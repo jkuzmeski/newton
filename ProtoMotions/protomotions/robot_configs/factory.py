@@ -50,7 +50,7 @@ def robot_config(robot_name: str, **updates) -> RobotConfig:
 
     Args:
         robot_name: Name of the robot type. Supported types:
-            - smpl, smplx, amp, g1, h1_2, rigv1
+            - smpl, smplx, amp, g1, h1_2, rigv1, gait2354
             - smpl_lower_body (base 170cm model)
             - smpl_lower_body_XXXcm (height-scaled, e.g., smpl_lower_body_156cm)
             - smpl_lower_body_XXXcm_torque (torque control variant)
@@ -123,6 +123,10 @@ def robot_config(robot_name: str, **updates) -> RobotConfig:
         from protomotions.robot_configs.rigv1 import Rigv1RobotConfig
 
         config = Rigv1RobotConfig()
+    elif robot_name == "gait2354":
+        from protomotions.robot_configs.gait2354 import Gait2354RobotConfig
+
+        config = Gait2354RobotConfig()
     else:
         raise ValueError(f"Invalid robot name: {robot_name}")
 

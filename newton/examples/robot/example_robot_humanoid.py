@@ -71,8 +71,8 @@ class Example:
         use_mujoco_contacts = args.use_mujoco_contacts if args is not None else False
         self.solver = newton.solvers.SolverMuJoCo(
             self.model,
-            njmax=100,
-            nconmax=50,
+            njmax=1000,
+            nconmax=250,
             use_mujoco_contacts=use_mujoco_contacts,
         )
 
