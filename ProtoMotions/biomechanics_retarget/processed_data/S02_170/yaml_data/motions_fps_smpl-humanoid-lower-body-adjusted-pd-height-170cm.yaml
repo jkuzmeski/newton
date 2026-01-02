@@ -1,0 +1,10 @@
+motions:
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_170/motion_files/S02_20ms_positons_lowerbody.motion
+  fps: 30
+  idx: 0
+  sub_motions:
+  - idx: 0
+    timings:
+      end: 8.433333333333334
+      start: 0.0
+    weight: 1.0

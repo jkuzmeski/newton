@@ -1,0 +1,37 @@
+motions:
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02/motion_files/S02_20ms_positons_lowerbody.motion
+  fps: 200
+  idx: 0
+  sub_motions:
+  - idx: 0
+    timings:
+      end: 1.265
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02/motion_files/S02_30ms_positons_lowerbody.motion
+  fps: 200
+  idx: 1
+  sub_motions:
+  - idx: 1
+    timings:
+      end: 0.815
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02/motion_files/S02_40ms_positons_lowerbody.motion
+  fps: 200
+  idx: 2
+  sub_motions:
+  - idx: 2
+    timings:
+      end: 1.08
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02/motion_files/S02_50ms_positons_lowerbody.motion
+  fps: 200
+  idx: 3
+  sub_motions:
+  - idx: 3
+    timings:
+      end: 0.955
+      start: 0.0
+    weight: 1.0

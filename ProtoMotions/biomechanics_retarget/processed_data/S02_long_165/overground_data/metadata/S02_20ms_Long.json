@@ -1,0 +1,21 @@
+{
+    "generated_timestamp": "2025-12-05T11:58:01.211588",
+    "fps": 200,
+    "duration_seconds": 18.56,
+    "num_frames": 3712,
+    "num_joints": 9,
+    "joint_names": [
+        "Pelvis",
+        "L_Hip",
+        "L_Knee",
+        "L_Ankle",
+        "L_Toe",
+        "R_Hip",
+        "R_Knee",
+        "R_Ankle",
+        "R_Toe"
+    ],
+    "units": "meters",
+    "coordinate_system": "X=forward, Y=left, Z=up",
+    "data_type": "positions"
+}

@@ -1,0 +1,73 @@
+motions:
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_15ms_Long.motion
+  fps: 200
+  idx: 0
+  sub_motions:
+  - idx: 0
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_20ms_Long.motion
+  fps: 200
+  idx: 1
+  sub_motions:
+  - idx: 1
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_25ms_Long.motion
+  fps: 200
+  idx: 2
+  sub_motions:
+  - idx: 2
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_30ms_Long.motion
+  fps: 200
+  idx: 3
+  sub_motions:
+  - idx: 3
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_35ms_Long.motion
+  fps: 200
+  idx: 4
+  sub_motions:
+  - idx: 4
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_40ms_Long.motion
+  fps: 200
+  idx: 5
+  sub_motions:
+  - idx: 5
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_45ms_Long.motion
+  fps: 200
+  idx: 6
+  sub_motions:
+  - idx: 6
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
+- file: D:/Isaac/BioMotions/biomechanics_retarget/processed_data/S02_long_165/motion_files/S02_50ms_Long.motion
+  fps: 200
+  idx: 7
+  sub_motions:
+  - idx: 7
+    timings:
+      end: 2.25
+      start: 0.0
+    weight: 1.0
