@@ -9,9 +9,16 @@ wheels/
 # Virtual Environments 
 .venv
 
+#models
+.sisyphus/
+.codex/
+data/
+
 # Tool cache
 .cache/
 .thumbs/
+/.omo/
+/graphify-out/
 
 # Coverage reports
 .coverage
@@ -64,6 +71,8 @@ asv/html
 MUJOCO_LOG.TXT
 imgui.ini
 newton/tests/outputs/
+reports/upstream-sync/
+DigitalInstron/processed/v2_cache/
 
 # Viser recordings
 docs/_static/recordings/
@@ -74,3 +83,10 @@ docs/_static/viser/
 
 # Notebook checkpoints
 **/*.ipynb_checkpoints/
+
+# Scratch experiments and stray run artifacts (root-anchored)
+/scratch/
+/run_debug*.log
+/*.mp4
+/foot_shoe_*
+/solver_convergence.png

@@ -446,8 +446,13 @@ Newton supports the following geometry types via :class:`~GeoType`:
      - Triangle mesh (arbitrary, including non-convex)
    * - ``CONVEX_MESH``
      - Convex hull mesh
+   * - ``HFIELD``
+     - Heightfield terrain (2D elevation grid)
 
 .. note::
+   **Heightfields** (``HFIELD``) are supported for terrain collisions.
+   Hydroelastic supports heightfields as terrain when set to
+   ``hydroelastic_type="rigid"``.
    **SDF is collision data, not a standalone shape type.** For mesh shapes, build and attach
    an SDF explicitly with ``mesh.build_sdf(...)`` and then pass that mesh to
    ``builder.add_shape_mesh(...)``. For primitive hydroelastic workflows, SDF generation uses
@@ -496,17 +501,17 @@ World indices enable multi-world simulations, primarily for reinforcement learni
 .. testcode:: world-indices
 
     builder = newton.ModelBuilder()
-    
+
     # Global ground (default world -1, collides with all worlds)
     builder.add_ground_plane()
-    
+
     # Robot template
     robot_builder = newton.ModelBuilder()
     body = robot_builder.add_link()
     robot_builder.add_shape_sphere(body, radius=0.5)
     joint = robot_builder.add_joint_free(body)
     robot_builder.add_articulation([joint])
-    
+
     # Instantiate in separate worlds - robots won't collide with each other
     builder.add_world(robot_builder)  # World 0
     builder.add_world(robot_builder)  # World 1
@@ -583,11 +588,11 @@ Collision groups control which shapes collide within the same world:
 .. testcode:: collision-groups
 
     builder = newton.ModelBuilder()
-    
+
     # Group 1: only collides with group 1 and negative groups
     body1 = builder.add_body()
     builder.add_shape_sphere(body1, radius=0.5, cfg=builder.ShapeConfig(collision_group=1))
-    
+
     # Group -1: collides with everything (except other -1)
     body2 = builder.add_body()
     builder.add_shape_sphere(body2, radius=0.5, cfg=builder.ShapeConfig(collision_group=-1))
@@ -603,7 +608,7 @@ Self-collisions within an articulation can be enabled or disabled with ``enable_
     # Enable self-collisions when loading models
     builder.add_usd("robot.usda", enable_self_collisions=True)
     builder.add_mjcf("robot.xml", enable_self_collisions=True)
-    
+
     # Or control per-shape (also applies to max-coordinate jointed bodies)
     cfg = builder.ShapeConfig(collision_group=-1, collision_filter_parent=False)
 
@@ -617,7 +622,7 @@ Use ``has_shape_collision`` and ``has_particle_collision`` for fine-grained cont
 
     # Shape that only collides with particles (not other shapes)
     cfg = builder.ShapeConfig(has_shape_collision=False, has_particle_collision=True)
-    
+
     # Shape that only collides with other shapes (not particles)
     cfg = builder.ShapeConfig(has_shape_collision=True, has_particle_collision=False)
 
@@ -688,7 +693,7 @@ UsdPhysics ``physics:filteredPairs`` relationships).
 .. testcode:: filter-pairs
 
     builder = newton.ModelBuilder()
-    
+
     # Add shapes
     body = builder.add_body()
     shape_a = builder.add_shape_sphere(body, radius=0.5)
@@ -724,11 +729,11 @@ The resulting filter pairs are stored in :attr:`~Model.shape_collision_filter_pa
     # Newton automatically imports UsdPhysics collision filtering
     builder = newton.ModelBuilder()
     builder.add_usd("scene.usda")
-    
+
     # Collision groups and filter pairs are now populated:
     # - shape_collision_group: integer IDs mapped from UsdPhysicsCollisionGroup
     # - shape_collision_filter_pairs: pairs from physics:filteredPairs relationships
-    
+
     model = builder.finalize()
 
 .. _Collision Pipeline Details:
@@ -965,6 +970,7 @@ often be improved by attaching a precomputed SDF to the mesh (``mesh.build_sdf(.
 
 | [1] Plane and heightfield shapes are static (world-attached) in Newton; static-static pairs are filtered from rigid collision generation.
 | [2] Particle-particle interactions are handled by the particle/soft-body solver self-collision path, not by the shape compatibility pipeline in this table.
+| Heightfields (``HFIELD``) are fully supported for rigid terrain contacts.
 
 .. note::
    ``Particle`` in this table refers to soft particle-shape contacts generated
@@ -1046,7 +1052,7 @@ Projects mesh vertices onto the plane and generates contacts for vertices below 
 
 Two approaches available:
 
-1. **BVH-based** (default when no SDF configured): Iterates mesh vertices against the other mesh's BVH. 
+1. **BVH-based** (default when no SDF configured): Iterates mesh vertices against the other mesh's BVH.
    Performance scales with triangle count - can be very slow for complex meshes.
 
 2. **SDF-based** (recommended): Uses precomputed signed distance fields for fast queries.
@@ -1213,13 +1219,13 @@ For hydroelastic and SDF-based contacts, use :class:`~geometry.HydroelasticSDF.C
    * - Parameter
      - Description
    * - ``normal_matching``
-     - Rotates selected contact normals so their weighted sum aligns with the aggregate force direction 
+     - Rotates selected contact normals so their weighted sum aligns with the aggregate force direction
        from all unreduced contacts. Preserves net force direction after reduction. Default: True.
    * - ``anchor_contact``
      - Adds an anchor contact at the center of pressure for each normal bin to better preserve moments.
        Default: False.
    * - ``margin_contact_area``
-     - Lower bound on contact area. Hydroelastic stiffness is ``area * k_eff``, but contacts 
+     - Lower bound on contact area. Hydroelastic stiffness is ``area * k_eff``, but contacts
        within the contact margin that are not yet penetrating have zero
        geometric area. This provides a floor value so they still generate repulsive force. Default: 0.01.
 
@@ -1262,7 +1268,17 @@ Shape collision behavior is controlled via :class:`~ModelBuilder.ShapeConfig`:
    * - ``is_solid``
      - Whether shape is solid or hollow. Affects inertia and SDF sign. Default: True.
    * - ``is_hydroelastic``
-     - Whether the shape uses SDF-based hydroelastic contacts. Both shapes in a pair must have this enabled. See :ref:`Hydroelastic Contacts`. Default: False.
+     - Legacy hydroelastic enable switch. Keep for backward compatibility; when True and ``hydroelastic_type`` is unset, mode defaults to compliant. See :ref:`Hydroelastic Contacts`. Default: False.
+   * - ``hydroelastic_type``
+     - Explicit hydroelastic mode: ``none``, ``rigid``, or ``compliant``. Hydroelastic contact is active when both shapes are non-``none`` and at least one is ``compliant``. Planes and heightfields participate only when explicitly set to ``rigid``. Default: None.
+   * - ``hydroelastic_contact_workflow``
+     - Hydroelastic field workflow: ``classic`` or ``pressure``. ``classic`` uses SDF-only signed fields; ``pressure`` uses immutable interior pressure fields for compliant contact evaluation. Default: None (currently resolves to ``classic``; set explicitly to avoid future default changes).
+   * - ``hydro_pressure_sine_amplitude``
+     - Per-axis pressure modulation amplitude tuple ``(x, y, z)`` used by ``pressure`` workflow when building immutable pressure fields. Default: ``(0.0, 0.0, 0.0)``.
+   * - ``hydro_pressure_sine_cycles``
+     - Per-axis sine cycles tuple ``(x, y, z)`` used with ``hydro_pressure_sine_amplitude``. Values must be ``> 0``. Default: ``(1.0, 1.0, 1.0)``.
+   * - ``hydro_pressure_sine_phase``
+     - Per-axis sine phase tuple ``(x, y, z)`` [rad] for pressure modulation. Default: ``(0.0, 0.0, 0.0)``.
    * - ``kh``
      - Hydroelastic contact stiffness coefficient. Under the default linear
        pressure law, pressure scales with ``kh`` and penetration depth; contact
@@ -1409,10 +1425,10 @@ Use ``body=-1`` to attach shapes to the static world frame:
 .. testcode:: static-geometry
 
     builder = newton.ModelBuilder()
-    
+
     # Static ground plane
     builder.add_ground_plane()  # Convenience method
-    
+
     # Or manually create static shapes
     builder.add_shape_plane(body=-1, xform=wp.transform_identity())
     builder.add_shape_box(body=-1, hx=5.0, hy=5.0, hz=0.1)  # Static floor
@@ -1424,12 +1440,12 @@ Use ``builder.default_shape_cfg`` to set defaults for all shapes:
 .. testcode:: default-shape-cfg
 
     builder = newton.ModelBuilder()
-    
+
     # Set defaults before adding shapes
     builder.default_shape_cfg.ke = 1.0e6
     builder.default_shape_cfg.kd = 1000.0
     builder.default_shape_cfg.mu = 0.5
-    builder.default_shape_cfg.is_hydroelastic = True
+    builder.default_shape_cfg.hydroelastic_type = "compliant"
     builder.default_shape_cfg.sdf_max_resolution = 64  # Primitive SDF defaults
 
 **Soft contacts (particle-shape)**
@@ -1641,12 +1657,12 @@ Example usage:
     pipeline = newton.CollisionPipeline(model)
     contacts = pipeline.contacts()
     pipeline.collide(state, contacts)
-    
+
     n = contacts.rigid_contact_count.numpy()[0]
     points0 = contacts.rigid_contact_point0.numpy()[:n]
     points1 = contacts.rigid_contact_point1.numpy()[:n]
     normals = contacts.rigid_contact_normal.numpy()[:n]
-    
+
     # Shape indices
     shape0 = contacts.rigid_contact_shape0.numpy()[:n]
     shape1 = contacts.rigid_contact_shape1.numpy()[:n]
@@ -1789,31 +1805,49 @@ Hydroelastic contacts are an **opt-in** feature that generates contact areas (no
 
 **Default behavior (hydroelastic disabled):**
 
-When ``is_hydroelastic=False`` (default), shapes use **hard SDF contacts** - point contacts computed from SDF distance queries. This is efficient and suitable for most rigid body simulations.
+When hydro mode is ``none`` (default), shapes use **hard SDF contacts** - point contacts computed from SDF distance queries. This is efficient and suitable for most rigid body simulations.
 
 **Opt-in hydroelastic behavior:**
 
-When ``is_hydroelastic=True`` on **both** shapes in a pair, the system generates distributed contact areas instead of point contacts. This is useful for:
+When both shapes opt into hydroelastic and at least one is ``compliant``, the system generates distributed contact areas instead of point contacts. Use ``hydroelastic_type`` to select rigid/compliant behavior. This is useful for:
 
 - More stable and continuous contact forces for non-convex shape interactions
 - Better force distribution across large contact patches
 - Realistic friction behavior for flat-on-flat contacts
 
+**Workflow selection:**
+
+- ``hydroelastic_contact_workflow="classic"``
+  - Uses the original hydroelastic signed-distance field workflow.
+- ``hydroelastic_contact_workflow="pressure"``
+  - Uses immutable pressure fields for compliant interior samples and enables per-shape pressure modulation parameters.
+- Mixed compliant pairs (one ``classic``, one ``pressure``) evaluate as ``pressure`` for that pair.
+- If ``hydroelastic_contact_workflow`` is not set, current behavior defaults to ``classic``. This implicit default is deprecated; set the workflow explicitly to keep behavior stable across releases.
+
 **Requirements:**
 
-- Both shapes in a pair must have ``is_hydroelastic=True``
+- Both shapes in a pair must set hydro mode to ``rigid`` or ``compliant``
+- At least one shape in the pair must be ``compliant`` (rigid-rigid pairs fall back to non-hydro contacts)
 - Shapes must have SDF data available:
   - mesh shapes: call ``mesh.build_sdf(...)``
   - primitive shapes: use ``sdf_max_resolution`` or ``sdf_target_voxel_size`` in ``ShapeConfig``
 - For non-unit shape scale, the attached SDF must be scale-baked
-- Only volumetric shapes supported (not planes, heightfields, or non-watertight meshes)
+- Terrain support is rigid-only:
+  - planes and heightfields are supported when ``hydroelastic_type="rigid"``
+  - compliant planes/heightfields are not supported
+  - legacy ``is_hydroelastic=True`` on terrain is ignored; set ``hydroelastic_type="rigid"`` explicitly
+- Non-watertight meshes are not supported for hydroelastic SDF contacts
 
 .. testcode:: hydroelastic
 
     builder = newton.ModelBuilder()
     body = builder.add_body()
     cfg = builder.ShapeConfig(
-        is_hydroelastic=True,   # Opt-in to hydroelastic contacts
+        hydroelastic_type="compliant",  # Opt-in as compliant hydroelastic
+        hydroelastic_contact_workflow="pressure",
+        hydro_pressure_sine_amplitude=(0.25, 0.0, 0.0),
+        hydro_pressure_sine_cycles=(1.5, 1.0, 1.0),
+        hydro_pressure_sine_phase=(0.0, 0.0, 0.0),
         sdf_max_resolution=64,  # Required for hydroelastic
         kh=1.0e11,              # Contact stiffness
     )
@@ -1828,7 +1862,10 @@ When ``is_hydroelastic=True`` on **both** shapes in a pair, the system generates
 
 **Hydroelastic stiffness (kh):**
 
-The ``kh`` parameter on each shape controls area-dependent contact stiffness. For a pair, the effective stiffness is computed as the harmonic mean: ``k_eff = 2 * k_a * k_b / (k_a + k_b)``. Tune this for desired penetration behavior.
+The ``kh`` parameter on each shape controls area-dependent contact stiffness. Effective pair stiffness is:
+
+- compliant-compliant: harmonic mean ``k_eff = 2 * k_a * k_b / (k_a + k_b)``
+- rigid-compliant: compliant shape stiffness
 
 **Custom pressure laws:**
 

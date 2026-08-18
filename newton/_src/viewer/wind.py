@@ -10,6 +10,8 @@ import warp as wp
 
 import newton
 
+PARTICLE_ACTIVE = wp.constant(wp.int32(int(newton.ParticleFlags.ACTIVE)))
+
 
 @wp.struct
 class WindParams:
@@ -34,7 +36,7 @@ def apply_wind_force_kernel(
     tid = wp.tid()
 
     # Check if particle is active
-    if (particle_flags[tid] & newton.ParticleFlags.ACTIVE) == 0:
+    if (particle_flags[tid] & PARTICLE_ACTIVE) == 0:
         return
 
     # Get wind parameters from device array

@@ -22,4 +22,3 @@ Experimental coupled-solver framework.
 .. autoclass:: SolverCoupledADMM
 
 .. autoclass:: SolverCoupledProxy
-
