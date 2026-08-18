@@ -1,0 +1,29 @@
+{
+  "schema_version": "human_shoe_contact_sidecar_1",
+  "source_model_path": "../../newton/examples/assets/gait2354_subject01.osim",
+  "generated_model_path": "generated/gait2354_subject01_with_shoe_contacts.osim",
+  "generated_model_name": "subject01_human_shoe_contacts",
+  "contacts": [
+    {
+      "name": "hs_calcn_r_heel",
+      "type": "ContactSphere",
+      "body_name": "calcn_r",
+      "location_m": [0.03745469, 0.00522529, 0.00982458],
+      "radius_m": 0.025
+    },
+    {
+      "name": "hs_calcn_r_forefoot_lat",
+      "type": "ContactSphere",
+      "body_name": "calcn_r",
+      "location_m": [0.19745469, 0.00666167, 0.02482458],
+      "radius_m": 0.02
+    },
+    {
+      "name": "hs_calcn_r_forefoot_med",
+      "type": "ContactSphere",
+      "body_name": "calcn_r",
+      "location_m": [0.19745469, 0.00585624, -0.00517542],
+      "radius_m": 0.02
+    }
+  ]
+}

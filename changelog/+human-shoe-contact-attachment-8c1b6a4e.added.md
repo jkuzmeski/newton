@@ -1,0 +1,1 @@
+Add a project-local adapter, reproducible contact sidecar, gait viewer, and direct-coupled landing example that align the Digital Instron sole with OpenSim foot contact geometry and apply its calibrated Y-up column forces to the imported foot body.

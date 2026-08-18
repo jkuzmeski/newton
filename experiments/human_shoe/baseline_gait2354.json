@@ -1,0 +1,25 @@
+{
+  "schema_version": "human_shoe_experiment_1",
+  "human_model_path": "experiments/human_shoe/generated/gait2354_subject01_with_shoe_contacts.osim",
+  "motion_path": "newton/examples/assets/gait2354_subject01_walk.mot",
+  "initial_motion_frame": 0,
+  "contact_sidecar_path": "experiments/human_shoe/gait2354_subject01_contacts.json",
+  "shoe_manifest_path": "DigitalInstron/manifest_v2.json",
+  "controller_id": "gait2354_drop_pd_v1",
+  "attachment": {
+    "foot_body_name": "calcn_r",
+    "shoe_carrier_body_name": "calcn_r",
+    "translation_m": [
+      -0.01137206666666668,
+      -0.00046797333333333316,
+      0.0010883833333333332
+    ],
+    "rotation_deg": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "time_step_s": 5e-05,
+  "random_seed": 0
+}
