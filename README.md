@@ -894,6 +894,65 @@ If you run the examples from a source checkout with uv, use
     <td align="center" width="33%">
     </td>
   </tr>
+  <tr>
+    <td colspan="3"><h3>OpenSim Examples</h3></td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_opensim_gait.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_opensim_gait.jpg" alt="OpenSim Gait">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_opensim_arm.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_opensim_arm.jpg" alt="OpenSim Arm">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_opensim_muscle_activity.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_opensim_muscle_activity.jpg" alt="OpenSim Muscle Activity">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <code>python -m newton.examples opensim_gait --download-geometry</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples opensim_arm</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples opensim_muscle_activity</code>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_opensim_gait2d.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_opensim_gait2d.jpg" alt="OpenSim Gait 2D">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_opensim_contact_hop.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_opensim_contact_hop.jpg" alt="OpenSim Contact Hop">
+      </a>
+    </td>
+    <td align="center" width="33%">
+      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_opensim_shoe_material.py">
+        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_opensim_shoe_material.jpg" alt="OpenSim Shoe Material">
+      </a>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <code>python -m newton.examples opensim_gait2d</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples opensim_contact_hop</code>
+    </td>
+    <td align="center" width="33%">
+      <code>python -m newton.examples opensim_shoe_material</code>
+    </td>
+  </tr>
 </table>
 
 ### Example Options

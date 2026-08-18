@@ -40,6 +40,12 @@ sim = [
     "mujoco~=3.11.0",       # MuJoCo physics engine
 ]
 
+# OpenSim port: C3D motion-capture loading for subject scaling.
+opensim = [
+    "ezc3d>=1.5.0",  # read raw .c3d static/dynamic trials for ScaleTool
+    "scipy>=1.11.0",  # solve OpenSim static-optimization problems
+]
+
 # Optional ONNX policy inference for neural actuators and RL policy examples.
 onnx = [
     "warp-nn[onnx]==0.3.0",
@@ -336,6 +342,8 @@ files.extend-exclude = ["/examples/assets", "*.urdf", "*.usd", "*.usda", "*.mjcf
 
 [tool.typos.default.extend-words]
 arange = "arange"
+# OpenSim's API uses "metabolics" for muscle metabolic-energy models.
+metabolics = "metabolics"
 precess = "precess"
 ba = "ba"
 ix = "ix"
@@ -352,6 +360,9 @@ IIT = "IIT"
 iit = "iit"
 PN = "PN"
 pnd = "pnd"
+# OpenSim anatomical abbreviations (vastus intermedius, abduction)
+vas = "vas"
+abd = "abd"
 
 [tool.typos.default.extend-identifiers]
 PNGs = "PNGs"
