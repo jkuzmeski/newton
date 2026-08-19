@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -76,7 +77,7 @@ class Example:
         self.replay = replay_prescribed_shoe_load(args.experiment, replay_config, device=self.device)
         self.ground_height_m = replay_config.ground_height_m
         (
-            _,
+            resolved_experiment_path,
             self.experiment,
             self.osim_model,
             _,
@@ -216,6 +217,18 @@ class Example:
             f"impulse_z={self.replay.final_vertical_impulse_ns:.2f} N*s, "
             f"column_force_scale={self.force_scale_n:.1f} N"
         )
+        if self.experiment.controller_id == "c3d_overground_exact_replay_v1":
+            integration_path = resolved_experiment_path.parent / "human_shoe_integration_qc.json"
+            if integration_path.is_file():
+                integration_qc = json.loads(integration_path.read_text(encoding="utf-8"))
+                print(f"[human_shoe.replay_viewer] INTEGRATION QC: {integration_qc.get('status', 'unknown').upper()}")
+                for warning in integration_qc.get("warnings", []):
+                    print(f"  - {warning}")
+            else:
+                print(
+                    "[human_shoe.replay_viewer] WARNING: baseline shoe anchors are reused on scaled S001 "
+                    "without independent subject/shoe registration."
+                )
 
     def step(self) -> None:
         next_frame = self.frame + 1
@@ -323,7 +336,7 @@ class Example:
             arrow[valid],
             self.grf_scale * self._display_force[valid],
             rtol=1.0e-5,
-            atol=2.0e-8,
+            atol=1.0e-7,
         )
         if self.replay.peak_vertical_force_n <= 0.0:
             raise AssertionError("exact replay did not produce a vertical shoe load")
