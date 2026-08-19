@@ -121,6 +121,7 @@ def foundation_apply(
     resultant_moment_origin: wp.array[wp.vec3],
     contact_power: wp.array[wp.float32],
     max_compression: wp.array[wp.float32],
+    column_force: wp.array[wp.vec3],
 ):
     """Pasternak coupling, per-column wrench into ``body_f``, and force diagnostics."""
     i = wp.tid()
@@ -174,6 +175,7 @@ def foundation_apply(
             tangent_anchor[i] = p_t + f_tan / params.friction_kt  # slide the anchor onto the cone
 
     force = wp.vec3(f_tan[0], f_tan[1], fn)
+    column_force[i] = force
     wp.atomic_add(body_f, carrier, wp.spatial_vector(force, wp.cross(r, force)))
     wp.atomic_add(normal_force, 0, fn)
     wp.atomic_add(cop_moment, 0, wp.vec3(world[0] * fn, world[1] * fn, 0.0))
@@ -313,6 +315,7 @@ class MidsoleFoundation:
         self.resultant_moment_origin = wp.zeros(1, dtype=wp.vec3, device=device)
         self.contact_power = wp.zeros(1, dtype=wp.float32, device=device)
         self.max_compression = wp.zeros(1, dtype=wp.float32, device=device)
+        self.column_force = wp.zeros(m, dtype=wp.vec3, device=device)
 
     def reset(self) -> None:
         """Clear the viscoelastic overstress history and release the friction bristles."""
@@ -390,6 +393,7 @@ class MidsoleFoundation:
                 self.resultant_moment_origin,
                 self.contact_power,
                 self.max_compression,
+                self.column_force,
             ],
             device=self.device,
         )

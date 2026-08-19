@@ -79,6 +79,7 @@ class TestFoundationReplayObservables(unittest.TestCase):
 
         self.assertGreater(fz, 0.0)
         np.testing.assert_allclose(force, body_wrench[:3], rtol=1.0e-6)
+        np.testing.assert_allclose(foundation.column_force.numpy()[0], force, rtol=1.0e-6)
         np.testing.assert_allclose(moment, body_wrench[3:], rtol=1.0e-6)
         np.testing.assert_allclose(moment, [-0.02 * fz, -0.03 * fz, 0.0], rtol=1.0e-5, atol=1.0e-6)
         np.testing.assert_allclose(foundation.cop_moment.numpy()[0, :2] / fz, [0.03, -0.02], atol=1.0e-6)
@@ -91,6 +92,7 @@ class TestFoundationReplayObservables(unittest.TestCase):
         state, foundation = self._foundation(body_height=0.01, velocity_z=0.0)
 
         np.testing.assert_allclose(foundation.resultant_force.numpy(), 0.0)
+        np.testing.assert_allclose(foundation.column_force.numpy(), 0.0)
         np.testing.assert_allclose(foundation.resultant_moment_origin.numpy(), 0.0)
         np.testing.assert_allclose(state.body_f.numpy(), 0.0)
         self.assertEqual(float(foundation.contact_power.numpy()[0]), 0.0)
@@ -102,7 +104,7 @@ class TestPrescribedShoeReplay(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Run one coarse exact replay shared by result and export tests."""
-        cls.result = replay_prescribed_shoe_load(EXPERIMENT, PrescribedReplayConfig(dt_s=0.005))
+        cls.result = replay_prescribed_shoe_load(EXPERIMENT, PrescribedReplayConfig(dt_s=0.005, record_columns=True))
 
     def test_first_stance_replay_is_finite_and_unloaded_at_brackets(self):
         """Replay exact OpenSim kinematics with a finite, bounded shoe response."""
@@ -127,6 +129,19 @@ class TestPrescribedShoeReplay(unittest.TestCase):
             delta=1.0e-4 * abs(result.final_contact_work_j),
         )
         self.assertTrue(np.all(np.abs(result.cop_m[result.cop_valid, :2]) < 1.0))
+        self.assertEqual(result.column_compression_m.shape[0], len(result.time_s))
+        self.assertEqual(result.column_force_n.shape[:2], result.column_compression_m.shape)
+        np.testing.assert_allclose(
+            result.grf_n,
+            np.sum(result.column_force_n, axis=1),
+            rtol=2.0e-5,
+            atol=1.0e-5,
+        )
+        np.testing.assert_allclose(
+            result.max_compression_m,
+            np.max(result.column_compression_m, axis=1),
+            rtol=1.0e-6,
+        )
 
     def test_export_writes_units_and_provenance_sidecar(self):
         """Round-trip the replay trace through CSV plus finite JSON metadata."""
@@ -134,8 +149,19 @@ class TestPrescribedShoeReplay(unittest.TestCase):
             csv_path, metadata_path = self.result.write_csv(Path(tmpdir) / "replay.csv")
             metadata = json.loads(metadata_path.read_text())
             rows = csv_path.read_text().splitlines()
+            column_data = np.load(csv_path.with_suffix(".columns.npz"))
+            exported_compression_shape = column_data["compression_m"].shape
+            exported_force_shape = column_data["force_n"].shape
+            exported_time = column_data["time_s"].copy()
+            exported_bottom = column_data["bottom_local_m"].copy()
 
         self.assertEqual(len(rows), len(self.result.time_s) + 1)
+        self.assertEqual(exported_compression_shape, self.result.column_compression_m.shape)
+        self.assertEqual(exported_force_shape, self.result.column_force_n.shape)
+        self.assertEqual(metadata["column_data"]["file"], "replay.columns.npz")
+        self.assertEqual(metadata["column_data"]["column_count"], self.result.column_compression_m.shape[1])
+        np.testing.assert_array_equal(exported_time, self.result.time_s)
+        np.testing.assert_array_equal(exported_bottom, self.result.column_bottom_local_m)
         self.assertEqual(metadata["sample_count"], len(self.result.time_s))
         self.assertEqual(metadata["coordinate_system"], "Newton right-handed Z-up")
         self.assertEqual(metadata["moment_reference"], "fixed world origin")
@@ -145,6 +171,18 @@ class TestPrescribedShoeReplay(unittest.TestCase):
         )
         self.assertFalse(Path(metadata["provenance"]["motion_path"]).is_absolute())
         self.assertEqual(len(metadata["columns"]), len(rows[0].split(",")))
+
+    def test_column_history_is_opt_in(self):
+        """Avoid allocating or exporting per-column histories unless explicitly requested."""
+        result = replay_prescribed_shoe_load(EXPERIMENT, PrescribedReplayConfig(dt_s=0.01))
+        self.assertIsNone(result.column_compression_m)
+        self.assertIsNone(result.column_force_n)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "replay.csv"
+            result.write_csv(csv_path)
+            metadata = json.loads(csv_path.with_suffix(".json").read_text())
+            self.assertNotIn("column_data", metadata)
+            self.assertFalse(csv_path.with_suffix(".columns.npz").exists())
 
     def test_timestep_refinement_preserves_impulse_and_work(self):
         """Keep integral shoe loads stable when halving the replay timestep."""

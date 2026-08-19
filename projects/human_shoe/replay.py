@@ -48,6 +48,7 @@ class PrescribedReplayConfig:
     end_time_s: float | None = None
     foundation: FoundationConfig = field(default_factory=make_human_shoe_foundation_config)
     chunk_size: int = 4096
+    record_columns: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,41 @@ class ShoeLoadReplayResult:
     impulse_ns: np.ndarray
     window: ReplayWindow
     provenance: dict[str, Any]
+    column_compression_m: np.ndarray | None = None
+    column_force_n: np.ndarray | None = None
+    column_bottom_local_m: np.ndarray | None = None
+    column_top_local_m: np.ndarray | None = None
+    column_rest_len_m: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        sample_count = len(self.time_s)
+        sample_arrays = {
+            "dt_s": self.dt_s,
+            "grf_n": self.grf_n,
+            "moment_origin_nm": self.moment_origin_nm,
+            "cop_m": self.cop_m,
+            "cop_valid": self.cop_valid,
+            "max_compression_m": self.max_compression_m,
+            "active_columns": self.active_columns,
+            "contact_power_w": self.contact_power_w,
+            "contact_work_j": self.contact_work_j,
+            "impulse_ns": self.impulse_ns,
+        }
+        for name, values in sample_arrays.items():
+            if len(values) != sample_count:
+                raise ValueError(f"{name} must have {sample_count} samples")
+        if (self.column_compression_m is None) != (self.column_force_n is None):
+            raise ValueError("column compression and force histories must be provided together")
+        if self.column_compression_m is not None:
+            expected = self.column_compression_m.shape
+            if len(expected) != 2 or expected[0] != sample_count:
+                raise ValueError("column_compression_m must have shape [sample, column]")
+            if self.column_force_n.shape != (*expected, 3):
+                raise ValueError("column_force_n must have shape [sample, column, 3]")
+            if np.any(self.column_compression_m < 0.0) or not np.all(np.isfinite(self.column_compression_m)):
+                raise ValueError("column compression history must be finite and nonnegative")
+            if not np.all(np.isfinite(self.column_force_n)):
+                raise ValueError("column force history must be finite")
 
     @property
     def peak_vertical_force_n(self) -> float:
@@ -84,7 +120,7 @@ class ShoeLoadReplayResult:
         return float(self.contact_work_j[-1]) if len(self.contact_work_j) else 0.0
 
     def write_csv(self, path: str | Path, metadata_path: str | Path | None = None) -> tuple[Path, Path]:
-        """Write the replay trace and a JSON units/provenance sidecar."""
+        """Write scalar CSV/JSON output and an optional per-column NPZ archive."""
         path = Path(path)
         metadata_path = Path(metadata_path) if metadata_path is not None else path.with_suffix(".json")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,6 +183,28 @@ class ShoeLoadReplayResult:
             "window": asdict(self.window),
             "provenance": self.provenance,
         }
+        if self.column_compression_m is not None and self.column_force_n is not None:
+            column_path = path.with_suffix(".columns.npz")
+            np.savez_compressed(
+                column_path,
+                time_s=self.time_s,
+                compression_m=self.column_compression_m,
+                force_n=self.column_force_n,
+                bottom_local_m=self.column_bottom_local_m,
+                top_local_m=self.column_top_local_m,
+                rest_len_m=self.column_rest_len_m,
+            )
+            metadata["column_data"] = {
+                "file": column_path.name,
+                "column_count": int(self.column_compression_m.shape[1]),
+                "dtype": str(self.column_compression_m.dtype),
+                "compression_m": list(self.column_compression_m.shape),
+                "force_n": list(self.column_force_n.shape),
+                "force_semantics": "environment on shoe, Newton world XYZ",
+                "column_order": "prepared sole bottom_local_m/top_local_m/rest_len_m",
+            }
+        else:
+            path.with_suffix(".columns.npz").unlink(missing_ok=True)
         metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False) + "\n")
         return path, metadata_path
 
@@ -227,9 +285,24 @@ def _record_foundation_substep(
     count[0] = k + 1
 
 
+@wp.kernel
+def _record_foundation_columns(
+    sample: wp.int32,
+    compression: wp.array[wp.float32],
+    column_force: wp.array[wp.vec3],
+    compression_out: wp.array2d[wp.float32],
+    force_out: wp.array2d[wp.vec3],
+):
+    column = wp.tid()
+    compression_out[sample, column] = compression[column]
+    force_out[sample, column] = column_force[column]
+
+
 class _FoundationReplayRecorder:
-    def __init__(self, capacity: int, *, device=None) -> None:
+    def __init__(self, capacity: int, column_count: int, *, record_columns: bool = False, device=None) -> None:
         self.capacity = int(capacity)
+        self.column_count = int(column_count)
+        self.record_columns = bool(record_columns)
         self.device = device
         self.count = wp.zeros(1, dtype=wp.int32, device=device)
         self.overflow = wp.zeros(1, dtype=wp.int32, device=device)
@@ -244,8 +317,21 @@ class _FoundationReplayRecorder:
         self.power = wp.empty(capacity, dtype=wp.float32, device=device)
         self.work = wp.empty(capacity, dtype=wp.float32, device=device)
         self.impulse = wp.empty(capacity, dtype=wp.vec3, device=device)
+        history_rows = capacity if self.record_columns else 1
+        history_columns = self.column_count if self.record_columns else 1
+        self.column_compression = wp.empty((history_rows, history_columns), dtype=wp.float32, device=device)
+        self.column_force = wp.empty((history_rows, history_columns), dtype=wp.vec3, device=device)
 
-    def record(self, time: float, dt: float, ground_height: float, foundation: MidsoleFoundation) -> None:
+    def record(
+        self,
+        sample: int,
+        time: float,
+        dt: float,
+        ground_height: float,
+        foundation: MidsoleFoundation,
+    ) -> None:
+        if not 0 <= sample < self.capacity:
+            raise IndexError(f"sample {sample} is outside recorder capacity {self.capacity}")
         wp.launch(
             _record_foundation_substep,
             dim=1,
@@ -277,8 +363,26 @@ class _FoundationReplayRecorder:
             ],
             device=self.device,
         )
+        if self.record_columns:
+            wp.launch(
+                _record_foundation_columns,
+                dim=self.column_count,
+                inputs=[
+                    sample,
+                    foundation.compression,
+                    foundation.column_force,
+                    self.column_compression,
+                    self.column_force,
+                ],
+                device=self.device,
+            )
 
-    def result(self, window: ReplayWindow, provenance: dict[str, Any]) -> ShoeLoadReplayResult:
+    def result(
+        self,
+        window: ReplayWindow,
+        provenance: dict[str, Any],
+        prepared: PreparedAttachedSole,
+    ) -> ShoeLoadReplayResult:
         count = int(self.count.numpy()[0])
         if int(self.overflow.numpy()[0]):
             raise RuntimeError("foundation replay recorder capacity was exceeded")
@@ -296,6 +400,11 @@ class _FoundationReplayRecorder:
             impulse_ns=self.impulse.numpy()[:count],
             window=window,
             provenance=provenance,
+            column_compression_m=(self.column_compression.numpy()[:count] if self.record_columns else None),
+            column_force_n=(self.column_force.numpy()[:count] if self.record_columns else None),
+            column_bottom_local_m=(prepared.column_bottom_local.copy() if self.record_columns else None),
+            column_top_local_m=(prepared.column_top_local.copy() if self.record_columns else None),
+            column_rest_len_m=(prepared.column_rest_len.copy() if self.record_columns else None),
         )
 
 
@@ -578,7 +687,12 @@ def replay_prescribed_shoe_load(
         device,
     )
     foundation.reset()
-    recorder = _FoundationReplayRecorder(len(output_time), device=device)
+    recorder = _FoundationReplayRecorder(
+        len(output_time),
+        len(prepared.column_bottom_local),
+        record_columns=config.record_columns,
+        device=device,
+    )
     for sample, time in enumerate(output_time):
         wp.launch(
             _set_prescribed_sample,
@@ -587,7 +701,7 @@ def replay_prescribed_shoe_load(
             device=device,
         )
         foundation.apply(state, dt, clear_body_force=True)
-        recorder.record(float(time), dt, config.ground_height_m, foundation)
+        recorder.record(sample, float(time), dt, config.ground_height_m, foundation)
 
     provenance = {
         "experiment_path": _portable_path(resolved_experiment_path),
@@ -602,7 +716,7 @@ def replay_prescribed_shoe_load(
         "foundation_config": asdict(config.foundation),
         "material": asdict(CALIBRATED_MATERIAL),
     }
-    return recorder.result(window, provenance)
+    return recorder.result(window, provenance, prepared)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -618,6 +732,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-time", type=float, default=None, help="Optional explicit replay end time [s].")
     parser.add_argument("--ground-height", type=float, default=0.0, help="Newton world ground height [m].")
     parser.add_argument("--device", help="Warp device override.")
+    parser.add_argument(
+        "--record-columns",
+        action="store_true",
+        help="Export per-column compression and force history to a compressed NPZ sidecar.",
+    )
     parser.add_argument(
         "--output",
         default="reports/human_shoe/prescribed_stance.csv",
@@ -637,6 +756,7 @@ def main(argv: list[str] | None = None) -> int:
         stance_index=args.stance_index,
         start_time_s=args.start_time,
         end_time_s=args.end_time,
+        record_columns=args.record_columns,
     )
     result = replay_prescribed_shoe_load(args.experiment, config)
     csv_path, metadata_path = result.write_csv(args.output)

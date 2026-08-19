@@ -114,6 +114,21 @@ and impulse with units and frame metadata.
 ``find_contact_windows()`` identifies complete stance windows with unloaded
 brackets. The checked-in motion contains three complete right-shoe windows.
 
+Visualize the exact replay with force-colored columns, the 3-D GRF arrow, COP
+point/path, and exact OpenSim skeleton and muscle paths:
+
+```bash
+uv run --extra examples -m projects.human_shoe.replay_viewer --viewer gl
+```
+
+The visualizer defaults to the experiment's converged replay timestep; pass
+``--replay-dt 0.001`` for faster interactive startup. Full 50 microsecond
+per-column history for one stance uses about 114 MB before display subsampling.
+Green arrows show environment-on-shoe GRF, yellow marks show COP, and column
+colors use a blue-green-red normal-force scale capped at the replay's 99th percentile.
+It prints a prominent ``PRESCRIBED EXACT KINEMATICS / NO FORCE FEEDBACK`` banner
+because the replay does not integrate human forward dynamics.
+
 ## Approximate dynamics example
 
 ```bash
