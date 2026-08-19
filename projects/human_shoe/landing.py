@@ -26,20 +26,13 @@ import newton
 import newton.examples
 import newton.opensim as opensim
 from projects.digital_instron_v2.core import CALIBRATED_MATERIAL
-from projects.digital_instron_v2.dynamics import (
-    FoundationConfig,
-    MidsoleFoundation,
-    build_foundation_geometry,
-    column_colors,
-)
-from projects.digital_instron_v2.geometry import load_mesh
+from projects.digital_instron_v2.dynamics import MidsoleFoundation, column_colors
 from projects.human_shoe import (
     HumanShoeExperimentContract,
-    attach_sole_geometry,
     load_experiment,
-    load_manifest,
-    resolve_attachment,
 )
+from projects.human_shoe.fidelity import compare_imported_state
+from projects.human_shoe.preparation import make_human_shoe_foundation_config, prepare_attached_sole
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 EXPERIMENT_PATH = BASE_DIR / "experiments/human_shoe/baseline_gait2354.json"
@@ -181,21 +174,14 @@ class Example:
             parse_contacts=False,
             parse_muscles=False,
         )
-        self.resolved = resolve_attachment(self.import_result, self.experiment.attachment)
+        prepared = prepare_attached_sole(self.import_result, self.experiment.attachment, self.manifest_path)
+        self.prepared_sole = prepared
+        self.resolved = prepared.resolved
         self.carrier = self.resolved.shoe_carrier_body_index
-
-        geo = build_foundation_geometry(self.manifest_path)
-        self.foundation_geometry = geo
-        manifest = load_manifest(self.manifest_path)
-        midsole = load_mesh(self.manifest_path.parent / manifest.midsole_mesh, 0.001)
-        midsole_vertices = np.asarray(midsole.vertices, dtype=np.float64).copy()
-        midsole_vertices[:, 2] -= geo.z_shift_m
-        top_interface = np.column_stack([geo.uv_m, geo.z_free_m])
-        top_reference = np.broadcast_to(top_interface.mean(axis=0), midsole_vertices.shape)
-        attached_mesh = attach_sole_geometry(self.resolved, midsole_vertices, top_reference)
+        self.foundation_geometry = prepared.foundation_geometry
         mesh = newton.Mesh(
-            np.asarray(attached_mesh.bottom_local, dtype=np.float32).copy(),
-            np.asarray(midsole.faces, dtype=np.int32).reshape(-1).copy(),
+            prepared.midsole_vertices.copy(),
+            prepared.midsole_indices.copy(),
             compute_inertia=False,
         )
         self.builder.add_shape_mesh(
@@ -205,19 +191,12 @@ class Example:
             color=(0.22, 0.34, 0.72),
             label="digital_instron_midsole",
         )
-
-        column = attach_sole_geometry(self.resolved, np.column_stack([geo.uv_m, geo.z_bottom_m]), top_interface)
-        if column.alignment_max_m > 0.5 * geo.spacing_m + 1.0e-9:
-            raise ValueError(
-                f"shoe-top contact alignment residual {column.alignment_max_m:.6f} m "
-                f"exceeds half the {geo.spacing_m:.6f} m column spacing"
-            )
-        self.attachment_alignment_rms_m = column.alignment_rms_m
-        self.attachment_alignment_max_m = column.alignment_max_m
-        self.column_bottom_local = np.asarray(column.bottom_local, dtype=np.float32)
-        self.column_top_local = np.asarray(column.top_local, dtype=np.float32)
-        self.column_rest_len = np.asarray(column.rest_len, dtype=np.float32)
-        self.column_area = np.full(len(self.column_bottom_local), geo.area_m2, dtype=np.float32)
+        self.attachment_alignment_rms_m = prepared.alignment_rms_m
+        self.attachment_alignment_max_m = prepared.alignment_max_m
+        self.column_bottom_local = prepared.column_bottom_local
+        self.column_top_local = prepared.column_top_local
+        self.column_rest_len = prepared.column_rest_len
+        self.column_area = prepared.column_area
         self._bottom_local = wp.array(self.column_bottom_local, dtype=wp.vec3, device=self.device)
         self._top_local = wp.array(self.column_top_local, dtype=wp.vec3, device=self.device)
         self._render_compression = wp.zeros(len(self.column_bottom_local), dtype=wp.float32, device=self.device)
@@ -245,20 +224,14 @@ class Example:
         self.builder.add_ground_plane()
         self.model = self.builder.finalize(device=self.device)
         self._validate_import_contract()
-        self.foundation_config = FoundationConfig(
-            stretch_floor=0.05,
-            normal_damping=40.0,
-            friction_stiffness=2.0e4,
-            friction=20.0,
-            mu=1.0,
-        )
+        self.foundation_config = make_human_shoe_foundation_config()
         self.foundation = MidsoleFoundation(
             self.column_bottom_local,
             np.zeros(len(self.column_bottom_local), dtype=np.float32),
             self.column_rest_len,
             self.column_area,
-            geo.neighbors,
-            geo.spacing_m,
+            self.foundation_geometry.neighbors,
+            self.foundation_geometry.spacing_m,
             CALIBRATED_MATERIAL,
             self.carrier,
             self.model.body_com,
@@ -348,6 +321,8 @@ class Example:
             raise ValueError(f"initial_motion_frame {frame} is outside motion with {len(times)} frames")
         coordinate_names = [coordinate.name for joint in self.osim_model.joints for coordinate in joint.coordinates]
         coordinate_speeds = np.gradient(coordinates, times, axis=0, edge_order=1)
+        self._initial_osim_coordinates = coordinates[frame].copy()
+        self._initial_osim_speeds = np.zeros_like(self._initial_osim_coordinates)
         joint_qd.fill(0.0)
         missing = []
         for column, name in enumerate(coordinate_names):
@@ -361,6 +336,7 @@ class Example:
                 # Use the measured vertical root speed, but start the controlled
                 # drop without gait-cycle angular velocities fighting the pose hold.
                 joint_qd[target] = coordinate_speeds[frame, column]
+                self._initial_osim_speeds[column] = coordinate_speeds[frame, column]
         if missing:
             raise ValueError(f"motion has nonzero coordinates without a Newton scalar mapping: {', '.join(missing)}")
         self.initial_motion_time_s = float(times[frame])
@@ -376,6 +352,20 @@ class Example:
         q[1] = _standing_root_height(self.state_0, self.carrier, self.column_bottom_local, clearance)
         self.state_0.joint_q.assign(wp.array(q, dtype=wp.float32, device=self.device))
         newton.eval_fk(self.model, self.state_0.joint_q, self.state_0.joint_qd, self.state_0)
+        if self.motion_path is not None:
+            coordinate_names = [coordinate.name for joint in self.osim_model.joints for coordinate in joint.coordinates]
+            pelvis_ty_column = coordinate_names.index("pelvis_ty")
+            self._initial_osim_coordinates[pelvis_ty_column] = q[self.import_result.coordinate_dof["pelvis_ty"]]
+            self.pose_fidelity = compare_imported_state(
+                self.model,
+                self.state_0,
+                self.osim_model,
+                self._initial_osim_coordinates,
+                self._initial_osim_speeds,
+                device=self.device,
+            )
+        else:
+            self.pose_fidelity = None
         self.state_1.body_q.assign(self.state_0.body_q)
         self.state_1.body_qd.assign(self.state_0.body_qd)
         self.control.joint_target_q.assign(self.state_0.joint_q)

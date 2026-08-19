@@ -13,10 +13,10 @@ import warp as wp
 import newton
 import newton.examples
 from newton import opensim
-from projects.digital_instron_v2.dynamics import build_foundation_geometry, column_colors
-from projects.digital_instron_v2.geometry import load_mesh
-from projects.human_shoe import attach_sole_geometry, load_experiment, load_manifest, resolve_attachment
+from projects.digital_instron_v2.dynamics import column_colors
+from projects.human_shoe import load_experiment
 from projects.human_shoe.contact_sidecar import load_contact_sidecar
+from projects.human_shoe.preparation import prepare_attached_sole
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 EXPERIMENT_PATH = BASE_DIR / "experiments/human_shoe/baseline_gait2354.json"
@@ -98,7 +98,9 @@ class Example:
         builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
         contact_shape_start = builder.shape_count
         import_result = opensim.add_osim(builder, self.osim_model, parse_contacts=True, parse_muscles=False)
-        self.resolved = resolve_attachment(import_result, self.experiment.attachment)
+        prepared = prepare_attached_sole(import_result, self.experiment.attachment, self.manifest_path)
+        self.prepared_sole = prepared
+        self.resolved = prepared.resolved
 
         imported_contact_geometry = [
             contact
@@ -113,17 +115,9 @@ class Example:
         for body in range(builder.body_count):
             builder.add_shape_sphere(body, radius=0.014, as_site=True, color=(0.9, 0.85, 0.55))
 
-        geo = build_foundation_geometry(self.manifest_path)
-        manifest = load_manifest(self.manifest_path)
-        midsole = load_mesh(self.manifest_path.parent / manifest.midsole_mesh, 0.001)
-        midsole_vertices = np.asarray(midsole.vertices, dtype=np.float64).copy()
-        midsole_vertices[:, 2] -= geo.z_shift_m
-        top_interface = np.column_stack([geo.uv_m, geo.z_free_m])
-        top_reference = np.broadcast_to(top_interface.mean(axis=0), midsole_vertices.shape)
-        attached_mesh = attach_sole_geometry(self.resolved, midsole_vertices, top_reference)
         mesh = newton.Mesh(
-            np.asarray(attached_mesh.bottom_local, dtype=np.float32).copy(),
-            np.asarray(midsole.faces, dtype=np.int32).reshape(-1).copy(),
+            prepared.midsole_vertices.copy(),
+            prepared.midsole_indices.copy(),
             compute_inertia=False,
         )
         self.midsole_shape = builder.add_shape_mesh(
@@ -133,22 +127,11 @@ class Example:
             color=(0.25, 0.35, 0.75),
             label="digital_instron_midsole",
         )
-
-        column = attach_sole_geometry(
-            self.resolved,
-            np.column_stack([geo.uv_m, geo.z_bottom_m]),
-            top_interface,
-        )
-        if column.alignment_max_m > 0.5 * geo.spacing_m + 1.0e-9:
-            raise ValueError(
-                f"shoe-top contact alignment residual {column.alignment_max_m:.6f} m "
-                f"exceeds half the {geo.spacing_m:.6f} m column spacing"
-            )
-        self.attachment_alignment_rms_m = column.alignment_rms_m
-        self.attachment_alignment_max_m = column.alignment_max_m
-        self.column_bottom_local = np.asarray(column.bottom_local, dtype=np.float32)
-        self.column_top_local = np.asarray(column.top_local, dtype=np.float32)
-        self.column_rest_len = np.asarray(column.rest_len, dtype=np.float32)
+        self.attachment_alignment_rms_m = prepared.alignment_rms_m
+        self.attachment_alignment_max_m = prepared.alignment_max_m
+        self.column_bottom_local = prepared.column_bottom_local
+        self.column_top_local = prepared.column_top_local
+        self.column_rest_len = prepared.column_rest_len
         self._column_bottom_local = wp.array(self.column_bottom_local, dtype=wp.vec3, device=self.device)
         self._column_top_local = wp.array(self.column_top_local, dtype=wp.vec3, device=self.device)
         self._column_rest_len = wp.array(self.column_rest_len, dtype=wp.float32, device=self.device)

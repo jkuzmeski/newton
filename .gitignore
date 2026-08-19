@@ -72,6 +72,7 @@ MUJOCO_LOG.TXT
 imgui.ini
 newton/tests/outputs/
 reports/upstream-sync/
+reports/human_shoe/
 DigitalInstron/processed/v2_cache/
 
 # Viser recordings

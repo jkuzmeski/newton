@@ -22,10 +22,13 @@ from .contracts import (
     load_experiment,
     load_manifest,
 )
+from .fidelity import BodyFidelityError, PoseFidelityReport, compare_imported_state
+from .preparation import PreparedAttachedSole, make_human_shoe_foundation_config, prepare_attached_sole
 
 __all__ = [
     "OSIM_LOCAL_TO_Z_UP_JUMP_BASIS",
     "AttachedSoleGeometry",
+    "BodyFidelityError",
     "DigitalInstronFitContract",
     "DigitalInstronGridContract",
     "DigitalInstronIndenterContract",
@@ -34,9 +37,14 @@ __all__ = [
     "FootContactReference",
     "FootShoeAttachmentContract",
     "HumanShoeExperimentContract",
+    "PoseFidelityReport",
+    "PreparedAttachedSole",
     "ResolvedHumanShoeAttachment",
     "attach_sole_geometry",
+    "compare_imported_state",
     "load_experiment",
     "load_manifest",
+    "make_human_shoe_foundation_config",
+    "prepare_attached_sole",
     "resolve_attachment",
 ]

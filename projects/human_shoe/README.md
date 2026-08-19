@@ -13,6 +13,8 @@ Current scope:
 - an explicit contact-reference-to-shoe offset, expressed along the OpenSim
   foot-body axes
 - pinned controller identifier, solver time step, and random seed
+- exact prescribed-motion shoe load replay with per-substep wrench and energy export
+- explicit pose-fidelity reports for the approximate dynamic OpenSim import
 
 The first template is
 `experiments/human_shoe/baseline_gait2354.json`. It couples the Gait2354
@@ -90,7 +92,29 @@ colors while the rendered segments show the resulting shortening as the foot
 rolls. This is a deformation visualization only; it does not apply foundation
 forces to the kinematic human motion.
 
-Dynamics example:
+## Exact prescribed-motion load replay
+
+Use exact OpenSim ``CustomJoint``/``SimmSpline`` kinematics to replay shoe loads
+without the approximate Newton D6 articulation or a posture controller:
+
+```bash
+uv run -m projects.human_shoe.replay \
+  --experiment experiments/human_shoe/baseline_gait2354.json \
+  --stance-index 0 \
+  --output reports/human_shoe/prescribed_stance.csv
+```
+
+The replay interpolates the source coordinate motion, evaluates exact OpenSim
+body poses and velocities, prescribes the ``calcn_r`` carrier, and advances the
+same Digital Instron foundation used by the dynamic examples. It never integrates
+or modifies the human state. The CSV and JSON sidecar contain per-substep 3-D
+GRF, world-origin moment, COP, compression, active columns, contact power/work,
+and impulse with units and frame metadata.
+
+``find_contact_windows()`` identifies complete stance windows with unloaded
+brackets. The checked-in motion contains three complete right-shoe windows.
+
+## Approximate dynamics example
 
 ```bash
 uv run --extra importers -m projects.human_shoe.landing --viewer gl
@@ -109,6 +133,9 @@ anchors, compression colors, and deformed columns all use that same dynamic
 This is a controlled attachment/contact experiment, not a physiological jump
 or a validated human landing. The OpenSim `CustomJoint` transformations are an
 approximate D6 dynamics import and the harness supplies posture stabilization.
+``PoseFidelityReport`` compares that import with exact OpenSim FK; the checked-in
+Gait2354 pose currently exceeds the 5 mm / 2 degree acceptance limits, so
+scientific shoe-load analysis should use the exact prescribed replay.
 The shoe contact law itself is shared with the calibrated Digital Instron jump
 scenario.
 The shoe is not a separate rigid body: the sole bed is the direct ground-force

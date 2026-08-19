@@ -117,6 +117,10 @@ def foundation_apply(
     normal_force: wp.array[wp.float32],
     cop_moment: wp.array[wp.vec3],
     active_count: wp.array[wp.int32],
+    resultant_force: wp.array[wp.vec3],
+    resultant_moment_origin: wp.array[wp.vec3],
+    contact_power: wp.array[wp.float32],
+    max_compression: wp.array[wp.float32],
 ):
     """Pasternak coupling, per-column wrench into ``body_f``, and force diagnostics."""
     i = wp.tid()
@@ -173,6 +177,10 @@ def foundation_apply(
     wp.atomic_add(body_f, carrier, wp.spatial_vector(force, wp.cross(r, force)))
     wp.atomic_add(normal_force, 0, fn)
     wp.atomic_add(cop_moment, 0, wp.vec3(world[0] * fn, world[1] * fn, 0.0))
+    wp.atomic_add(resultant_force, 0, force)
+    wp.atomic_add(resultant_moment_origin, 0, wp.cross(world, force))
+    wp.atomic_add(contact_power, 0, wp.dot(force, point_vel))
+    wp.atomic_max(max_compression, 0, ci)
     if ci > 0.0:
         wp.atomic_add(active_count, 0, 1)
 
@@ -185,6 +193,10 @@ def foundation_reset(
     normal_force: wp.array[wp.float32],
     cop_moment: wp.array[wp.vec3],
     active_count: wp.array[wp.int32],
+    resultant_force: wp.array[wp.vec3],
+    resultant_moment_origin: wp.array[wp.vec3],
+    contact_power: wp.array[wp.float32],
+    max_compression: wp.array[wp.float32],
 ):
     """Zero the per-substep foundation accumulators (and optionally the carrier wrench).
 
@@ -197,6 +209,10 @@ def foundation_reset(
     normal_force[0] = 0.0
     cop_moment[0] = wp.vec3(0.0, 0.0, 0.0)
     active_count[0] = 0
+    resultant_force[0] = wp.vec3(0.0, 0.0, 0.0)
+    resultant_moment_origin[0] = wp.vec3(0.0, 0.0, 0.0)
+    contact_power[0] = 0.0
+    max_compression[0] = 0.0
     if clear_body_force != 0:
         body_f[carrier] = wp.spatial_vector(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
@@ -293,6 +309,10 @@ class MidsoleFoundation:
         self.normal_force = wp.zeros(1, dtype=wp.float32, device=device)
         self.cop_moment = wp.zeros(1, dtype=wp.vec3, device=device)
         self.active = wp.zeros(1, dtype=wp.int32, device=device)
+        self.resultant_force = wp.zeros(1, dtype=wp.vec3, device=device)
+        self.resultant_moment_origin = wp.zeros(1, dtype=wp.vec3, device=device)
+        self.contact_power = wp.zeros(1, dtype=wp.float32, device=device)
+        self.max_compression = wp.zeros(1, dtype=wp.float32, device=device)
 
     def reset(self) -> None:
         """Clear the viscoelastic overstress history and release the friction bristles."""
@@ -321,6 +341,10 @@ class MidsoleFoundation:
                 self.normal_force,
                 self.cop_moment,
                 self.active,
+                self.resultant_force,
+                self.resultant_moment_origin,
+                self.contact_power,
+                self.max_compression,
             ],
             device=self.device,
         )
@@ -362,6 +386,10 @@ class MidsoleFoundation:
                 self.normal_force,
                 self.cop_moment,
                 self.active,
+                self.resultant_force,
+                self.resultant_moment_origin,
+                self.contact_power,
+                self.max_compression,
             ],
             device=self.device,
         )
