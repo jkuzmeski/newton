@@ -273,6 +273,20 @@ def mass_bias_kernel(
 
 
 @wp.kernel
+def constrain_fixed_coordinates_kernel(
+    mass: wp.array3d[_f64],
+    rhs: wp.array2d[_f64],
+    fixed: wp.array[wp.int32],
+):
+    """Impose zero acceleration on locked and zero-width clamped coordinates."""
+    b, i, k = wp.tid()
+    if fixed[i] != 0 or fixed[k] != 0:
+        mass[b, i, k] = _f64(1.0) if i == k and fixed[i] != 0 else _f64(0.0)
+    if k == 0 and fixed[i] != 0:
+        rhs[b, i] = _f64(0.0)
+
+
+@wp.kernel
 def spd_solve_kernel(A: wp.array3d[_f64], b: wp.array2d[_f64], nc: int, x: wp.array2d[_f64]):
     """In-place Cholesky of each SPD system ``A[s]`` and solve ``A[s] x = b[s]``."""
     s = wp.tid()
@@ -621,12 +635,24 @@ class IDResult:
         generalized_forces: Joint moments [N*m] (rotational) or forces [N]
             (translational), shape ``[num_frames, num_coordinates]``.
         motion_types: Motion type per coordinate (``"rotational"`` etc.).
+        coordinates: Filtered coordinate values [m or rad], shape
+            ``[num_frames, num_coordinates]``. Available for results produced by
+            :meth:`InverseDynamics.solve_from_motion`.
+        speeds: Filtered coordinate speeds [m/s or rad/s], same shape as
+            ``coordinates``. Available for results produced by
+            :meth:`InverseDynamics.solve_from_motion`.
+        accelerations: Filtered coordinate accelerations [m/s^2 or rad/s^2],
+            same shape as ``coordinates``. Available for results produced by
+            :meth:`InverseDynamics.solve_from_motion`.
     """
 
     times: np.ndarray
     coordinate_names: list[str]
     generalized_forces: np.ndarray
     motion_types: list[str]
+    coordinates: np.ndarray | None = None
+    speeds: np.ndarray | None = None
+    accelerations: np.ndarray | None = None
 
     @property
     def column_labels(self) -> list[str]:
@@ -824,6 +850,9 @@ class InverseDynamics:
             coordinate_names=self.coordinate_names,
             generalized_forces=tau,
             motion_types=self.motion_types,
+            coordinates=q,
+            speeds=qd,
+            accelerations=qdd,
         )
 
 
@@ -974,6 +1003,9 @@ class ForwardDynamics:
     evaluations and the batched Cholesky solve
     :math:`M(q)\ddot q = \tau-b` run in Warp kernels. Repeated simulations
     reuse fixed-shape device workspaces and capture supported CUDA steps.
+    Coordinates marked ``locked`` and clamped coordinates with a zero-width
+    range are imposed as zero-acceleration constraints. Forward simulation also
+    zeros their initial speeds and sets zero-width coordinates to their bound.
 
     Args:
         model: Parsed model IR.
@@ -989,6 +1021,23 @@ class ForwardDynamics:
         self.coordinate_names = self.idyn.coordinate_names
         self.motion_types = self.idyn.motion_types
         self.ncoord = self.idyn.ncoord
+        coordinates = {coordinate.name: coordinate for joint in model.joints for coordinate in joint.coordinates}
+
+        def is_zero_width_clamp(name: str) -> bool:
+            coordinate = coordinates[name]
+            return coordinate.clamped and coordinate.range is not None and coordinate.range[0] == coordinate.range[1]
+
+        fixed = np.asarray(
+            [coordinates[name].locked or is_zero_width_clamp(name) for name in self.coordinate_names],
+            dtype=np.int32,
+        )
+        fixed_values = np.asarray(
+            [coordinates[name].range[0] if is_zero_width_clamp(name) else np.nan for name in self.coordinate_names],
+            dtype=float,
+        )
+        self._fixed_coordinates = fixed
+        self._fixed_values = fixed_values
+        self._fixed_coordinates_device = wp.array(fixed, dtype=wp.int32, device=self.device)
 
     def _create_device_workspace(
         self, batch: int, external_bodies: list[str] | None = None
@@ -1118,6 +1167,13 @@ class ForwardDynamics:
     ) -> None:
         """Evaluate forward accelerations with device-resident inputs and workspace."""
         self._mass_bias_device(coords, speeds, applied_forces, workspace, h, eps, external_wrenches)
+        if np.any(self._fixed_coordinates):
+            wp.launch(
+                constrain_fixed_coordinates_kernel,
+                dim=(workspace.batch, self.ncoord, self.ncoord),
+                inputs=[workspace.mass_matrix, workspace.rhs, self._fixed_coordinates_device],
+                device=self.device,
+            )
         wp.launch(
             spd_solve_kernel,
             dim=workspace.batch,
@@ -1202,9 +1258,12 @@ class ForwardDynamics:
         Returns:
             Coordinate accelerations, shape ``[num_frames, num_coordinates]``.
         """
-        q = np.ascontiguousarray(q, dtype=float)
-        qd = np.ascontiguousarray(qd, dtype=float)
+        q = np.ascontiguousarray(q, dtype=float).copy()
+        qd = np.ascontiguousarray(qd, dtype=float).copy()
         tau = np.ascontiguousarray(tau, dtype=float)
+        fixed_values = np.isfinite(self._fixed_values)
+        q[:, fixed_values] = self._fixed_values[fixed_values]
+        qd[:, self._fixed_coordinates != 0] = 0.0
         q_wp = wp.array(q, dtype=_f64, device=self.device)
         qd_wp = wp.array(qd, dtype=_f64, device=self.device)
         tau_wp = wp.array(tau, dtype=_f64, device=self.device)
@@ -1272,6 +1331,9 @@ class ForwardDynamics:
 
         q = np.asarray(initial_coordinates, dtype=float).copy()
         v = np.asarray(initial_speeds, dtype=float).copy()
+        fixed_values = np.isfinite(self._fixed_values)
+        q[fixed_values] = self._fixed_values[fixed_values]
+        v[self._fixed_coordinates != 0] = 0.0
         nc = self.ncoord
         n_steps = int(round(duration / dt))
 
@@ -1369,8 +1431,11 @@ class ForwardDynamics:
         """
         dev = self.device
         nc = self.ncoord
-        q0 = np.ascontiguousarray(np.atleast_2d(np.asarray(initial_coordinates, dtype=float)))
-        v0 = np.ascontiguousarray(np.atleast_2d(np.asarray(initial_speeds, dtype=float)))
+        q0 = np.ascontiguousarray(np.atleast_2d(np.asarray(initial_coordinates, dtype=float))).copy()
+        v0 = np.ascontiguousarray(np.atleast_2d(np.asarray(initial_speeds, dtype=float))).copy()
+        fixed_values = np.isfinite(self._fixed_values)
+        q0[:, fixed_values] = self._fixed_values[fixed_values]
+        v0[:, self._fixed_coordinates != 0] = 0.0
         n_traj = q0.shape[0]
         n_steps = int(round(duration / dt))
         if integrator not in ("rk4", "semi_implicit"):

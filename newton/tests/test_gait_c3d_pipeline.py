@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from projects.gait_c3d import pipeline
+from projects.gait_c3d import pipeline, torque_reconstruction
 
 
 class TestGaitC3DPipeline(unittest.TestCase):
@@ -268,6 +268,62 @@ class TestGaitC3DPipeline(unittest.TestCase):
         misordered[0], misordered[1] = misordered[1], misordered[0]
         with self.assertRaisesRegex(ValueError, "required schema"):
             pipeline.validate_external_load_schema(misordered)
+
+    def test_sample_only_archived_external_load_frames(self):
+        """Reuse sanitized load frames exactly and reject interpolated requests."""
+        times = np.array([1.0, 1.1, 1.2, 1.3])
+        wrenches = np.arange(4 * 2 * 9, dtype=float).reshape(4, 2, 9)
+        loads = pipeline._SampledExternalLoads(times, ["left", "right"], wrenches)
+
+        bodies, subset = loads.sample(times[[0, 2, 3]])
+
+        self.assertEqual(bodies, ["left", "right"])
+        np.testing.assert_array_equal(subset, wrenches[[0, 2, 3]])
+        with self.assertRaisesRegex(ValueError, "outside the sampled time grid"):
+            loads.sample(np.array([1.05]))
+
+    def test_interpolate_torque_reconstruction_inputs_without_extrapolation(self):
+        """Interpolate all trailing components and reject times outside the archive."""
+        times = np.array([0.0, 1.0, 2.0])
+        values = np.zeros((3, 2, 2))
+        values[:, 0, 0] = [0.0, 2.0, 4.0]
+        values[:, 1, 1] = [1.0, 3.0, 5.0]
+
+        sampled = torque_reconstruction._interpolate(times, values, np.array([0.5, 1.5]))
+
+        self.assertEqual(sampled.shape, (2, 2, 2))
+        np.testing.assert_allclose(sampled[:, 0, 0], [1.0, 3.0])
+        np.testing.assert_allclose(sampled[:, 1, 1], [2.0, 4.0])
+        with self.assertRaisesRegex(ValueError, "outside the archived trajectory"):
+            torque_reconstruction._interpolate(times, values, np.array([2.1]))
+
+    def test_reject_overlapping_torque_reconstruction_paths(self):
+        """Keep diagnostic replacement paths disjoint from immutable source artifacts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data_dir = root / "source" / "latest"
+            data_dir.mkdir(parents=True)
+
+            with self.assertRaisesRegex(ValueError, "must not overlap"):
+                torque_reconstruction.run_reconstruction(data_dir, data_dir / "diagnostic")
+            with self.assertRaisesRegex(ValueError, "must not overlap"):
+                torque_reconstruction.run_reconstruction(data_dir, root / "source")
+
+            output_file = root / "diagnostic"
+            output_file.write_text("not a directory", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not a directory"):
+                torque_reconstruction.run_reconstruction(data_dir, output_file)
+
+    def test_separate_rotational_and_translational_reconstruction_errors(self):
+        """Report dynamics errors without mixing angular and linear units."""
+        error = np.array([[3.0, 4.0], [0.0, 0.0]])
+
+        summary = torque_reconstruction._error_summary(error, ["rotational", "translational"])
+
+        self.assertEqual(summary["rotational"]["count"], 1)
+        self.assertAlmostEqual(summary["rotational"]["max_abs"], 3.0)
+        self.assertEqual(summary["translational"]["count"], 1)
+        self.assertAlmostEqual(summary["translational"]["max_abs"], 4.0)
 
     def test_preserve_marker_units_as_metres(self):
         """Label C3D marker values as metres after numerical conversion."""

@@ -52,7 +52,9 @@ PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.pipeline \
 Use `--help` for input/output, stride search time, coarse node count, and Warp
 device options. CPU is the deterministic default.
 Static Optimization runs unless it is *explicitly* disabled; its default 12 nodes
-are resampled to every 100 Hz stride frame.
+are selected directly from the 100 Hz stride grid and resampled to every stride
+frame. Both inverse dynamics and Static Optimization consume the same archived,
+sanitized external-wrench frames.
 
 ## Frames and treadmill conversion
 
@@ -126,7 +128,7 @@ FK equivalence is checked independently to numerical precision.
 The output directory includes:
 
 - `S001_scaled.osim` and its static TRC;
-- `trial_ik.mot`, `trial_ik_human_shoe_context.mot`, and `ik_marker_residuals.sto`;
+- `trial_ik.mot`, padded `trial_ik_dynamics_context.mot`, legacy adapter context, and `ik_marker_residuals.sto`;
 - stride `trial_grf.mot`, `trial_grf_context.mot/.xml`, and the exact
   `trial_grf_id_sampled.mot` used by ID;
 - `trial_id.sto` and paired `trial_id_treadmill_frame.sto`;
@@ -153,8 +155,11 @@ The `analysis.npz` schema is:
 | `com` | `[N,3]` | whole-body OpenSim-frame center of mass [m] |
 | `activations` | `[N,U]` | resampled muscle activations; `[N,0]` when skipped |
 | `muscle_names` | `[U]` | activation columns |
+| `id_coordinates`, `id_speeds`, `id_accelerations` | `[N,Q]` | filtered coordinate state used by inverse dynamics [m or rad and time derivatives] |
 | `id_generalized_forces` | `[N,Q]` | inverse-dynamics forces/moments |
 | `id_names` | `[Q]` | inverse-dynamics column coordinate names |
+| `id_external_wrenches` | `[N,2,9]` | exact sanitized `[F P T]` wrenches used by inverse dynamics |
+| `id_external_bodies` | `[2]` | bodies receiving the archived external wrenches |
 
 `qc_summary.json` records SHA-256 hashes of every raw source, axis/frame semantics,
 metric anchors and unit assumptions, mass source, static and dynamic marker errors,
@@ -164,6 +169,26 @@ and FK/ID frame-equivalence gates, exact sampled-load differences, dimensionally
 normalized pelvis residual force/moment resultants, and per-coordinate/unit Static
 Optimization reserve statistics. A kinetics/reserve failure remains visible rather
 than being hidden by a successful animation.
+
+## Torque-reconstruction diagnostic
+
+After producing a complete pipeline artifact, verify the inverse-to-forward
+dynamics bridge with:
+
+```bash
+uv run --extra examples --extra opensim -m projects.gait_c3d.torque_reconstruction
+```
+
+The diagnostic first evaluates every frame pointwise using the exact filtered
+`q`, `qdot`, and `qddot` retained by inverse dynamics, its generalized forces,
+and its archived sanitized external wrenches. It then runs a trimmed open-loop
+RK4 rollout with linearly interpolated copies of the measured wrenches and ID
+torques. Outputs are written to a sibling directory rather than modifying the
+staged source artifact.
+
+This is an engineering reconstruction, not predictive contact dynamics. It
+replays measured ground reactions and intentionally reports uncorrected
+open-loop drift without a tracking controller or hidden residual forces.
 
 ## Visualization
 

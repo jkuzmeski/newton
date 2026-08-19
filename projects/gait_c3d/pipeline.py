@@ -26,7 +26,7 @@ import numpy as np
 import newton.examples
 import newton.opensim as osim
 
-_SCHEMA_VERSION = "gait_c3d_analysis_1"
+_SCHEMA_VERSION = "gait_c3d_analysis_2"
 _BELT_ANCHOR_INDICES = np.array([0, 1356, 22244, 43139, 52098, 53223], dtype=float)
 _BELT_ANCHOR_TIMES = np.array([0.0, 4.68, 74.69, 144.70, 174.71, 178.46], dtype=float)
 _G = 9.80665
@@ -601,10 +601,18 @@ class _SampledExternalLoads:
         self.wrenches = np.asarray(wrenches, float)
 
     def sample(self, output_times: np.ndarray) -> tuple[list[str], np.ndarray]:
-        """Return exact pre-sampled wrenches on the validated output grid."""
-        if not np.allclose(output_times, self.times, rtol=0.0, atol=1.0e-10):
-            raise ValueError("exact external loads were requested on a different time grid")
-        return self.bodies, self.wrenches.copy()
+        """Return exact pre-sampled wrenches at frames from the validated grid."""
+        output_times = np.asarray(output_times, float)
+        indices = np.searchsorted(self.times, output_times)
+        if (
+            output_times.ndim != 1
+            or np.any(indices >= len(self.times))
+            or not np.allclose(
+                self.times[np.minimum(indices, len(self.times) - 1)], output_times, rtol=0.0, atol=1.0e-10
+            )
+        ):
+            raise ValueError("exact external loads were requested outside the sampled time grid")
+        return self.bodies, self.wrenches[indices].copy()
 
 
 def _ik_result(model, markers: osim.MarkerData, device) -> tuple[osim.IKResult, np.ndarray]:
@@ -786,28 +794,33 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     ik.write_mot(ik_path)
     residual = predicted - target_markers
     residual_norm = np.linalg.norm(residual, axis=-1)
-    shoe_padding = int(round(0.25 / float(np.median(np.diff(times)))))
-    shoe_start = max(0, start - shoe_padding)
-    shoe_stop = min(len(times), stop + shoe_padding)
-    shoe_slice = slice(shoe_start, shoe_stop)
-    shoe_times = times[shoe_slice]
-    shoe_displacement = np.asarray(cache["belt_displacement_absolute"], float)[shoe_slice]
-    shoe_treadmill_markers = np.asarray(cache["markers_treadmill"], float)[shoe_slice]
-    shoe_target_markers = treadmill_to_overground(
-        shoe_treadmill_markers,
-        shoe_displacement,
-        reference_index=start - shoe_start,
+    dynamics_padding = int(round(0.25 / float(np.median(np.diff(times)))))
+    dynamics_start = max(0, start - dynamics_padding)
+    dynamics_stop = min(len(times), stop + dynamics_padding)
+    dynamics_slice = slice(dynamics_start, dynamics_stop)
+    dynamics_times = times[dynamics_slice]
+    dynamics_displacement = np.asarray(cache["belt_displacement_absolute"], float)[dynamics_slice]
+    dynamics_treadmill_markers = np.asarray(cache["markers_treadmill"], float)[dynamics_slice]
+    dynamics_target_markers = treadmill_to_overground(
+        dynamics_treadmill_markers,
+        dynamics_displacement,
+        reference_index=start - dynamics_start,
     )
-    shoe_markers = osim.MarkerData(
-        times=shoe_times,
+    dynamics_markers = osim.MarkerData(
+        times=dynamics_times,
         marker_names=marker_names,
-        data=shoe_target_markers,
+        data=dynamics_target_markers,
         rate=100.0,
         units="m",
     )
-    shoe_ik, _shoe_predicted = _ik_result(model, shoe_markers, args.device)
+    dynamics_ik, _dynamics_predicted = _ik_result(model, dynamics_markers, args.device)
+    dynamics_ik_path = output_dir / "trial_ik_dynamics_context.mot"
+    dynamics_ik.write_mot(dynamics_ik_path)
+
+    # Preserve the existing downstream adapter artifact without coupling the
+    # dynamics analysis to that workflow.
     shoe_ik_path = output_dir / "trial_ik_human_shoe_context.mot"
-    shoe_ik.write_mot(shoe_ik_path)
+    dynamics_ik.write_mot(shoe_ik_path)
 
     residual_path = output_dir / "ik_marker_residuals.sto"
     osim.write_storage(
@@ -882,31 +895,63 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     )
     exact_loads = _SampledExternalLoads(segment_times, external_bodies, sampled_wrenches)
 
-    ik_storage = ik.to_storage()
+    # Differentiate the measured motion with real context on both sides of the
+    # selected stride instead of padding a one-stride signal synthetically.
+    ik_storage = dynamics_ik.to_storage()
     inverse = osim.InverseDynamics(model, device=args.device)
     id_result = inverse.solve_from_motion(
         ik_storage, external_loads=exact_loads, cutoff=6.0, output_times=segment_times
     )
+    if id_result.coordinates is None or id_result.speeds is None or id_result.accelerations is None:
+        raise RuntimeError("inverse dynamics did not retain its filtered coordinate state")
     id_path = output_dir / "trial_id.sto"
     id_result.write_sto(id_path)
+    forward = osim.ForwardDynamics(model, device=args.device)
+    reconstructed_accelerations = forward.accelerations(
+        id_result.coordinates,
+        id_result.speeds,
+        id_result.generalized_forces,
+        external_bodies=external_bodies,
+        external_wrenches=sampled_wrenches,
+    )
+    acceleration_closure_error = reconstructed_accelerations - id_result.accelerations
+    rotational_coordinates = np.asarray([kind == "rotational" for kind in id_result.motion_types], bool)
+
+    def acceleration_error_stats(mask: np.ndarray) -> dict[str, float]:
+        values = acceleration_closure_error[:, mask]
+        return {
+            "rms": float(np.sqrt(np.mean(values**2))) if values.size else 0.0,
+            "max_abs": float(np.max(np.abs(values))) if values.size else 0.0,
+        }
+
+    acceleration_closure = {
+        "rotational_rad_s2": acceleration_error_stats(rotational_coordinates),
+        "translational_m_s2": acceleration_error_stats(~rotational_coordinates),
+    }
 
     treadmill_coordinates = ik.values.copy()
     pelvis_tx_index = ik.coordinate_names.index("pelvis_tx")
     treadmill_coordinates[:, pelvis_tx_index] -= displacement_relative
-    treadmill_ik = osim.IKResult(
-        times=segment_times,
-        coordinate_names=ik.coordinate_names,
-        values=treadmill_coordinates,
-        motion_types=ik.motion_types,
-        marker_rms=ik.marker_rms,
-        marker_max=ik.marker_max,
-        marker_names=ik.marker_names,
-    )
     treadmill_wrenches = sampled_wrenches.copy()
     treadmill_wrenches[:, :, 3] -= displacement_relative[:, None]
     treadmill_loads = _SampledExternalLoads(segment_times, external_bodies, treadmill_wrenches)
+    treadmill_context_coordinates = dynamics_ik.values.copy()
+    dynamics_displacement_relative = dynamics_displacement - dynamics_displacement[start - dynamics_start]
+    treadmill_context_coordinates[:, pelvis_tx_index] -= dynamics_displacement_relative
+    treadmill_context_ik = osim.IKResult(
+        times=dynamics_ik.times,
+        coordinate_names=dynamics_ik.coordinate_names,
+        values=treadmill_context_coordinates,
+        motion_types=dynamics_ik.motion_types,
+        marker_rms=dynamics_ik.marker_rms,
+        marker_max=dynamics_ik.marker_max,
+        marker_names=dynamics_ik.marker_names,
+    )
     treadmill_id = inverse.solve_from_motion(
-        treadmill_ik.to_storage(), external_loads=treadmill_loads, cutoff=6.0, output_times=segment_times
+        treadmill_context_ik.to_storage(),
+        external_loads=treadmill_loads,
+        cutoff=6.0,
+        output_times=segment_times,
     )
     treadmill_id_path = output_dir / "trial_id_treadmill_frame.sto"
     treadmill_id.write_sto(treadmill_id_path)
@@ -924,11 +969,17 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     if not args.skip_static_optimization:
         if int(args.so_nodes) < 6:
             raise ValueError("--so-nodes must be at least 6 for spline differentiation")
-        so_times = np.linspace(segment_times[0], segment_times[-1], int(args.so_nodes))
+        so_frame_indices = np.linspace(
+            0,
+            len(segment_times) - 1,
+            min(int(args.so_nodes), len(segment_times)),
+            dtype=int,
+        )
+        so_times = segment_times[so_frame_indices]
         static_optimizer = osim.StaticOptimization(model, device=args.device)
         so_result = static_optimizer.solve_from_motion(
             ik_storage,
-            external_loads=parsed_loads,
+            external_loads=exact_loads,
             cutoff=6.0,
             output_times=so_times,
         )
@@ -954,6 +1005,8 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         reserve_by_coordinate = {}
         normalized_force = []
         normalized_moment = []
+        normalized_non_root_force = []
+        normalized_non_root_moment = []
         for index, name in enumerate(so_result.coordinate_names):
             rotational = coordinate_motion[name] == "rotational"
             values = so_result.reserve_forces[:, index]
@@ -967,12 +1020,22 @@ def run_pipeline(args: argparse.Namespace) -> Path:
                 "max_abs_normalized": normalized,
             }
             (normalized_moment if rotational else normalized_force).append(normalized)
+            if not name.startswith("pelvis_"):
+                (normalized_non_root_moment if rotational else normalized_non_root_force).append(normalized)
         reserve_summary = {
             "status": "computed",
             "coordinates": reserve_by_coordinate,
             "max_force_fraction_BW": max(normalized_force, default=0.0),
             "max_moment_fraction_BW_height": max(normalized_moment, default=0.0),
+            "max_non_root_force_fraction_BW": max(normalized_non_root_force, default=0.0),
+            "max_non_root_moment_fraction_BW_height": max(normalized_non_root_moment, default=0.0),
             "max_moment_balance_residual_N_or_Nm": float(np.max(np.abs(so_result.moment_residuals))),
+            "sampling": {
+                "frame_indices": so_frame_indices,
+                "times_s": so_times,
+                "external_load_source": sampled_path.name,
+                "max_wrench_mismatch": {"force_N": 0.0, "point_m": 0.0, "torque_Nm": 0.0},
+            },
             "normalization": {"body_weight_N": mass * _G, "marker_height_m": subject_height_m},
         }
 
@@ -1131,6 +1194,15 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "value": bool(np.all(np.isfinite(id_result.generalized_forces))),
             "threshold": True,
         },
+        "inverse_forward_acceleration_closure": {
+            "passed": (
+                acceleration_closure["rotational_rad_s2"]["max_abs"] <= 1.0e-3
+                and acceleration_closure["translational_m_s2"]["max_abs"] <= 1.0e-5
+            ),
+            "value": acceleration_closure,
+            "threshold": {"rotational_max_abs_rad_s2": 1.0e-3, "translational_max_abs_m_s2": 1.0e-5},
+            "note": "Engineering ID-to-FD consistency gate; it does not validate predictive contact dynamics.",
+        },
         "pelvis_residual_translation": {
             "passed": pelvis_residuals["translation"]["rms_fraction_body_weight"] < 0.10,
             "value": pelvis_residuals["translation"],
@@ -1153,9 +1225,11 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "value": {
                 "max_force_fraction_BW": reserve_summary["max_force_fraction_BW"],
                 "max_moment_fraction_BW_height": reserve_summary["max_moment_fraction_BW_height"],
+                "max_non_root_force_fraction_BW": reserve_summary["max_non_root_force_fraction_BW"],
+                "max_non_root_moment_fraction_BW_height": reserve_summary["max_non_root_moment_fraction_BW_height"],
             },
             "threshold": {"force_fraction_BW": 0.10, "moment_fraction_BW_height": 0.05},
-            "note": "Large reserves make muscle recruitment illustrative rather than quantitative.",
+            "note": "Root reserves duplicate pelvis residuals; non-root reserves are reported separately. Activations remain illustrative when either gate fails.",
         }
     core_pass = all(bool(gate["passed"]) for gate in gates.values() if gate.get("severity", "error") != "warning")
     source_hashes = {name: sha256(path) for name, path in source_paths.items()}
@@ -1276,11 +1350,14 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "forces": "OpenSim ground; subject-directed",
             "cop": "OpenSim overground, translated with virtual origin",
             "coordinates": "OpenSim native radians/metres",
+            "id_coordinates_speeds_accelerations": "6 Hz filtered OpenSim native state used by inverse dynamics",
             "id_generalized_forces": "overground constant-velocity frame",
+            "id_external_wrenches": "sanitized exact sampled [F P T] used by inverse dynamics",
         },
         "artifacts": {
             "model": scaled_model_path.name,
             "ik": ik_path.name,
+            "ik_dynamics_context": dynamics_ik_path.name,
             "ik_human_shoe_context": shoe_ik_path.name,
             "ik_residuals": residual_path.name,
             "grf_stride": grf_path.name,
@@ -1337,8 +1414,13 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         com=com,
         activations=activations,
         muscle_names=np.asarray(muscle_names, dtype="U"),
+        id_coordinates=id_result.coordinates,
+        id_speeds=id_result.speeds,
+        id_accelerations=id_result.accelerations,
         id_generalized_forces=id_result.generalized_forces,
         id_names=np.asarray(id_result.coordinate_names, dtype="U"),
+        id_external_bodies=np.asarray(external_bodies, dtype="U"),
+        id_external_wrenches=sampled_wrenches,
     )
     backup_dir = final_output_dir.parent / f".{final_output_dir.name}.previous"
     if backup_dir.exists():

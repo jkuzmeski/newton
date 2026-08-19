@@ -1475,6 +1475,12 @@ class TestInverseDynamics(unittest.TestCase):
         thdd = -amp * freq * freq * np.sin(freq * result.times)
         analytic = i_pivot * thdd + m * g * ell * np.cos(th)
         np.testing.assert_allclose(result.generalized_forces[:, 0], analytic, atol=1e-3)
+        self.assertIsNotNone(result.coordinates)
+        self.assertIsNotNone(result.speeds)
+        self.assertIsNotNone(result.accelerations)
+        np.testing.assert_allclose(result.coordinates[:, 0], th, atol=1.0e-9)
+        np.testing.assert_allclose(result.speeds[:, 0], amp * freq * np.cos(freq * result.times), atol=1.0e-5)
+        np.testing.assert_allclose(result.accelerations[:, 0], thdd, atol=2.0e-4)
 
     def test_result_storage_round_trip(self):
         """Write and re-read an inverse-dynamics result as an OpenSim storage."""
@@ -1521,6 +1527,91 @@ class TestForwardDynamics(unittest.TestCase):
         omega = amp * k * np.sin(k * result.times)
         self.assertLess(np.max(np.abs(result.coordinates[:, 0] - theta)), 1.0e-2)
         self.assertLess(np.max(np.abs(result.speeds[:, 0] - omega)), 1.0e-2)
+
+    def test_zero_width_clamped_coordinate_remains_fixed(self):
+        """Constrain a zero-width clamped coordinate during acceleration and rollout."""
+        xml = _FD_PENDULUM_OSIM.replace(
+            "<range>-3.14159265 3.14159265</range>",
+            "<range>0 0</range><clamped>true</clamped>",
+        )
+        forward = ForwardDynamics(osim.parse_osim(xml))
+
+        acceleration = forward.accelerations(
+            np.array([[0.0]]),
+            np.array([[3.0]]),
+            np.array([[100.0]]),
+        )
+        result = forward.simulate(
+            initial_coordinates=np.array([0.2]),
+            initial_speeds=np.array([3.0]),
+            duration=0.01,
+            dt=0.001,
+            controls=lambda _t, _q, _qd: np.array([100.0]),
+        )
+
+        np.testing.assert_array_equal(acceleration, 0.0)
+        np.testing.assert_array_equal(result.coordinates, 0.0)
+        np.testing.assert_array_equal(result.speeds, 0.0)
+
+    def test_locked_coordinate_eliminates_coupled_mass_row_and_column(self):
+        """Hold a locked coordinate while solving the coupled free-coordinate equation."""
+        model = osim.parse_osim(_DOUBLE_PENDULUM_OSIM)
+        coordinates = {coordinate.name: coordinate for joint in model.joints for coordinate in joint.coordinates}
+        coordinates["j1_q"].locked = True
+        forward = ForwardDynamics(model)
+        q = np.array([[0.2, -0.3]])
+        qd = np.zeros_like(q)
+        tau = np.array([[100.0, 2.0]])
+
+        acceleration = forward.accelerations(q, qd, tau)
+        acceleration_without_reaction = forward.accelerations(q, qd, np.array([[-100.0, 2.0]]))
+        mass = forward.mass_matrix(q)[0]
+        bias = forward.idyn.solve(q, qd, np.zeros_like(q))[0]
+        expected_free = (tau[0, 1] - bias[1]) / mass[1, 1]
+
+        self.assertEqual(acceleration[0, 0], 0.0)
+        self.assertAlmostEqual(acceleration[0, 1], expected_free, places=9)
+        np.testing.assert_allclose(acceleration_without_reaction, acceleration, atol=1.0e-12)
+
+    def test_clamped_coordinate_without_range_remains_free(self):
+        """Accept a clamped coordinate whose optional range is absent."""
+        model = osim.parse_osim(_FD_PENDULUM_OSIM)
+        coordinate = model.joints[0].coordinates[0]
+        coordinate.clamped = True
+        coordinate.range = None
+
+        forward = ForwardDynamics(model)
+        acceleration = forward.accelerations(
+            np.array([[0.0]]),
+            np.array([[0.0]]),
+            np.array([[100.0]]),
+        )
+
+        self.assertNotEqual(acceleration[0, 0], 0.0)
+
+    def test_locked_coordinate_remains_fixed_in_batched_cuda_rollout(self):
+        """Preserve locked values and zero their speeds in captured batched simulation."""
+        if not wp.is_cuda_available():
+            self.skipTest("CUDA is unavailable")
+        model = osim.parse_osim(_DOUBLE_PENDULUM_OSIM)
+        coordinates = {coordinate.name: coordinate for joint in model.joints for coordinate in joint.coordinates}
+        coordinates["j1_q"].locked = True
+        forward = ForwardDynamics(model, device="cuda:0")
+        initial_q = np.array([[0.2, -0.3], [0.5, 0.1]])
+        initial_qd = np.array([[3.0, 0.0], [-2.0, 0.0]])
+
+        result = forward.simulate_batch(
+            initial_q,
+            initial_qd,
+            duration=0.005,
+            dt=0.001,
+            tau_applied=np.array([100.0, 0.0]),
+            use_graph=True,
+        )
+
+        expected_locked = np.broadcast_to(initial_q[None, :, 0], result.coordinates[:, :, 0].shape)
+        np.testing.assert_allclose(result.coordinates[:, :, 0], expected_locked, atol=1.0e-12)
+        np.testing.assert_array_equal(result.speeds[:, :, 0], 0.0)
 
     def test_mass_matrix_is_symmetric_positive_definite(self):
         """Return a symmetric, positive-definite joint-space mass matrix."""
