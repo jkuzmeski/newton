@@ -43,7 +43,7 @@ from newton._src.opensim.functions import SimmSpline, build_function
 from newton._src.opensim.ik import InverseKinematics
 from newton._src.opensim.kinematics import ForwardKinematics, euler_xyz_to_matrix, make_transform
 from newton._src.opensim.mocap import MarkerData, read_storage, read_trc, write_storage, write_trc
-from newton._src.opensim.visualize import _read_vtp
+from newton._src.opensim.visualize import _read_vtp, _resolve_geometry_file
 from newton.viewer import ViewerNull
 
 # A minimal self-contained OpenSim 4.x model: a single pendulum body hanging
@@ -3668,7 +3668,23 @@ def _quat_to_matrix(q):
 
 
 class TestMotionVisualizer(unittest.TestCase):
-    """Warp-native OpenSim motion visualization (``MotionVisualizer``)."""
+    """Verify Warp-native OpenSim motion visualization."""
+
+    def test_geometry_fallback_prefers_matching_side_family(self):
+        """Prefer r_name/l_name geometry so bilateral meshes use one file family."""
+        with tempfile.TemporaryDirectory() as directory:
+            paths = {
+                name: os.path.join(directory, name)
+                for name in ("r_tibia.vtp", "tibia_r.vtp", "r_femur.vtp", "femur_r.vtp")
+            }
+            for path in paths.values():
+                open(path, "w").close()
+
+            tibia = _resolve_geometry_file("tibia.vtp", "tibia_r", directory)
+            femur = _resolve_geometry_file("femur.vtp", "femur_r", directory)
+
+            self.assertEqual(tibia, paths["r_tibia.vtp"])
+            self.assertEqual(femur, paths["femur_r.vtp"])
 
     def _model_with_muscles(self):
         model = osim.parse_osim(_DOUBLE_PENDULUM_OSIM)

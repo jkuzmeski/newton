@@ -690,7 +690,8 @@ def read_display_geometry(source) -> dict[str, list[tuple[str, np.ndarray, np.nd
     """
     text = source
     if isinstance(source, str) and len(source) < 4096 and os.path.exists(source):
-        text = open(source).read()
+        with open(source, encoding="utf-8") as stream:
+            text = stream.read()
     root = ET.fromstring(text)
 
     def _xform(vals):
@@ -732,9 +733,16 @@ def read_display_geometry(source) -> dict[str, list[tuple[str, np.ndarray, np.nd
     return out
 
 
+_LEGACY_GEOMETRY_ALIASES = {
+    ("femur_r", "femur.vtp"): ("femur_r.vtp", "r_femur.vtp"),
+    ("tibia_r", "tibia.vtp"): ("r_tibia.vtp", "tibia_r.vtp"),
+}
+
+
 def _resolve_geometry_file(filename: str, body_name: str, geometry_dir: str) -> str | None:
     """Resolve a referenced ``.vtp`` against ``geometry_dir`` with side-aware fallbacks."""
     candidates = [filename]
+    candidates.extend(_LEGACY_GEOMETRY_ALIASES.get((body_name, filename), ()))
     base, ext = os.path.splitext(filename)
     for side in ("r", "l"):
         if body_name.endswith("_" + side):

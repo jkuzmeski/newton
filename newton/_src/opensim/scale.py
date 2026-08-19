@@ -448,6 +448,80 @@ def _scale_inertia(inertia6: tuple[float, ...], s: Vec3, mass_scale: float) -> t
 _WRAP_DIM_TAGS = ("radius", "length", "dimensions", "radii", "height")
 
 
+def _scale_function_output(function: ET.Element | None, factor: float) -> None:
+    """Scale the scalar output of a legacy OpenSim coordinate function."""
+    if function is None or abs(factor - 1.0) < 1.0e-15:
+        return
+    child = next(iter(function), None)
+    if child is None:
+        return
+    tag = child.tag.rsplit("}", 1)[-1]
+    if tag == "LinearFunction":
+        coefficients = child.find("coefficients")
+        if coefficients is not None:
+            values = _txt_vec(coefficients)
+            if len(values) >= 2 and values[0] == 1.0 and values[1] == 0.0:
+                return
+    value_tag = {
+        "Constant": "value",
+        "LinearFunction": "coefficients",
+        "SimmSpline": "y",
+        "NaturalCubicSpline": "y",
+        "GCVSpline": "y",
+        "PiecewiseLinearFunction": "y",
+    }.get(tag)
+    if value_tag is not None:
+        values = child.find(value_tag)
+        if values is not None and (values.text or "").split():
+            _set_vec(values, [factor * value for value in _txt_vec(values)])
+        return
+    if tag == "MultiplierFunction":
+        scale = child.find("scale")
+        if scale is None:
+            raise ValueError("MultiplierFunction is missing its scale")
+        scale.text = f" {factor * float(scale.text or 1.0):.8f} "
+        return
+    raise NotImplementedError(f"cannot scale the output of OpenSim function {tag}")
+
+
+def _scale_spatial_transform_translations(joint: ET.Element, parent_scale: Vec3) -> None:
+    """Scale CustomJoint translation axes/functions in the parent body frame."""
+    spatial = joint.find("SpatialTransform")
+    if spatial is None:
+        return
+    parent_scale_array = np.asarray(parent_scale, dtype=float)
+    for transform_axis in spatial.findall("TransformAxis"):
+        if not (transform_axis.get("name") or "").startswith("translation"):
+            continue
+        axis_element = transform_axis.find("axis")
+        if axis_element is None or not (axis_element.text or "").split():
+            continue
+        axis = np.asarray(_txt_vec(axis_element), dtype=float)
+        scale_factor = float(np.dot(np.abs(axis), parent_scale_array))
+        if scale_factor < 1.0e-12:
+            raise ValueError("scaled CustomJoint translation axis is degenerate")
+        _scale_function_output(transform_axis.find("function"), scale_factor)
+
+
+def _scale_display_geometry_once(body: ET.Element, body_scale: Vec3) -> None:
+    """Apply body scaling once across nested legacy display-scale levels."""
+    for visible in body.findall("VisibleObject"):
+        visible_scale = visible.find("scale_factors")
+        if visible_scale is not None and (visible_scale.text or "").split():
+            _set_vec(
+                visible_scale,
+                [value * factor for value, factor in zip(_txt_vec(visible_scale), body_scale, strict=False)],
+            )
+            continue
+        for geometry in visible.iter("DisplayGeometry"):
+            geometry_scale = geometry.find("scale_factors")
+            if geometry_scale is not None and (geometry_scale.text or "").split():
+                _set_vec(
+                    geometry_scale,
+                    [value * factor for value, factor in zip(_txt_vec(geometry_scale), body_scale, strict=False)],
+                )
+
+
 def _scale_body_element(body: ET.Element, s: Vec3, parent_factors: ScaleFactorSet, scale_mass: bool) -> None:
     """Scale one ``<Body>`` element in place (geometry, inertia, joint, wrap)."""
     sx, sy, sz = s
@@ -470,10 +544,8 @@ def _scale_body_element(body: ET.Element, s: Vec3, parent_factors: ScaleFactorSe
         if m is not None and (m.text or "").strip():
             m.text = f" {float(m.text) * vol:.8f} "
 
-    # Display geometry scale factors (VisibleObject and each DisplayGeometry).
-    for sf in body.iter("scale_factors"):
-        if (sf.text or "").split():
-            _set_vec(sf, [v * f for v, f in zip(_txt_vec(sf), s, strict=False)])
+    # VisibleObject and DisplayGeometry scales are nested and multiplied at render time.
+    _scale_display_geometry_once(body, s)
 
     # Joint owned by this body: location is in the child (this) frame; the
     # location_in_parent is in the parent frame.
@@ -484,9 +556,12 @@ def _scale_body_element(body: ET.Element, s: Vec3, parent_factors: ScaleFactorSe
                 _set_vec(loc, [v * f for v, f in zip(_txt_vec(loc), s, strict=False)])
             lip = joint.find("location_in_parent")
             pb = joint.find("parent_body")
-            if lip is not None and pb is not None and (lip.text or "").split():
-                pf = parent_factors.get((pb.text or "").strip(), (1.0, 1.0, 1.0))
-                _set_vec(lip, [v * f for v, f in zip(_txt_vec(lip), pf, strict=False)])
+            parent_scale = (
+                parent_factors.get((pb.text or "").strip(), (1.0, 1.0, 1.0)) if pb is not None else (1.0, 1.0, 1.0)
+            )
+            if lip is not None and (lip.text or "").split():
+                _set_vec(lip, [v * f for v, f in zip(_txt_vec(lip), parent_scale, strict=False)])
+            _scale_spatial_transform_translations(joint, parent_scale)
 
     # Wrap objects on this body.
     for wrap in body.iter():
@@ -543,10 +618,15 @@ def _scale_osim_document(
     for tag in ("PathPoint", "ConditionalPathPoint", "MovingPathPoint"):
         for pp in root.iter(tag):
             bd = pp.find("body")
+            if bd is None:
+                continue
+            body_scale = body_of((bd.text or "").strip())
             loc = pp.find("location")
-            if bd is not None and loc is not None and (loc.text or "").split():
-                s = body_of((bd.text or "").strip())
-                _set_vec(loc, [v * f for v, f in zip(_txt_vec(loc), s, strict=False)])
+            if loc is not None and (loc.text or "").split():
+                _set_vec(loc, [value * factor for value, factor in zip(_txt_vec(loc), body_scale, strict=False)])
+            if tag == "MovingPathPoint":
+                for axis, factor in zip("xyz", body_scale, strict=True):
+                    _scale_function_output(pp.find(f"{axis}_location"), factor)
 
     # Mass normalization to the subject mass, preserving distribution.
     if subject_mass is not None:
@@ -806,7 +886,13 @@ GAIT2354_VIRTUAL_MARKERS: dict[str, tuple[str, ...]] = {
 
 
 def gait2354_measurement_set() -> MeasurementSet:
-    """Return a measurement set for the gait2354 model (OpenSim subject01 setup)."""
+    """Return the gait2354 subject-scaling measurement set.
+
+    Bilateral segment lengths share one scale, following the OpenSim gait2354
+    setup. The torso uses shoulder/sternum-to-pelvis distances because the
+    available C3D ``Top.Head`` is a synthesized head-cluster centroid rather
+    than the cranial vertex assumed by the original setup.
+    """
 
     def mp(a, b):
         return MarkerPair(a, b)
@@ -818,10 +904,19 @@ def gait2354_measurement_set() -> MeasurementSet:
             [mp("R.Acromium", "L.Acromium"), mp("Sternum", "R.ASIS"), mp("Sternum", "L.ASIS")],
             {"torso": "XYZ"},
         ),
-        Measurement("femur_r", [mp("R.ASIS", "R.Knee.Lat"), mp("R.Knee.Lat", "R.Knee.Med")], {"femur_r": "XYZ"}),
-        Measurement("femur_l", [mp("L.ASIS", "L.Knee.Lat"), mp("L.Knee.Lat", "L.Knee.Med")], {"femur_l": "XYZ"}),
-        Measurement("tibia_r", [mp("R.Knee.Lat", "R.Ankle.Lat"), mp("R.Ankle.Lat", "R.Ankle.Med")], {"tibia_r": "XYZ"}),
-        Measurement("tibia_l", [mp("L.Knee.Lat", "L.Ankle.Lat"), mp("L.Ankle.Lat", "L.Ankle.Med")], {"tibia_l": "XYZ"}),
-        Measurement("foot_r", [mp("R.Heel", "R.Toe.Tip")], {"talus_r": "XYZ", "calcn_r": "XYZ", "toes_r": "XYZ"}),
-        Measurement("foot_l", [mp("L.Heel", "L.Toe.Tip")], {"talus_l": "XYZ", "calcn_l": "XYZ", "toes_l": "XYZ"}),
+        Measurement(
+            "thigh",
+            [mp("R.ASIS", "R.Knee.Lat"), mp("L.ASIS", "L.Knee.Lat")],
+            {"femur_r": "XYZ", "femur_l": "XYZ", "patella_r": "XYZ", "patella_l": "XYZ"},
+        ),
+        Measurement(
+            "shank",
+            [mp("R.Knee.Lat", "R.Ankle.Lat"), mp("L.Knee.Lat", "L.Ankle.Lat")],
+            {"tibia_r": "XYZ", "tibia_l": "XYZ", "talus_r": "XYZ", "talus_l": "XYZ"},
+        ),
+        Measurement(
+            "foot",
+            [mp("R.Heel", "R.Toe.Tip"), mp("L.Heel", "L.Toe.Tip")],
+            {"calcn_r": "XYZ", "calcn_l": "XYZ", "toes_r": "XYZ", "toes_l": "XYZ"},
+        ),
     ]

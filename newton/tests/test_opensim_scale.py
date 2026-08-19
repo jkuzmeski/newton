@@ -6,9 +6,11 @@
 import os
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 
 import numpy as np
 
+import newton.examples
 import newton.opensim as osim
 from newton._src.opensim.kinematics import ForwardKinematics
 from newton._src.opensim.mocap import MarkerData
@@ -164,6 +166,28 @@ class TestScaleMath(unittest.TestCase):
         np.testing.assert_allclose(scaled[3:], (0.0, 0.0, 0.0), atol=1e-12)
 
 
+class TestGait2354Measurements(unittest.TestCase):
+    def test_share_bilateral_length_scales(self):
+        """Use bilateral segment lengths without mixing joint breadth into uniform scale."""
+        measurements = {measurement.name: measurement for measurement in osim.gait2354_measurement_set()}
+
+        self.assertEqual(
+            [(pair.marker1, pair.marker2) for pair in measurements["thigh"].marker_pairs],
+            [("R.ASIS", "R.Knee.Lat"), ("L.ASIS", "L.Knee.Lat")],
+        )
+        self.assertEqual(
+            set(measurements["thigh"].body_scales),
+            {"femur_r", "femur_l", "patella_r", "patella_l"},
+        )
+        self.assertEqual(
+            set(measurements["shank"].body_scales),
+            {"tibia_r", "tibia_l", "talus_r", "talus_l"},
+        )
+        self.assertNotIn(
+            ("R.Knee.Lat", "R.Knee.Med"), [(p.marker1, p.marker2) for p in measurements["thigh"].marker_pairs]
+        )
+
+
 class TestModelScalerDocument(unittest.TestCase):
     def test_manual_scale_geometry(self):
         """ModelScaler scales markers, joint frames, mass center, and mass by the body factors."""
@@ -191,6 +215,157 @@ class TestModelScalerDocument(unittest.TestCase):
             os.remove(path)
             if os.path.exists(path + ".scaled.osim"):
                 os.remove(path + ".scaled.osim")
+
+    def test_scale_display_geometry_once(self):
+        """Scale the combined visible/display geometry exactly once per body."""
+        path = _write_leg()
+        out = path + ".scaled.osim"
+        try:
+            tree = ET.parse(path)
+            thigh = next(body for body in tree.getroot().iter("Body") if body.get("name") == "thigh")
+            visible = ET.SubElement(thigh, "VisibleObject")
+            ET.SubElement(visible, "scale_factors").text = " 1.2 1.2 1.2 "
+            geometry_set = ET.SubElement(visible, "GeometrySet")
+            objects = ET.SubElement(geometry_set, "objects")
+            display = ET.SubElement(objects, "DisplayGeometry")
+            ET.SubElement(display, "geometry_file").text = " thigh.vtp "
+            ET.SubElement(display, "scale_factors").text = " 1.1 1.1 1.1 "
+            tree.write(path)
+
+            model = osim.parse_osim(path)
+            osim.ModelScaler(model, path).scale({"thigh": (1.5, 2.0, 2.5)}, out)
+            entries = osim.read_display_geometry(out)["thigh"]
+
+            self.assertEqual(len(entries), 1)
+            np.testing.assert_allclose(entries[0][2], 1.2 * 1.1 * np.array([1.5, 2.0, 2.5]))
+        finally:
+            for candidate in (path, out):
+                if os.path.exists(candidate):
+                    os.remove(candidate)
+
+    def test_scale_custom_joint_translation_function(self):
+        """Scale CustomJoint translation-function output in its parent body frame."""
+        path = _write_leg()
+        out = path + ".scaled.osim"
+        try:
+            tree = ET.parse(path)
+            knee = next(joint for joint in tree.getroot().iter("CustomJoint") if joint.get("name") == "knee")
+            knee.find("location_in_parent").text = " 0 0 0 "
+            translation = next(
+                axis
+                for axis in knee.find("SpatialTransform").findall("TransformAxis")
+                if axis.get("name") == "translation2"
+            )
+            function = translation.find("function")
+            function.clear()
+            spline = ET.SubElement(function, "NaturalCubicSpline")
+            ET.SubElement(spline, "x").text = " 0 1 "
+            ET.SubElement(spline, "y").text = " -0.4 -0.5 "
+            free_translation = next(
+                axis
+                for axis in knee.find("SpatialTransform").findall("TransformAxis")
+                if axis.get("name") == "translation1"
+            )
+            free_function = free_translation.find("function")
+            free_function.clear()
+            linear = ET.SubElement(free_function, "LinearFunction")
+            ET.SubElement(linear, "coefficients").text = " 1 0 "
+            tree.write(path)
+
+            model = osim.parse_osim(path)
+            osim.ModelScaler(model, path).scale({"thigh": (1.5, 2.0, 1.5), "shank": (1.0, 1.0, 1.0)}, out)
+            scaled_tree = ET.parse(out)
+            scaled_knee = next(
+                joint for joint in scaled_tree.getroot().iter("CustomJoint") if joint.get("name") == "knee"
+            )
+            scaled_translation = next(
+                axis
+                for axis in scaled_knee.find("SpatialTransform").findall("TransformAxis")
+                if axis.get("name") == "translation2"
+            )
+
+            np.testing.assert_allclose(
+                [float(value) for value in scaled_translation.find("function/NaturalCubicSpline/y").text.split()],
+                [-0.8, -1.0],
+            )
+            np.testing.assert_allclose(
+                [float(value) for value in scaled_translation.find("axis").text.split()],
+                [0.0, 1.0, 0.0],
+            )
+            scaled_free_translation = next(
+                axis
+                for axis in scaled_knee.find("SpatialTransform").findall("TransformAxis")
+                if axis.get("name") == "translation1"
+            )
+            np.testing.assert_allclose(
+                [
+                    float(value)
+                    for value in scaled_free_translation.find("function/LinearFunction/coefficients").text.split()
+                ],
+                [1.0, 0.0],
+            )
+        finally:
+            for candidate in (path, out):
+                if os.path.exists(candidate):
+                    os.remove(candidate)
+
+    def test_scale_gait2354_knee_translation_and_display_once(self):
+        """Scale gait2354 knee translation and nested bone geometry by one body factor."""
+        path = newton.examples.get_asset("gait2354_subject01.osim")
+        fd, out = tempfile.mkstemp(suffix=".scaled.osim")
+        os.close(fd)
+        try:
+            original_geometry = osim.read_display_geometry(path)
+            original_tree = ET.parse(path)
+            original_knee = next(
+                joint for joint in original_tree.getroot().iter("CustomJoint") if joint.get("name") == "knee_l"
+            )
+            original_translation = next(
+                axis
+                for axis in original_knee.find("SpatialTransform").findall("TransformAxis")
+                if axis.get("name") == "translation2"
+            )
+            original_y = np.array(
+                [float(value) for value in original_translation.find("function/NaturalCubicSpline/y").text.split()]
+            )
+            original_moving_point = next(
+                point
+                for point in original_tree.getroot().iter("MovingPathPoint")
+                if point.get("name") == "rect_fem_l-P3"
+            )
+            original_moving_x = np.array(
+                [float(value) for value in original_moving_point.find("x_location/NaturalCubicSpline/y").text.split()]
+            )
+
+            model = osim.parse_osim(path)
+            osim.ModelScaler(model, path).scale({"femur_l": (1.1, 1.1, 1.1), "tibia_l": (0.9, 0.9, 0.9)}, out)
+            scaled_geometry = osim.read_display_geometry(out)
+            scaled_tree = ET.parse(out)
+            scaled_knee = next(
+                joint for joint in scaled_tree.getroot().iter("CustomJoint") if joint.get("name") == "knee_l"
+            )
+            scaled_translation = next(
+                axis
+                for axis in scaled_knee.find("SpatialTransform").findall("TransformAxis")
+                if axis.get("name") == "translation2"
+            )
+            scaled_y = np.array(
+                [float(value) for value in scaled_translation.find("function/NaturalCubicSpline/y").text.split()]
+            )
+
+            np.testing.assert_allclose(scaled_y, 1.1 * original_y)
+            np.testing.assert_allclose(scaled_geometry["femur_l"][0][2], 1.1 * original_geometry["femur_l"][0][2])
+            np.testing.assert_allclose(scaled_geometry["tibia_l"][0][2], 0.9 * original_geometry["tibia_l"][0][2])
+            scaled_moving_point = next(
+                point for point in scaled_tree.getroot().iter("MovingPathPoint") if point.get("name") == "rect_fem_l-P3"
+            )
+            scaled_moving_x = np.array(
+                [float(value) for value in scaled_moving_point.find("x_location/NaturalCubicSpline/y").text.split()]
+            )
+            np.testing.assert_allclose(scaled_moving_x, 0.9 * original_moving_x, atol=5.0e-9)
+        finally:
+            if os.path.exists(out):
+                os.remove(out)
 
     def test_preserve_mass_distribution_hits_target(self):
         """With preserve_mass_distribution the total mass equals the subject mass, keeping the ratio."""
