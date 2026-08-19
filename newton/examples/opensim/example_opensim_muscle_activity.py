@@ -78,6 +78,8 @@ class Example:
         wp.copy(self.state.body_q, self.body_q_frames[self.frame])
 
         self.viewer.set_model(self.model)
+        if hasattr(self.viewer, "set_camera"):
+            self.viewer.set_camera(pos=wp.vec3(0.6, -2.3, 1.15), pitch=-4.0, yaw=90.0)
 
     def _solve_activations(self, model_path, motion_path):
         """Run Static Optimization on a decimated stride and color the muscles by it."""

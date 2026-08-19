@@ -790,6 +790,42 @@ add_example_test(
 )
 
 
+class TestOpenSimExamples(NewtonTestCase):
+    pass
+
+
+add_example_test(
+    TestOpenSimExamples,
+    name="opensim.example_opensim_gait",
+    devices=test_devices,
+    test_options={"num-frames": 2},
+    use_viewer=True,
+)
+
+add_example_test(
+    TestOpenSimExamples,
+    name="opensim.example_opensim_gait2d",
+    devices=test_devices,
+    test_options={"num-frames": 2, "duration": 0.7},
+    use_viewer=True,
+)
+
+add_example_test(
+    TestOpenSimExamples,
+    name="opensim.example_opensim_marker_ik",
+    devices=test_devices,
+    test_options={"num-frames": 2, "ik-frames": 8},
+    use_viewer=True,
+    expect_output_regexes=[
+        (
+            r"\[opensim_marker_ik\] solved \d+ frames with \d+/\d+ observations occluded; "
+            r"median marker RMS=\d+\.\d+ mm\n?",
+            "stdout",
+        )
+    ],
+)
+
+
 class TestMuJoCoExamples(unittest.TestCase):
     pass
 

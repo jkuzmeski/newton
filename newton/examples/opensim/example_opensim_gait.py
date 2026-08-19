@@ -89,6 +89,8 @@ class Example:
         wp.copy(self.state.body_q, self.body_q_frames[self.frame])
 
         self.viewer.set_model(self.model)
+        if hasattr(self.viewer, "set_camera"):
+            self.viewer.set_camera(pos=wp.vec3(0.6, -3.2, 1.15), pitch=-4.0, yaw=90.0)
 
     def step(self):
         self.frame = (self.frame + 1) % self.num_frames
