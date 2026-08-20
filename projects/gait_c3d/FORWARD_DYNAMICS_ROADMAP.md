@@ -17,6 +17,18 @@ FD-1 evaluation. Stage 0 completed at `6f66a393`; both the explicit
 `forward_dynamics` artifact and the default `latest` artifact were regenerated
 cleanly from that commit with their dependent torque diagnostics.
 
+## Revision 2 — contact seed geometry
+
+A prescribed-motion probe showed that raw marker-centered spheres produce only
+6–11 N peaks and marker-plus-radius centers produce essentially zero force. Heel
+markers remain 74–81 mm above the ground at their minimum, while forefoot markers
+remain 23–40 mm above it. Therefore contact centers are not initialized directly
+at markers. For each role, solve and archive the body-local center nearest its
+landmark whose sphere surface is tangent to the measured ground over frozen
+role-specific stance frames. Optimization remains bounded to ±30 mm per component
+around that geometry-derived seed. The existing unregistered human-shoe spheres
+also produced near-zero force and are not an accepted fallback.
+
 ## Final definitions
 
 The project uses two explicit forward-dynamics milestones.
@@ -161,8 +173,8 @@ evaluation.
 
 Initial bounds are:
 
-- sphere-center displacement from its marker-seeded body-local position: ±30 mm
-  per component;
+- sphere-center displacement from its archived stance-tangent geometry seed:
+  ±30 mm per component;
 - sphere radius: 10–60 mm;
 - ground height relative to the measured force-platform plane: ±20 mm;
 - stiffness: `1e5–5e7` in the smooth-contact model's native units;
