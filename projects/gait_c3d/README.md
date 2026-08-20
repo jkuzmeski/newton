@@ -1,5 +1,10 @@
 # Instrumented-treadmill C3D gait pipeline
 
+The staged path from measured-load reconstruction through predictive torque- and
+muscle-driven gait is defined in
+[`FORWARD_DYNAMICS_ROADMAP.md`](FORWARD_DYNAMICS_ROADMAP.md). That document is
+the implementation and scientific-QC contract for the flagship pipeline.
+
 This project reconstructs one measured stride from the S001 instrumented-treadmill
 trial with the public `newton.opensim` scaling, marker-placement, inverse-kinematics,
 inverse-dynamics, and Static Optimization APIs. It is an analysis pipeline, not a
