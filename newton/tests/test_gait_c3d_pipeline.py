@@ -230,6 +230,91 @@ class TestGaitC3DPipeline(unittest.TestCase):
         np.testing.assert_array_equal(torque[1, 1], 0.0)
         self.assertTrue(np.all(np.isnan(cop[1, 1])))
 
+    def test_filter_force_and_moment_before_deriving_cop_and_free_torque(self):
+        """Derive a varying filtered wrench that preserves its moment identity."""
+        butter, sosfiltfilt = pipeline._signal_tools()
+        sos = butter(4, 20.0, btype="low", fs=1000.0, output="sos")
+        time = np.arange(1000, dtype=float) / 1000.0
+        loaded = np.zeros(1000, dtype=bool)
+        loaded[250:750] = True
+        force = np.zeros((1000, 3))
+        force[loaded, 0] = 80.0 + 30.0 * np.sin(2.0 * np.pi * 13.0 * time[loaded])
+        force[loaded, 1] = -40.0 + 20.0 * np.cos(2.0 * np.pi * 11.0 * time[loaded])
+        force[loaded, 2] = 800.0 + 200.0 * np.sin(2.0 * np.pi * 17.0 * time[loaded])
+        corners = np.array(
+            [
+                [0.0, 500.0, 500.0, 0.0],
+                [850.0, 850.0, -850.0, -850.0],
+                [0.0, 0.0, 0.0, 0.0],
+            ]
+        )
+        platform_origin = np.mean(corners, axis=1)
+        application_point = np.repeat(platform_origin[None], len(time), axis=0)
+        application_point[loaded, 0] += 120.0 + 80.0 * np.sin(2.0 * np.pi * 19.0 * time[loaded])
+        application_point[loaded, 1] += -200.0 + 60.0 * np.cos(2.0 * np.pi * 17.0 * time[loaded])
+        free_torque = np.zeros_like(force)
+        free_torque[loaded, 2] = 15000.0 + 2000.0 * np.sin(2.0 * np.pi * 7.0 * time[loaded])
+        moment = np.cross(application_point - platform_origin, force) + free_torque
+
+        filtered_force, cop, torque, contact, filtered_moment, identity_error = pipeline.filter_force_platform_wrench(
+            force,
+            moment,
+            corners,
+            sos,
+            contact_threshold_n=50.0,
+        )
+
+        reconstructed_moment = np.cross(cop[contact] - platform_origin, filtered_force[contact]) + torque[contact]
+        np.testing.assert_allclose(reconstructed_moment, filtered_moment[contact], atol=1.0e-8)
+        self.assertLess(identity_error, 1.0e-8)
+        legacy_cop = np.full_like(application_point, np.nan)
+        legacy_cop[loaded] = sosfiltfilt(sos, application_point[loaded], axis=0)
+        legacy_torque = sosfiltfilt(sos, free_torque, axis=0)
+        legacy_valid = contact & np.all(np.isfinite(legacy_cop), axis=1)
+        legacy_moment = (
+            np.cross(legacy_cop[legacy_valid] - platform_origin, filtered_force[legacy_valid])
+            + legacy_torque[legacy_valid]
+        )
+        self.assertGreater(np.max(np.abs(legacy_moment - filtered_moment[legacy_valid])), 1000.0)
+        np.testing.assert_array_equal(filtered_force[~contact], 0.0)
+        np.testing.assert_array_equal(torque[~contact], 0.0)
+        self.assertTrue(np.all(np.isnan(cop[~contact])))
+        invalid_moment = moment.copy()
+        invalid_moment[0, 0] = np.nan
+        with self.assertRaisesRegex(ValueError, "must be finite"):
+            pipeline.filter_force_platform_wrench(
+                force,
+                invalid_moment,
+                corners,
+                sos,
+                contact_threshold_n=50.0,
+            )
+
+    def test_gate_cop_proximity_to_the_assigned_foot(self):
+        """Accept anatomically associated COPs and reject a bilateral side swap."""
+        marker_names = ["L.Heel", "L.Toe.Tip", "R.Heel", "R.Toe.Tip"]
+        frame = np.array(
+            [
+                [0.0, 0.08, -0.1],
+                [0.25, 0.03, -0.1],
+                [0.5, 0.08, 0.1],
+                [0.75, 0.03, 0.1],
+            ]
+        )
+        markers = np.repeat(frame[None], 3, axis=0)
+        cop = np.repeat(np.array([[[0.12, 0.0, -0.1], [0.62, 0.0, 0.1]]]), 3, axis=0)
+        grf = np.zeros_like(cop)
+        grf[:, :, 1] = 300.0
+        contact = np.ones((3, 2), dtype=bool)
+
+        result = pipeline.cop_foot_proximity_qc(marker_names, markers, cop, grf, contact)
+
+        self.assertIs(result["passed"], True)
+        self.assertEqual(result["sides"]["left"]["ipsilateral_closer_fraction"], 1.0)
+        self.assertEqual(result["sides"]["right"]["ipsilateral_closer_fraction"], 1.0)
+        swapped = pipeline.cop_foot_proximity_qc(marker_names, markers, cop[:, ::-1], grf, contact)
+        self.assertIs(swapped["passed"], False)
+
     def test_detect_contact_runs_and_select_a_complete_stride(self):
         """Detect sustained contact bouts and select the first eligible stride."""
         times = np.arange(12, dtype=float) * 0.1

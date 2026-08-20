@@ -26,11 +26,11 @@ import numpy as np
 import newton.examples
 import newton.opensim as osim
 
-_SCHEMA_VERSION = "gait_c3d_analysis_2"
+_SCHEMA_VERSION = "gait_c3d_analysis_3"
 _BELT_ANCHOR_INDICES = np.array([0, 1356, 22244, 43139, 52098, 53223], dtype=float)
 _BELT_ANCHOR_TIMES = np.array([0.0, 4.68, 74.69, 144.70, 174.71, 178.46], dtype=float)
 _G = 9.80665
-_CACHE_SCHEMA_VERSION = "gait_c3d_trial_cache_4"
+_CACHE_SCHEMA_VERSION = "gait_c3d_trial_cache_5"
 _EXPECTED_MARKER_COUNT = 35
 
 
@@ -252,35 +252,63 @@ def _mapped_markers(path: Path) -> osim.MarkerData:
     return mapped
 
 
-def _fill_nan(values: np.ndarray) -> np.ndarray:
-    values = np.asarray(values, float).copy()
-    x = np.arange(len(values))
-    for column in range(values.shape[1]):
-        finite = np.isfinite(values[:, column])
-        if np.any(finite):
-            values[:, column] = np.interp(x, x[finite], values[finite, column])
-        else:
-            values[:, column] = 0.0
-    return values
+def filter_force_platform_wrench(
+    force_lab: np.ndarray,
+    moment_lab_nmm: np.ndarray,
+    corners_lab_mm: np.ndarray,
+    sos: np.ndarray,
+    *,
+    contact_threshold_n: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    """Filter a raw force-platform wrench before deriving COP and free torque.
 
+    Args:
+        force_lab: Ground-on-subject force samples in lab axes [N].
+        moment_lab_nmm: Moments about the platform surface center [N·mm].
+        corners_lab_mm: Platform surface corners, shape ``[3, corner_count]`` [mm].
+        sos: SciPy second-order-section low-pass filter coefficients.
+        contact_threshold_n: Minimum positive vertical force for contact [N].
 
-def _filter_loaded_cop(cop_lab_mm: np.ndarray, active: np.ndarray, sos: np.ndarray) -> np.ndarray:
-    """Filter COP only within loaded contact runs and leave unloaded samples NaN."""
+    Returns:
+        Filtered force [N], COP [mm], free torque [N·mm], contact mask,
+        filtered moment about the surface center [N·mm], and maximum
+        loaded-sample wrench-identity error [N·mm].
+    """
     _butter, sosfiltfilt = _signal_tools()
-    cop = np.asarray(cop_lab_mm, float)
-    output = np.full_like(cop, np.nan)
-    for start, stop in contact_runs(active, min_frames=20):
-        segment = cop[start:stop].copy()
-        valid = np.all(np.isfinite(segment), axis=1) & np.all(np.abs(segment) < 5000.0, axis=1)
-        if np.count_nonzero(valid) < 4:
-            continue
-        x = np.arange(len(segment))
-        for axis in range(3):
-            segment[:, axis] = np.interp(x, x[valid], segment[valid, axis])
-        if len(segment) > 24:
-            segment = sosfiltfilt(sos, segment, axis=0)
-        output[start:stop] = segment
-    return output
+    force = np.asarray(force_lab, float)
+    moment = np.asarray(moment_lab_nmm, float)
+    corners = np.asarray(corners_lab_mm, float)
+    if force.ndim != 2 or force.shape[1] != 3 or moment.shape != force.shape:
+        raise ValueError("force and moment must have matching [sample_count, 3] shapes")
+    if corners.ndim != 2 or corners.shape[0] != 3 or corners.shape[1] < 3:
+        raise ValueError("platform corners must have shape [3, corner_count]")
+    if not np.all(np.isfinite(force)) or not np.all(np.isfinite(moment)) or not np.all(np.isfinite(corners)):
+        raise ValueError("raw force, moment, and platform corners must be finite")
+    if not np.isfinite(contact_threshold_n) or contact_threshold_n <= 0.0:
+        raise ValueError("contact_threshold_n must be finite and positive")
+
+    force = sosfiltfilt(sos, force, axis=0)
+    moment = sosfiltfilt(sos, moment, axis=0)
+    origin = np.mean(corners, axis=1)
+    surface_z = float(np.mean(corners[2]))
+    contact = force[:, 2] > contact_threshold_n
+    cop = np.full_like(force, np.nan)
+    torque = np.zeros_like(force)
+    if np.any(contact):
+        loaded_force = force[contact]
+        loaded_moment = moment[contact]
+        offset_z = surface_z - origin[2]
+        cop[contact, 0] = origin[0] + (offset_z * loaded_force[:, 0] - loaded_moment[:, 1]) / loaded_force[:, 2]
+        cop[contact, 1] = origin[1] + (loaded_moment[:, 0] + offset_z * loaded_force[:, 1]) / loaded_force[:, 2]
+        cop[contact, 2] = surface_z
+        lever = cop[contact] - origin
+        torque[contact, 2] = loaded_moment[:, 2] - np.cross(lever, loaded_force)[:, 2]
+        reconstructed = np.cross(lever, loaded_force) + torque[contact]
+        identity_error = float(np.max(np.abs(reconstructed - loaded_moment)))
+    else:
+        identity_error = 0.0
+    force[~contact] = 0.0
+    return force, cop, torque, contact, moment, identity_error
 
 
 def _extract_subject_mass(calibration_path: Path, cutoff_hz: float = 20.0) -> tuple[float, dict]:
@@ -397,6 +425,19 @@ def _cache_provenance(incoming: Path) -> dict:
             "belt_anchor_times_s": _BELT_ANCHOR_TIMES.tolist(),
             "force_cutoff_hz": 20.0,
             "contact_threshold_N": 50.0,
+            "wrench_processing": "filter_force_and_moment_then_derive_cop_and_free_torque",
+            "wrench_raw_sources": ["platform.force", "platform.moment"],
+            "wrench_derived_sources_not_filtered": ["platform.center_of_pressure", "platform.Tz"],
+            "wrench_moment_reference": "mean platform surface corners",
+            "wrench_equation": "M=(P-O)xF+T",
+            "wrench_filter": {
+                "family": "Butterworth",
+                "order": 4,
+                "representation": "second-order sections",
+                "phase": "zero-phase sosfiltfilt",
+                "cutoff_hz": 20.0,
+            },
+            "validated_platform_units": {"force": "N", "moment": "Nmm", "position": "mm"},
             "expected_marker_count": _EXPECTED_MARKER_COUNT,
             "trial_geometry": "level treadmill, lab -Y heading, no incline compensation",
         },
@@ -404,7 +445,7 @@ def _cache_provenance(incoming: Path) -> dict:
 
 
 def _extract_trial_cache(incoming: Path, cache_path: Path) -> dict[str, np.ndarray]:
-    butter, sosfiltfilt = _signal_tools()
+    butter, _sosfiltfilt = _signal_tools()
     try:
         import ezc3d  # noqa: PLC0415
     except ImportError as exc:  # pragma: no cover
@@ -420,6 +461,10 @@ def _extract_trial_cache(incoming: Path, cache_path: Path) -> dict[str, np.ndarr
     missing = (residual < 0.0) | np.all(data == 0.0, axis=-1)
     data[missing] = np.nan
     rotation = osim.lab_to_opensim_rotation("+Z", "-Y")
+    if not np.allclose(rotation @ rotation.T, np.eye(3), atol=1.0e-12) or not np.isclose(
+        np.linalg.det(rotation), 1.0, atol=1.0e-12
+    ):
+        raise ValueError("lab-to-OpenSim axes must define a proper rotation")
     data = data @ rotation.T * 0.001
     times = np.arange(len(data), dtype=float) / point_rate
     markers = _marker_data_meters(times, labels, data, point_rate)
@@ -433,14 +478,21 @@ def _extract_trial_cache(incoming: Path, cache_path: Path) -> dict[str, np.ndarr
     force_frames = []
     cop_frames = []
     torque_frames = []
+    moment_frames = []
     contact_frames = []
+    wrench_identity_errors_nmm = []
     platform_mean_x = []
+    platform_surface_origins_lab_mm = []
     platforms = sorted(
         c3d["data"]["platform"],
         key=lambda platform: float(np.mean(np.asarray(platform["corners"], float)[0])),
         reverse=True,
     )
+    if len(platforms) != 2:
+        raise ValueError(f"expected exactly two force platforms, found {len(platforms)}")
     platform_corners = [np.asarray(platform["corners"], float) for platform in platforms]
+    if not all(np.all(np.isfinite(corners)) for corners in platform_corners):
+        raise ValueError("force-platform corners must be finite")
     platform_level_max_abs_z_mm = float(max(np.max(np.abs(corners[2])) for corners in platform_corners))
     platform_y_spans_mm = [float(np.ptp(corners[1])) for corners in platform_corners]
     platform_x_spans_mm = [float(np.ptp(corners[0])) for corners in platform_corners]
@@ -449,26 +501,31 @@ def _extract_trial_cache(incoming: Path, cache_path: Path) -> dict[str, np.ndarr
     ):
         raise ValueError("this mapping is restricted to the verified level treadmill with lab-Y heading")
     for platform in platforms:
-        mean_x = float(np.mean(np.asarray(platform["corners"], float)[0]))
+        units = (str(platform["unit_force"]), str(platform["unit_moment"]), str(platform["unit_position"]))
+        if units != ("N", "Nmm", "mm"):
+            raise ValueError(f"unsupported force-platform units: {units}")
+        corners = np.asarray(platform["corners"], float)
+        surface_origin_lab_mm = np.mean(corners, axis=1)
+        mean_x = float(surface_origin_lab_mm[0])
         platform_mean_x.append(mean_x)
-        force_lab = sosfiltfilt(sos, np.asarray(platform["force"], float), axis=1).T
-        active_analog = force_lab[:, 2] > 50.0
-        force = force_lab @ rotation.T
-        torque_lab = _fill_nan(np.asarray(platform["Tz"], float).T)
-        torque_lab = sosfiltfilt(sos, torque_lab, axis=0)
-        torque = torque_lab * 0.001 @ rotation.T
-        cop_lab = _filter_loaded_cop(np.asarray(platform["center_of_pressure"], float).T, active_analog, sos)
-        cop = cop_lab * 0.001 @ rotation.T
-        force = force[sample_index]
-        torque = torque[sample_index]
-        cop = cop[sample_index]
+        platform_surface_origins_lab_mm.append(surface_origin_lab_mm)
+        force_lab, cop_lab, torque_lab, _active_analog, moment_lab, identity_error_nmm = filter_force_platform_wrench(
+            np.asarray(platform["force"], float).T,
+            np.asarray(platform["moment"], float).T,
+            corners,
+            sos,
+            contact_threshold_n=50.0,
+        )
+        wrench_identity_errors_nmm.append(identity_error_nmm)
+        force = (force_lab @ rotation.T)[sample_index]
+        cop = (cop_lab * 0.001 @ rotation.T)[sample_index]
+        torque = (torque_lab * 0.001 @ rotation.T)[sample_index]
+        moment = (moment_lab * 0.001 @ rotation.T)[sample_index]
         active = force[:, 1] > 50.0
-        force[~active] = 0.0
-        torque[~active] = 0.0
-        cop[~active] = np.nan
         force_frames.append(force)
         cop_frames.append(cop)
         torque_frames.append(torque)
+        moment_frames.append(moment)
         contact_frames.append(active)
     if not (platform_mean_x[0] > 0.0 and platform_mean_x[1] < 0.0):
         raise ValueError(f"force platforms do not match left(+X)/right(-X) geometry: {platform_mean_x}")
@@ -481,6 +538,12 @@ def _extract_trial_cache(incoming: Path, cache_path: Path) -> dict[str, np.ndarr
         "analog_rate_hz": np.asarray(analog_rate, dtype=float),
         "force_cutoff_hz": np.asarray(20.0, dtype=float),
         "contact_threshold_N": np.asarray(50.0, dtype=float),
+        "wrench_identity_max_abs_Nm": np.asarray(wrench_identity_errors_nmm, dtype=float) * 0.001,
+        "filtered_moment_at_surface_origin_Nm": np.stack(moment_frames, axis=1),
+        "platform_surface_origin_lab_mm": np.asarray(platform_surface_origins_lab_mm, dtype=float),
+        "platform_surface_origin_opensim_m": np.asarray(platform_surface_origins_lab_mm, dtype=float)
+        * 0.001
+        @ rotation.T,
         "marker_names": np.asarray(markers.marker_names, dtype="U"),
         "markers_treadmill": np.asarray(markers.data, dtype=np.float64),
         "belt_speed": speed,
@@ -674,6 +737,84 @@ def _stance_speed_qc(
     return result
 
 
+def cop_foot_proximity_qc(
+    marker_names: list[str],
+    markers: np.ndarray,
+    cop: np.ndarray,
+    grf: np.ndarray,
+    contact: np.ndarray,
+    *,
+    high_load_threshold_n: float = 200.0,
+    max_midpoint_distance_m: float = 0.25,
+    max_high_load_perpendicular_m: float = 0.05,
+) -> dict:
+    """Check that each loaded COP remains associated with its assigned foot."""
+    markers = np.asarray(markers, float)
+    cop = np.asarray(cop, float)
+    grf = np.asarray(grf, float)
+    contact = np.asarray(contact, bool)
+    if markers.ndim != 3 or markers.shape[0] != len(cop) or markers.shape[2] != 3:
+        raise ValueError("markers must have shape [frame_count, marker_count, 3]")
+    if cop.shape != (len(markers), 2, 3) or grf.shape != cop.shape or contact.shape != cop.shape[:2]:
+        raise ValueError("COP, GRF, and contact must contain two feet on the marker frame grid")
+
+    index = {name: marker_names.index(name) for name in ("L.Heel", "L.Toe.Tip", "R.Heel", "R.Toe.Tip")}
+    sides = {}
+    for side_index, (side, prefix, opposite_prefix) in enumerate((("left", "L", "R"), ("right", "R", "L"))):
+        active = contact[:, side_index]
+        high_load = active & (grf[:, side_index, 1] >= high_load_threshold_n)
+        if not np.any(active) or not np.any(high_load):
+            raise ValueError(f"{side} foot has no loaded COP frames for proximity QC")
+        heel = markers[:, index[f"{prefix}.Heel"]][:, [0, 2]]
+        toe = markers[:, index[f"{prefix}.Toe.Tip"]][:, [0, 2]]
+        opposite_heel = markers[:, index[f"{opposite_prefix}.Heel"]][:, [0, 2]]
+        opposite_toe = markers[:, index[f"{opposite_prefix}.Toe.Tip"]][:, [0, 2]]
+        point = cop[:, side_index][:, [0, 2]]
+        if not np.all(np.isfinite(point[active])):
+            raise ValueError(f"{side} contact-active COP contains non-finite values")
+        foot_axis = toe - heel
+        foot_length = np.linalg.norm(foot_axis, axis=1)
+        if np.any(foot_length[active] <= 0.0):
+            raise ValueError(f"{side} heel-to-toe marker axis is degenerate")
+        unit_axis = foot_axis / foot_length[:, None]
+        unit_perpendicular = np.column_stack((-unit_axis[:, 1], unit_axis[:, 0]))
+        relative = point - heel
+        longitudinal = np.sum(relative * unit_axis, axis=1)
+        perpendicular = np.sum(relative * unit_perpendicular, axis=1)
+        midpoint = 0.5 * (heel + toe)
+        opposite_midpoint = 0.5 * (opposite_heel + opposite_toe)
+        assigned_distance = np.linalg.norm(point - midpoint, axis=1)
+        opposite_distance = np.linalg.norm(point - opposite_midpoint, axis=1)
+        ipsilateral_closer_fraction = float(np.mean(assigned_distance[active] < opposite_distance[active]))
+        side_metrics = {
+            "contact_frames": int(np.count_nonzero(active)),
+            "high_load_frames": int(np.count_nonzero(high_load)),
+            "ipsilateral_closer_fraction": ipsilateral_closer_fraction,
+            "max_contact_midpoint_distance_m": float(np.max(assigned_distance[active])),
+            "median_contact_midpoint_distance_m": float(np.median(assigned_distance[active])),
+            "max_high_load_perpendicular_m": float(np.max(np.abs(perpendicular[high_load]))),
+            "max_high_load_anterior_to_toe_marker_m": float(
+                np.max(np.maximum(0.0, longitudinal[high_load] - foot_length[high_load]))
+            ),
+        }
+        side_metrics["passed"] = bool(
+            ipsilateral_closer_fraction == 1.0
+            and side_metrics["max_contact_midpoint_distance_m"] <= max_midpoint_distance_m
+            and side_metrics["max_high_load_perpendicular_m"] <= max_high_load_perpendicular_m
+        )
+        sides[side] = side_metrics
+    return {
+        "passed": all(side["passed"] for side in sides.values()),
+        "sides": sides,
+        "threshold": {
+            "ipsilateral_closer_fraction": 1.0,
+            "max_contact_midpoint_distance_m": max_midpoint_distance_m,
+            "high_load_vertical_force_N": high_load_threshold_n,
+            "max_high_load_perpendicular_m": max_high_load_perpendicular_m,
+        },
+    }
+
+
 def _force_qc(grf: np.ndarray, contact: np.ndarray) -> tuple[dict, dict]:
     signs = {}
     friction = {}
@@ -743,13 +884,18 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         reference_index=0,
     )
     grf = np.asarray(cache["grf"], float)[selection]
-    cop = treadmill_to_overground(
-        np.asarray(cache["cop_treadmill"], float)[selection],
-        displacement_absolute,
-        reference_index=0,
-    )
+    treadmill_cop = np.asarray(cache["cop_treadmill"], float)[selection]
+    cop = treadmill_to_overground(treadmill_cop, displacement_absolute, reference_index=0)
     torque = np.asarray(cache["free_torque"], float)[selection]
     contact = np.asarray(cache["contact"], bool)[selection]
+    platform_moment = np.asarray(cache["filtered_moment_at_surface_origin_Nm"], float)[selection]
+    platform_origin = np.asarray(cache["platform_surface_origin_opensim_m"], float)
+    point_grid_wrench_identity_errors_nm = []
+    for side in range(2):
+        reconstructed_moment = np.cross(treadmill_cop[:, side] - platform_origin[side], grf[:, side]) + torque[:, side]
+        point_grid_wrench_identity_errors_nm.append(
+            float(np.max(np.abs(reconstructed_moment[contact[:, side]] - platform_moment[contact[:, side], side])))
+        )
     belt_speed = np.asarray(cache["belt_speed"], float)[selection]
 
     mass, mass_qc = _extract_subject_mass(source_paths["calibration_c3d"])
@@ -1068,6 +1214,9 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         context_overground,
         context_contact,
     )
+    cop_foot_qc = cop_foot_proximity_qc(marker_names, target_markers, cop, grf, contact)
+    analog_wrench_identity_errors_nm = np.asarray(cache["wrench_identity_max_abs_Nm"], float)
+    point_grid_wrench_identity_errors_nm = np.asarray(point_grid_wrench_identity_errors_nm, float)
     signs, friction = _force_qc(context_grf, context_contact)
     pelvis_force = np.column_stack(
         [
@@ -1136,6 +1285,23 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             },
             "threshold": {"platform_level_max_abs_z_mm": 1.0e-3, "heading": "lab -Y"},
             "note": "Generic incline reuse is blocked because this adapter does not estimate treadmill orientation R_TR^G.",
+        },
+        "force_platform_wrench_identity": {
+            "passed": bool(
+                max(np.max(analog_wrench_identity_errors_nm), np.max(point_grid_wrench_identity_errors_nm)) <= 1.0e-8
+            ),
+            "value": {
+                "analog_max_abs_Nm_left_then_right": analog_wrench_identity_errors_nm,
+                "point_grid_max_abs_Nm_left_then_right": point_grid_wrench_identity_errors_nm,
+            },
+            "threshold": {"max_abs_Nm": 1.0e-8},
+            "note": "Filtered force, COP, and free torque must reconstruct the jointly filtered raw platform moment.",
+        },
+        "cop_foot_proximity": {
+            "passed": cop_foot_qc["passed"],
+            "value": cop_foot_qc["sides"],
+            "threshold": cop_foot_qc["threshold"],
+            "note": "This checks side association and gross boundary artifacts, not containment in an anatomical support polygon.",
         },
         "serialized_load_sampling": {
             "passed": (
@@ -1249,6 +1415,10 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         warnings.append(
             "Pelvis translational residual RMS exceeds the 10% body-weight gate; quantitative kinetics are not accepted."
         )
+    if not gates["force_platform_wrench_identity"]["passed"]:
+        warnings.append("Filtered force-platform channels do not preserve the raw platform moment identity.")
+    if not gates["cop_foot_proximity"]["passed"]:
+        warnings.append("A contact-active COP is not plausibly associated with its assigned foot.")
     qc = {
         "schema_version": _SCHEMA_VERSION,
         "status": "research_demo_passed_with_provenance_warnings" if core_pass else "research_demo_failed_qc",
@@ -1268,6 +1438,22 @@ def run_pipeline(args: argparse.Namespace) -> Path:
             "analog_rate_hz": float(cache["analog_rate_hz"]),
             "lowpass_cutoff_hz": float(cache["force_cutoff_hz"]),
             "contact_threshold_N": float(cache["contact_threshold_N"]),
+            "wrench_processing": "filter_force_and_moment_then_derive_cop_and_free_torque",
+            "wrench_raw_sources": ["platform.force", "platform.moment"],
+            "wrench_moment_reference": "mean platform surface corners",
+            "wrench_equation": "M=(P-O)xF+T",
+            "wrench_filter": {
+                "family": "Butterworth",
+                "order": 4,
+                "representation": "second-order sections",
+                "phase": "zero-phase sosfiltfilt",
+            },
+            "validated_platform_units": {"force": "N", "moment": "Nmm", "position": "mm"},
+            "analog_wrench_identity_max_abs_Nm_left_then_right": analog_wrench_identity_errors_nm,
+            "point_grid_wrench_identity_max_abs_Nm_left_then_right": point_grid_wrench_identity_errors_nm,
+            "platform_surface_origin_lab_mm_left_then_right": np.asarray(
+                cache["platform_surface_origin_lab_mm"], float
+            ),
             "platform_mean_lab_x_mm_left_then_right": np.asarray(cache["platform_mean_lab_x_mm"], float),
             "platform_assignment": ["calcn_l", "calcn_r"],
             "trial_geometry": "verified level/aligned Trial 101; lab -Y heading",

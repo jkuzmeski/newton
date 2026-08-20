@@ -108,12 +108,16 @@ calibration window supplies an adjacent temporal-consistency gate, not an
 independent validation trial.
 
 Force-platform data come from ezc3d's force-platform extraction at 2000 Hz. A
-20 Hz fourth-order zero-phase low-pass is applied before resampling at marker times
-(100 Hz). Lab force is already ground-on-foot GRF. COP is converted from mm to m,
-free torque from Nmm to Nm, and unloaded samples are thresholded at 50 N (force
-and free torque are zeroed; COP is marked unavailable). The lab +X platform loads `calcn_l`; lab -X loads
-`calcn_r`. COP forward position receives the same relative belt displacement as
-markers.
+20 Hz fourth-order zero-phase low-pass is applied jointly to raw force and moment
+about the platform surface center. COP and vertical free torque are then derived
+from the filtered wrench so `M = (P - O) × F + T` remains true. The pipeline does
+not filter ezc3d's separately derived COP or `Tz` channels. Lab force is already
+ground-on-foot GRF. COP is converted from mm to m, free torque from Nmm to Nm,
+and unloaded samples are thresholded at 50 N (force and free torque are zeroed;
+COP is marked unavailable). A wrench-identity gate and a COP-to-assigned-foot
+proximity gate reject boundary artifacts. The lab +X platform loads `calcn_l`;
+lab -X loads `calcn_r`. COP forward position receives the same relative belt
+displacement as markers.
 
 Contacts are vertical-GRF threshold crossings. The default segment is the first
 complete left heel-strike-to-left-heel-strike stride at or after 20 seconds.
