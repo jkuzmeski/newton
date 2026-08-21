@@ -284,6 +284,26 @@ excluded and must be regenerated:
 .venv/bin/python -m projects.gait_c3d.rra_adjusted_contact_input   --rra-reference /home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output /home/jo31399/newton-data/gait/processed/trial_101/rra_adjusted_contact_input
 ```
 
+### Official MocoInverse reference
+
+Prepare MocoInverse from the hash-sealed accepted RRA result. The adapter converts
+legacy short coordinate labels/degrees to absolute state paths/radians, welds
+unsupported MTP joints, follows the pinned official ModelProcessor order, and
+preserves sealed failures as reusable failed-guess artifacts:
+
+```bash
+rra=/home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4
+out=/home/jo31399/newton-data/gait/processed/trial_101/opensim_moco_inverse_reference
+
+.venv/bin/python -m projects.gait_c3d.opensim_moco_inverse_reference prepare   "$rra" "$out" --mesh-interval 0.05 --max-iterations 1000
+.venv/bin/python -m projects.gait_c3d.opensim_moco_inverse_reference run "$out"
+.venv/bin/python -m projects.gait_c3d.opensim_moco_inverse_reference summarize "$out"
+```
+
+MocoInverse prescribes the accepted RRA motion. It is a muscle-redundancy
+reference, not predictive forward dynamics. Mesh refinement and reserve QC are
+required before interpretation.
+
 ### Official 3-D Moco contact topology
 
 `projects.gait_c3d.opensim_moco_contact_reference` pins the current official
