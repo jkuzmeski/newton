@@ -337,7 +337,7 @@ class TestGaitC3DPredictiveContact(unittest.TestCase):
             )
             sidecar_path = self._write_sidecar(root, model, model_path, data_dir / "analysis.npz")
             calibrated_sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-            calibrated_sidecar["ground"]["height_m"] = 0.01
+            calibrated_sidecar["ground"]["height_m"] = 0.005
             for sphere in calibrated_sidecar["spheres"]:
                 sphere["radius_m"] = 0.04
             sidecar_path.write_text(json.dumps(calibrated_sidecar), encoding="utf-8")
