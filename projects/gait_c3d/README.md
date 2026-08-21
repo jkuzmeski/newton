@@ -333,12 +333,12 @@ out=/home/jo31399/newton-data/gait/processed/trial_101/opensim_moco_track_refere
 .venv/bin/python -m projects.gait_c3d.opensim_moco_track_reference summarize "$out"
 ```
 
-The S001 RRA model keeps both MTP coordinates locked. The adapter therefore keeps
-the toe bodies fixed to their calcaneus parents and omits the official example's
-active-MTP actuator and passive toe expression. If an accepted model unlocks MTP,
-it applies the pinned official `-25*q-2*qdot` toe force before adding weak MTP
-actuators. Failed optimizations remain sealed failed-guess artifacts and never
-become predictive or FD-1 claims.
+The adapter records and rechecks the accepted model's effective MTP lock state.
+The current S001 RRA model leaves both MTP coordinates unlocked, so it applies the
+pinned official `-25*q-2*qdot` passive toe force before adding weak MTP actuators.
+A locked MTP instead stays fixed to its calcaneus parent and omits those active-toe
+terms. Failed optimizations remain sealed failed-guess artifacts and never become
+predictive or FD-1 claims.
 
 ## Official OpenSim to Newton contact parity
 
