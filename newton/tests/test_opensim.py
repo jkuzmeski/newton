@@ -517,6 +517,42 @@ class TestLegacyParserAndKinematics(unittest.TestCase):
         self.assertEqual(tx.coordinates, ["knee_angle"])
         self.assertEqual(len(m.markers), 5)
 
+    def test_modern_direct_named_transform_function(self):
+        """Parse OpenSim 4.x functions written directly with name="function"."""
+        legacy = "<function><LinearFunction><coefficients> 1 0</coefficients></LinearFunction></function>"
+        modern = '<LinearFunction name="function"><coefficients> 1 0</coefficients></LinearFunction>'
+        modern_model = _PENDULUM_OSIM.replace(legacy, modern).replace('Version="20302"', 'Version="40600"')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "modern_direct_function.osim")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(modern_model)
+            model = osim.parse_osim(path)
+
+        axis = model.joints[0].spatial_transform[0]
+        self.assertEqual(axis.function_type, "LinearFunction")
+        self.assertEqual(axis.function, {"type": "LinearFunction", "coefficients": [1.0, 0.0]})
+        fk = ForwardKinematics(model)
+        zero = fk.body_transforms({"theta": 0.0})["link"]
+        rotated = fk.body_transforms({"theta": 0.5})["link"]
+        self.assertGreater(float(np.max(np.abs(rotated - zero))), 0.1)
+
+    def test_modern_direct_named_spline_function(self):
+        """Parse a direct OpenSim 4.x SimmSpline transform function."""
+        legacy = "<function><SimmSpline><x> -2.0 -1.0 0.0 1.0</x><y> 0.02 0.01 0.0 -0.015</y></SimmSpline></function>"
+        modern = '<SimmSpline name="function"><x> -2.0 -1.0 0.0 1.0</x><y> 0.02 0.01 0.0 -0.015</y></SimmSpline>'
+        modern_model = LEGACY_OSIM.replace(legacy, modern).replace('Version="20302"', 'Version="40600"')
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "modern_direct_spline.osim")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(modern_model)
+            model = osim.parse_osim(path)
+
+        knee = next(joint for joint in model.joints if joint.name == "knee")
+        self.assertEqual(knee.spatial_transform[3].function_type, "SimmSpline")
+        fk = ForwardKinematics(model)
+        transformed = fk.body_transforms({"hip_angle": 0.0, "knee_angle": -1.0})
+        np.testing.assert_allclose(transformed["shank"][:3, 3], (0.01, 0.6, 0.0), atol=1e-9)
+
     def test_forward_kinematics_coupling(self):
         """CustomJoint forward kinematics applies the SimmSpline coupled translation."""
         m = osim.parse_osim(LEGACY_OSIM)

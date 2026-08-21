@@ -294,8 +294,19 @@ def _parse_spatial_transform(elem: ET.Element) -> list[OsimTransformAxis]:
         function_type = None
         function: dict = {}
         is_identity = True
+        function_body = None
         if func_elem is not None and len(list(func_elem)) > 0:
-            function = _parse_function(next(iter(func_elem)))
+            # Legacy serialization wraps the concrete function in <function>.
+            function_body = next(iter(func_elem))
+        else:
+            # OpenSim 4.x writes the concrete Function directly and names the
+            # component "function" (e.g. <SimmSpline name="function">).
+            function_body = next(
+                (child for child in ta if child.get("name") == "function" and child.tag != "function"),
+                None,
+            )
+        if function_body is not None:
+            function = _parse_function(function_body)
             function_type = function.get("type")
             constant_zero = function_type == "Constant" and function.get("value", 0.0) == 0.0
             is_identity = constant_zero and not coords
