@@ -622,7 +622,10 @@ def run_reference(output_dir: str | os.PathLike[str]) -> Path:
     finally:
         elapsed = time.perf_counter() - started
         if tool is not None:
-            del tool
+            destroy = getattr(type(tool), "__swig_destroy__", None)
+            if destroy is not None:
+                destroy(tool)
+                tool.thisown = False
             tool = None
             gc.collect()
         if logger_added:
