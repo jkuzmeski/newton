@@ -29,6 +29,34 @@ role-specific stance frames. Optimization remains bounded to ±30 mm per compone
 around that geometry-derived seed. The existing unregistered human-shoe spheres
 also produced near-zero force and are not an accepted fallback.
 
+## Revision 4 — align implementation with official OpenSim methods
+
+A review of the primary OpenSim 4.6 implementation showed that our proposed
+free-form COM and Fourier pelvis optimization was not RRA. That path is abandoned
+and must not be integrated. Residual reduction now uses official `RRATool` and
+`CMC` as the executable reference. Newton implementations may follow only after
+canonical OpenSim fixture and Trial 101 parity.
+
+The pinned reference source is opensim-core commit
+`11036b39ca7232c604685b37f483afafc056d92b`:
+
+- `OpenSim/Tools/RRATool.cpp`
+- `OpenSim/Tools/CMC.cpp`
+- `OpenSim/Tools/CMC_Joint.cpp`
+- `OpenSim/Tools/ActuatorForceTarget.cpp`
+- the official gait2354 RRA task and actuator resources; and
+- the official 3-D Moco walking examples.
+
+RRA automatically adjusts only the selected heavy body's COM X/Z from average
+spatial residual moments, recommends but does not silently apply proportional
+mass changes, then uses CMC to generate adjusted kinematics. CMC's PD law creates
+desired task accelerations; it does not directly apply PD generalized torques.
+Force allocation, actuator prediction, excitation inversion, scheduled controls,
+and forward integration are required before a Newton feature may use the CMC
+name. Muscle redundancy starts with RRA-adjusted motion and official MocoInverse;
+motion/contact tracking uses torque-driven MocoTrack before muscle-driven
+MocoTrack; untracked prediction is a custom MocoStudy seeded by tracking.
+
 ## Final definitions
 
 The project uses two explicit forward-dynamics milestones.
@@ -208,150 +236,196 @@ preserve the failure and amend this document before changing them.
 Stage gate: prescribed-motion contact passes its declared targets and a held-out
 stance result is reported separately.
 
-## Stage 3 — FD-1 torque-driven predictive contact
+## Stage 3 — torque-driven contact tracking with OpenSim Moco
 
 Stage 3 prototypes may run after preliminary contact calibration, but FD-1
-acceptance is blocked until Stage 4 residual/model closure passes. The accepted
-model and motion must then regenerate inverse dynamics and re-fit/revalidate
-Stage 2 contact before the final Stage 3 run.
+acceptance is blocked until official Stage 4 RRA passes. The accepted RRA model
+and kinematics then regenerate inverse dynamics and contact calibration.
 
-### 3.1 Initialization
+### 3.1 Official torque-driven MocoTrack bridge
 
-- Initialize from filtered C3D-derived coordinates and speeds.
-- Use a prescribed-motion warm-up only to initialize contact/controller state.
-- Start from a declared gait phase and archive the exact transition to free
-  forward dynamics.
-- Use stationary overground contact and remove all measured external loads.
-- Freeze and record the accepted model, contact, controller, and reference hashes.
+Use the official OpenSim 3-D walking pattern:
 
-### 3.2 Controller progression
+1. Process the accepted model with only justified welds and explicit residual/
+   reserve actuators.
+2. Use the RRA-adjusted state trajectory as the tracking reference.
+3. For the measured-load bridge, add corrected ExternalLoads and heavily penalize
+   pelvis residual controls.
+4. For predictive contact, remove measured ExternalLoads from the model, add
+   SmoothSphereHalfSpace forces, and use measured ExternalLoads only as the
+   `MocoContactTrackingGoal` reference.
+5. Group all spheres per foot; provide alternative frame paths when contact spans
+   calcaneus and toe bodies.
+6. Solve torque-driven tracking first and archive its solution as the seed for
+   muscle-driven tracking.
 
-1. Strong bounded tracking on non-root coordinates.
-2. Reduced-gain bounded tracking with per-coordinate saturation.
-3. Feed-forward ID torque plus the minimum documented stabilization needed.
+`MocoContactTrackingGoal` tracks summed force vectors only. COP and free moment
+remain independent validation outputs and cannot be passed by the optimization
+goal itself.
 
-At every level, archive feed-forward and feedback torque separately. Report RMS
-feedback torque divided by RMS total torque for each coordinate. Root commanded
-force is exactly zero; contact projection onto root coordinates remains physical
-and is reported separately.
+### 3.2 Treadmill/overground contract
 
-The first milestone is explicitly **contact-predictive tracking**, not autonomous
-gait: the controller may use current state and the frozen periodic phase/reference,
-but never measured future state or measured external loads. Autonomous or
-perturbation-recovery claims require Stage 6.
+For the verified tied-belt constant-speed Trial 101 window, use the audited
+virtual-overground motion with a stationary ground. Never combine treadmill-frame
+kinematics with a static floor. Belt acceleration windows remain rejected until a
+non-inertial or moving-belt formulation is implemented.
 
-### 3.3 FD-1 gates
+### 3.3 FD-1 definition and gates
 
-- 100% stride completion at 1.0 and 0.5 ms;
-- no measured external wrench after the free-dynamics transition;
-- every commanded root generalized force exactly zero;
-- no hidden continuation force;
-- no declared coordinate-range violation;
-- maximum contact penetration below 20 mm;
-- marker RMS below 30 mm and marker maximum below 60 mm;
-- global RMS feedback/total non-root torque ratio below 25%, with no coordinate
-  above 50%;
-- controller saturation in less than 1% of non-root coordinate-time samples;
-- every vertical, horizontal, impulse, timing, COP, free-moment, and friction gate
-  from Stage 2;
-- bounded speeds and a complete work/energy balance; and
-- complete controller-effort, saturation, and information-set reports.
+FD-1 is the torque-driven contact-tracking solution plus independent forward
+replay, not a custom PD callback. Require:
 
-Stage gate: the artifact is labeled FD-1 only when every required gate passes on
-the residual-accepted model. A finite but heavily tracked result remains an
-engineering continuation result.
+- accepted official RRA model/kinematics and re-fitted contact hash;
+- measured external loads absent from predictive model dynamics;
+- measured loads used only as force-vector tracking references;
+- no hidden root generalized force; every residual/reserve is an explicit named
+  actuator with physical force/moment and optimal-force penalty;
+- mesh refinement and solver convergence;
+- 100% stride completion in independent forward replay;
+- marker RMS <30 mm and maximum <60 mm;
+- global RMS auxiliary/total non-root torque ratio below 25%, no coordinate above
+  50%, and root residuals within accepted RRA component limits;
+- every vertical/horizontal/impulse/timing/COP/free-moment/friction/penetration
+  gate from revalidated Stage 2 contact; and
+- complete model, goal, bounds, weights, solver, guess, and output provenance.
 
-## Stage 4 — resolve residual and model inconsistency
+A finite state-tracking solve with large residuals remains an engineering bridge,
+not FD-1. Autonomous prediction and perturbation recovery remain Stage 6.
 
-Run preliminary sensitivity work alongside Stage 2, but require this stage before
-FD-1 acceptance. Newton currently has no ready RRA tool; this is a new constrained
-estimation implementation and must receive its own regression and recovery tests.
+## Stage 4 — official OpenSim RRA residual reduction
 
-1. Sweep only a predeclared ±20 ms marker/force timing offset in 1 ms increments
-   and report the full sensitivity surface.
-2. Test matched marker/force filtering on a frozen grid without choosing a setting
-   from one output alone.
-3. Audit subject mass, segment mass distribution, inertias, and COM locations.
-4. Implement an RRA-like adjustment of pelvis kinematics and body COM with bounds
-   set by marker-fit tolerances.
-5. Limit each body COM adjustment to 20 mm per component, total mass change to 1%,
-   segment mass change to 5%, and pelvis coordinate adjustment to the existing
-   30 mm RMS / 60 mm maximum marker-fit envelope unless this document is amended.
-6. Archive every adjusted state and model parameter plus the before/after change.
+Use official OpenSim `RRATool` as the executable reference before any Newton
+native port. The input is the corrected scaled model, padded IK, corrected
+ExternalLoads, a replacement ideal-actuator ForceSet, and a CMC joint-task set.
 
-Stage gates retain the current quantitative targets and add peak reporting:
+### 4.1 Exact RRA preprocessing
 
-- pelvis translational residual RMS below 10% body weight;
-- pelvis translational residual peak below 25% body weight;
-- pelvis rotational residual RMS below 5% body-weight-height;
-- pelvis rotational residual peak below 10% body-weight-height;
-- root force reserve below 10% body weight;
-- non-root moment reserve below 5% body-weight-height; and
-- marker-fit gates remain passed without worsening RMS or maximum by more than
-  10% relative to the corrected foundation.
+- Clamp the requested interval to available motion.
+- Pad desired motion by 60 samples.
+- Apply OpenSim order-50 low-pass FIR filtering at the declared cutoff before
+  completing constrained coordinates.
+- Fit quintic GCV splines for q/u and differentiate u for acceleration.
+- Exclude locked coordinates from tasks and reserve actuators.
 
-Crossing a threshold without an identified sensitivity mechanism is not enough;
-the accepted adjustment must be reproducible and biomechanically justified. Once
-accepted, regenerate IK derivatives, inverse dynamics, and torque inputs, then
-re-fit and revalidate Stage 2 contact on the exact accepted model before final
+### 4.2 Anthropometry pass
+
+Construct three global pelvis PointActuators at the scaled pelvis COM and three
+global TorqueActuators, plus one CoordinateActuator per unlocked internal DOF.
+Compute average spatial residual `FX/FY/FZ/MX/MY/MZ` with official inverse
+dynamics. For the selected heavy body (torso), reproduce current OpenSim exactly:
+
+```text
+bodyWeight = abs(gravity_y) * torso_mass
+dx = clamp(MZ_average / bodyWeight, -0.100, 0.100)
+dz = clamp(-MX_average / bodyWeight, -0.100, 0.100)
+new_com_x = old_com_x - dx
+new_com_z = old_com_z - dz
+recommended_total_mass_change = FY_average / gravity_y
+```
+
+The COM X/Z change is automatic. The total mass change is a recommendation only;
+if accepted for the next pass, distribute it proportional to segment mass and
+archive every old/new value. Do not alter COM Y or optimize arbitrary body COMs
+under the RRA label.
+
+### 4.3 CMC kinematic adjustment
+
+Run official regular `ActuatorForceTarget` CMC with target window 1 ms,
+`kp=100`, `kv=20`, `ka=1`, official gait2354 relative task weights, explicit
+residual/reserve optimal forces, IPOPT tolerance `1e-5`, and adaptive Manager
+integration with maximum step 1 ms and error tolerance `1e-4`. Archive states,
+q/u/udot, pErr, controls, Actuation forces/powers/speeds, average residuals, setup,
+tasks, actuators, adjusted model, official version, and log.
+
+Iterate as OpenSim prescribes: inspect the first pass, apply a documented mass
+recommendation if justified, rerun on adjusted kinematics/model, and make
+residuals more expensive only through explicit actuator optimal-force or control
+bounds. Never replace CMC with direct joint PD torque.
+
+### 4.4 Acceptance gates
+
+Apply official componentwise RRA guidance and retain the project's normalized
+resultant gates:
+
+- max residual force: GOOD 0–10 N, OKAY 10–25 N, BAD >25 N;
+- RMS residual force: GOOD 0–5 N, OKAY 5–10 N, BAD >10 N;
+- max residual moment: GOOD 0–50 N·m, OKAY 50–75 N·m, BAD >75 N·m;
+- RMS residual moment: GOOD 0–30 N·m, OKAY 30–50 N·m, BAD >50 N·m;
+- coordinate pErr translation RMS <2 cm and max <2 cm for GOOD (2–4/5 cm
+  is reported as OKAY, not silently promoted);
+- coordinate pErr rotation RMS/max <2 degrees for GOOD (2–5 degrees OKAY);
+- pelvis resultant translational RMS below 10% BW and peak below 25% BW;
+- pelvis resultant rotational RMS below 5% BW-height and peak below 10%; and
+- marker-fit and force/COP mapping gates remain passed.
+
+A production candidate requires no BAD residual component and explicit review of
+every OKAY component. Once an RRA pass is accepted, regenerate inverse dynamics
+and re-fit/revalidate contact on the exact adjusted model and kinematics before
 FD-1 evaluation.
 
-## Stage 5 — FD-2 muscle-driven predictive contact
+### 4.5 Newton parity gate
 
-### 5.0 Capability and coverage gate
+A Newton-native `ResidualReduction`/`ComputedMuscleControl` implementation may be
+accepted only after matching official OpenSim single-muscle, two-muscle, arm26,
+gait2354, and Trial 101 controls, forces, states, task accelerations, residual
+wrenches, and pErr within predeclared tolerances. Until then, official OpenSim is
+the reference runtime and Newton artifacts are parity experiments.
 
-Before a gait solve, audit which non-root coordinates the 54 muscles can span,
-which coordinates require passive structures or reserves, and the condition of
-the muscle moment-arm map across the stride. Benchmark the control method on the
-full state dimension. Do not claim that the current dense project-local
-collocation solver is scalable until that benchmark passes.
+## Stage 5 — official OpenSim muscle redundancy and tracking
 
-The first executable milestone is FD-2R, using the current rigid-tendon state
-`[q, qdot, activation]`. FD-2E is a later capability milestone that first
-implements and independently validates fiber-length/tendon-equilibrium states,
-initialization, integration, force/energy consistency, and time-step convergence.
+### 5.1 MocoInverse baseline
 
-### 5.1 Initial muscle state and controls
+Run official MocoInverse first on the accepted RRA-adjusted motion with corrected
+measured ExternalLoads. Follow the official 3-D walking ModelProcessor pattern:
 
-- Initialize activations consistently and, for FD-2E, initialize fiber/tendon
-  equilibrium states with a documented solver.
-- Seed excitations from Static Optimization, Moco inverse, or an equivalent
-  archived solution, while preserving their failed-reserve status.
-- Replace net non-root joint torques with muscle forces wherever muscle coverage
-  exists.
-- Retain the residual-accepted Stage 3 predictive contact model and stationary
-  ground.
-- Use a controller/optimizer whose information set and scalability benchmark are
-  archived; prescribed-kinematics redundancy resolution alone is not FD-2.
+- add ExternalLoads;
+- weld only unsupported coordinates;
+- add explicit weak residuals/reserves;
+- use the validated muscle model or replace with DeGrooteFregly2016 through an
+  explicit compatibility decision;
+- document tendon-compliance and passive-fiber assumptions;
+- solve coarse-to-fine mesh (`0.05 -> 0.02 -> 0.01 s` where practical); and
+- report reserve controls relative to peak inverse-dynamics moments.
 
-### 5.2 Assistance reduction
+MocoInverse prescribes kinematics. It is the fast muscle-redundancy baseline and
+replacement for the current illustrative Static Optimization result; it is not
+predictive gait.
 
-1. FD-2R muscle-driven tracking with bounded non-root reserves.
-2. Penalize and reduce reserves while preserving contact and state stability.
-3. Remove reserves where muscle coverage permits; root reserves remain forbidden.
-4. Implement and validate FD-2E before emitting elastic-fiber/tendon claims.
+### 5.2 Muscle-driven MocoTrack
 
-### 5.3 FD-2R gates
+Use the torque-driven MocoTrack states as the initial guess for muscle-driven
+MocoTrack. Track the accepted RRA states and, for the predictive-contact lane,
+track grouped contact force vectors. Add periodicity appropriate to a full stride,
+including speeds, activations, controls, and auxiliary states; exclude forward
+pelvis translation value in the overground frame while making its speed periodic.
 
-- every FD-1 contact, kinematic, integration, and no-root-actuation gate;
-- excitations and activations remain in `[0, 1]`;
-- muscle forces remain finite and nonnegative where required by the model;
-- reserve magnitude and work are reported per coordinate;
-- root reserve is exactly absent;
-- non-root reserves pass the declared Stage 4 thresholds; and
-- rigid-tendon approximation is explicit in every scope/status field.
+Lower-limb reserves are removed or reduced in stages. Root residuals remain
+explicit and must meet RRA limits. Validate muscle coordinate coverage and the
+moment-arm map before interpreting excitations.
 
-### 5.4 FD-2E additional gates
+### 5.3 Muscle-driven prediction
 
-- independently validated fiber/tendon state initialization and equilibrium;
-- finite, physically bounded fiber length, velocity, tendon force, and energy;
-- nominal and smaller time-step convergence; and
-- no rigid-tendon fallback in the accepted artifact.
+Prediction is a custom MocoStudy seeded by the accepted muscle-driven tracking
+solution. Remove state/contact tracking goals for a genuinely predictive problem,
+or label retained tracking as hybrid. Add full-stride periodicity, average-speed
+or belt-relative-distance constraints, physiological objectives, and the
+validated contact model. Do not divide effort by lab-frame treadmill pelvis
+displacement; use overground/belt-relative distance or a time/stride-normalized
+objective.
 
-Muscle and metabolic interpretation is emitted only after model compatibility,
-residual, reserve, and the applicable FD-2R/FD-2E gates pass.
+### 5.4 Muscle gates
 
-Stage gate: one full muscle-driven predictive stride passes at 1.0 and 0.5 ms.
+- every accepted RRA, FD-1 contact, kinematic, and no-hidden-root-force gate;
+- excitations and activations within `[0,1]`;
+- finite muscle force and applicable fiber/tendon states;
+- every reserve/residual physical magnitude and work archived;
+- no lower-limb reserve in final prediction unless explicitly justified;
+- Moco mesh/objective/constraint convergence; and
+- independent forward replay of the solved controls.
+
+Rigid-tendon results remain explicitly approximate. Elastic fiber/tendon claims
+require the official model state definitions or a Newton implementation validated
+against OpenSim; they are not inferred from a rigid-tendon simulation.
 
 ## Stage 6 — continuity and generalization
 
@@ -406,14 +480,16 @@ artifact.
 The required acceptance order is:
 
 1. Stage 0 canonical integration and default-artifact regeneration.
-2. Stage 1 divergence and measured-load tracking harness.
+2. Stage 1 engineering diagnostics only.
 3. Preliminary Stage 2 prescribed-motion contact calibration.
-4. Stage 4 residual/model consistency closure.
-5. Regenerate inverse dynamics and re-fit/revalidate Stage 2 contact on the
-   accepted model.
-6. Stage 3 torque-driven predictive contact and FD-1 acceptance.
-7. Stage 5.0 capability/coverage validation, then FD-2R and FD-2E.
-8. Stage 6 multi-stride and cross-trial generalization.
+4. Official OpenSim RRATool/CMC Stage 4 passes and reference artifact acceptance.
+5. Optional Newton RRA/CMC implementation only after official fixture parity.
+6. Regenerate inverse dynamics and re-fit/revalidate Stage 2 contact on the
+   accepted RRA model and kinematics.
+7. Official torque-driven MocoTrack contact bridge and FD-1 acceptance.
+8. Official MocoInverse muscle-redundancy baseline.
+9. Official muscle-driven MocoTrack, then custom predictive MocoStudy.
+10. Stage 6 multi-stride and cross-trial generalization.
 
 A later stage may be prototyped early only when it does not bypass an earlier
 stage gate, overwrite its artifacts, or receive an acceptance label out of order.
