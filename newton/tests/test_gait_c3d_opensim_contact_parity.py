@@ -146,7 +146,7 @@ class TestGaitC3DOpenSimContactParity(unittest.TestCase):
         newton = official.copy()
         newton[0, 0, 0] += 0.009
         newton[1, 1, 5] -= 0.0009
-        difference, metrics = parity.comparison_metrics(official, newton)
+        _difference, metrics = parity.comparison_metrics(official, newton)
         self.assertTrue(metrics["passed"])
         self.assertEqual(metrics["force"]["atol"], 0.001)
         self.assertEqual(metrics["torque"]["atol"], 0.0001)

@@ -234,7 +234,9 @@ def comparison_metrics(
             raise ValueError(f"{name} must be positive and finite")
     difference = newton - official
 
-    def metrics(values: np.ndarray, reference: np.ndarray, candidate: np.ndarray, atol: float, unit: str) -> dict[str, Any]:
+    def metrics(
+        values: np.ndarray, reference: np.ndarray, candidate: np.ndarray, atol: float, unit: str
+    ) -> dict[str, Any]:
         scale = np.maximum(np.linalg.norm(reference, axis=-1), np.linalg.norm(candidate, axis=-1))
         normalized = np.abs(values) / (atol + relative_tolerance * scale[..., None])
         return {
@@ -256,7 +258,11 @@ def comparison_metrics(
                 difference[:, body_index, :3], official[:, body_index, :3], newton[:, body_index, :3], force_atol_n, "N"
             ),
             "torque": metrics(
-                difference[:, body_index, 3:], official[:, body_index, 3:], newton[:, body_index, 3:], torque_atol_nm, "N*m"
+                difference[:, body_index, 3:],
+                official[:, body_index, 3:],
+                newton[:, body_index, 3:],
+                torque_atol_nm,
+                "N*m",
             ),
         }
     return difference, {
