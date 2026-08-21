@@ -11,6 +11,7 @@ OpenSim is optional and imported only by :func:`run_reference`.
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import itertools
 import json
@@ -600,6 +601,7 @@ def run_reference(output_dir: str | os.PathLike[str]) -> Path:
     success = False
     error: str | None = None
     opensim: Any | None = None
+    tool: Any | None = None
     logger_added = False
     previous_directory = Path.cwd()
     try:
@@ -609,7 +611,8 @@ def run_reference(output_dir: str | os.PathLike[str]) -> Path:
         # RRATool creates its default log and optimization stop sentinel in the
         # process working directory. Keep those generated files out of the repo.
         os.chdir(output_dir)
-        result = opensim.RRATool(str(setup_path)).run()
+        tool = opensim.RRATool(str(setup_path))
+        result = tool.run()
         success = result is not False
         if not success:
             raise RuntimeError("official RRATool returned false")
@@ -618,6 +621,10 @@ def run_reference(output_dir: str | os.PathLike[str]) -> Path:
         raise
     finally:
         elapsed = time.perf_counter() - started
+        if tool is not None:
+            del tool
+            tool = None
+            gc.collect()
         if logger_added:
             opensim.Logger.removeFileSink()
         os.chdir(previous_directory)
