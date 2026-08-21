@@ -181,6 +181,23 @@ class TestOpenSimMocoInverseReference(unittest.TestCase):
             self.assertEqual(rows[0][2], 1.25)
             self.assertNotIn("mtp", destination.read_text(encoding="utf-8"))
 
+    def test_coupled_knee_translation_does_not_override_rotational_units(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary) / "model.osim"
+            self._write_model(model)
+            tree = ET.parse(model)
+            joints = tree.getroot().find(".//JointSet/objects")
+            knee = ET.SubElement(joints, "CustomJoint", {"name": "knee_r"})
+            coordinates = ET.SubElement(knee, "coordinates")
+            ET.SubElement(coordinates, "Coordinate", {"name": "knee_angle_r"})
+            transform = ET.SubElement(knee, "SpatialTransform")
+            rotation = ET.SubElement(transform, "TransformAxis", {"name": "rotation1"})
+            ET.SubElement(rotation, "coordinates").text = "knee_angle_r"
+            translation = ET.SubElement(transform, "TransformAxis", {"name": "translation1"})
+            ET.SubElement(translation, "coordinates").text = "knee_angle_r"
+            tree.write(model, encoding="utf-8", xml_declaration=True)
+            self.assertTrue(moco.coordinate_info_from_model(model)["knee_angle_r"].rotational)
+
     def test_conversion_rejects_absolute_or_incomplete_legacy_labels(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

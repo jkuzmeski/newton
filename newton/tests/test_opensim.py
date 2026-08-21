@@ -517,6 +517,35 @@ class TestLegacyParserAndKinematics(unittest.TestCase):
         self.assertEqual(tx.coordinates, ["knee_angle"])
         self.assertEqual(len(m.markers), 5)
 
+    def test_modern_joint_motion_types_are_inferred_without_motion_type_tags(self):
+        """Keep FreeJoint translations in metres and coupled knee coordinates angular."""
+        model = osim.parse_osim(
+            """<OpenSimDocument Version="40600"><Model name="motion_types">
+            <JointSet><objects>
+              <FreeJoint name="free"><coordinates>
+                <Coordinate name="r1"/><Coordinate name="r2"/><Coordinate name="r3"/>
+                <Coordinate name="tx"/><Coordinate name="ty"/><Coordinate name="tz"/>
+              </coordinates></FreeJoint>
+              <CustomJoint name="custom"><coordinates>
+                <Coordinate name="knee"/><Coordinate name="slide"/>
+              </coordinates><SpatialTransform>
+                <TransformAxis name="rotation1"><coordinates>knee</coordinates><axis>1 0 0</axis></TransformAxis>
+                <TransformAxis name="rotation2"><coordinates/><axis>0 1 0</axis></TransformAxis>
+                <TransformAxis name="rotation3"><coordinates/><axis>0 0 1</axis></TransformAxis>
+                <TransformAxis name="translation1"><coordinates>knee</coordinates><axis>1 0 0</axis></TransformAxis>
+                <TransformAxis name="translation2"><coordinates>slide</coordinates><axis>0 1 0</axis></TransformAxis>
+                <TransformAxis name="translation3"><coordinates/><axis>0 0 1</axis></TransformAxis>
+              </SpatialTransform></CustomJoint>
+            </objects></JointSet></Model></OpenSimDocument>"""
+        )
+        free = next(joint for joint in model.joints if joint.name == "free")
+        self.assertEqual(
+            [coordinate.motion_type for coordinate in free.coordinates],
+            ["rotational", "rotational", "rotational", "translational", "translational", "translational"],
+        )
+        custom = next(joint for joint in model.joints if joint.name == "custom")
+        self.assertEqual([coordinate.motion_type for coordinate in custom.coordinates], ["rotational", "translational"])
+
     def test_modern_direct_named_transform_function(self):
         """Parse OpenSim 4.x functions written directly with name="function"."""
         legacy = "<function><LinearFunction><coefficients> 1 0</coefficients></LinearFunction></function>"

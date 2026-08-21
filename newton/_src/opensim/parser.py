@@ -332,7 +332,31 @@ def _parse_joint(elem: ET.Element) -> OsimJoint:
     child_body, child_xf = _resolve_frame(c_socket, owned)
 
     coords_elem = elem.find("coordinates")
-    coordinates = [_parse_coordinate(c) for c in _objects(coords_elem)] if coords_elem is not None else []
+    coordinate_elements = _objects(coords_elem) if coords_elem is not None else []
+    coordinates = [_parse_coordinate(coordinate) for coordinate in coordinate_elements]
+    declared_motion = {
+        coordinate.get("name", "") for coordinate in coordinate_elements if _find(coordinate, "motion_type") is not None
+    }
+    spatial_transform = _parse_spatial_transform(elem)
+
+    # OpenSim 4.x Coordinate elements normally omit ``motion_type``. Infer it
+    # from the joint's six-axis convention so translational states remain in
+    # metres instead of being mistaken for degree-valued rotations. A rotational
+    # coordinate may also drive coupled translation (e.g. the gait knee), so a
+    # rotation-axis reference takes precedence.
+    translational: set[str] = set()
+    if elem.tag == "CustomJoint":
+        rotational = {name for axis in spatial_transform[:3] for name in axis.coordinates}
+        translational = {name for axis in spatial_transform[3:6] for name in axis.coordinates} - rotational
+    elif elem.tag == "FreeJoint":
+        translational.update(coordinate.name for coordinate in coordinates[3:6])
+    elif elem.tag == "SliderJoint":
+        translational.update(coordinate.name for coordinate in coordinates[:1])
+    elif elem.tag == "PlanarJoint":
+        translational.update(coordinate.name for coordinate in coordinates[1:3])
+    for coordinate in coordinates:
+        if coordinate.name not in declared_motion and coordinate.name in translational:
+            coordinate.motion_type = "translational"
 
     return OsimJoint(
         name=elem.get("name", ""),
@@ -342,7 +366,7 @@ def _parse_joint(elem: ET.Element) -> OsimJoint:
         parent_transform=parent_xf,
         child_transform=child_xf,
         coordinates=coordinates,
-        spatial_transform=_parse_spatial_transform(elem),
+        spatial_transform=spatial_transform,
     )
 
 

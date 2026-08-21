@@ -205,14 +205,19 @@ def _coordinate_rotation_map(joint: ET.Element) -> dict[str, bool]:
     result: dict[str, bool] = {}
     spatial = joint.find("SpatialTransform")
     if spatial is not None:
+        rotational_names: set[str] = set()
+        translational_names: set[str] = set()
         for axis in spatial.findall("TransformAxis"):
             axis_name = (axis.get("name") or "").lower()
-            rotational = axis_name.startswith("rotation")
-            translational = axis_name.startswith("translation")
-            if not (rotational or translational):
-                continue
-            for name in (axis.findtext("coordinates") or "").split():
-                result[name] = rotational
+            names = set((axis.findtext("coordinates") or "").split())
+            if axis_name.startswith("rotation"):
+                rotational_names.update(names)
+            elif axis_name.startswith("translation"):
+                translational_names.update(names)
+        # A rotational coordinate can also drive coupled translation (the gait
+        # knee is the canonical example). Rotation therefore takes precedence.
+        result.update(dict.fromkeys(translational_names - rotational_names, False))
+        result.update(dict.fromkeys(rotational_names, True))
     tag = joint.tag.rsplit("}", 1)[-1]
     if tag in {"PinJoint", "BallJoint", "EllipsoidJoint"}:
         default: bool | None = True
