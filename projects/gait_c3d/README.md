@@ -274,6 +274,25 @@ pErr remains diagnostic and is excluded from the production gate. The S001
 reference uses FY optimal force 4 N; OpenSim's upstream default is 8 N and both
 values remain explicit.
 
+### Import accepted RRA motion for contact
+
+After an official RRA summary passes, publish its adjusted model and q/u/udot on
+the corrected contact-target grid. Original ID generalized forces are deliberately
+excluded and must be regenerated:
+
+```bash
+.venv/bin/python -m projects.gait_c3d.rra_adjusted_contact_input   --rra-reference /home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output /home/jo31399/newton-data/gait/processed/trial_101/rra_adjusted_contact_input
+```
+
+### Official 3-D Moco contact topology
+
+`projects.gait_c3d.opensim_moco_contact_reference` pins the current official
+example3DWalking topology: six spheres per foot, with four on the calcaneus and
+two on the toe body. It generates matching official XML and Newton augmentation
+specs, MocoContactTrackingGoal groups with toe alternative frames, and independent
+COP/free-moment validation. Measured ExternalLoads are reference-only and are
+never added to the predictive contact model.
+
 ## Official OpenSim to Newton contact parity
 
 Validate the Newton-native SmoothSphereHalfSpace port against official OpenSim
