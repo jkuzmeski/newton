@@ -631,7 +631,8 @@ def run_reference(output_dir: str | os.PathLike[str]) -> Path:
         if logger_added:
             opensim.Logger.removeFileSink()
         os.chdir(previous_directory)
-        artifact_hashes = _artifact_hashes(output_dir, excluded={runtime_path})
+        deferred_paths = sorted(results_dir.glob("*_states.sto"))
+        artifact_hashes = _artifact_hashes(output_dir, excluded={runtime_path, *deferred_paths})
         runtime = {
             "schema_version": _SCHEMA,
             "scope": _SCOPE,
@@ -646,6 +647,9 @@ def run_reference(output_dir: str | os.PathLike[str]) -> Path:
             "setup_sha256": _sha256(setup_path),
             "artifact_linkage": {"run_id": run_id, "root": str(output_dir)},
             "artifacts": artifact_hashes,
+            "deferred_artifacts_finalized_after_process_exit": [
+                str(path.relative_to(output_dir)) for path in deferred_paths
+            ],
             "mass_recommendation_automatically_applied": False,
         }
         _write_json(runtime_path, runtime)
@@ -822,9 +826,16 @@ def summarize_reference(output_dir: str | os.PathLike[str]) -> Path:
     expected_artifacts = runtime.get("artifacts")
     if not isinstance(expected_artifacts, dict):
         raise ValueError("runtime has no artifact hash set")
-    current_artifacts = _artifact_hashes(output_dir, excluded={runtime_path, summary_path})
-    if current_artifacts != expected_artifacts:
-        raise ValueError("current official RRA artifacts do not match the successful runtime")
+    deferred_names = runtime.get("deferred_artifacts_finalized_after_process_exit", [])
+    if not isinstance(deferred_names, list) or any(not isinstance(name, str) for name in deferred_names):
+        raise ValueError("runtime deferred artifact list is invalid")
+    deferred_paths = {output_dir / name for name in deferred_names}
+    current_stable = _artifact_hashes(output_dir, excluded={runtime_path, summary_path, *deferred_paths})
+    if current_stable != expected_artifacts:
+        raise ValueError("current stable official RRA artifacts do not match the successful runtime")
+    for path in deferred_paths:
+        if not path.is_file() or path.stat().st_size == 0:
+            raise FileNotFoundError(f"deferred official RRA artifact is missing or empty: {path}")
 
     tool_name = manifest["tool_name"]
     results_dir = output_dir / "results"
