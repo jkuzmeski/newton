@@ -1402,7 +1402,7 @@ def run_prescribed_contact(
             source_transforms[np.asarray(sphere.phase_frame_indices), fk_body_index[sphere.body]],
             np.asarray(sphere.marker_landmark_m),
             sphere.seed_radius_m,
-            sidecar.ground.height_m,
+            sidecar.ground.platform_height_m,
         )
         if not np.allclose(seed, sphere.geometry_seed_m, rtol=0.0, atol=1.0e-10):
             raise ValueError(f"sphere {sphere.name!r} geometry seed does not reproduce from frozen motion")
