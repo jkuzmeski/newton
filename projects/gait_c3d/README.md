@@ -199,6 +199,57 @@ This is an engineering reconstruction, not predictive contact dynamics. It
 replays measured ground reactions and intentionally reports uncorrected
 open-loop drift without a tracking controller or hidden residual forces.
 
+## Stage 1 measured-load engineering diagnostics
+
+The roadmap's non-predictive integration harness is separate from the pointwise
+torque-reconstruction artifact:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.measured_load_diagnostics   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage1_engineering_measured_load_tracking
+```
+
+The canonical run performs 1.0, 0.5, and 0.25 ms convergence, conditionally adds
+0.125 ms, schedules 25/50/100 ms restarts from every source frame, compares load
+and interpolation variants, and runs bounded non-root tracking with every root
+command forced to zero. It archives controller components, work/energy balance,
+mass conditioning, range violations, marker/state error, and unavailable source
+boundaries. This is an expensive engineering diagnostic and is never labeled
+predictive gait. Use repeated `--section` options and
+`--restart-start-limit N` only for explicitly incomplete probes.
+
+## Stage 2 prescribed-motion predictive contact
+
+Create a source-bound bilateral contact sidecar from frozen stance-tangent
+geometry, then evaluate contact without passing measured loads to the contact
+model:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact init   --model /home/jo31399/newton-data/gait/processed/trial_101/latest/S001_scaled.osim   --analysis /home/jo31399/newton-data/gait/processed/trial_101/latest/analysis.npz   --output /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --body-height 1.695898298375747
+
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact evaluate   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact
+```
+
+The initial sidecar is intentionally uncalibrated. Measured GRF, COP, impulse,
+timing, and free moment are validation targets read only after contact evaluation.
+A finite prescribed replay is infrastructure, not an FD-1 result; all declared
+contact gates and the later held-out calibration must pass.
+
+## Stage 4 residual and model sensitivity
+
+Run the frozen preliminary timing and inertial audit without accepting a timing
+change:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.residual_sensitivity   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage4_residual_sensitivity_preliminary
+```
+
+The artifact evaluates every integer wrench lag from -20 to +20 ms on one common
+non-extrapolated interval in one batched inverse-dynamics call. It archives all
+root residuals, vector-resultant RMS/peak normalization, qualified-but-not-
+accepted lags, and every body mass, COM, and inertia. A lower residual at one lag
+is sensitivity evidence only; timing remains unchanged until an independent
+synchronization mechanism and the full residual/model closure stage are accepted.
+
 ## Visualization
 
 After the pipeline completes, launch the exact-FK replay with measured markers,
