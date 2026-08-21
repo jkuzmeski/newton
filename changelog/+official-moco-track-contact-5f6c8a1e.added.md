@@ -1,0 +1,1 @@
+Add a strict official OpenSim torque-driven MocoTrack reference for accepted-RRA full-stride state and six-sphere contact tracking, with measured ExternalLoads used only as a goal reference and sealed failure artifacts.

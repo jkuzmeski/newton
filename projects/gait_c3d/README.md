@@ -313,6 +313,33 @@ specs, MocoContactTrackingGoal groups with toe alternative frames, and independe
 COP/free-moment validation. Measured ExternalLoads are reference-only and are
 never added to the predictive contact model.
 
+### Official torque-driven MocoTrack contact reference
+
+Prepare the first official torque-driven contact-tracking bridge from the accepted
+RRA and six-sphere topology. The adapter hash-seals the complete model, state,
+goal, periodicity, solver, and guess configuration. It rejects model-applied
+`ExternalForce` components. The measured loads are read only by
+`MocoContactTrackingGoal`:
+
+```bash
+rra=/home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4
+contact=/home/jo31399/newton-data/gait/processed/trial_101/opensim_moco_contact_reference
+loads=/home/jo31399/newton-data/gait/processed/trial_101/latest/trial_grf_context.xml
+out=/home/jo31399/newton-data/gait/processed/trial_101/opensim_moco_track_reference
+
+.venv/bin/python -m projects.gait_c3d.opensim_moco_track_reference prepare \
+  "$rra" "$contact" "$loads" "$out" --mesh-interval 0.05 --max-iterations 1000
+.venv/bin/python -m projects.gait_c3d.opensim_moco_track_reference run "$out"
+.venv/bin/python -m projects.gait_c3d.opensim_moco_track_reference summarize "$out"
+```
+
+The S001 RRA model keeps both MTP coordinates locked. The adapter therefore keeps
+the toe bodies fixed to their calcaneus parents and omits the official example's
+active-MTP actuator and passive toe expression. If an accepted model unlocks MTP,
+it applies the pinned official `-25*q-2*qdot` toe force before adding weak MTP
+actuators. Failed optimizations remain sealed failed-guess artifacts and never
+become predictive or FD-1 claims.
+
 ## Official OpenSim to Newton contact parity
 
 Validate the Newton-native SmoothSphereHalfSpace port against official OpenSim
