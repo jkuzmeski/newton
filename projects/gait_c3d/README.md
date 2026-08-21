@@ -250,6 +250,44 @@ side penetration above 20 mm. It does not fit horizontal force, timing, COP, fre
 moment, or the held-out side, so optimizer convergence cannot be called complete
 Stage 2 calibration.
 
+## Official OpenSim RRA reference
+
+OpenSim is the executable residual-reduction reference. The optional official
+Python bindings are needed only for `run`; preparation and parsing remain usable
+without them. A development environment can install the reference runtime with
+`uv pip install opensim` without adding it as a Newton package dependency.
+
+```bash
+out=/home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4
+
+.venv/bin/python -m projects.gait_c3d.opensim_rra_reference prepare   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir "$out" --initial-time 20.60 --final-time 21.66   --tool-name trial101_official_opensim_rra_fy4 --fy-optimal-force 4
+
+.venv/bin/python -m projects.gait_c3d.opensim_rra_reference run   --output-dir "$out"
+.venv/bin/python -m projects.gait_c3d.opensim_rra_reference summarize   --output-dir "$out"
+```
+
+The adapter generates the pinned gait2354 RRA residual/reserve ForceSet and CMC
+tasks, places spatial residuals at the scaled pelvis COM, invokes official
+`RRATool`, and archives CMC states, adjusted kinematics/model, pErr, controls,
+Actuation results, COM adjustment, and unapplied mass recommendation. Locked MTP
+pErr remains diagnostic and is excluded from the production gate. The S001
+reference uses FY optimal force 4 N; OpenSim's upstream default is 8 N and both
+values remain explicit.
+
+## Official OpenSim to Newton contact parity
+
+Validate the Newton-native SmoothSphereHalfSpace port against official OpenSim
+on the same sidecar, state, frame, and all stride samples:
+
+```bash
+.venv/bin/python -m projects.gait_c3d.opensim_contact_parity   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_initial_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/opensim_newton_contact_parity   --full-frames --device cpu
+```
+
+The mixed component gate is `abs(delta) <= atol + 1e-4 * vector_scale`, with
+`atol=1e-3 N` for force and `1e-4 N*m` for torque. The comparison reads only q
+and qdot; measured loads are not inputs. Pre-existing model contact is rejected
+so both runtimes evaluate exactly the sidecar elements.
+
 ## Stage 4 residual and model sensitivity
 
 Run the frozen preliminary timing and inertial audit without accepting a timing
