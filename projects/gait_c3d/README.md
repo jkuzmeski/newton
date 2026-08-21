@@ -234,6 +234,22 @@ timing, and free moment are validation targets read only after contact evaluatio
 A finite prescribed replay is infrastructure, not an FD-1 result; all declared
 contact gates and the later held-out calibration must pass.
 
+### Preliminary bounded normal-contact fit
+
+The first calibration stage fits only left-side vertical force with six bounded
+parameters. It keeps the right side held out and writes full prescribed QC to a
+separate artifact:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.contact_calibration   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_normal_contact_calibration   --max-nfev 40   --prescribed-qc-output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact_calibrated
+```
+
+This fit adjusts ground height, four bilateral role-shared vertical center
+offsets, and log stiffness. It records every evaluation and penalizes training-
+side penetration above 20 mm. It does not fit horizontal force, timing, COP, free
+moment, or the held-out side, so optimizer convergence cannot be called complete
+Stage 2 calibration.
+
 ## Stage 4 residual and model sensitivity
 
 Run the frozen preliminary timing and inertial audit without accepting a timing
