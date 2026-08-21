@@ -1286,8 +1286,10 @@ class ForwardDynamics:
         start_time: float = 0.0,
         controls=None,
         external_loads: ExternalLoads | None = None,
+        contact_forces=None,
         integrator: str = "rk4",
         h: float = 1.0e-4,
+        contact_h: float = 1.0e-6,
         eps: float = 1.0e-6,
         use_graph: bool = True,
     ) -> FDResult:
@@ -1302,19 +1304,28 @@ class ForwardDynamics:
             controls: Optional ``controls(t, q, qd) -> generalized_forces`` callable
                 returning applied joint moments/forces (length ``num_coordinates``);
                 ``None`` leaves the model passive.
-            external_loads: Optional :class:`ExternalLoads` sampled at each step.
+            external_loads: Optional measured/prescribed :class:`ExternalLoads`
+                sampled at each step.
+            contact_forces: Optional :class:`newton.opensim.OpenSimContact`-like
+                evaluator. Its OpenSim-frame body wrenches are recomputed from the
+                current state at every integration stage.
             integrator: ``"rk4"`` (fixed-step Runge-Kutta 4) or ``"semi_implicit"``
                 (symplectic Euler).
             h: Finite-difference step for the inverse-dynamics stencil [s].
+            contact_h: Coordinate perturbation used by contact point-velocity
+                evaluation [rad or m].
             eps: Finite-difference step for the geometric Jacobian [rad or m].
             use_graph: Take the device-resident, CUDA-graph-captured stepper when
-                the trajectory is passive (no ``controls`` or ``external_loads``)
-                on a CUDA device. Falls back to the host loop otherwise.
+                the trajectory is passive (no ``controls``, ``external_loads``,
+                or ``contact_forces``) on a CUDA device. Falls back to the host
+                loop otherwise.
 
         Returns:
             The coordinate and speed trajectory over ``[start_time, start_time + duration]``.
         """
-        if use_graph and controls is None and external_loads is None and self.device.is_cuda:
+        if contact_forces is not None and (not np.isfinite(contact_h) or contact_h <= 0.0):
+            raise ValueError("contact_h must be finite and positive")
+        if use_graph and controls is None and external_loads is None and contact_forces is None and self.device.is_cuda:
             batch = self.simulate_batch(
                 np.asarray(initial_coordinates, dtype=float)[None, :],
                 np.asarray(initial_speeds, dtype=float)[None, :],
@@ -1341,9 +1352,20 @@ class ForwardDynamics:
             return np.zeros(nc) if controls is None else np.asarray(controls(t, qc, vc), dtype=float)
 
         def accel(t, qc, vc):
-            ext_bodies, wrench = (None, None)
+            body_groups: list[list[str]] = []
+            wrench_groups: list[np.ndarray] = []
             if external_loads is not None:
-                ext_bodies, wrench = external_loads.sample(np.array([t]))
+                ext_bodies, ext_wrenches = external_loads.sample(np.array([t]))
+                body_groups.append(list(ext_bodies))
+                wrench_groups.append(np.asarray(ext_wrenches, dtype=float))
+            if contact_forces is not None:
+                contact_bodies, contact_wrenches = contact_forces.body_wrenches(
+                    qc[None], vc[None], h=contact_h, frame="opensim"
+                )
+                body_groups.append(list(contact_bodies))
+                wrench_groups.append(np.asarray(contact_wrenches, dtype=float))
+            ext_bodies = [body for group in body_groups for body in group] or None
+            wrench = np.concatenate(wrench_groups, axis=1) if wrench_groups else None
             return self.accelerations(
                 qc[None],
                 vc[None],

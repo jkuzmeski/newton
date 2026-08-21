@@ -4688,17 +4688,62 @@ class TestContactSimulation(unittest.TestCase):
         contact = OpenSimContact(model)
         fd = ForwardDynamics(model)
         mass, g = 2.0, 9.80665
-        q = np.array([0.0, 0.2])
-        v = np.array([0.0, 0.0])
-        dt = 1e-4
-        for _ in range(40000):
-            bodies, wr = contact.body_wrenches(q[None], v[None], frame="opensim")
-            a = fd.accelerations(q[None], v[None], np.zeros((1, 2)), external_bodies=bodies, external_wrenches=wr)[0]
-            v = v + dt * a
-            q = q + dt * v
+        q0 = np.array([0.0, 0.2])
+        v0 = np.array([0.0, 0.0])
+        result = fd.simulate(
+            q0,
+            v0,
+            duration=4.0,
+            dt=1e-4,
+            contact_forces=contact,
+            integrator="semi_implicit",
+            use_graph=False,
+        )
+        q = result.coordinates[-1]
+        v = result.speeds[-1]
         fc = contact.forces(q, v, frame="opensim")[0]
         self.assertLess(abs(v[1]), 1e-3)
         np.testing.assert_allclose(fc[1], mass * g, rtol=2e-3)
+
+    def test_forward_simulation_evaluates_contact_at_rk_stages(self):
+        """Recompute body contact from each current RK state without measured loads."""
+        model = osim.parse_osim(_CONTACT_MODEL_OSIM)
+        forward = ForwardDynamics(model)
+        calls = []
+
+        class Contact:
+            def body_wrenches(self, q, qd, *, h, frame):
+                calls.append((q.copy(), qd.copy(), h, frame))
+                return ["ball"], np.zeros((1, 1, 9))
+
+        def zero_acceleration(q, qd, tau, *, external_bodies, external_wrenches, h, eps):
+            self.assertEqual(external_bodies, ["ball"])
+            self.assertEqual(external_wrenches.shape, (1, 1, 9))
+            return np.zeros_like(q)
+
+        original = forward.accelerations
+        forward.accelerations = zero_acceleration
+        try:
+            result = forward.simulate(
+                np.array([0.0, 0.2]),
+                np.array([0.1, -0.2]),
+                duration=0.002,
+                dt=0.001,
+                contact_forces=Contact(),
+                integrator="rk4",
+                use_graph=False,
+            )
+        finally:
+            forward.accelerations = original
+
+        self.assertEqual(len(calls), 8)
+        self.assertTrue(all(call[2:] == (1.0e-6, "opensim") for call in calls))
+        self.assertGreater(float(np.max(np.abs(calls[1][0] - calls[0][0]))), 0.0)
+        self.assertEqual(result.coordinates.shape, (3, 2))
+        with self.assertRaisesRegex(ValueError, "contact_h"):
+            forward.simulate(
+                np.zeros(2), np.zeros(2), 0.001, 0.001, contact_forces=Contact(), contact_h=0.0, use_graph=False
+            )
 
     def test_elastic_foundation_mesh_on_floor(self):
         """Drive an ElasticFoundationForce with a supplied triangle mesh vs the floor.
