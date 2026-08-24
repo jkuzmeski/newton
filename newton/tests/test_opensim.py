@@ -4774,6 +4774,81 @@ class TestContactSimulation(unittest.TestCase):
                 np.zeros(2), np.zeros(2), 0.001, 0.001, contact_forces=Contact(), contact_h=0.0, use_graph=False
             )
 
+    def test_contact_device_workspace_clears_accumulators(self):
+        """Reuse contact device buffers without accumulating old body wrenches."""
+        model = osim.parse_osim(_CONTACT_MODEL_OSIM)
+        contact = OpenSimContact(model)
+        q = np.array([[0.01, 0.044], [-0.02, 0.046]])
+        qd = np.array([[0.1, -0.2], [-0.1, 0.3]])
+        expected_bodies, expected = contact.body_wrenches(q, qd, frame="opensim")
+        q_wp = wp.array(q, dtype=wp.float64, device=contact.device)
+        qd_wp = wp.array(qd, dtype=wp.float64, device=contact.device)
+        workspace = contact._create_device_workspace(q.shape[0])
+        out = wp.empty((q.shape[0], len(expected_bodies), 9), dtype=wp.float64, device=contact.device)
+
+        contact._body_wrenches_device(q_wp, qd_wp, 1.0e-6, out, workspace)
+        first = out.numpy()
+        contact._body_wrenches_device(q_wp, qd_wp, 1.0e-6, out, workspace)
+        second = out.numpy()
+
+        np.testing.assert_allclose(first, expected, atol=1.0e-10)
+        np.testing.assert_allclose(second, expected, atol=1.0e-10)
+
+    def test_batched_contact_simulation_matches_host_loop(self):
+        """Match the fused device contact stepper to the existing host contact path."""
+        model = osim.parse_osim(_CONTACT_MODEL_OSIM)
+        contact = OpenSimContact(model)
+        forward = ForwardDynamics(model)
+        q0 = np.array([0.01, 0.06])
+        v0 = np.array([0.1, -0.2])
+        for integrator in ("semi_implicit", "rk4"):
+            expected = forward.simulate(
+                q0,
+                v0,
+                duration=0.001,
+                dt=1.0e-4,
+                contact_forces=contact,
+                integrator=integrator,
+                use_graph=False,
+            )
+            actual = forward.simulate_batch(
+                q0,
+                v0,
+                duration=0.001,
+                dt=1.0e-4,
+                contact_forces=contact,
+                integrator=integrator,
+                use_graph=False,
+            ).trajectory(0)
+            np.testing.assert_allclose(actual.coordinates, expected.coordinates, atol=1.0e-12)
+            np.testing.assert_allclose(actual.speeds, expected.speeds, atol=1.0e-12)
+
+    @unittest.skipUnless(wp.is_cuda_available(), "CUDA graph capture requires CUDA")
+    def test_cuda_graph_contact_matches_direct_device_rollout(self):
+        """Capture contact and dynamics together without using host-returning wrappers."""
+        model = osim.parse_osim(_CONTACT_MODEL_OSIM)
+        contact = OpenSimContact(model, device="cuda:0")
+        forward = ForwardDynamics(model, device="cuda:0")
+        q0 = np.array([[0.01, 0.06], [-0.01, 0.055]])
+        v0 = np.array([[0.1, -0.2], [-0.05, 0.1]])
+        direct = forward.simulate_batch(q0, v0, 0.002, 1.0e-4, contact_forces=contact, use_graph=False)
+        captured = forward.simulate_batch(q0, v0, 0.002, 1.0e-4, contact_forces=contact, use_graph=True)
+        np.testing.assert_allclose(captured.coordinates, direct.coordinates, atol=1.0e-12)
+        np.testing.assert_allclose(captured.speeds, direct.speeds, atol=1.0e-12)
+
+        contact.body_wrenches = lambda *_args, **_kwargs: self.fail("used host contact wrapper")
+        forward.accelerations = lambda *_args, **_kwargs: self.fail("used host dynamics wrapper")
+        routed = forward.simulate(
+            q0[0],
+            v0[0],
+            0.002,
+            1.0e-4,
+            contact_forces=contact,
+            use_graph=True,
+        )
+        np.testing.assert_allclose(routed.coordinates, captured.coordinates[:, 0], atol=1.0e-12)
+        np.testing.assert_allclose(routed.speeds, captured.speeds[:, 0], atol=1.0e-12)
+
     def test_elastic_foundation_mesh_on_floor(self):
         """Drive an ElasticFoundationForce with a supplied triangle mesh vs the floor.
 

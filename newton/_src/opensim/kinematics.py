@@ -999,10 +999,10 @@ class ForwardKinematics:
         return np.asarray(q, dtype=float).reshape(-1)
 
     # ---- device launches ----------------------------------------------------
-    def _launch_body_transforms(self, q_wp: wp.array) -> wp.array:
+    def _launch_body_transforms(self, q_wp: wp.array, out: wp.array | None = None) -> wp.array:
         """Launch :func:`fk_kernel` for a device batch ``q_wp`` [B, ncoord]."""
         batch = q_wp.shape[0]
-        body_x = wp.empty((batch, self.nbody), dtype=_mat44d, device=self.device)
+        body_x = wp.empty((batch, self.nbody), dtype=_mat44d, device=self.device) if out is None else out
         wp.launch(
             fk_kernel,
             dim=batch,

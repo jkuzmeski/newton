@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import os
 import struct
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -622,6 +623,20 @@ _SURFACE_DEFAULTS = {
 }
 
 
+@dataclass
+class _ContactWorkspace:
+    """Fixed-shape device buffers for repeated contact evaluations."""
+
+    batch: int
+    stencil: wp.array[_f64]
+    poses: wp.array[_mat44d]
+    body_force: wp.array[_vec3d]
+    body_torque: wp.array[_vec3d]
+    smooth_force: wp.array[_vec3d]
+    hc_force: wp.array[_vec3d]
+    ef_force: wp.array[_vec3d]
+
+
 class OpenSimContact:
     r"""Evaluate a model's OpenSim compliant contact forces with Warp kernels.
 
@@ -923,6 +938,19 @@ class OpenSimContact:
         return out
 
     # -- evaluation ---------------------------------------------------------- #
+    def _create_device_workspace(self, batch: int) -> _ContactWorkspace:
+        """Allocate reusable device buffers for a fixed contact batch."""
+        return _ContactWorkspace(
+            batch=batch,
+            stencil=wp.empty((3 * batch, self.ncoord), dtype=_f64, device=self.device),
+            poses=wp.empty((3 * batch, self.fk.nbody), dtype=_mat44d, device=self.device),
+            body_force=wp.empty((batch, self.fk.nbody), dtype=_vec3d, device=self.device),
+            body_torque=wp.empty((batch, self.fk.nbody), dtype=_vec3d, device=self.device),
+            smooth_force=wp.empty((batch, max(self.n_smooth, 1)), dtype=_vec3d, device=self.device),
+            hc_force=wp.empty((batch, max(self.n_hc, 1)), dtype=_vec3d, device=self.device),
+            ef_force=wp.empty((batch, max(self.n_ef, 1)), dtype=_vec3d, device=self.device),
+        )
+
     def _run(self, q: np.ndarray, qd: np.ndarray, h: float):
         q = np.ascontiguousarray(np.atleast_2d(q), dtype=np.float64)
         qd = np.ascontiguousarray(np.atleast_2d(qd), dtype=np.float64)
@@ -930,26 +958,40 @@ class OpenSimContact:
         qd_wp = wp.array(qd, dtype=_f64, device=self.device)
         return self._run_device(q_wp, qd_wp, h)
 
-    def _run_device(self, q: wp.array[_f64], qd: wp.array[_f64], h: float):
+    def _run_device(
+        self,
+        q: wp.array[_f64],
+        qd: wp.array[_f64],
+        h: float,
+        workspace: _ContactWorkspace | None = None,
+    ):
         """Evaluate contact from device coordinate and speed batches."""
         n = q.shape[0]
-        stencil = wp.empty((3 * n, self.ncoord), dtype=_f64, device=self.device)
+        workspace = self._create_device_workspace(n) if workspace is None else workspace
+        if workspace.batch != n:
+            raise ValueError(f"contact workspace batch {workspace.batch} does not match input batch {n}")
+        stencil = workspace.stencil
         wp.launch(
             contact_state_stencil_kernel,
             dim=(n, 3, self.ncoord),
             inputs=[q, qd, _f64(h), stencil],
             device=self.device,
         )
-        poses = self.fk._launch_body_transforms(stencil)
-        nbody = self.fk.nbody
-        body_force = wp.zeros((n, nbody), dtype=_vec3d, device=self.device)
-        body_torque = wp.zeros((n, nbody), dtype=_vec3d, device=self.device)
+        self.fk._launch_body_transforms(stencil, out=workspace.poses)
+        poses = workspace.poses
+        body_force = workspace.body_force
+        body_torque = workspace.body_torque
+        body_force.zero_()
+        body_torque.zero_()
         inv_2h = _f64(1.0 / (2.0 * h))
-        # element force accumulators are per (frame, element); sub-pairs of an
-        # element write into it via the owner map (host reduction after readback).
-        smooth_force = wp.zeros((n, max(self.n_smooth, 1)), dtype=_vec3d, device=self.device)
-        hc_force = wp.zeros((n, max(self.n_hc, 1)), dtype=_vec3d, device=self.device)
-        ef_force = wp.zeros((n, max(self.n_ef, 1)), dtype=_vec3d, device=self.device)
+        # Element-force buffers are also reusable. Clear them because some
+        # element families can accumulate more than one contact sub-pair.
+        smooth_force = workspace.smooth_force
+        hc_force = workspace.hc_force
+        ef_force = workspace.ef_force
+        smooth_force.zero_()
+        hc_force.zero_()
+        ef_force.zero_()
 
         if self.n_smooth:
             wp.launch(
@@ -1042,6 +1084,29 @@ class OpenSimContact:
 
         return poses, body_force, body_torque, smooth_force, hc_force, ef_force
 
+    def _body_names(self) -> list[str]:
+        """Return non-ground body names in device-wrench order."""
+        return [self.fk.body_names[body] for body in self._touched_bodies]
+
+    def _body_wrenches_device(
+        self,
+        q: wp.array[_f64],
+        qd: wp.array[_f64],
+        h: float,
+        out: wp.array[_f64],
+        workspace: _ContactWorkspace | None = None,
+    ) -> None:
+        """Write OpenSim-frame body wrenches without crossing the host boundary."""
+        if not self._touched_bodies:
+            return
+        poses, body_force, body_torque, *_ = self._run_device(q, qd, h, workspace)
+        wp.launch(
+            pack_contact_body_wrench_kernel,
+            dim=(q.shape[0], len(self._touched_bodies)),
+            inputs=[poses, body_force, body_torque, self.d_touched_bodies, out],
+            device=self.device,
+        )
+
     def forces(
         self,
         q: np.ndarray,
@@ -1122,15 +1187,11 @@ class OpenSimContact:
             empty = np.zeros((n, 0, 3, 3))
             return [], _convert_world_vectors(empty, frame).reshape(n, 0, 9)
         qd = np.zeros_like(q) if qd is None else np.ascontiguousarray(np.atleast_2d(qd), dtype=np.float64)
-        poses, body_force, body_torque, *_ = self._run(q, qd, h)
+        q_wp = wp.array(q, dtype=_f64, device=self.device)
+        qd_wp = wp.array(qd, dtype=_f64, device=self.device)
         wrenches_wp = wp.empty((n, len(self._touched_bodies), 9), dtype=_f64, device=self.device)
-        wp.launch(
-            pack_contact_body_wrench_kernel,
-            dim=(n, len(self._touched_bodies)),
-            inputs=[poses, body_force, body_torque, self.d_touched_bodies, wrenches_wp],
-            device=self.device,
-        )
-        bodies = [self.fk.body_names[b] for b in self._touched_bodies]
+        self._body_wrenches_device(q_wp, qd_wp, h, wrenches_wp)
+        bodies = self._body_names()
         wrenches = wrenches_wp.numpy()
         vectors = wrenches.reshape(n, len(self._touched_bodies), 3, 3)
         wrenches = _convert_world_vectors(vectors, frame).reshape(wrenches.shape)

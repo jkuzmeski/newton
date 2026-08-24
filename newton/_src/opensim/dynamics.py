@@ -30,8 +30,8 @@ applied generalized forces (and optional external loads) and integrates the
 equations of motion, reproducing OpenSim's ``ForwardTool``. Because the
 Newton-Euler inverse dynamics is affine in the accelerations, the mass matrix and
 bias forces are read straight out of the same Warp kernels (the composite
-rigid-body method), so only the small dense solve and the time stepping run on
-the host.
+rigid-body method). The dense solve, time stepping, and supported OpenSim
+contact evaluation remain on the Warp device and can run in captured CUDA graphs.
 """
 
 from __future__ import annotations
@@ -1312,28 +1312,34 @@ class ForwardDynamics:
             integrator: ``"rk4"`` (fixed-step Runge-Kutta 4) or ``"semi_implicit"``
                 (symplectic Euler).
             h: Finite-difference step for the inverse-dynamics stencil [s].
-            contact_h: Coordinate perturbation used by contact point-velocity
-                evaluation [rad or m].
+            contact_h: Central-difference step for contact point velocities [s].
             eps: Finite-difference step for the geometric Jacobian [rad or m].
             use_graph: Take the device-resident, CUDA-graph-captured stepper when
-                the trajectory is passive (no ``controls``, ``external_loads``,
-                or ``contact_forces``) on a CUDA device. Falls back to the host
-                loop otherwise.
+                there are no Python ``controls`` or sampled ``external_loads`` and
+                ``contact_forces`` supports device evaluation on a CUDA device.
+                Falls back to the host loop otherwise.
 
         Returns:
             The coordinate and speed trajectory over ``[start_time, start_time + duration]``.
         """
         if contact_forces is not None and (not np.isfinite(contact_h) or contact_h <= 0.0):
             raise ValueError("contact_h must be finite and positive")
-        if use_graph and controls is None and external_loads is None and contact_forces is None and self.device.is_cuda:
+        device_contact = contact_forces is None or all(
+            hasattr(contact_forces, name)
+            for name in ("_body_names", "_body_wrenches_device", "_create_device_workspace")
+        )
+        if use_graph and controls is None and external_loads is None and device_contact and self.device.is_cuda:
             batch = self.simulate_batch(
                 np.asarray(initial_coordinates, dtype=float)[None, :],
                 np.asarray(initial_speeds, dtype=float)[None, :],
                 duration,
                 dt,
                 start_time=start_time,
+                tau_applied=None,
+                contact_forces=contact_forces,
                 integrator=integrator,
                 h=h,
+                contact_h=contact_h,
                 eps=eps,
                 record_every=1,
                 use_graph=True,
@@ -1416,8 +1422,10 @@ class ForwardDynamics:
         dt: float,
         start_time: float = 0.0,
         tau_applied: np.ndarray | None = None,
+        contact_forces=None,
         integrator: str = "rk4",
         h: float = 1.0e-4,
+        contact_h: float = 1.0e-6,
         eps: float = 1.0e-6,
         record_every: int = 1,
         use_graph: bool = True,
@@ -1440,9 +1448,13 @@ class ForwardDynamics:
             tau_applied: Optional constant applied generalized forces, shape
                 ``[num_coordinates]`` (shared) or ``[num_trajectories, num_coordinates]``;
                 ``None`` leaves the trajectories passive.
+            contact_forces: Optional :class:`newton.opensim.OpenSimContact` evaluator.
+                Contact wrenches are recomputed from each integration-stage state on
+                the device.
             integrator: ``"rk4"`` (fixed-step Runge-Kutta 4) or ``"semi_implicit"``
                 (symplectic Euler).
             h: Finite-difference step for the inverse-dynamics stencil [s].
+            contact_h: Central-difference step for contact point velocities [s].
             eps: Finite-difference step for the geometric Jacobian [rad or m].
             record_every: Store the state every ``record_every`` steps (plus the
                 initial state); ``0`` keeps only the final state.
@@ -1462,6 +1474,18 @@ class ForwardDynamics:
         n_steps = int(round(duration / dt))
         if integrator not in ("rk4", "semi_implicit"):
             raise ValueError(f"unknown integrator {integrator!r}")
+        if contact_forces is not None:
+            required = ("_body_names", "_body_wrenches_device", "_create_device_workspace")
+            if not all(hasattr(contact_forces, name) for name in required):
+                raise TypeError("contact_forces must provide the OpenSimContact device interface")
+            if contact_forces.device != dev:
+                raise ValueError("contact_forces and ForwardDynamics must use the same device")
+            if list(contact_forces.coordinate_names) != list(self.coordinate_names):
+                raise ValueError("contact_forces and ForwardDynamics must use the same coordinate order")
+            if list(contact_forces.fk.body_names) != list(self.fk.body_names):
+                raise ValueError("contact_forces and ForwardDynamics must use the same body order")
+            if not np.isfinite(contact_h) or contact_h <= 0.0:
+                raise ValueError("contact_h must be finite and positive")
 
         q = wp.array(q0, dtype=_f64, device=dev)
         v = wp.array(v0, dtype=_f64, device=dev)
@@ -1469,7 +1493,12 @@ class ForwardDynamics:
         vs = wp.empty((n_traj, nc), dtype=_f64, device=dev)
         a = [wp.empty((n_traj, nc), dtype=_f64, device=dev) for _ in range(4)]
         a0 = wp.zeros((n_traj, nc), dtype=_f64, device=dev)
-        workspace = self._create_device_workspace(n_traj)
+        contact_bodies = [] if contact_forces is None else contact_forces._body_names()
+        workspace = self._create_device_workspace(n_traj, contact_bodies)
+        contact_workspace = None if contact_forces is None else contact_forces._create_device_workspace(n_traj)
+        contact_wrenches = (
+            None if not contact_bodies else wp.empty((n_traj, len(contact_bodies), 9), dtype=_f64, device=dev)
+        )
         tau_app_np = (
             np.zeros((n_traj, nc))
             if tau_applied is None
@@ -1478,7 +1507,9 @@ class ForwardDynamics:
         tau_app = wp.array(np.ascontiguousarray(tau_app_np), dtype=_f64, device=dev)
 
         def accel(qc, vc, a_out):
-            self._accelerations_device(qc, vc, tau_app, a_out, workspace, h, eps)
+            if contact_forces is not None and contact_wrenches is not None:
+                contact_forces._body_wrenches_device(qc, vc, contact_h, contact_wrenches, contact_workspace)
+            self._accelerations_device(qc, vc, tau_app, a_out, workspace, h, eps, contact_wrenches)
 
         def step():
             if integrator == "semi_implicit":
