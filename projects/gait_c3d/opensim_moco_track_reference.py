@@ -564,6 +564,23 @@ def _add_periodicity_goal(opensim: Any, problem: Any, model: Any, config: dict[s
     return goal
 
 
+def _configure_state_information(problem: Any, reference: Any, config: dict[str, Any]) -> None:
+    """Apply state bounds and tight initial bounds without discarding toe bounds."""
+    toe_bounds: dict[str, list[float]] = {}
+    for toe in config["toe_policy"]["coordinates"].values():
+        if toe["locked"]:
+            continue
+        toe_bounds[toe["value_state_path"]] = toe["state_bounds"]["value"]
+        toe_bounds[toe["speed_state_path"]] = toe["state_bounds"]["speed"]
+
+    index = reference.getNearestRowIndexForTime(float(config["initial_time_s"]))
+    for label in reference.getColumnLabels():
+        values = reference.getDependentColumn(label).to_numpy()
+        width = 0.1 if "/speed" in label else 0.05
+        initial_bounds = [float(values[index]) - width, float(values[index]) + width]
+        problem.setStateInfo(label, toe_bounds.get(label, []), initial_bounds)
+
+
 def _solution_success(solution: Any) -> bool:
     method = getattr(solution, "success", None)
     return bool(method()) if callable(method) else False
@@ -634,19 +651,10 @@ def _run_reference_in_process(output_dir: str | os.PathLike[str]) -> Path:
         track.set_states_weight_set(weights)
         study = track.initialize()
         problem = study.updProblem()
-        for toe in config["toe_policy"]["coordinates"].values():
-            if toe["locked"]:
-                continue
-            problem.setStateInfo(toe["value_state_path"], toe["state_bounds"]["value"])
-            problem.setStateInfo(toe["speed_state_path"], toe["state_bounds"]["speed"])
         problem.addGoal(configure_contact_tracking_goal(opensim, config))
 
         updated = table_processor.process(source_model)
-        index = updated.getNearestRowIndexForTime(float(config["initial_time_s"]))
-        for label in updated.getColumnLabels():
-            values = updated.getDependentColumn(label).to_numpy()
-            width = 0.1 if "/speed" in label else 0.05
-            problem.setStateInfo(label, [], [float(values[index]) - width, float(values[index]) + width])
+        _configure_state_information(problem, updated, config)
 
         processed_model = model_processor.process()
         processed_model.initSystem()

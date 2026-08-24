@@ -403,6 +403,47 @@ class TestOpenSimMocoTrackReference(unittest.TestCase):
             self.assertEqual(goal.groups[0][2], ["/bodyset/toes_l"])
             self.assertEqual(len(goal.groups[1][0]), 6)
 
+    def test_state_information_preserves_mtp_bounds_with_initial_bounds(self) -> None:
+        """Keep explicit MTP bounds when adding tight initial-state bounds."""
+        value = "/jointset/mtp_l/mtp_angle_l/value"
+        speed = "/jointset/mtp_l/mtp_angle_l/speed"
+        pelvis = "/jointset/ground_pelvis/pelvis_tx/value"
+        columns = {
+            value: [0.02, 0.03],
+            speed: [0.4, 0.5],
+            pelvis: [1.2, 1.3],
+        }
+        reference = mock.MagicMock()
+        reference.getNearestRowIndexForTime.return_value = 0
+        reference.getColumnLabels.return_value = list(columns)
+        reference.getDependentColumn.side_effect = lambda label: SimpleNamespace(to_numpy=lambda: columns[label])
+        problem = mock.MagicMock()
+        config = {
+            "initial_time_s": 20.6,
+            "toe_policy": {
+                "coordinates": {
+                    "mtp_angle_l": {
+                        "locked": False,
+                        "value_state_path": value,
+                        "speed_state_path": speed,
+                        "state_bounds": {"value": [-1.0, 1.0], "speed": [-20.0, 20.0]},
+                    },
+                    "mtp_angle_r": {"locked": True},
+                }
+            },
+        }
+
+        moco._configure_state_information(problem, reference, config)
+
+        self.assertEqual(
+            problem.setStateInfo.call_args_list,
+            [
+                mock.call(value, [-1.0, 1.0], [-0.030000000000000002, 0.07]),
+                mock.call(speed, [-20.0, 20.0], [0.30000000000000004, 0.5]),
+                mock.call(pelvis, [], [1.15, 1.25]),
+            ],
+        )
+
     def test_run_rejects_manifest_and_hashed_config_divergence_before_opensim(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
