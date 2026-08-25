@@ -136,6 +136,8 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertEqual(first.count("data:image/gif;base64,"), 3)
         self.assertNotIn(directory, first)
         self.assertIn("Mechanical experiment loops", first)
+        self.assertIn(".experiment-grid{display:block}", first)
+        self.assertIn("shoe surface is hidden", first)
 
     def test_validates_physical_holdout_manifest(self):
         """Accept the planned acquisition matrix and reject leakage across splits."""

@@ -98,17 +98,17 @@ class Example:
         self.fixture_name = getattr(args, "fixture", "fullfoot_last")
         self.shoe = load_artifact(getattr(args, "artifact", DEFAULT_ARTIFACT))
         self.device = wp.get_preferred_device()
-        self.fps = 60
+        self.fps = 240 if self.mode == "drop" else 60
         self.frame_dt = 1.0 / self.fps
-        self.sim_substeps = 128 if self.mode == "drop" else 32
+        self.sim_substeps = 32
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
         self.history: list[dict[str, float]] = []
         record_gif = getattr(args, "record_gif", None)
         self._gif_path = Path(record_gif) if record_gif else None
-        self._gif_width = int(getattr(args, "gif_width", 480))
-        self._gif_fps = int(getattr(args, "gif_fps", 30))
-        self._gif_stride = int(getattr(args, "gif_stride", 2))
+        self._gif_width = int(getattr(args, "gif_width", 720))
+        self._gif_fps = int(getattr(args, "gif_fps", 12))
+        self._gif_stride = int(getattr(args, "gif_stride", 1))
         if min(self._gif_width, self._gif_fps, self._gif_stride) <= 0:
             raise ValueError("GIF width, FPS, and stride must be positive")
         self._gif_frames = []
@@ -273,7 +273,7 @@ class Example:
         self.drop_height_m = float(getattr(args, "drop_height", 0.04))
         hx = 0.5 * float(np.ptp(bed.anchor_bottom_m[:, 0])) + 0.01
         hy = 0.5 * float(np.ptp(bed.anchor_bottom_m[:, 1])) + 0.01
-        hz = 0.035
+        hz = 0.015
         midsole_top = float(np.max(self.shoe.visual_mesh("midsole").vertices_m[:, 2]))
         mass_center_z = midsole_top + 0.005 + hz
         inertia = wp.mat33(
@@ -418,10 +418,11 @@ class Example:
     def render(self) -> None:
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
+        color_reference_m = 0.003 if self.mode == "drop" else 0.010
         wp.launch(
             column_colors,
             dim=self.column_count,
-            inputs=[self.foundation.compression, 0.010, self._colors],
+            inputs=[self.foundation.compression, color_reference_m, self._colors],
             device=self.device,
         )
         if self.mode == "instron":
@@ -458,22 +459,25 @@ class Example:
                 ],
                 device=self.device,
             )
-            wp.launch(
-                deform_attached_mesh,
-                dim=len(self._mesh_points),
-                inputs=[self.carrier, self.state_0.body_q, self._mesh_source, self._mesh_points],
-                device=self.device,
-            )
+            if self.mode == "rocker":
+                wp.launch(
+                    deform_attached_mesh,
+                    dim=len(self._mesh_points),
+                    inputs=[self.carrier, self.state_0.body_q, self._mesh_source, self._mesh_points],
+                    device=self.device,
+                )
             self.viewer.log_lines("digital_shoe/columns", self._points, self._tops, self._colors, width=0.003)
-        self.viewer.log_mesh(
-            "digital_shoe/midsole",
-            self._mesh_points,
-            self._mesh_indices,
-            backface_culling=False,
-            color=(0.78, 0.44, 0.16),
-            roughness=0.85,
-        )
-        self.viewer.log_points("digital_shoe/contact", self._points, radii=0.0025, colors=self._colors)
+        if self.mode != "drop":
+            self.viewer.log_mesh(
+                "digital_shoe/midsole",
+                self._mesh_points,
+                self._mesh_indices,
+                backface_culling=False,
+                color=(0.78, 0.44, 0.16),
+                roughness=0.85,
+            )
+        point_radius = 0.0018 if self.mode == "drop" else 0.0025
+        self.viewer.log_points("digital_shoe/contact", self._points, radii=point_radius, colors=self._colors)
         last = self.history[-1] if self.history else {"normal_force_n": 0.0, "active_columns": 0}
         self.viewer.log_scalar("/digital_shoe/force_n", last["normal_force_n"])
         self.viewer.log_scalar("/digital_shoe/active_columns", last["active_columns"])
@@ -593,9 +597,9 @@ if __name__ == "__main__":
     parser.add_argument("--drop-mass", type=float, default=5.0, help="Guided drop mass [kg].")
     parser.add_argument("--drop-height", type=float, default=0.04, help="Initial outsole clearance [m].")
     parser.add_argument("--record-gif", type=Path, help="Write an infinite GIF loop from the OpenGL viewer.")
-    parser.add_argument("--gif-width", type=int, default=480, help="Recorded GIF width in pixels.")
-    parser.add_argument("--gif-fps", type=int, default=30, help="Recorded GIF playback rate.")
-    parser.add_argument("--gif-stride", type=int, default=2, help="Capture every Nth rendered frame.")
+    parser.add_argument("--gif-width", type=int, default=720, help="Recorded GIF width in pixels.")
+    parser.add_argument("--gif-fps", type=int, default=12, help="Recorded GIF playback rate.")
+    parser.add_argument("--gif-stride", type=int, default=1, help="Capture every Nth rendered frame.")
     viewer, args = newton.examples.init(parser)
     example = Example(viewer, args)
     newton.examples.run(example, args)

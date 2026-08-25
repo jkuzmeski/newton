@@ -10,12 +10,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+import warp as wp
+
 from .report import write_report
 
 EXPERIMENTS = {
-    "instron": 180,
-    "drop": 60,
-    "rocker": 72,
+    "instron": {"frames": 180, "gif_fps": 12},
+    "drop": {"frames": 180, "gif_fps": 24},
+    "rocker": {"frames": 72, "gif_fps": 12},
 }
 
 
@@ -30,12 +32,10 @@ def record_experiment_gifs(
     output = Path(output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
     if clear_kernel_cache:
-        import warp as wp
-
         wp.clear_kernel_cache()
 
     gifs = []
-    for mode, frame_count in EXPERIMENTS.items():
+    for mode, settings in EXPERIMENTS.items():
         gif_path = output / f"{mode}.gif"
         command = [
             sys.executable,
@@ -49,7 +49,9 @@ def record_experiment_gifs(
             "gl",
             "--headless",
             "--num-frames",
-            str(frame_count),
+            str(settings["frames"]),
+            "--gif-fps",
+            str(settings["gif_fps"]),
             "--test",
             "--record-gif",
             str(gif_path),
