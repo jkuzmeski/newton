@@ -11,7 +11,7 @@ import math
 import os
 import tempfile
 import xml.etree.ElementTree as ET
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -184,6 +184,143 @@ def read_vtp(path: str | os.PathLike) -> tuple[np.ndarray, np.ndarray]:
     if np.any((faces[:, 0] == faces[:, 1]) | (faces[:, 1] == faces[:, 2]) | (faces[:, 0] == faces[:, 2])):
         raise ValueError("VTP mesh contains a degenerate indexed triangle")
     return vertices, faces
+
+
+def _owned_joint(body: ET.Element) -> ET.Element:
+    for element in body.iter():
+        if element.tag.rsplit("}", 1)[-1].endswith("Joint") and element.tag.rsplit("}", 1)[-1] != "Joint":
+            return element
+    raise ValueError(f"body {body.get('name')!r} has no owned joint")
+
+
+def _joint_translation_at_zero(joint: ET.Element) -> np.ndarray:
+    spatial = _child(joint, "SpatialTransform")
+    translation = np.zeros(3, dtype=np.float64)
+    for transform_axis in _children(spatial, "TransformAxis"):
+        if not (transform_axis.get("name") or "").startswith("translation"):
+            continue
+        axis_element = _child(transform_axis, "axis")
+        function_wrapper = _child(transform_axis, "function")
+        if axis_element is None or function_wrapper is None or len(function_wrapper) != 1:
+            raise ValueError("joint translation axis is missing its axis or scalar function")
+        axis = _floats(axis_element.text)
+        function = function_wrapper[0]
+        tag = function.tag.rsplit("}", 1)[-1]
+        if tag == "Constant":
+            value_element = _child(function, "value")
+            value = float(value_element.text if value_element is not None else "nan")
+        elif tag == "LinearFunction":
+            coefficients_element = _child(function, "coefficients")
+            coefficients = _floats(coefficients_element.text if coefficients_element is not None else None)
+            if coefficients.shape != (2,):
+                raise ValueError("LinearFunction must contain slope and intercept")
+            value = float(coefficients[1])
+        elif tag in {"NaturalCubicSpline", "SimmSpline"}:
+            x_element = _child(function, "x")
+            y_element = _child(function, "y")
+            x = _floats(x_element.text if x_element is not None else None)
+            y = _floats(y_element.text if y_element is not None else None)
+            if len(x) != len(y) or len(x) < 2 or np.any(np.diff(x) <= 0.0):
+                raise ValueError(f"{tag} knots are invalid")
+            value = float(np.interp(0.0, x, y))
+        else:
+            raise ValueError(f"unsupported zero-pose joint function: {tag}")
+        if axis.shape != (3,) or not math.isfinite(value):
+            raise ValueError("joint translation axis/value is invalid")
+        translation += axis * value
+    return translation
+
+
+def simple_config_from_scaled_gait2354(
+    path: str | os.PathLike,
+    *,
+    body_height: float,
+) -> SimpleGaitConfig:
+    """Derive the simple native subject parameters from one scaled gait2354 model."""
+    root = ET.parse(path).getroot()
+    bodies = {
+        body.get("name", ""): body for body in root.iter() if body.tag.rsplit("}", 1)[-1] == "Body" and body.get("name")
+    }
+    required = {
+        "pelvis",
+        "torso",
+        "femur_l",
+        "femur_r",
+        "tibia_l",
+        "tibia_r",
+        "talus_l",
+        "talus_r",
+        "calcn_l",
+        "calcn_r",
+        "toes_l",
+        "toes_r",
+    }
+    if not required.issubset(bodies):
+        raise ValueError(f"scaled gait2354 model is missing bodies: {sorted(required - bodies.keys())}")
+
+    def mass(name: str) -> float:
+        element = _child(bodies[name], "mass")
+        value = float(element.text if element is not None else "nan")
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(f"body {name!r} has an invalid mass")
+        return value
+
+    def mass_center(name: str) -> np.ndarray:
+        element = _child(bodies[name], "mass_center")
+        value = _floats(element.text if element is not None else None)
+        if value.shape != (3,) or not np.all(np.isfinite(value)):
+            raise ValueError(f"body {name!r} has an invalid mass center")
+        return value
+
+    pelvis_com = mass_center("pelvis")
+    hip_locations = []
+    thigh_lengths = []
+    shank_lengths = []
+    for side in ("l", "r"):
+        hip_joint = _owned_joint(bodies[f"femur_{side}"])
+        hip_parent_element = _child(hip_joint, "location_in_parent")
+        hip_parent = _floats(hip_parent_element.text if hip_parent_element is not None else None)
+        if hip_parent.shape != (3,):
+            raise ValueError(f"hip_{side} has an invalid parent location")
+        hip_locations.append(hip_parent - pelvis_com)
+        thigh_lengths.append(float(np.linalg.norm(_joint_translation_at_zero(_owned_joint(bodies[f"tibia_{side}"])))))
+        ankle_joint = _owned_joint(bodies[f"talus_{side}"])
+        ankle_parent_element = _child(ankle_joint, "location_in_parent")
+        ankle_parent = _floats(ankle_parent_element.text if ankle_parent_element is not None else None)
+        shank_lengths.append(float(np.linalg.norm(ankle_parent)))
+
+    back_joint = _owned_joint(bodies["torso"])
+    back_parent_element = _child(back_joint, "location_in_parent")
+    back_child_element = _child(back_joint, "location")
+    back_parent = _floats(back_parent_element.text if back_parent_element is not None else None) - pelvis_com
+    back_child = _floats(back_child_element.text if back_child_element is not None else None) - mass_center("torso")
+    torso_offset = float(back_parent[1] - back_child[1])
+    hip_half_width = float(np.mean([abs(location[2]) for location in hip_locations]))
+    hip_drop = float(-np.mean([location[1] for location in hip_locations]))
+    foot_mass = np.mean([mass(f"talus_{side}") + mass(f"calcn_{side}") + mass(f"toes_{side}") for side in ("l", "r")])
+    total_mass = sum(mass(name) for name in required)
+    reference = SimpleGaitConfig.for_subject(
+        body_mass=total_mass,
+        body_height=body_height,
+        hip_width=2.0 * hip_half_width,
+    )
+    thigh_length = float(np.mean(thigh_lengths))
+    shank_length = float(np.mean(shank_lengths))
+    pelvis_height = hip_drop + thigh_length + shank_length + 3.0 * reference.contact_radius
+    return replace(
+        reference,
+        pelvis_height=pelvis_height,
+        pelvis_mass=mass("pelvis"),
+        torso_mass=mass("torso"),
+        thigh_mass=0.5 * (mass("femur_l") + mass("femur_r")),
+        shank_mass=0.5 * (mass("tibia_l") + mass("tibia_r")),
+        foot_mass=float(foot_mass),
+        hip_half_width=hip_half_width,
+        thigh_length=thigh_length,
+        shank_length=shank_length,
+        pelvis_hip_drop=hip_drop,
+        torso_center_offset=torso_offset,
+    )
 
 
 def read_scaled_display_geometry(path: str | os.PathLike) -> tuple[DisplayGeometry, ...]:

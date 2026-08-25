@@ -123,3 +123,29 @@ uv run --with ezc3d python -m your_subject_compiler
 
 The saved NPZ/Warp runtime path uses only NumPy and Warp. TRC, MOT, and STO
 remain optional reference exports for OpenSim interoperability.
+
+## Reusable progress example
+
+Run the current native subject path with generated fallback geometry:
+
+```bash
+uv run --extra dev -m newton.examples opensim_subject
+```
+
+Run the complete canonical S001 proof with direct C3D decoding and scaled VTP
+visuals:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
+  --subject-dir /tmp/newton-opensim-s001-proof \
+  --overwrite-subject-dir \
+  --c3d "/home/jo31399/newton-data/gait/incoming/Cal 101.v3d.c3d" \
+  --scaled-osim /home/jo31399/newton-data/gait/processed/trial_101/latest/S001_scaled.osim \
+  --geometry-dir ~/.cache/newton/opensim-models_Geometry_fa3fb094_d9b05d47/Geometry
+```
+
+The example always writes a reusable MJCF model and runs it through
+`ModelBuilder.add_mjcf()`, `CollisionPipeline`, and `SolverFeatherstone`. When
+source arguments are supplied it also proves C3D-to-NPZ/Warp conversion and
+scaled VTP-to-OBJ attachment. Its `test_final()` checks finite body state, exact
+root-force exclusion, artifact publication, and uploaded marker arrays.

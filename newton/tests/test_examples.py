@@ -790,6 +790,19 @@ add_example_test(
 )
 
 
+class TestOpenSimExamples(unittest.TestCase):
+    pass
+
+
+add_example_test(
+    TestOpenSimExamples,
+    name="opensim.example_opensim_subject",
+    devices=test_devices,
+    test_options={"num-frames": 5},
+    use_viewer=True,
+)
+
+
 class TestMuJoCoExamples(unittest.TestCase):
     pass
 
