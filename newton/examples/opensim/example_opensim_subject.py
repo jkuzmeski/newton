@@ -25,6 +25,7 @@ import newton.examples
 from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
 from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
+from projects.gait_c3d.subject_scaling import place_markers_with_official_opensim, scale_gait2354_from_markers
 from projects.gait_c3d.vtp_adapter import compile_scaled_vtp_visuals, simple_config_from_scaled_gait2354
 
 
@@ -57,14 +58,11 @@ class Example:
             body_height=args.body_height,
             hip_width=args.hip_width,
         )
-        if args.scaled_osim:
-            config = simple_config_from_scaled_gait2354(args.scaled_osim, body_height=args.body_height)
-            print(
-                f"Scale: {config.pelvis_mass + config.torso_mass + 2.0 * (config.thigh_mass + config.shank_mass + config.foot_mass):.3f} kg, "
-                f"thigh {config.thigh_length:.3f} m, shank {config.shank_length:.3f} m"
-            )
+        if args.template_osim and args.scaled_osim:
+            raise ValueError("provide either --template-osim or --scaled-osim, not both")
         self.marker_artifact = None
         self.device_markers = None
+        markers = None
         if args.c3d:
             self.marker_artifact = c3d_to_marker_artifact(
                 args.c3d,
@@ -79,12 +77,49 @@ class Example:
                 f"-> {self.marker_artifact / 'markers.npz'}"
             )
 
+        scaled_osim = args.scaled_osim
+        if args.template_osim:
+            if markers is None:
+                raise ValueError("--template-osim requires --c3d")
+            scaling = scale_gait2354_from_markers(
+                markers,
+                args.template_osim,
+                self.subject_dir / "scaling",
+                subject_mass=args.body_mass,
+                time_range=(args.scale_start, args.scale_end),
+            )
+            scaled_osim = str(scaling.model_path)
+            print(f"ModelScaler-derived: {len(scaling.scale_factors)} body factors -> {scaling.model_path}")
+        if scaled_osim:
+            config = simple_config_from_scaled_gait2354(scaled_osim, body_height=args.body_height)
+            print(
+                f"Scale: {config.pelvis_mass + config.torso_mass + 2.0 * (config.thigh_mass + config.shank_mass + config.foot_mass):.3f} kg, "
+                f"thigh {config.thigh_length:.3f} m, shank {config.shank_length:.3f} m"
+            )
+
+        self.marker_placement = None
+        if args.official_marker_placement:
+            if markers is None or not scaled_osim:
+                raise ValueError("--official-marker-placement requires --c3d and a scaled/template model")
+            self.marker_placement = place_markers_with_official_opensim(
+                markers,
+                scaled_osim,
+                self.subject_dir / "opensim_marker_placement",
+                subject_mass=args.body_mass,
+                subject_height=args.body_height,
+                time_range=(args.scale_start, args.scale_end),
+            )
+            print(
+                f"MarkerPlacer: RMS {self.marker_placement.marker_rms:.4f} m, "
+                f"max {self.marker_placement.marker_max:.4f} m -> {self.marker_placement.model_path}"
+            )
+
         visual_meshes = ()
-        if bool(args.scaled_osim) != bool(args.geometry_dir):
-            raise ValueError("--scaled-osim and --geometry-dir must be provided together")
-        if args.scaled_osim:
+        if bool(scaled_osim) != bool(args.geometry_dir):
+            raise ValueError("a scaled/template model path and --geometry-dir must be provided together")
+        if scaled_osim:
             visuals = compile_scaled_vtp_visuals(
-                args.scaled_osim,
+                scaled_osim,
                 args.geometry_dir,
                 self.model_dir,
                 config,
@@ -165,6 +200,16 @@ class Example:
         root_force = self.control.joint_f.numpy()[:6]
         if not np.array_equal(root_force, np.zeros(6, dtype=root_force.dtype)):
             raise ValueError("free pelvis controls must remain exactly zero")
+        if self.marker_placement is not None:
+            if not self.marker_placement.model_path.is_file() or not self.marker_placement.manifest_path.is_file():
+                raise ValueError("official OpenSim MarkerPlacer artifacts are missing")
+            if not np.isfinite(self.marker_placement.marker_rms) or not np.isfinite(self.marker_placement.marker_max):
+                raise ValueError("official OpenSim MarkerPlacer metrics are nonfinite")
+            if (
+                self.marker_placement.marker_rms > self.marker_placement.marker_rms_limit
+                or self.marker_placement.marker_max > self.marker_placement.marker_max_limit
+            ):
+                raise ValueError("official OpenSim MarkerPlacer failed its engineering QC gate")
         if self.marker_artifact is not None:
             if not (self.marker_artifact / "manifest.json").is_file() or self.device_markers is None:
                 raise ValueError("C3D marker artifact or Warp upload is missing")
@@ -195,7 +240,15 @@ def create_parser():
     parser.add_argument("--c3d", help="Optional calibration or dynamic C3D to decode directly")
     parser.add_argument("--c3d-up-axis", default="+Z", help="C3D lab axis pointing upward")
     parser.add_argument("--c3d-forward-axis", default="-Y", help="C3D lab axis pointing subject-forward")
-    parser.add_argument("--scaled-osim", help="Optional accepted scaled gait2354 model for VTP visuals")
+    parser.add_argument("--template-osim", help="Pinned generic gait2354 model to scale directly from --c3d")
+    parser.add_argument("--scaled-osim", help="Optional accepted pre-scaled gait2354 model for VTP visuals")
+    parser.add_argument("--scale-start", type=float, default=0.5, help="Static scaling window start [s]")
+    parser.add_argument("--scale-end", type=float, default=1.0, help="Static scaling window end [s]")
+    parser.add_argument(
+        "--official-marker-placement",
+        action="store_true",
+        help="Run official OpenSim 4.6 MarkerPlacer as an offline oracle stage",
+    )
     parser.add_argument("--geometry-dir", help="Geometry directory containing referenced VTP files")
     return parser
 

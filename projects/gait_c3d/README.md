@@ -136,11 +136,14 @@ Run the complete canonical S001 proof with direct C3D decoding and scaled VTP
 visuals:
 
 ```bash
-uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
+uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_subject \
   --subject-dir /tmp/newton-opensim-s001-proof \
   --overwrite-subject-dir \
   --c3d "/home/jo31399/newton-data/gait/incoming/Cal 101.v3d.c3d" \
-  --scaled-osim /home/jo31399/newton-data/gait/processed/trial_101/latest/S001_scaled.osim \
+  --template-osim /home/jo31399/newton-worktrees/c3d-predictive-forward-dynamics/newton/examples/assets/gait2354_subject01.osim \
+  --body-mass 81.9312118 \
+  --body-height 1.695898298375747 \
+  --official-marker-placement \
   --geometry-dir ~/.cache/newton/opensim-models_Geometry_fa3fb094_d9b05d47/Geometry
 ```
 
@@ -149,3 +152,32 @@ The example always writes a reusable MJCF model and runs it through
 source arguments are supplied it also proves C3D-to-NPZ/Warp conversion and
 scaled VTP-to-OBJ attachment. Its `test_final()` checks finite body state, exact
 root-force exclusion, artifact publication, and uploaded marker arrays.
+
+## OpenSim-referenced C3D ModelScaler
+
+When `--template-osim` is supplied, the progress example now starts from the
+static C3D rather than a pre-scaled model. The offline adapter uses the pinned
+OpenSim gait2354 default-marker fixture and a declared Trial 101 measurement
+policy derived from ModelScaler semantics. The pelvis and bilateral limb
+measurements follow the OpenSim marker-pair method; the torso substitutes
+shoulder width and sternum-to-ASIS distances because `Top.Head` is a synthesized
+head-cluster centroid rather than the cranial vertex assumed by the original
+setup. Patella-only and official manual overrides are not represented in the
+sealed simple model. The adapter then applies corrected OpenSim-inspired XML
+scaling rules for body geometry,
+mass/COM/inertia, joint frames and CustomJoint translations, markers, wraps,
+and muscle/path points.
+
+For the canonical S001 static window (0.5–1.0 s), all five recovered segment
+factors are within 0.026% of the accepted reference artifact. The output
+`scaling/manifest.json` records the C3D/template hashes, measurement ratios,
+body factors, subject mass, time window, method reference, and scaled-model
+hash. Marker placement remains a separate oracle stage. With
+`--official-marker-placement`, the example runs the pinned OpenSim 4.6
+MarkerPlacer task weights and coordinate locks against the scaled model, saves
+its placed model/MOT/marker set/setup/log as reference artifacts, and reports
+RMS/max marker error. The placed OpenSim model is not used as the Newton runtime
+model. The current engineering publication gate is RMS <= 0.10 m and maximum
+<= 0.25 m; the canonical run reports 0.0680 m and 0.1714 m. These deliberately
+broad gates only reject broken placement and do not establish high-fidelity
+marker validation.
