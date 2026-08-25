@@ -58,22 +58,22 @@ def _validate_marker_data(markers: OpenSimMarkerData) -> tuple[np.ndarray, np.nd
 
 @dataclass
 class OpenSimMarkerData:
-    """Marker trajectories from a ``.trc`` file.
-
-    Attributes:
-        times: Frame times [s], shape ``[num_frames]``.
-        marker_names: Marker labels in column order.
-        data: Marker positions in ground [m], shape ``[num_frames, num_markers, 3]``.
-            Missing observations are ``NaN``.
-        rate: Data rate [Hz].
-        units: Original position units string from the file header.
-    """
+    """Marker trajectories from a ``.trc`` file."""
 
     times: np.ndarray
+    """Frame times [s], shape ``[num_frames]``."""
+
     marker_names: list[str]
+    """Marker labels in column order."""
+
     data: np.ndarray
+    """Marker positions in ground [m], shape ``[num_frames, num_markers, 3]``."""
+
     rate: float = 0.0
+    """Data rate [Hz]."""
+
     units: str = "m"
+    """Original position units string from the file header."""
 
     def index(self, name: str) -> int:
         """Return the column index of marker ``name``."""
@@ -197,23 +197,25 @@ def write_trc(path: str | os.PathLike, markers: OpenSimMarkerData, units: str = 
 
 @dataclass
 class OpenSimStorage:
-    """Time-series storage from a ``.mot``/``.sto`` file.
-
-    Attributes:
-        times: Independent (time) column [s], shape ``[num_rows]``.
-        labels: Dependent column labels (excluding ``time``).
-        data: Dependent values, shape ``[num_rows, num_labels]``.
-        in_degrees: Whether rotational columns are in degrees.
-        name: Table name from the header.
-        metadata: Remaining header key/value pairs.
-    """
+    """Time-series storage from a ``.mot``/``.sto`` file."""
 
     times: np.ndarray
+    """Independent time column [s], shape ``[num_rows]``."""
+
     labels: list[str]
+    """Dependent column labels, excluding ``time``."""
+
     data: np.ndarray
+    """Dependent values, shape ``[num_rows, num_labels]``."""
+
     in_degrees: bool = False
+    """Whether rotational columns are in degrees."""
+
     name: str = "table"
+    """Table name from the header."""
+
     metadata: dict[str, str] = field(default_factory=dict)
+    """Remaining header key/value pairs."""
 
     def column(self, name: str) -> np.ndarray:
         """Return the values of dependent column ``name``."""
