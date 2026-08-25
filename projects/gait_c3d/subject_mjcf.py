@@ -330,6 +330,23 @@ def subject_mjcf_xml(
             mesh=mesh.name,
             attrib={"class": "visual"},
         )
+    if visual_meshes:
+        connector_bottom = 0.40 * config.pelvis_dimensions[2]
+        connector_top = max(connector_bottom + 0.02, config.torso_center_offset - 0.35 * config.torso_dimensions[2])
+        ET.SubElement(
+            pelvis,
+            "geom",
+            name="geometry_abdomen_connector",
+            type="box",
+            pos=_values(0.0, 0.0, 0.5 * (connector_bottom + connector_top)),
+            size=_values(
+                0.25 * min(config.pelvis_dimensions[0], config.torso_dimensions[0]),
+                0.25 * min(config.pelvis_dimensions[1], config.torso_dimensions[1]),
+                0.5 * (connector_top - connector_bottom),
+            ),
+            rgba="0.68 0.48 0.30 1",
+            attrib={"class": "visual"},
+        )
 
     keyframe = ET.SubElement(root, "keyframe")
     ET.SubElement(

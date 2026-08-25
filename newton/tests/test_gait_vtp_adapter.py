@@ -124,9 +124,14 @@ class TestGaitVTPAdapter(unittest.TestCase):
         np.testing.assert_allclose(femur_record["source"]["target_proximal_newton"], (0.0, 0.0, 0.225))
         self.assertEqual(model.body_count, 8)
         self.assertEqual(model.joint_dof_count, 16)
-        self.assertEqual(model.shape_count, 15)
+        self.assertEqual(model.shape_count, 16)
+        connector = next(
+            index for index, label in enumerate(model.shape_label) if label.endswith("/geometry_abdomen_connector")
+        )
         shape_types = model.shape_type.numpy()
         shape_flags = model.shape_flags.numpy()
+        self.assertEqual(shape_types[connector], newton.GeoType.BOX)
+        self.assertFalse(shape_flags[connector] & newton.ShapeFlags.COLLIDE_SHAPES)
         mesh_indices = np.flatnonzero(shape_types == newton.GeoType.MESH)
         self.assertEqual(len(mesh_indices), 6)
         for shape in mesh_indices:

@@ -92,6 +92,7 @@ class Example:
             visual_meshes = visuals.meshes
             print(f"VTP: {len(visual_meshes)} scaled visual meshes -> {visuals.root}")
 
+        self.visual_mesh_count = len(visual_meshes)
         self.subject_xml = write_subject_mjcf(
             config,
             self.model_dir / "subject.xml",
@@ -138,6 +139,25 @@ class Example:
             raise ValueError("subject MJCF was not published")
         if self.model.body_count != 8 or self.model.joint_dof_count != 16:
             raise ValueError("subject model has an unexpected topology")
+        shape_types = self.model.shape_type.numpy()
+        contact_spheres = [
+            index
+            for index, label in enumerate(self.model.shape_label)
+            if "/contact_left_" in label or "/contact_right_" in label
+        ]
+        if len(contact_spheres) != 8 or any(shape_types[index] != newton.GeoType.SPHERE for index in contact_spheres):
+            raise ValueError("subject model must contain eight foot contact spheres")
+        ground = [index for index, label in enumerate(self.model.shape_label) if label.endswith("/ground")]
+        if len(ground) != 1 or shape_types[ground[0]] != newton.GeoType.PLANE:
+            raise ValueError("subject model must contain one ground plane")
+        if self.visual_mesh_count:
+            connector = [
+                index
+                for index, label in enumerate(self.model.shape_label)
+                if label.endswith("/geometry_abdomen_connector")
+            ]
+            if len(connector) != 1 or shape_types[connector[0]] != newton.GeoType.BOX:
+                raise ValueError("scaled visual model must contain an abdomen connector")
         body_q = self.state_0.body_q.numpy()
         body_qd = self.state_0.body_qd.numpy()
         if not np.all(np.isfinite(body_q)) or not np.all(np.isfinite(body_qd)):
