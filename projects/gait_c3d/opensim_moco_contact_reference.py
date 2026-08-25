@@ -23,7 +23,7 @@ import math
 import os
 import tempfile
 import xml.etree.ElementTree as ET
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -260,6 +260,28 @@ def sphere_specs(alignment: VerticalAlignment = S001_ALIGNMENT) -> tuple[SphereS
     return tuple(result)
 
 
+def _validate_sphere_specs(spheres: Sequence[SphereSpec]) -> tuple[SphereSpec, ...]:
+    """Require calibrated spheres to preserve the pinned topology contract."""
+    values = tuple(spheres)
+    defaults = sphere_specs()
+    if len(values) != len(defaults):
+        raise ValueError("contact topology must contain exactly 12 spheres")
+    for value, default in zip(values, defaults, strict=True):
+        if not isinstance(value, SphereSpec):
+            raise TypeError("contact topology entries must be SphereSpec values")
+        if (value.side, value.role, value.name, value.force_name, value.body) != (
+            default.side,
+            default.role,
+            default.name,
+            default.force_name,
+            default.body,
+        ):
+            raise ValueError("calibrated contact changed pinned sphere identity, order, or body")
+        if not np.all(np.isfinite(value.location_m)) or not math.isfinite(value.radius_m) or value.radius_m <= 0.0:
+            raise ValueError("calibrated contact sphere geometry must be finite and positive")
+    return values
+
+
 def derive_vertical_alignment(
     world_center_y_m: np.ndarray,
     local_y_world_gain: np.ndarray,
@@ -320,8 +342,19 @@ def derive_vertical_alignment(
     )
 
 
-def build_contact_geometry_xml(alignment: VerticalAlignment = S001_ALIGNMENT) -> ET.Element:
-    """Build an official ``ContactGeometrySet`` with the pinned topology."""
+def build_contact_geometry_xml(
+    alignment: VerticalAlignment = S001_ALIGNMENT,
+    *,
+    spheres: Sequence[SphereSpec] | None = None,
+) -> ET.Element:
+    """Build an official ``ContactGeometrySet`` with the pinned topology.
+
+    Args:
+        alignment: Default S001 vertical alignment used when ``spheres`` is not supplied.
+        spheres: Optional calibrated spheres that retain the pinned names, bodies, and order.
+    """
+    sphere_values = sphere_specs(alignment) if spheres is None else tuple(spheres)
+    _validate_sphere_specs(sphere_values)
     document = ET.Element("OpenSimDocument", {"Version": "40600"})
     geometry_set = _element(document, "ContactGeometrySet", None, name="contactgeometryset")
     objects = _element(geometry_set, "objects")
@@ -329,7 +362,7 @@ def build_contact_geometry_xml(alignment: VerticalAlignment = S001_ALIGNMENT) ->
     _element(floor, "socket_frame", "/ground")
     _element(floor, "location", "0 0 0")
     _element(floor, "orientation", _vec_text((0.0, 0.0, -0.5 * math.pi)))
-    for sphere in sphere_specs(alignment):
+    for sphere in sphere_values:
         item = _element(objects, "ContactSphere", None, name=sphere.name)
         _element(item, "socket_frame", f"/bodyset/{sphere.body}")
         _element(item, "location", _vec_text(sphere.location_m))
@@ -339,23 +372,57 @@ def build_contact_geometry_xml(alignment: VerticalAlignment = S001_ALIGNMENT) ->
     return document
 
 
-def build_force_xml(alignment: VerticalAlignment = S001_ALIGNMENT) -> ET.Element:
-    """Build the official ``SmoothSphereHalfSpaceForce`` ForceSet."""
+def build_force_xml(
+    alignment: VerticalAlignment = S001_ALIGNMENT,
+    *,
+    spheres: Sequence[SphereSpec] | None = None,
+    material: Mapping[str, float] | None = None,
+) -> ET.Element:
+    """Build the official ``SmoothSphereHalfSpaceForce`` ForceSet.
+
+    Args:
+        alignment: Default S001 vertical alignment used when ``spheres`` is not supplied.
+        spheres: Optional calibrated spheres that preserve the pinned topology.
+        material: Optional complete calibrated material parameter mapping.
+    """
+    sphere_values = sphere_specs(alignment) if spheres is None else _validate_sphere_specs(spheres)
+    material_values = dict(_MATERIAL if material is None else material)
+    if set(material_values) != set(_MATERIAL) or not all(
+        math.isfinite(float(value)) for value in material_values.values()
+    ):
+        raise ValueError("material must contain exactly the finite pinned SmoothSphereHalfSpace fields")
     document = ET.Element("OpenSimDocument", {"Version": "40600"})
     force_set = _element(document, "ForceSet", None, name="contact_force_set")
     objects = _element(force_set, "objects")
-    for sphere in sphere_specs(alignment):
+    for sphere in sphere_values:
         force = _element(objects, "SmoothSphereHalfSpaceForce", None, name=sphere.force_name)
         _element(force, "socket_sphere", f"/contactgeometryset/{sphere.name}")
         _element(force, "socket_half_space", "/contactgeometryset/floor")
-        for name, value in _MATERIAL.items():
-            _element(force, name, float(value))
+        for name in _MATERIAL:
+            _element(force, name, float(material_values[name]))
     _element(force_set, "groups")
     return document
 
 
-def newton_augmentation_spec(alignment: VerticalAlignment = S001_ALIGNMENT) -> NewtonAugmentationSpec:
-    """Return the Newton ``OsimContactGeometry``/``OsimContactForce`` spec."""
+def newton_augmentation_spec(
+    alignment: VerticalAlignment = S001_ALIGNMENT,
+    *,
+    spheres: Sequence[SphereSpec] | None = None,
+    material: Mapping[str, float] | None = None,
+) -> NewtonAugmentationSpec:
+    """Return the Newton ``OsimContactGeometry``/``OsimContactForce`` spec.
+
+    Args:
+        alignment: Default S001 vertical alignment used when ``spheres`` is not supplied.
+        spheres: Optional calibrated spheres that preserve the pinned topology.
+        material: Optional complete calibrated material parameter mapping.
+    """
+    sphere_values = sphere_specs(alignment) if spheres is None else _validate_sphere_specs(spheres)
+    material_values = dict(_NEWTON_MATERIAL if material is None else material)
+    if set(material_values) != set(_NEWTON_MATERIAL) or not all(
+        math.isfinite(float(value)) for value in material_values.values()
+    ):
+        raise ValueError("material must contain exactly the finite pinned SmoothSphereHalfSpace fields")
     geometry: list[Any] = [
         newton_osim.OsimContactGeometry(
             name="floor",
@@ -366,7 +433,7 @@ def newton_augmentation_spec(alignment: VerticalAlignment = S001_ALIGNMENT) -> N
         )
     ]
     forces: list[Any] = []
-    for sphere in sphere_specs(alignment):
+    for sphere in sphere_values:
         geometry.append(
             newton_osim.OsimContactGeometry(
                 name=sphere.name,
@@ -382,17 +449,23 @@ def newton_augmentation_spec(alignment: VerticalAlignment = S001_ALIGNMENT) -> N
                 type="SmoothSphereHalfSpaceForce",
                 sphere=sphere.name,
                 half_space="floor",
-                params=dict(_NEWTON_MATERIAL),
+                params=dict(material_values),
                 geometries=[sphere.name, "floor"],
             )
         )
     return NewtonAugmentationSpec(tuple(geometry), tuple(forces))
 
 
-def augment_newton_model(model: Any, alignment: VerticalAlignment = S001_ALIGNMENT) -> Any:
+def augment_newton_model(
+    model: Any,
+    alignment: VerticalAlignment = S001_ALIGNMENT,
+    *,
+    spheres: Sequence[SphereSpec] | None = None,
+    material: Mapping[str, float] | None = None,
+) -> Any:
     """Deep-copy and augment a Newton model; reject names and missing bodies."""
     augmented = copy.deepcopy(model)
-    spec = newton_augmentation_spec(alignment)
+    spec = newton_augmentation_spec(alignment, spheres=spheres, material=material)
     existing = {item.name for item in augmented.contact_geometry} | {item.name for item in augmented.contact_forces}
     requested = {item.name for item in spec.contact_geometry} | {item.name for item in spec.contact_forces}
     if existing & requested:
@@ -609,6 +682,9 @@ def _load_official_augmented_model(
     opensim: Any,
     model_path: str | os.PathLike[str],
     alignment: VerticalAlignment = S001_ALIGNMENT,
+    *,
+    spheres: Sequence[SphereSpec] | None = None,
+    material: Mapping[str, float] | None = None,
 ) -> Any:
     model = opensim.Model(str(Path(model_path).resolve()))
     assert_model_has_no_external_loads(model)
@@ -616,8 +692,8 @@ def _load_official_augmented_model(
         directory = Path(temporary)
         geometry_path = directory / "ContactGeometrySet.xml"
         force_path = directory / "ContactForceSet.xml"
-        geometry_path.write_bytes(xml_bytes(build_contact_geometry_xml(alignment)))
-        force_path.write_bytes(xml_bytes(build_force_xml(alignment)))
+        geometry_path.write_bytes(xml_bytes(build_contact_geometry_xml(alignment, spheres=spheres)))
+        force_path.write_bytes(xml_bytes(build_force_xml(alignment, spheres=spheres, material=material)))
         geometry_set = opensim.ContactGeometrySet(str(geometry_path))
         force_set = opensim.ForceSet(str(force_path))
         for index in range(geometry_set.getSize()):
@@ -768,10 +844,12 @@ def evaluate_official_prescribed(
     *,
     times_s: Sequence[float] | None = None,
     alignment: VerticalAlignment = S001_ALIGNMENT,
+    spheres: Sequence[SphereSpec] | None = None,
+    material: Mapping[str, float] | None = None,
 ) -> ContactEvaluation:
     """Evaluate official OpenSim contact on prescribed SI q/qd arrays."""
     names, q, qd = _validate_motion_arrays(coordinate_names, coordinates, speeds)
-    model = _load_official_augmented_model(opensim, model_path, alignment)
+    model = _load_official_augmented_model(opensim, model_path, alignment, spheres=spheres, material=material)
     official_names = tuple(
         model.getCoordinateSet().get(index).getName() for index in range(model.getCoordinateSet().getSize())
     )
@@ -780,7 +858,7 @@ def evaluate_official_prescribed(
     times = np.arange(len(q), dtype=float) if times_s is None else np.asarray(times_s, dtype=float)
     if times.shape != (len(q),) or not np.all(np.isfinite(times)):
         raise ValueError("times_s must contain one finite value per frame")
-    specs = sphere_specs(alignment)
+    specs = sphere_specs(alignment) if spheres is None else _validate_sphere_specs(spheres)
     force_objects = []
     for sphere in specs:
         force = opensim.SmoothSphereHalfSpaceForce.safeDownCast(model.getComponent(f"/{sphere.force_name}"))

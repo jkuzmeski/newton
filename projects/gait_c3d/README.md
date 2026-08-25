@@ -313,6 +313,33 @@ specs, MocoContactTrackingGoal groups with toe alternative frames, and independe
 COP/free-moment validation. Measured ExternalLoads are reference-only and are
 never added to the predictive contact model.
 
+### S001 12-sphere contact calibration and figures
+
+Fit the exact six-role-per-foot topology after retargeting its geometry to the
+scaled S001 heel/forefoot landmarks and actual articulated toe frames:
+
+```bash
+out=/home/jo31399/newton-data/gait/processed/trial_101/stage2_moco12_contact_calibration_s001_v1
+
+.venv/bin/python -m projects.gait_c3d.moco_contact_calibration \
+  --output-dir "$out" --device cuda:0 --stride 4 --max-nfev 80
+```
+
+Every run writes `calibration_report.md`, `run.log`, and diagnostic figures for
+measured/predicted GRF, COP paths, sphere penetration/contact timing, optimizer
+convergence, and the complete QC gate dashboard. Add or regenerate them on an
+existing artifact, then run the optional official OpenSim parity plot, with:
+
+```bash
+MPLBACKEND=Agg .venv/bin/python -m projects.gait_c3d.moco_contact_calibration \
+  --output-dir "$out" --add-diagnostics --official-parity
+```
+
+The report shows failed gates as well as passed gates. A passing official/Newton
+parity figure proves force-law implementation agreement only; the artifact remains
+failed prescribed-contact QC until every measured-load, timing, friction, and
+penetration gate passes. It makes no forward-dynamics or FD-1 claim.
+
 ### Official torque-driven MocoTrack contact reference
 
 Prepare the first official torque-driven contact-tracking bridge from the accepted
