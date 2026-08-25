@@ -72,7 +72,9 @@ assert 'newton.opensim' not in sys.modules
         self.assertEqual(self.model.joint_count, 8)
         self.assertEqual(self.model.joint_coord_count, 17)
         self.assertEqual(self.model.joint_dof_count, 16)
+        self.assertEqual(len(self.build.body_shape_indices), 6)
         self.assertEqual(len(self.build.contact_shape_indices), 8)
+        self.assertEqual(self.model.shape_count, 15)
         labels = self.model.joint_label
         types = self.model.joint_type.numpy()
         for side in ("left", "right"):
@@ -86,6 +88,42 @@ assert 'newton.opensim' not in sys.modules
             self.assertEqual(qd_starts[knee + 1] - qd_starts[knee], 1)
             self.assertEqual(qd_starts[ankle + 1] - qd_starts[ankle], 1)
         self.assertAlmostEqual(float(np.sum(self.model.body_mass.numpy())), 81.4, places=4)
+
+    def test_uses_boxes_capsules_and_foot_spheres(self):
+        """Use primitive fallback bodies and sphere-only foot geometry."""
+        shape_types = self.model.shape_type.numpy()
+        shape_flags = self.model.shape_flags.numpy()
+        for label in ("pelvis", "torso"):
+            shape = self.build.body_shape_indices[label]
+            self.assertEqual(shape_types[shape], newton.GeoType.BOX)
+            self.assertFalse(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+        for side in ("left", "right"):
+            for segment in ("femur", "tibia"):
+                shape = self.build.body_shape_indices[f"{segment}_{side}"]
+                self.assertEqual(shape_types[shape], newton.GeoType.CAPSULE)
+                self.assertFalse(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+        for shape in self.build.contact_shape_indices:
+            self.assertEqual(shape_types[shape], newton.GeoType.SPHERE)
+            self.assertTrue(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+
+    def test_scales_geometry_and_mass_for_subject(self):
+        """Scale all segment lengths and masses from height and body mass."""
+        config = native_model.SimpleGaitConfig.for_subject(body_mass=100.0, body_height=2.0, hip_width=0.25)
+        length_scale = 2.0 / 1.695898298375747
+        self.assertAlmostEqual(config.thigh_length, 0.45 * length_scale)
+        self.assertAlmostEqual(config.shank_length, 0.40 * length_scale)
+        self.assertAlmostEqual(config.contact_radius, 0.04 * length_scale)
+        self.assertAlmostEqual(config.hip_half_width, 0.125)
+        scaled_build = native_model.build_simple_gait_model(config)
+        scaled_model = scaled_build.builder.finalize(device="cpu")
+        self.assertAlmostEqual(float(np.sum(scaled_model.body_mass.numpy())), 100.0, places=4)
+        shape_scale = scaled_model.shape_scale.numpy()
+        pelvis_shape = scaled_build.body_shape_indices["pelvis"]
+        np.testing.assert_allclose(
+            shape_scale[pelvis_shape],
+            0.5 * np.asarray(config.pelvis_dimensions),
+            atol=1.0e-6,
+        )
 
     def test_initializes_finite_bilateral_pose(self):
         """Initialize finite mirrored legs with feet tangent to the ground."""

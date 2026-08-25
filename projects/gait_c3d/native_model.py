@@ -55,6 +55,27 @@ class SimpleGaitConfig:
     foot_length: float = 0.25
     """Approximate heel-to-toe length [m]."""
 
+    foot_width: float = 0.10
+    """Approximate foot width [m]."""
+
+    pelvis_dimensions: tuple[float, float, float] = (0.24, 0.22, 0.16)
+    """Pelvis box dimensions (anterior, lateral, vertical) [m]."""
+
+    torso_dimensions: tuple[float, float, float] = (0.32, 0.25, 0.55)
+    """Torso box dimensions (anterior, lateral, vertical) [m]."""
+
+    thigh_radius: float = 0.07
+    """Thigh capsule radius [m]."""
+
+    shank_radius: float = 0.05
+    """Shank capsule radius [m]."""
+
+    pelvis_hip_drop: float = 0.05
+    """Vertical hip offset below the pelvis center [m]."""
+
+    torso_center_offset: float = 0.50
+    """Vertical torso-center offset above the pelvis center [m]."""
+
     contact_radius: float = 0.04
     """Radius of each foot contact sphere [m]."""
 
@@ -70,6 +91,68 @@ class SimpleGaitConfig:
     friction: float = 0.8
     """Ground friction coefficient."""
 
+    @classmethod
+    def for_subject(
+        cls,
+        *,
+        body_mass: float,
+        body_height: float,
+        hip_width: float | None = None,
+    ) -> SimpleGaitConfig:
+        """Scale the rounded reference model to one subject.
+
+        Args:
+            body_mass: Subject body mass [kg].
+            body_height: Subject standing height [m].
+            hip_width: Optional hip-joint center spacing [m].
+
+        Returns:
+            Uniformly length-scaled geometry and proportionally scaled segment
+            masses. Contact material coefficients remain unchanged.
+        """
+        if not math.isfinite(body_mass) or body_mass <= 0.0:
+            raise ValueError("body_mass must be finite and positive")
+        if not math.isfinite(body_height) or body_height <= 0.0:
+            raise ValueError("body_height must be finite and positive")
+        if hip_width is not None and (not math.isfinite(hip_width) or hip_width <= 0.0):
+            raise ValueError("hip_width must be finite and positive")
+        reference = cls()
+        reference_mass = (
+            reference.pelvis_mass
+            + reference.torso_mass
+            + 2.0 * (reference.thigh_mass + reference.shank_mass + reference.foot_mass)
+        )
+        mass_scale = body_mass / reference_mass
+        length_scale = body_height / 1.695898298375747
+
+        def scale_dimensions(values: tuple[float, float, float]) -> tuple[float, float, float]:
+            return tuple(length_scale * value for value in values)
+
+        return cls(
+            pelvis_height=length_scale * reference.pelvis_height,
+            pelvis_mass=mass_scale * reference.pelvis_mass,
+            torso_mass=mass_scale * reference.torso_mass,
+            thigh_mass=mass_scale * reference.thigh_mass,
+            shank_mass=mass_scale * reference.shank_mass,
+            foot_mass=mass_scale * reference.foot_mass,
+            hip_half_width=0.5 * hip_width if hip_width is not None else length_scale * reference.hip_half_width,
+            thigh_length=length_scale * reference.thigh_length,
+            shank_length=length_scale * reference.shank_length,
+            foot_length=length_scale * reference.foot_length,
+            foot_width=length_scale * reference.foot_width,
+            pelvis_dimensions=scale_dimensions(reference.pelvis_dimensions),
+            torso_dimensions=scale_dimensions(reference.torso_dimensions),
+            thigh_radius=length_scale * reference.thigh_radius,
+            shank_radius=length_scale * reference.shank_radius,
+            pelvis_hip_drop=length_scale * reference.pelvis_hip_drop,
+            torso_center_offset=length_scale * reference.torso_center_offset,
+            contact_radius=length_scale * reference.contact_radius,
+            ground_ke=reference.ground_ke,
+            ground_kd=reference.ground_kd,
+            ground_kf=reference.ground_kf,
+            friction=reference.friction,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SimpleGaitBuild:
@@ -83,6 +166,9 @@ class SimpleGaitBuild:
 
     joint_indices: dict[str, int]
     """Joint indices keyed by anatomical label."""
+
+    body_shape_indices: dict[str, int]
+    """Primitive fallback shape indices keyed by anatomical label."""
 
     contact_shape_indices: tuple[int, ...]
     """Foot contact shape indices."""
@@ -145,18 +231,73 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
     """
     config = config or SimpleGaitConfig()
     builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+    if config.thigh_radius >= 0.5 * config.thigh_length:
+        raise ValueError("thigh_radius must be less than half the thigh length")
+    if config.shank_radius >= 0.5 * config.shank_length:
+        raise ValueError("shank_radius must be less than half the shank length")
     bodies = {
-        "pelvis": _add_body(builder, "pelvis", config.pelvis_mass, (0.24, 0.22, 0.16)),
-        "torso": _add_body(builder, "torso", config.torso_mass, (0.32, 0.25, 0.55)),
+        "pelvis": _add_body(builder, "pelvis", config.pelvis_mass, config.pelvis_dimensions),
+        "torso": _add_body(builder, "torso", config.torso_mass, config.torso_dimensions),
     }
     for side in ("left", "right"):
         bodies[f"femur_{side}"] = _add_body(
-            builder, f"femur_{side}", config.thigh_mass, (0.12, 0.12, config.thigh_length)
+            builder,
+            f"femur_{side}",
+            config.thigh_mass,
+            (2.0 * config.thigh_radius, 2.0 * config.thigh_radius, config.thigh_length),
         )
         bodies[f"tibia_{side}"] = _add_body(
-            builder, f"tibia_{side}", config.shank_mass, (0.09, 0.09, config.shank_length)
+            builder,
+            f"tibia_{side}",
+            config.shank_mass,
+            (2.0 * config.shank_radius, 2.0 * config.shank_radius, config.shank_length),
         )
-        bodies[f"foot_{side}"] = _add_body(builder, f"foot_{side}", config.foot_mass, (config.foot_length, 0.10, 0.08))
+        bodies[f"foot_{side}"] = _add_body(
+            builder,
+            f"foot_{side}",
+            config.foot_mass,
+            (config.foot_length, config.foot_width, 2.0 * config.contact_radius),
+        )
+
+    fallback_geometry = builder.ShapeConfig(
+        density=0.0,
+        has_shape_collision=False,
+        has_particle_collision=False,
+        is_visible=True,
+    )
+    body_shapes = {
+        "pelvis": builder.add_shape_box(
+            bodies["pelvis"],
+            hx=0.5 * config.pelvis_dimensions[0],
+            hy=0.5 * config.pelvis_dimensions[1],
+            hz=0.5 * config.pelvis_dimensions[2],
+            cfg=fallback_geometry,
+            label="geometry_pelvis",
+        ),
+        "torso": builder.add_shape_box(
+            bodies["torso"],
+            hx=0.5 * config.torso_dimensions[0],
+            hy=0.5 * config.torso_dimensions[1],
+            hz=0.5 * config.torso_dimensions[2],
+            cfg=fallback_geometry,
+            label="geometry_torso",
+        ),
+    }
+    for side in ("left", "right"):
+        body_shapes[f"femur_{side}"] = builder.add_shape_capsule(
+            bodies[f"femur_{side}"],
+            radius=config.thigh_radius,
+            half_height=0.5 * config.thigh_length - config.thigh_radius,
+            cfg=fallback_geometry,
+            label=f"geometry_femur_{side}",
+        )
+        body_shapes[f"tibia_{side}"] = builder.add_shape_capsule(
+            bodies[f"tibia_{side}"],
+            radius=config.shank_radius,
+            half_height=0.5 * config.shank_length - config.shank_radius,
+            cfg=fallback_geometry,
+            label=f"geometry_tibia_{side}",
+        )
 
     joints: dict[str, int] = {}
     articulation: list[int] = []
@@ -165,8 +306,8 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
     joints["lumbar_fixed"] = builder.add_joint_fixed(
         parent=bodies["pelvis"],
         child=bodies["torso"],
-        parent_xform=_joint_frame((0.0, 0.0, 0.25)),
-        child_xform=_joint_frame((0.0, 0.0, -0.25)),
+        parent_xform=_joint_frame((0.0, 0.0, 0.5 * config.torso_center_offset)),
+        child_xform=_joint_frame((0.0, 0.0, -0.5 * config.torso_center_offset)),
         label="lumbar_fixed",
     )
     articulation.append(joints["lumbar_fixed"])
@@ -206,7 +347,7 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
             parent=bodies["pelvis"],
             child=bodies[f"femur_{side}"],
             angular_axes=hip_axes,
-            parent_xform=_joint_frame((0.0, lateral_sign * config.hip_half_width, -0.05)),
+            parent_xform=_joint_frame((0.0, lateral_sign * config.hip_half_width, -config.pelvis_hip_drop)),
             child_xform=_joint_frame((0.0, 0.0, 0.5 * config.thigh_length)),
             label=f"hip_{side}",
         )
@@ -231,7 +372,7 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
             child=bodies[f"foot_{side}"],
             axis=(0.0, -1.0, 0.0),
             parent_xform=_joint_frame((0.0, 0.0, -0.5 * config.shank_length)),
-            child_xform=_joint_frame((-0.10, 0.0, 0.04)),
+            child_xform=_joint_frame((-0.4 * config.foot_length, 0.0, config.contact_radius)),
             limit_lower=-50.0 * degrees,
             limit_upper=30.0 * degrees,
             limit_ke=2.0e3,
@@ -252,11 +393,14 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
     )
     builder.add_ground_plane(cfg=material)
     contact_shapes: list[int] = []
+    heel_x = -0.32 * config.foot_length
+    forefoot_x = 0.48 * config.foot_length
+    contact_half_width = 0.35 * config.foot_width
     contact_centers = (
-        (-0.08, -0.035, -0.04),
-        (-0.08, 0.035, -0.04),
-        (0.12, -0.035, -0.04),
-        (0.12, 0.035, -0.04),
+        (heel_x, -contact_half_width, -config.contact_radius),
+        (heel_x, contact_half_width, -config.contact_radius),
+        (forefoot_x, -contact_half_width, -config.contact_radius),
+        (forefoot_x, contact_half_width, -config.contact_radius),
     )
     for side in ("left", "right"):
         for sphere_index, center in enumerate(contact_centers):
@@ -281,6 +425,7 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
         builder,
         bodies,
         joints,
+        body_shapes,
         tuple(contact_shapes),
         initial_q,
         root_dof_slice,

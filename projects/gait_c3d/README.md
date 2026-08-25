@@ -10,11 +10,22 @@ joint set over one-to-one OpenSim mechanics.
 - torso fixed to the pelvis;
 - three independent rotational hip axes per side;
 - one revolute knee hinge per side;
-- one revolute ankle hinge per side; and
-- four sphere contacts per foot on a stationary Z-up ground plane.
+- one revolute ankle hinge per side;
+- box fallback geometry for the pelvis and torso;
+- capsule fallback geometry for each thigh and shank; and
+- four contact spheres per foot on a stationary Z-up ground plane.
 
-The default rounded dimensions and masses are derived offline from the sealed
-S001 reference model, but the runtime does not parse or import `.osim` files.
+`SimpleGaitConfig.for_subject()` scales all segment lengths from standing height
+and all segment masses from body mass. An optional measured hip width overrides
+the uniformly scaled hip spacing. The default rounded dimensions and masses are
+derived offline from the sealed S001 reference model, but the runtime does not
+parse or import `.osim` files.
+
+The primitive body shapes are non-colliding visual fallbacks. Foot spheres are
+the only active body contacts. A later source adapter will convert scaled OpenSim
+VTP display meshes into a sealed neutral vertex/index bundle. The same native
+builder will attach those meshes as non-colliding visuals without parsing VTP or
+`.osim` files at runtime.
 The model has 8 bodies, 8 joints, 17 generalized coordinates, and 16 velocity
 DOFs. The six free-pelvis controls start and remain uncommanded.
 
