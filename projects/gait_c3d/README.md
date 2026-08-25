@@ -38,3 +38,26 @@ Run its focused tests from the repository root:
 ```bash
 uv run --extra dev -m newton.tests -k test_gait_simple_joints
 ```
+
+## Saved subject model
+
+`write_subject_mjcf()` exports a scaled `SimpleGaitConfig` as a self-contained
+MJCF XML model. The XML includes the full simple-joint topology, inertial
+properties, primitive visuals, foot contacts, a neutral keyframe, and bounded
+position/velocity controls for all ten non-root DOFs. It deliberately creates
+no pelvis/root actuator.
+
+The saved XML is loadable in one Newton builder call and is also accepted by
+MuJoCo:
+
+```python
+from projects.gait_c3d.subject_mjcf import write_subject_mjcf
+
+path = write_subject_mjcf(config, "subject.xml")
+builder = newton.ModelBuilder()
+builder.add_mjcf(str(path))
+```
+
+The next adapter stage bakes the scaled VTP display geometry into subject-local
+mesh assets referenced by this MJCF. A separate manifest seals source C3D,
+scaled model, geometry, conversion policy, and output hashes.
