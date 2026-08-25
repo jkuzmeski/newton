@@ -49,6 +49,12 @@ DigitalInstron/digital_shoe_showcase/digital_shoe.json
 DigitalInstron/digital_shoe_showcase/validation_report.html
 ```
 
+The report is organized as methods, results, examples, and reproducibility. Its
+methods section derives the column kinematics, Hyperfoam equilibrium pressure,
+Maxwell recurrence, Pasternak coupling, wrench/COP assembly, and normalized fit
+objective. `methods.mmd` is the Mermaid source for the workflow diagram;
+`methods.svg` is its pre-rendered offline form embedded in the HTML.
+
 The output directory is intentionally ignored. The measurements, footwear
 geometry, fitted artifact, and their derivatives are not cleared for upstream
 redistribution. See `ASSET_PROVENANCE.md`.

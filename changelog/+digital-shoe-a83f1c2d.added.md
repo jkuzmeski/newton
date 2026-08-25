@@ -1,1 +1,1 @@
-Add a portable Digital Shoe artifact, validation report with embedded experiment loops, and standalone Instron, free-body drop, and rocker demonstrations.
+Add a portable Digital Shoe artifact, methods-first validation report with a Mermaid workflow, model derivation, and embedded experiment loops, and standalone Instron, free-body drop, and rocker demonstrations.

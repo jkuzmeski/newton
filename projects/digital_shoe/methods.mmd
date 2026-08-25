@@ -1,0 +1,24 @@
+%% SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
+%% SPDX-License-Identifier: Apache-2.0
+
+flowchart TD
+    A[Instron force and crosshead data] --> B[Cycle QC and adjacent-cycle train-test split]
+    G[Midsole and fixture meshes] --> C[5 mm column bed: thickness, area, neighbors]
+    B --> F[Shared parameter identification]
+    C --> H[Hyperfoam equilibrium pressure]
+    H --> M[Maxwell memory and hysteresis]
+    M --> P[Pasternak lateral load spreading]
+    P --> W[Column forces, net wrench, COP, work]
+    W --> F
+    F --> V[Held-out validation]
+    F --> J[digital_shoe.json]
+    J --> I[Virtual Instron]
+    J --> D[80 kg free six-DOF drop]
+    J --> R[Heel-to-toe rocker]
+
+    classDef input fill:#e0f2fe,stroke:#0369a1,color:#0c4a6e;
+    classDef physics fill:#fef3c7,stroke:#d97706,color:#78350f;
+    classDef output fill:#dcfce7,stroke:#15803d,color:#14532d;
+    class A,G,B,C input;
+    class H,M,P,W,F physics;
+    class V,J,I,D,R output;
