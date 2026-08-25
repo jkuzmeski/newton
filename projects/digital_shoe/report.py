@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import html
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 
@@ -85,13 +86,45 @@ def _material_rows(shoe: DigitalShoe) -> str:
     }
     values = shoe.raw["constitutive_model"]["parameters"]
     return "".join(
-        f"<tr><td>{label}</td><td>{values[key]:.6g}</td><td>{unit}</td></tr>"
-        for key, (label, unit) in labels.items()
+        f"<tr><td>{label}</td><td>{values[key]:.6g}</td><td>{unit}</td></tr>" for key, (label, unit) in labels.items()
     )
 
 
-def render_html(shoe: DigitalShoe) -> str:
-    """Render a deterministic, self-contained validation report."""
+def _experiment_media(media_dir: str | Path | None) -> str:
+    """Return embedded experiment loops or a reproducible recording instruction."""
+    labels = {
+        "instron": ("Virtual Instron", "Held-out compression cycle after viscoelastic warm-up."),
+        "drop": ("Guided drop", "A 5 kg rigid mass released 40 mm above the digital shoe."),
+        "rocker": ("Rigid rocker", "Controlled heel-to-toe loading and center-of-pressure travel."),
+    }
+    cards = []
+    missing = []
+    root = Path(media_dir) if media_dir is not None else None
+    for mode, (title, description) in labels.items():
+        path = root / f"{mode}.gif" if root is not None else None
+        if path is None or not path.is_file():
+            missing.append(mode)
+            continue
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        cards.append(
+            f'<figure><img class="experiment" src="data:image/gif;base64,{encoded}" '
+            f'alt="{html.escape(title)} experiment loop">'
+            f"<figcaption><strong>{html.escape(title)}</strong><br>{html.escape(description)}</figcaption></figure>"
+        )
+    if cards:
+        note = ""
+        if missing:
+            note = f"<p>Missing loops: {html.escape(', '.join(missing))}.</p>"
+        return f'<section><h2>Mechanical experiment loops</h2><div class="experiment-grid">{"".join(cards)}</div>{note}</section>'
+    return (
+        "<section><h2>Mechanical experiment loops</h2><p>Generate and embed all three audited loops with:</p>"
+        "<pre><code>uv run --extra examples -m projects.digital_shoe.record_gifs "
+        "--artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json</code></pre></section>"
+    )
+
+
+def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> str:
+    """Render a deterministic, self-contained validation report with optional GIF loops."""
     curves = shoe.validation["curves"]
     passed = bool(shoe.raw["identification"]["passed_all_declared_gates"])
     sections = []
@@ -99,7 +132,7 @@ def render_html(shoe: DigitalShoe) -> str:
         sections.append(
             f"<section><h2>{html.escape(curve['name'])}: held-out cycles</h2>"
             '<div class="plot-grid"><figure>'
-            f"{_svg(curve, domain='displacement')}<figcaption>Force–compression loop</figcaption></figure>"
+            f"{_svg(curve, domain='displacement')}<figcaption>Force-compression loop</figcaption></figure>"
             f"<figure>{_svg(curve, domain='time')}<figcaption>Force history</figcaption></figure></div></section>"
         )
     status = "ALL DECLARED GATES PASSED" if passed else "RESEARCH BASELINE — SOME DECLARED GATES FAILED"
@@ -113,27 +146,34 @@ def render_html(shoe: DigitalShoe) -> str:
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Digital Shoe validation — {html.escape(shoe.shoe_id)}</title>
 <style>
-:root{{--ink:#172033;--muted:#5f6b7a;--panel:#f5f7fa;--blue:#1261a0;--orange:#d94801;--green:#137333;--red:#a61b1b}}body{{font:16px/1.5 system-ui,sans-serif;color:var(--ink);max-width:1200px;margin:auto;padding:2rem}}h1{{font-size:2.3rem;margin-bottom:.2rem}}h2{{margin-top:2.2rem}}.subtitle{{color:var(--muted);font-size:1.15rem}}.status{{display:inline-block;padding:.35rem .65rem;border-radius:.3rem;font-weight:700}}.pass{{color:var(--green);font-weight:700}}.fail{{color:var(--red);font-weight:700}}.status.pass{{background:#dff3e4}}.status.fail{{background:#fbe1e1}}.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.5rem 0}}.card{{background:var(--panel);padding:1rem;border-radius:.5rem}}table{{border-collapse:collapse;width:100%}}th,td{{padding:.65rem;border-bottom:1px solid #d7dee8;text-align:left}}th{{background:var(--panel)}}.plot-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:1rem}}figure{{margin:0}}svg{{width:100%;height:auto;background:white}}figcaption{{text-align:center;color:var(--muted)}}code{{font-size:.85em;overflow-wrap:anywhere}}.boundary{{border-left:5px solid var(--orange);padding:1rem;background:#fff5ed}}
+:root{{--ink:#172033;--muted:#5f6b7a;--panel:#f5f7fa;--blue:#1261a0;--orange:#d94801;--green:#137333;--red:#a61b1b}}body{{font:16px/1.5 system-ui,sans-serif;color:var(--ink);max-width:1200px;margin:auto;padding:2rem}}h1{{font-size:2.3rem;margin-bottom:.2rem}}h2{{margin-top:2.2rem}}.subtitle{{color:var(--muted);font-size:1.15rem}}.status{{display:inline-block;padding:.35rem .65rem;border-radius:.3rem;font-weight:700}}.pass{{color:var(--green);font-weight:700}}.fail{{color:var(--red);font-weight:700}}.status.pass{{background:#dff3e4}}.status.fail{{background:#fbe1e1}}.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.5rem 0}}.card{{background:var(--panel);padding:1rem;border-radius:.5rem}}table{{border-collapse:collapse;width:100%}}th,td{{padding:.65rem;border-bottom:1px solid #d7dee8;text-align:left}}th{{background:var(--panel)}}.plot-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:1rem}}.experiment-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}}figure{{margin:0}}svg{{width:100%;height:auto;background:white}}img.experiment{{display:block;width:100%;height:auto;border:1px solid #ccd5df;border-radius:.4rem;background:#fff}}figcaption{{text-align:center;color:var(--muted);padding-top:.4rem}}code{{font-size:.85em;overflow-wrap:anywhere}}.boundary{{border-left:5px solid var(--orange);padding:1rem;background:#fff5ed}}
 </style></head><body>
 <header><h1>From Instron Data to a Digital Shoe</h1><p class="subtitle">Portable effective shoe dynamics for <code>{html.escape(shoe.shoe_id)}</code></p><p><span class="status {status_class}">{status}</span></p></header>
-<div class="cards"><div class="card"><strong>Identification</strong><br>One shared nonlinear viscoelastic material fit to rearfoot and full-foot tests.</div><div class="card"><strong>Validation</strong><br>Cycles 99–100 were held out from fitting.</div><div class="card"><strong>Deployment</strong><br>The same <code>digital_shoe.json</code> drives live Newton simulations without refitting.</div></div>
+<div class="cards"><div class="card"><strong>Identification</strong><br>One shared nonlinear viscoelastic material fit to rearfoot and full-foot tests.</div><div class="card"><strong>Validation</strong><br>Cycles 99-100 were held out from fitting.</div><div class="card"><strong>Deployment</strong><br>The same <code>digital_shoe.json</code> drives live Newton simulations without refitting.</div></div>
+{_experiment_media(media_dir)}
 <section><h2>Held-out validation summary</h2><table><thead><tr><th>Trial</th><th>Peak error</th><th>Active RMSE</th><th>Hysteresis error</th><th>Measured peak</th><th>Declared 10% gates</th></tr></thead><tbody>{_metric_rows(curves)}</tbody></table></section>
-{''.join(sections)}
+{"".join(sections)}
 <section><h2>Identified effective model</h2><table><thead><tr><th>Parameter</th><th>Value</th><th>Unit</th></tr></thead><tbody>{_material_rows(shoe)}</tbody></table><p>The parameters describe the intact tested shoe system. They include geometry, outsole, plate, bonding, confinement, and foam response.</p></section>
 <section><h2>Claim boundary</h2><p class="boundary">{claim}</p></section>
 <section><h2>Reproduce</h2><pre><code>uv run -m projects.digital_instron_v2.export_digital_shoe --manifest DigitalInstron/manifest_v2.json --output DigitalInstron/digital_shoe_showcase
 uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode instron --viewer gl
 uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode drop --viewer gl
-uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode rocker --viewer gl</code></pre></section>
+uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode rocker --viewer gl
+uv run --extra examples -m projects.digital_shoe.record_gifs --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json</code></pre></section>
 <section><h2>Source integrity</h2><ul>{sources}</ul></section>
 </body></html>"""
 
 
-def write_report(artifact_path: str | Path, output_path: str | Path) -> Path:
+def write_report(
+    artifact_path: str | Path,
+    output_path: str | Path,
+    *,
+    media_dir: str | Path | None = None,
+) -> Path:
     """Load an artifact and write its self-contained HTML report."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render_html(load_artifact(artifact_path)))
+    output.write_text(render_html(load_artifact(artifact_path), media_dir=media_dir))
     return output
 
 
@@ -142,8 +182,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--output", type=Path, default=Path("validation_report.html"))
+    parser.add_argument("--media-dir", type=Path, help="Directory containing instron.gif, drop.gif, and rocker.gif.")
     args = parser.parse_args()
-    print(write_report(args.artifact, args.output))
+    print(write_report(args.artifact, args.output, media_dir=args.media_dir))
 
 
 if __name__ == "__main__":

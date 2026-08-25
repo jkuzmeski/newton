@@ -1,1 +1,1 @@
-Add a portable Digital Shoe artifact, validation report, and standalone Instron, guided-drop, and rocker demonstrations.
+Add a portable Digital Shoe artifact, validation report with embedded experiment loops, and standalone Instron, guided-drop, and rocker demonstrations.

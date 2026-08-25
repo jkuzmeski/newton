@@ -66,6 +66,9 @@
     },
     "validation": {
       "type": "object"
+    },
+    "visual_meshes": {
+      "type": "object"
     }
   },
   "required": [

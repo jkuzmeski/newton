@@ -121,6 +121,22 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         parser.feed(first)
         parser.close()
 
+    def test_embeds_experiment_gifs_without_external_paths(self):
+        """Embed all experiment loops as deterministic data URIs in the report."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact_path = root / "digital_shoe.json"
+            artifact_path.write_text(json.dumps(_tiny_artifact()))
+            for mode in ("instron", "drop", "rocker"):
+                (root / f"{mode}.gif").write_bytes(b"GIF89a" + mode.encode())
+            shoe = load_artifact(artifact_path)
+            first = render_html(shoe, media_dir=root)
+            second = render_html(shoe, media_dir=root)
+        self.assertEqual(first, second)
+        self.assertEqual(first.count("data:image/gif;base64,"), 3)
+        self.assertNotIn(directory, first)
+        self.assertIn("Mechanical experiment loops", first)
+
     def test_validates_physical_holdout_manifest(self):
         """Accept the planned acquisition matrix and reject leakage across splits."""
         example_path = Path("projects/digital_shoe/acquisition_manifest.example.json")
@@ -138,6 +154,8 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         validate_artifact(artifact)
         self.assertEqual(artifact["column_bed"]["column_count"], 910)
         self.assertEqual(artifact["instron_fixtures"]["fullfoot_last"]["column_count"], 611)
+        self.assertGreater(artifact["visual_meshes"]["midsole"]["vertex_count"], 7000)
+        self.assertGreater(artifact["visual_meshes"]["fullfoot_last"]["vertex_count"], 7000)
         self.assertFalse(artifact["identification"]["passed_all_declared_gates"])
         encoded = json.dumps(artifact, sort_keys=True)
         self.assertNotIn(str(Path.cwd()), encoded)

@@ -411,5 +411,3 @@ class MidsoleFoundation:
             "cop_y_m": cop[1],
             "active_columns": int(self.active.numpy()[0]),
         }
-
-

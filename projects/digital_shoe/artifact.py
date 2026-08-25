@@ -72,6 +72,38 @@ class ColumnBed:
 
 
 @dataclass(frozen=True)
+class VisualMesh:
+    """Path-independent triangle mesh in the declared shoe frame."""
+
+    vertices_m: np.ndarray
+    triangles: np.ndarray
+
+    @classmethod
+    def from_json(cls, name: str, data: dict[str, Any]) -> VisualMesh:
+        """Decode one visual mesh and reject malformed topology."""
+        required = {"vertices_m", "triangles"}
+        if missing := sorted(required - data.keys()):
+            raise ValueError(f"visual mesh {name!r} is missing {missing}")
+        mesh = cls(
+            vertices_m=np.asarray(data["vertices_m"], dtype=np.float64),
+            triangles=np.asarray(data["triangles"], dtype=np.int32),
+        )
+        mesh.validate(name)
+        return mesh
+
+    def validate(self, name: str = "mesh") -> None:
+        """Require finite 3D vertices and in-range triangle indices."""
+        if self.vertices_m.ndim != 2 or self.vertices_m.shape[1] != 3 or len(self.vertices_m) == 0:
+            raise ValueError(f"visual mesh {name!r} has invalid vertices")
+        if self.triangles.ndim != 2 or self.triangles.shape[1] != 3 or len(self.triangles) == 0:
+            raise ValueError(f"visual mesh {name!r} has invalid triangles")
+        if not np.all(np.isfinite(self.vertices_m)):
+            raise ValueError(f"visual mesh {name!r} contains nonfinite vertices")
+        if np.any(self.triangles < 0) or np.any(self.triangles >= len(self.vertices_m)):
+            raise ValueError(f"visual mesh {name!r} has out-of-range triangle indices")
+
+
+@dataclass(frozen=True)
 class InstronFixture:
     """Fixture-specific kinematic mapping used only by the Virtual Instron."""
 
@@ -140,10 +172,18 @@ class DigitalShoe:
     shoe_id: str
     material: ShoeMaterial
     column_bed: ColumnBed
+    visual_meshes: dict[str, VisualMesh]
     instron_fixtures: dict[str, InstronFixture]
     validation: dict[str, Any]
     provenance: dict[str, Any]
     raw: dict[str, Any]
+
+    def visual_mesh(self, name: str) -> VisualMesh:
+        """Return a baked visual mesh or list the available names in the error."""
+        if name not in self.visual_meshes:
+            choices = ", ".join(sorted(self.visual_meshes))
+            raise KeyError(f"unknown visual mesh {name!r}; available meshes: {choices}")
+        return self.visual_meshes[name]
 
     def instron_fixture(self, fixture: str = "fullfoot_last") -> InstronFixture:
         """Return a fixture or list the available names in the error."""
@@ -165,6 +205,8 @@ def validate_artifact(data: dict[str, Any]) -> None:
         raise ValueError(f"unsupported constitutive model {model.get('type')!r}")
     ShoeMaterial(**model["parameters"])
     ColumnBed.from_json(data["column_bed"])
+    for name, mesh_data in data.get("visual_meshes", {}).items():
+        VisualMesh.from_json(name, mesh_data)
     for fixture, fixture_data in data.get("instron_fixtures", {}).items():
         InstronFixture.from_json(fixture, fixture_data)
     coordinate = data["coordinate_system"]
@@ -180,6 +222,9 @@ def load_artifact(path: str | Path) -> DigitalShoe:
         shoe_id=data["shoe"]["id"],
         material=ShoeMaterial(**data["constitutive_model"]["parameters"]),
         column_bed=ColumnBed.from_json(data["column_bed"]),
+        visual_meshes={
+            name: VisualMesh.from_json(name, value) for name, value in data.get("visual_meshes", {}).items()
+        },
         instron_fixtures={
             fixture: InstronFixture.from_json(fixture, value)
             for fixture, value in data.get("instron_fixtures", {}).items()

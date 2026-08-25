@@ -26,10 +26,11 @@ projects.digital_instron_v2 (data, geometry, fitting)
 projects.digital_shoe (strict loader, runtime, report, demos)
 ```
 
-The runtime artifact contains the full 910-column shoe bed, all six
-constitutive constants, neighbor topology, coordinate semantics, held-out
-curves, metrics, and source hashes. It contains no absolute file paths. The
-runtime never falls back to hidden parameters when loading a named shoe.
+The runtime artifact contains the full 910-column shoe bed, baked calibrated
+midsole and shoe-last visual meshes, all six constitutive constants, neighbor
+topology, coordinate semantics, held-out curves, metrics, and source hashes. It
+contains no absolute file paths. The runtime never falls back to hidden
+parameters when loading a named shoe.
 
 ## Identify and export
 
@@ -73,12 +74,43 @@ uv run --extra examples -m projects.digital_shoe.showcase \
   --mode rocker --viewer gl
 ```
 
+Record all three audited GIF loops and rebuild the report with the GIF bytes
+embedded directly in the HTML:
+
+```bash
+uv run --extra examples -m projects.digital_shoe.record_gifs \
+  --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json
+```
+
+The command writes `instron.gif`, `drop.gif`, and `rocker.gif` beside the
+artifact, then rewrites `validation_report.html` as a portable single file.
+Add `--clear-kernel-cache` if a prior interrupted Warp compilation left a
+missing `.ptx` cache entry.
+
 Use `--viewer null --num-frames N --test` for a headless audit. Useful minimum
 runs are 180 frames for Instron, 60 for drop, and 80 for rocker.
+
+The scenes render the baked calibrated geometry rather than proxy carrier
+boxes. The Virtual Instron uses the posed shoe-last mesh. Drop and rocker render
+the midsole mesh with its ground-contact deformation. The visible drop mass is
+placed above the highest midsole vertex and cannot intersect the shoe at rest.
 
 The drop demo adds 40 N·s/m per-column normal damping for impact stability. That
 value is clearly a scenario parameter and was not identified by the current
 normal-compression tests. Friction is also not claimed as fitted.
+
+### Warp cache recovery
+
+The OpenGL warning about falling back from MSAA is harmless. An error that says
+Warp could not open a generated `.ptx` file means a kernel-cache write was
+interrupted. Clear the compiled cache once and rerun:
+
+```bash
+uv run python -c "import warp as wp; wp.clear_kernel_cache()"
+```
+
+The prescribed Instron and rocker modes avoid articulation initialization, so
+they do not compile the articulation module merely to set a rigid carrier pose.
 
 ## Current held-out result
 

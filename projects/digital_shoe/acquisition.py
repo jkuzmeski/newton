@@ -105,7 +105,9 @@ def validate_acquisition_manifest(data: dict[str, Any], *, base: str | Path | No
             if not channel.get("column") or not channel.get("unit"):
                 raise ValueError(f"acquisition {identifier!r} has incomplete {channel_name} channel metadata")
         digest = acquisition.get("sha256")
-        if digest not in (None, "TO_BE_RECORDED") and (len(str(digest)) != 64 or any(c not in "0123456789abcdef" for c in str(digest))):
+        if digest not in (None, "TO_BE_RECORDED") and (
+            len(str(digest)) != 64 or any(c not in "0123456789abcdef" for c in str(digest))
+        ):
             raise ValueError(f"acquisition {identifier!r} sha256 must be lowercase hexadecimal")
         if root is not None and not (root / raw_path).is_file():
             raise ValueError(f"acquisition {identifier!r} raw_path does not exist: {raw_path}")

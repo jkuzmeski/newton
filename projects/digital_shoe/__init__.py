@@ -3,7 +3,7 @@
 
 """Load and simulate portable Digital Shoe artifacts."""
 
-from .artifact import ColumnBed, DigitalShoe, InstronFixture, load_artifact
+from .artifact import ColumnBed, DigitalShoe, InstronFixture, VisualMesh, load_artifact
 from .runtime import FoundationConfig, MidsoleFoundation, ShoeMaterial
 
 __all__ = [
@@ -13,5 +13,6 @@ __all__ = [
     "InstronFixture",
     "MidsoleFoundation",
     "ShoeMaterial",
+    "VisualMesh",
     "load_artifact",
 ]
