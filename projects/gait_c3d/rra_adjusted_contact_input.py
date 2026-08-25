@@ -32,6 +32,8 @@ _RRA_SCHEMA = "gait_c3d_official_opensim_rra_reference_1"
 _RRA_SCOPE = "official_opensim_rra_reference_not_newton_native_prediction"
 _ANALYSIS_SCHEMA = "gait_c3d_analysis_3"
 _IMPORT_SCHEMA = "gait_c3d_rra_adjusted_contact_input_1"
+ARCHITECTURE_ROLE = "source_adapter"
+
 _SCOPE = "accepted_official_rra_adjusted_contact_input"
 _FRAME = "opensim_x_forward_y_up_z_right"
 _UNITS = {"length": "m", "force": "N", "moment": "N*m", "time": "s"}

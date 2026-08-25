@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+ARCHITECTURE_ROLE = "official_oracle"
+
 _SCHEMA = "gait_c3d_official_opensim_rra_reference_1"
 _SCOPE = "official_opensim_rra_reference_not_newton_native_prediction"
 _DEFAULT_DATA = Path("/home/jo31399/newton-data/gait/processed/trial_101/latest")

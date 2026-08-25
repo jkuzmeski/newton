@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fit a bounded first normal-contact model under prescribed gait motion.
+"""OFFLINE COMPATIBILITY REFERENCE ONLY. Production contact calibration uses ``newton_contact_calibration`` and neutral Newton core APIs.
+
+Fit a bounded first normal-contact model under prescribed gait motion.
 
 This module is intentionally narrower than the complete Stage 2 contract. It
 fits only ground height, four bilateral role-shared vertical center offsets,
@@ -30,6 +32,8 @@ import numpy as np
 
 import newton.opensim as osim
 from projects.gait_c3d import predictive_contact
+
+ARCHITECTURE_ROLE = "compatibility_reference"
 
 _SCHEMA = "gait_c3d_preliminary_normal_contact_calibration_1"
 _SCOPE = "preliminary_stage_2_normal_contact_only"
@@ -536,6 +540,7 @@ def calibrate_normal_contact(
 
     optimizer_result = {
         "schema_version": _SCHEMA,
+        "architecture_role": ARCHITECTURE_ROLE,
         "scope": _SCOPE,
         "success": bool(result.success),
         "status": int(result.status),
@@ -596,6 +601,9 @@ def calibrate_normal_contact(
         )
         manifest = {
             "schema_version": _SCHEMA,
+            "architecture_role": ARCHITECTURE_ROLE,
+            "reference_only": True,
+            "production_eligible": False,
             "scope": _SCOPE,
             "status": (
                 "preliminary_normal_contact_fit_succeeded"
@@ -841,6 +849,11 @@ def run_contact_calibration(
 def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the bounded calibration command-line parser."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: this uses newton.opensim compatibility mechanics, not production Newton",
+    )
     parser.add_argument("--data-dir", type=Path, default=_DEFAULT_DATA)
     parser.add_argument("--sidecar", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path)
@@ -856,7 +869,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the bounded preliminary normal-contact calibration CLI."""
-    args = _build_arg_parser().parse_args(argv)
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    if not args.reference_only:
+        parser.error("--reference-only is required; use newton_contact_calibration for production contact")
     output = run_contact_calibration(
         args.data_dir,
         args.sidecar,

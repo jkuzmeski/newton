@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Evaluate project-local predictive foot contact under prescribed gait motion.
+"""OFFLINE COMPATIBILITY REFERENCE ONLY. Its prescribed evaluator uses ``newton.opensim.OpenSimContact`` and is not predictive Newton runtime.
+
+Evaluate project-local predictive foot contact under prescribed gait motion.
 
 This preliminary Stage 2 adapter augments a deep copy of a scaled OpenSim model
 from a strict JSON sidecar. It evaluates :class:`newton.opensim.OpenSimContact`
@@ -30,6 +32,8 @@ from typing import Any
 import numpy as np
 
 import newton.opensim as osim
+
+ARCHITECTURE_ROLE = "compatibility_reference"
 
 _SCHEMA = "gait_c3d_predictive_contact_sidecar_2"
 _ARTIFACT_SCHEMA = "gait_c3d_prescribed_contact_2"
@@ -1478,6 +1482,9 @@ def run_prescribed_contact(
         }
         artifact_manifest = {
             "schema_version": _ARTIFACT_SCHEMA,
+            "architecture_role": ARCHITECTURE_ROLE,
+            "reference_only": True,
+            "production_eligible": False,
             "status": qc["status"],
             "scope": qc["scope"],
             "runtime": _runtime_provenance(repository_root, device),
@@ -1544,6 +1551,11 @@ def run_prescribed_contact(
 def _build_arg_parser() -> argparse.ArgumentParser:
     """Build the preliminary Stage 2 command-line interface."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: this uses newton.opensim compatibility contact",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     initialize = subparsers.add_parser("init", help="write a strict marker-seeded contact sidecar")
     initialize.add_argument("--model", required=True, help="Scaled S001_scaled.osim path")
@@ -1563,7 +1575,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run sidecar initialization or prescribed-contact evaluation."""
-    args = _build_arg_parser().parse_args(argv)
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+    if not args.reference_only:
+        parser.error("--reference-only is required; use newton_contact_calibration for production contact")
     if args.command == "init":
         output = write_initial_contact_sidecar(
             args.model,

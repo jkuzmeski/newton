@@ -33,6 +33,8 @@ import numpy as np
 import newton.opensim as newton_osim
 from projects.gait_c3d import predictive_contact
 
+ARCHITECTURE_ROLE = "cross_runtime_oracle"
+
 _SCHEMA = "gait_c3d_official_newton_contact_parity_1"
 _FRAME = "opensim_x_forward_y_up_z_right"
 _BODY_ORDER = ("calcn_l", "calcn_r")

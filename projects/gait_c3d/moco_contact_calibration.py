@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Calibrate the exact 12-sphere Moco contact topology on accepted RRA motion.
+"""OFFLINE COMPATIBILITY REFERENCE ONLY. Despite the historical name, this uses OpenSim-shaped contact; production contact uses ``newton_contact_calibration``.
+
+Calibrate the exact 12-sphere Moco contact topology on accepted RRA motion.
 
 The optimizer evaluates contact from prescribed q/qd only. Measured platform
 wrenches are held by the objective, never by the contact evaluator. The output
@@ -31,6 +33,8 @@ import numpy as np
 import newton.opensim as osim
 from projects.gait_c3d import opensim_moco_contact_reference as reference
 from projects.gait_c3d import predictive_contact
+
+ARCHITECTURE_ROLE = "compatibility_reference"
 
 _SCHEMA = "gait_c3d_moco_contact_calibration_1"
 _SCOPE = "exact_12_sphere_rra_adjusted_prescribed_contact_calibration_not_forward_dynamics"
@@ -367,7 +371,9 @@ class PrescribedContactEvaluator:
 
     def __call__(self, candidate: ContactCandidate) -> ContactEvaluation:
         """Evaluate one candidate."""
-        augmented = reference.augment_newton_model(self._model, spheres=candidate.spheres, material=candidate.material)
+        augmented = reference.augment_opensim_compat_model(
+            self._model, spheres=candidate.spheres, material=candidate.material
+        )
         contact = osim.OpenSimContact(augmented, device=self._device)
         if tuple(contact.coordinate_names) != self._coordinate_names:
             raise ValueError("prescribed coordinate order does not match OpenSimContact")
@@ -1001,6 +1007,9 @@ def run_calibration(
         )
         manifest = {
             "schema_version": _SCHEMA,
+            "architecture_role": ARCHITECTURE_ROLE,
+            "reference_only": True,
+            "production_eligible": False,
             "scope": _SCOPE,
             "status": "prescribed_contact_passed"
             if qc["passed"] and result.success
@@ -1210,6 +1219,11 @@ def add_diagnostics_to_artifact(directory: str | os.PathLike) -> tuple[str, ...]
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: this uses OpenSim-shaped compatibility contact",
+    )
     parser.add_argument("--output-dir", required=True)
     parser.add_argument(
         "--add-diagnostics",
@@ -1230,7 +1244,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """Run the command-line contact calibration."""
-    args = _build_parser().parse_args()
+    parser = _build_parser()
+    args = parser.parse_args()
+    if not args.reference_only:
+        parser.error("--reference-only is required; use newton_contact_calibration for production contact")
     if args.add_diagnostics:
         print("\n".join(add_diagnostics_to_artifact(args.output_dir)))
         if args.official_parity:

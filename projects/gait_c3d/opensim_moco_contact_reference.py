@@ -32,6 +32,8 @@ import numpy as np
 
 import newton.opensim as newton_osim
 
+ARCHITECTURE_ROLE = "cross_runtime_oracle"
+
 _SCHEMA = "gait_c3d_opensim_moco_contact_reference_1"
 _PINNED_COMMIT = "11036b39ca7232c604685b37f483afafc056d92b"
 _RAW_ROOT = f"https://raw.githubusercontent.com/opensim-org/opensim-core/{_PINNED_COMMIT}"
@@ -456,7 +458,7 @@ def newton_augmentation_spec(
     return NewtonAugmentationSpec(tuple(geometry), tuple(forces))
 
 
-def augment_newton_model(
+def augment_opensim_compat_model(
     model: Any,
     alignment: VerticalAlignment = S001_ALIGNMENT,
     *,
@@ -907,7 +909,7 @@ def evaluate_newton_prescribed(
     names, q, qd = _validate_motion_arrays(coordinate_names, coordinates, speeds)
     model_path = Path(model_path).resolve()
     assert_model_has_no_external_loads(model_path)
-    model = augment_newton_model(newton_osim.parse_osim(model_path), alignment)
+    model = augment_opensim_compat_model(newton_osim.parse_osim(model_path), alignment)
     contact = newton_osim.OpenSimContact(model, device=device)
     if names != tuple(contact.coordinate_names):
         raise ValueError("prescribed coordinate order does not match Newton OpenSimContact")

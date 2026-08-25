@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a preliminary Stage 4 timing and model-inertia sensitivity audit.
+"""OFFLINE COMPATIBILITY REFERENCE ONLY. Its inverse dynamics uses ``newton.opensim`` pending a faithful neutral S001 joint implementation.
+
+Run a preliminary Stage 4 timing and model-inertia sensitivity audit.
 
 This module intentionally does not select or accept a timing correction. It sweeps
 only the predeclared wrench lag grid and archives every inverse-dynamics result.
@@ -28,6 +30,8 @@ import numpy as np
 import newton.opensim as osim
 
 _ANALYSIS_SCHEMA = "gait_c3d_analysis_3"
+ARCHITECTURE_ROLE = "compatibility_reference"
+
 _SCHEMA = "gait_c3d_residual_sensitivity_1"
 _LAG_MS = np.arange(-20, 21, dtype=np.int64)
 _REQUIRED_ARRAYS = (
@@ -532,6 +536,9 @@ def run(data_dir: str | os.PathLike, output_dir: str | os.PathLike, device: str 
             source_hashes["uv.lock"] = _sha256(lock_path)
         summary = {
             "schema_version": _SCHEMA,
+            "architecture_role": ARCHITECTURE_ROLE,
+            "reference_only": True,
+            "production_eligible": False,
             "status": "preliminary_sensitivity_only_no_timing_accepted",
             "accepted_timing_lag_ms": None,
             "timing_adjustment_applied": False,
@@ -593,10 +600,17 @@ def run(data_dir: str | os.PathLike, output_dir: str | os.PathLike, device: str 
 def main(argv: list[str] | None = None) -> int:
     """Run the command-line entry point."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: this uses newton.opensim compatibility inverse dynamics",
+    )
     parser.add_argument("--data-dir", required=True, help="Completed gait_c3d schema-3 directory")
     parser.add_argument("--output-dir", required=True, help="New nonexisting publication directory")
     parser.add_argument("--device", default="cpu", help="Warp inverse-dynamics device")
     args = parser.parse_args(argv)
+    if not args.reference_only:
+        parser.error("--reference-only is required; native inverse dynamics is not implemented for S001")
     result = run(args.data_dir, args.output_dir, args.device)
     print(result)
     return 0

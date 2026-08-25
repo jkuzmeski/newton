@@ -35,6 +35,8 @@ from typing import Any
 
 from projects.gait_c3d import rra_adjusted_contact_input as _rra_contact
 
+ARCHITECTURE_ROLE = "official_oracle"
+
 _SCHEMA = "gait_c3d_official_opensim_moco_inverse_reference_1"
 _SCOPE = "official_opensim_moco_inverse_prescribed_rra_motion_not_predictive_forward_dynamics"
 _RRA_SCHEMA = "gait_c3d_official_opensim_rra_reference_1"

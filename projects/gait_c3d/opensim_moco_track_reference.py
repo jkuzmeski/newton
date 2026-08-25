@@ -37,6 +37,8 @@ from typing import Any
 from projects.gait_c3d import opensim_moco_contact_reference as _contact
 from projects.gait_c3d import opensim_moco_inverse_reference as _inverse
 
+ARCHITECTURE_ROLE = "official_oracle"
+
 _SCHEMA = "gait_c3d_official_opensim_moco_track_contact_reference_1"
 _SCOPE = "official_opensim_torque_driven_moco_track_contact_reference_not_predictive_or_fd1"
 _CONTACT_SCHEMA = "gait_c3d_opensim_moco_contact_reference_1"

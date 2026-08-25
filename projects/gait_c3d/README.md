@@ -199,13 +199,52 @@ This is an engineering reconstruction, not predictive contact dynamics. It
 replays measured ground reactions and intentionally reports uncorrected
 open-loop drift without a tracking controller or hidden residual forces.
 
-## Stage 1 measured-load engineering diagnostics
+## Native runtime boundary
+
+The canonical production contact route is:
+
+```text
+accepted source/RRA artifacts
+  -> projects.gait_c3d.prepare_newton_contact_input
+  -> sealed newton_contact_input_v1 JSON/NPZ
+  -> projects.gait_c3d.newton_contact_calibration
+  -> newton.ModelBuilder / Model / State / CollisionPipeline / Contacts / SolverSemiImplicit
+```
+
+After the neutral artifact is published, production code must not import
+`opensim`, `newton.opensim`, an `opensim_*_reference` module, or any module marked
+`ARCHITECTURE_ROLE="compatibility_reference"`. The machine-readable policy is
+`ARCHITECTURE_BOUNDARIES.json`; the complete branch inventory is
+`NATIVE_ARCHITECTURE_AUDIT.md`; CI enforcement is in
+`test_gait_c3d_architecture.py`.
+
+Convert and calibrate with:
+
+```bash
+native_input=/home/jo31399/newton-data/gait/processed/trial_101/newton_contact_input_v1
+native_fit=/home/jo31399/newton-data/gait/processed/trial_101/stage2_newton_native_contact_v1
+
+.venv/bin/python -m projects.gait_c3d.prepare_newton_contact_input \
+  --output-dir "$native_input" --device cuda:0
+
+.venv/bin/python -m projects.gait_c3d.newton_contact_calibration \
+  --input-dir "$native_input" --output-dir "$native_fit" \
+  --device cuda:0 --stride 4 --max-nfev 40
+```
+
+`newton_contact_calibration` uses only neutral Newton contact and solver APIs. It
+is still prescribed-motion calibration, not articulated forward dynamics. The
+current `add_osim()` D6 approximation is forbidden for predictive S001 dynamics
+because the nonlinear one-coordinate knee splines become three independent DOFs.
+A native coupled-knee component is required before FD-1 rollout.
+
+## Stage 1 measured-load compatibility reference
 
 The roadmap's non-predictive integration harness is separate from the pointwise
 torque-reconstruction artifact:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.measured_load_diagnostics   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage1_engineering_measured_load_tracking
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.measured_load_diagnostics   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage1_engineering_measured_load_tracking
 ```
 
 The canonical run performs 1.0, 0.5, and 0.25 ms convergence, conditionally adds
@@ -217,16 +256,16 @@ boundaries. This is an expensive engineering diagnostic and is never labeled
 predictive gait. Use repeated `--section` options and
 `--restart-start-limit N` only for explicitly incomplete probes.
 
-## Stage 2 prescribed-motion predictive contact
+## Archived Stage 2 OpenSim-compatible prescribed-contact reference
 
 Create a source-bound bilateral contact sidecar from frozen stance-tangent
 geometry, then evaluate contact without passing measured loads to the contact
 model:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact init   --model /home/jo31399/newton-data/gait/processed/trial_101/latest/S001_scaled.osim   --analysis /home/jo31399/newton-data/gait/processed/trial_101/latest/analysis.npz   --output /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --body-height 1.695898298375747
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact --reference-only init   --model /home/jo31399/newton-data/gait/processed/trial_101/latest/S001_scaled.osim   --analysis /home/jo31399/newton-data/gait/processed/trial_101/latest/analysis.npz   --output /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --body-height 1.695898298375747
 
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact evaluate   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact --reference-only evaluate   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact
 ```
 
 The initial sidecar is intentionally uncalibrated. Measured GRF, COP, impulse,
@@ -241,7 +280,7 @@ parameters. It keeps the right side held out and writes full prescribed QC to a
 separate artifact:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.contact_calibration   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_normal_contact_calibration   --max-nfev 40   --prescribed-qc-output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact_calibrated
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.contact_calibration   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_normal_contact_calibration   --max-nfev 40   --prescribed-qc-output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact_calibrated
 ```
 
 This fit adjusts ground height, four bilateral role-shared vertical center
@@ -313,7 +352,7 @@ specs, MocoContactTrackingGoal groups with toe alternative frames, and independe
 COP/free-moment validation. Measured ExternalLoads are reference-only and are
 never added to the predictive contact model.
 
-### S001 12-sphere contact calibration and figures
+### Archived OpenSim-compatible S001 contact calibration and figures
 
 Fit the exact six-role-per-foot topology after retargeting its geometry to the
 scaled S001 heel/forefoot landmarks and actual articulated toe frames:
@@ -322,7 +361,7 @@ scaled S001 heel/forefoot landmarks and actual articulated toe frames:
 out=/home/jo31399/newton-data/gait/processed/trial_101/stage2_moco12_contact_calibration_s001_v1
 
 .venv/bin/python -m projects.gait_c3d.moco_contact_calibration \
-  --output-dir "$out" --device cuda:0 --stride 4 --max-nfev 80
+  --reference-only --output-dir "$out" --device cuda:0 --stride 4 --max-nfev 80
 ```
 
 Every run writes `calibration_report.md`, `run.log`, and diagnostic figures for
@@ -332,7 +371,7 @@ existing artifact, then run the optional official OpenSim parity plot, with:
 
 ```bash
 MPLBACKEND=Agg .venv/bin/python -m projects.gait_c3d.moco_contact_calibration \
-  --output-dir "$out" --add-diagnostics --official-parity
+  --reference-only --output-dir "$out" --add-diagnostics --official-parity
 ```
 
 The report shows failed gates as well as passed gates. A passing official/Newton
@@ -387,7 +426,7 @@ Run the frozen preliminary timing and inertial audit without accepting a timing
 change:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.residual_sensitivity   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage4_residual_sensitivity_preliminary
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.residual_sensitivity   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage4_residual_sensitivity_preliminary
 ```
 
 The artifact evaluates every integer wrench lag from -20 to +20 ms on one common

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Characterize measured-load forward integration for the C3D gait project.
+"""OFFLINE COMPATIBILITY REFERENCE ONLY. Its rollouts use ``newton.opensim`` and are excluded from production Newton dependency manifests.
+
+Characterize measured-load forward integration for the C3D gait project.
 
 This Stage 1 harness replays archived measured external loads. It is an
 engineering diagnostic and never a predictive-gait result. The pelvis/root is
@@ -28,6 +30,8 @@ from typing import Any, Literal
 import numpy as np
 
 import newton.opensim as osim
+
+ARCHITECTURE_ROLE = "compatibility_reference"
 
 _DEFAULT_DATA = Path("/home/jo31399/newton-data/gait/processed/trial_101/forward_dynamics")
 _SCOPE = "engineering_measured_load_tracking"
@@ -1651,6 +1655,9 @@ def run_stage1(
         gate["passed"] = False
     manifest = {
         "schema_version": _SCHEMA,
+        "architecture_role": ARCHITECTURE_ROLE,
+        "reference_only": True,
+        "production_eligible": False,
         "scope": _SCOPE,
         "status": "engineering_stage1_passed" if gate["passed"] else "engineering_stage1_failed_or_incomplete",
         "runtime": {**_git_runtime(repository_root), "device": device, "wall_time_s": time.monotonic() - started},
@@ -1729,6 +1736,11 @@ def run_stage1(
 def create_parser() -> argparse.ArgumentParser:
     """Build the measured-load diagnostic command-line parser."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: this uses newton.opensim compatibility dynamics",
+    )
     parser.add_argument("--data-dir", default=str(_DEFAULT_DATA))
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--device", default="cpu")
@@ -1751,7 +1763,10 @@ def create_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """Run the Stage 1 command-line harness."""
-    args = create_parser().parse_args()
+    parser = create_parser()
+    args = parser.parse_args()
+    if not args.reference_only:
+        parser.error("--reference-only is required; this diagnostic is not a Newton-native rollout")
     run_stage1(
         args.data_dir,
         args.output_dir,

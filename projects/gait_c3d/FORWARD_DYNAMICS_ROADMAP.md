@@ -33,8 +33,8 @@ also produced near-zero force and are not an accepted fallback.
 
 A review of the primary OpenSim 4.6 implementation showed that our proposed
 free-form COM and Fourier pelvis optimization was not RRA. That path is abandoned
-and must not be integrated. Residual reduction now uses official `RRATool` and
-`CMC` as the executable reference. Newton implementations may follow only after
+and must not be integrated. Residual reduction uses official `RRATool` and
+`CMC` only as offline executable references. Newton implementations may follow only after
 canonical OpenSim fixture and Trial 101 parity.
 
 The pinned reference source is opensim-core commit
@@ -57,6 +57,39 @@ name. Muscle redundancy starts with RRA-adjusted motion and official MocoInverse
 motion/contact tracking uses torque-driven MocoTrack before muscle-driven
 MocoTrack; untracked prediction is a custom MocoStudy seeded by tracking.
 
+## Revision 5 — enforce the OpenSim adapter/Newton runtime boundary
+
+OpenSim is a source-format adapter and an offline correctness oracle. It is not
+an allowed production simulator. The same restriction applies to the
+`newton.opensim` compatibility API: its Warp implementation is useful for
+conversion and parity, but its `OsimModel`, `OpenSimContact`, and OpenSim-shaped
+wrench/tool interfaces are forbidden after neutral artifact conversion.
+
+The only current production contact chain is:
+
+```text
+source/RRA files
+  -> prepare_newton_contact_input                 (adapter boundary)
+  -> sealed Newton Z-up body pose/velocity arrays
+  -> newton_contact_calibration                   (neutral runtime)
+  -> ModelBuilder / Model / State / CollisionPipeline / Contacts / solver
+```
+
+Every FD artifact must include a transitive dependency manifest. No production
+entrypoint may import `opensim`, `newton.opensim`, an official oracle module, or a
+module marked `compatibility_reference`. Compatibility executables require an
+explicit `--reference-only` acknowledgement and cannot publish a
+production-eligible artifact.
+
+The current `add_osim()` CustomJoint conversion is not predictive-ready for S001:
+it expands each one-coordinate nonlinear knee into independent D6 rotation and
+translation DOFs, producing 27 Newton DOFs from 23 source coordinates. Prescribed
+contact may consume converted body poses. Predictive articulated dynamics is
+blocked until Newton has a native single-coordinate coupled-knee transform,
+Jacobian, and bias acceleration. MTP policy must likewise be explicit: weld it,
+or implement the repaired ±30 degree coordinate with passive
+`-25*q - 2*qdot` mechanics.
+
 ## Final definitions
 
 The project uses two explicit forward-dynamics milestones.
@@ -64,7 +97,7 @@ The project uses two explicit forward-dynamics milestones.
 ### FD-1: predictive torque-driven gait
 
 FD-1 starts from a C3D-derived state, applies no measured external wrench after
-initialization, generates foot loads only through Newton/OpenSim contact, actuates
+initialization, generates foot loads only through Newton-native contact, actuates
 only non-root coordinates, and completes a full stride with quantitative
 kinematic and kinetic QC.
 
@@ -368,8 +401,9 @@ FD-1 evaluation.
 A Newton-native `ResidualReduction`/`ComputedMuscleControl` implementation may be
 accepted only after matching official OpenSim single-muscle, two-muscle, arm26,
 gait2354, and Trial 101 controls, forces, states, task accelerations, residual
-wrenches, and pErr within predeclared tolerances. Until then, official OpenSim is
-the reference runtime and Newton artifacts are parity experiments.
+wrenches, and pErr within predeclared tolerances. Until then, official OpenSim
+is an offline oracle/reference tool and native Newton artifacts remain parity
+experiments.
 
 ## Stage 5 — official OpenSim muscle redundancy and tracking
 

@@ -1,1 +1,1 @@
-Added S001-specific 12-sphere contact calibration with measured-load QC, official OpenSim parity, and diagnostic report figures.
+Added an offline OpenSim-compatible S001 12-sphere contact reference with measured-load QC, official parity, and diagnostic report figures.
