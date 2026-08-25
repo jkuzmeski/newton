@@ -15,7 +15,7 @@ from unittest import mock
 
 import numpy as np
 
-from projects.gait_c3d import measured_load_diagnostics as diagnostics
+from projects.gait_c3d.compatibility import measured_load_diagnostics as diagnostics
 
 
 class _FakeForward:

@@ -31,7 +31,7 @@ from typing import Any
 import numpy as np
 
 import newton.opensim as osim
-from projects.gait_c3d import predictive_contact
+from projects.gait_c3d.compatibility import predictive_contact
 
 ARCHITECTURE_ROLE = "compatibility_reference"
 

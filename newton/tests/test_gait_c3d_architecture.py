@@ -150,34 +150,19 @@ assert not any(name == 'opensim' or name.startswith('opensim.') for name in sys.
             self.assertTrue((self.root / relative).is_file())
             self.assertNotIn(relative, self.config["production_entrypoints"])
 
-    def test_all_created_project_modules_are_classified(self):
-        """Discover committed and untracked files independently of the inventory."""
-        created: set[str] = set()
-        diff = subprocess.run(
-            ["git", "diff", "--name-status", f"{self.config['baseline_commit']}..HEAD"],
-            cwd=self.root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if diff.returncode == 0:
-            created.update(
-                line.split("\t", 1)[1]
-                for line in diff.stdout.splitlines()
-                if line.startswith("A\tprojects/gait_c3d/") and line.endswith(".py")
-            )
-        untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard", "projects/gait_c3d/*.py"],
-            cwd=self.root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if untracked.returncode == 0:
-            created.update(untracked.stdout.splitlines())
-        self.assertTrue(created)
-        missing = created - self.config["modules"].keys()
+    def test_all_project_modules_are_classified(self):
+        """Classify every current project module, including untracked modules."""
+        project_root = self.root / "projects/gait_c3d"
+        current = {
+            path.relative_to(self.root).as_posix()
+            for path in project_root.rglob("*.py")
+            if "__pycache__" not in path.parts
+        }
+        self.assertTrue(current)
+        missing = current - self.config["modules"].keys()
+        stale = self.config["modules"].keys() - current
         self.assertFalse(missing, sorted(missing))
+        self.assertFalse(stale, sorted(stale))
 
 
 if __name__ == "__main__":

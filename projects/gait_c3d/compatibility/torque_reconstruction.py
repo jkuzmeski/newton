@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Diagnose C3D inverse-to-forward torque reconstruction.
+"""OFFLINE COMPATIBILITY REFERENCE ONLY. Pointwise and rollout mechanics use newton.opensim, not the production Newton solver path.
+
+Diagnose C3D inverse-to-forward torque reconstruction.
 
 This adapter verifies the dynamics plumbing without claiming predictive gait. It
 first feeds the exact filtered inverse-dynamics state, generalized forces, and
@@ -24,6 +26,8 @@ import numpy as np
 import newton.opensim as osim
 
 from .pipeline import sha256, write_json
+
+ARCHITECTURE_ROLE = "compatibility_reference"
 
 _DEFAULT_DATA = Path("/home/jo31399/newton-data/gait/processed/trial_101/latest")
 _POINTWISE_ROTATIONAL_THRESHOLD = 1.0e-3
@@ -252,6 +256,9 @@ def run_reconstruction(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     report = {
         "schema_version": "gait_c3d_torque_reconstruction_1",
+        "architecture_role": ARCHITECTURE_ROLE,
+        "reference_only": True,
+        "production_eligible": False,
         "status": (
             "engineering_pointwise_pass_open_loop_completed"
             if pointwise_pass and completed
@@ -337,6 +344,11 @@ def run_reconstruction(
 def create_parser() -> argparse.ArgumentParser:
     """Build the torque-reconstruction command-line parser."""
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: this uses newton.opensim compatibility dynamics",
+    )
     parser.add_argument("--data-dir", default=str(_DEFAULT_DATA))
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--device", default="cpu")
@@ -347,7 +359,10 @@ def create_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     """Run the command-line torque-reconstruction diagnostic."""
-    args = create_parser().parse_args()
+    parser = create_parser()
+    args = parser.parse_args()
+    if not args.reference_only:
+        parser.error("--reference-only is required; this is not a Newton-native rollout")
     run_reconstruction(
         args.data_dir,
         args.output_dir,

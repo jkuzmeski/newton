@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from projects.gait_c3d import pipeline, torque_reconstruction
+from projects.gait_c3d.compatibility import pipeline, torque_reconstruction
 
 
 class TestGaitC3DPipeline(unittest.TestCase):
@@ -427,7 +427,7 @@ class TestGaitC3DPipeline(unittest.TestCase):
         import newton.examples  # noqa: PLC0415
         import newton.opensim as opensim  # noqa: PLC0415
         import newton.viewer  # noqa: PLC0415
-        from projects.gait_c3d.viewer import Example  # noqa: PLC0415
+        from projects.gait_c3d.compatibility.viewer import Example  # noqa: PLC0415
 
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)

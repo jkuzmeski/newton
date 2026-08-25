@@ -11,8 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
-from projects.gait_c3d import moco_contact_calibration as calibration
-from projects.gait_c3d import opensim_moco_contact_reference as reference
+from projects.gait_c3d.compatibility import moco_contact_calibration as calibration
+from projects.gait_c3d.oracles import opensim_moco_contact_reference as reference
 
 
 class TestMocoContactCalibration(unittest.TestCase):

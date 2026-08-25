@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from projects.gait_c3d import contact_calibration, predictive_contact
+from projects.gait_c3d.compatibility import contact_calibration, predictive_contact
 
 
 class TestGaitC3DContactCalibration(unittest.TestCase):

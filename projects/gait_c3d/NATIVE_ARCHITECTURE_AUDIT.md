@@ -1,93 +1,98 @@
-# C3D predictive branch native-architecture audit
+# C3D project native-architecture audit
 
-Baseline: `6f66a393`. Audited `52` changed or newly created files in this worktree.
+Audited the complete current `projects/gait_c3d` tree plus every branch-changed support file: `61` files.
 
-## Enforced boundary
+## Directory contract
 
-- Before conversion: source `.osim`/RRA assets and exact source kinematics may use the optional `newton.opensim` adapter.
-- After `newton_contact_input_v1` publication: production mechanics use only neutral Newton/Warp APIs.
-- Official OpenSim and `newton.opensim` mechanics are offline references and never FD-1/FD-2 runtime dependencies.
+- `projects/gait_c3d/newton_*.py`: production Newton-native mechanics.
+- `projects/gait_c3d/adapters/`: source conversion before the sealed neutral boundary.
+- `projects/gait_c3d/oracles/`: official or cross-runtime offline reference tools.
+- `projects/gait_c3d/compatibility/`: historical `newton.opensim` analysis/reference executables; every CLI requires `--reference-only`.
+
+No production module imports any of the three boundary namespaces.
 
 ## File-by-file inventory
 
-| File | Role | Required action |
+| File | Role | Contract |
 |---|---|---|
-| `changelog/+c3d-measured-load-diagnostics-31a7c9e2.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+c3d-newton-native-contact-boundary-8f4c2a71.changed.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+c3d-normal-contact-fit-91e6b3c4.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+c3d-predictive-contact-7f2d4a91.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+c3d-residual-sensitivity-54b8e0d3.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+moco-track-toe-bounds-6a42f17c.fixed.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+official-moco-contact-reference-0d7b315e.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+official-moco-inverse-reference-5b741d8e.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+official-moco-track-contact-5f6c8a1e.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+official-opensim-rra-reference-6c31e7a4.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+opensim-contact-cuda-a617e4c2.changed.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+opensim-contact-parity-b8d402f1.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+opensim-forward-contact-3e7a61b9.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+opensim-modern-motion-types-5de8b9c1.fixed.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+opensim-modern-transform-functions-2a9d71c4.fixed.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+rra-adjusted-contact-input-1cf458d2.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `changelog/+s001-moco-contact-calibration-figures-31e8d6a4.added.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `newton/_src/opensim/contact.py` | `compatibility_library/test` | Keep as optional newton.opensim compatibility/parity support; not core-native production. |
-| `newton/_src/opensim/dynamics.py` | `compatibility_library/test` | Keep as optional newton.opensim compatibility/parity support; not core-native production. |
-| `newton/_src/opensim/kinematics.py` | `compatibility_library/test` | Keep as optional newton.opensim compatibility/parity support; not core-native production. |
-| `newton/_src/opensim/parser.py` | `compatibility_library/test` | Keep as optional newton.opensim compatibility/parity support; not core-native production. |
-| `newton/tests/test_gait_c3d_architecture.py` | `native_architecture_test` | Retain; enforces neutral runtime and dependency boundary. |
-| `newton/tests/test_gait_c3d_contact_calibration.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_measured_load_diagnostics.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_moco_contact_calibration.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_newton_native_contact.py` | `native_architecture_test` | Retain; enforces neutral runtime and dependency boundary. |
-| `newton/tests/test_gait_c3d_opensim_contact_parity.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_opensim_moco_contact_reference.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_opensim_moco_inverse_reference.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_opensim_moco_track_reference.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_opensim_rra_reference.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_predictive_contact.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_residual_sensitivity.py` | `reference_or_adapter_test` | Retain only for adapter/oracle behavior; does not validate production mechanics. |
-| `newton/tests/test_gait_c3d_rra_adjusted_contact_input.py` | `adapter_test` | Retain for sealed conversion/file-boundary behavior. |
-| `newton/tests/test_opensim.py` | `compatibility_library/test` | Keep as optional newton.opensim compatibility/parity support; not core-native production. |
-| `projects/gait_c3d/ARCHITECTURE_BOUNDARIES.json` | `architecture_policy` | Canonical machine-readable role inventory. |
-| `projects/gait_c3d/FORWARD_DYNAMICS_ROADMAP.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `projects/gait_c3d/NATIVE_ARCHITECTURE_AUDIT.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `projects/gait_c3d/README.md` | `documentation/changelog` | Ensure language reserves production claims for neutral Newton runtime. |
-| `projects/gait_c3d/contact_calibration.py` | `compatibility_reference` | Quarantined with --reference-only; exclude from FD runtime, migrate pure QC then delete/rename. |
-| `projects/gait_c3d/measured_load_diagnostics.py` | `compatibility_reference` | Quarantined with --reference-only; exclude from FD runtime, migrate pure QC then delete/rename. |
-| `projects/gait_c3d/moco_contact_calibration.py` | `compatibility_reference` | Quarantined with --reference-only; exclude from FD runtime, migrate pure QC then delete/rename. |
-| `projects/gait_c3d/newton_contact_calibration.py` | `native_runtime` | Production path; retain and require neutral API guard. |
-| `projects/gait_c3d/opensim_contact_parity.py` | `cross_runtime_oracle` | Offline cross-runtime parity fixture only; never import from native runtime. |
-| `projects/gait_c3d/opensim_moco_contact_reference.py` | `cross_runtime_oracle` | Offline cross-runtime parity fixture only; never import from native runtime. |
-| `projects/gait_c3d/opensim_moco_inverse_reference.py` | `official_oracle` | Offline official oracle only; retain outside production dependency closure. |
-| `projects/gait_c3d/opensim_moco_track_reference.py` | `official_oracle` | Offline official oracle only; retain outside production dependency closure. |
-| `projects/gait_c3d/opensim_rra_reference.py` | `official_oracle` | Offline official oracle only; retain outside production dependency closure. |
-| `projects/gait_c3d/predictive_contact.py` | `compatibility_reference` | Quarantined with --reference-only; exclude from FD runtime, migrate pure QC then delete/rename. |
-| `projects/gait_c3d/prepare_newton_contact_input.py` | `source_adapter` | Pre-boundary only; retain, hash-seal output, forbid simulation after publish. |
-| `projects/gait_c3d/residual_sensitivity.py` | `compatibility_reference` | Quarantined with --reference-only; exclude from FD runtime, migrate pure QC then delete/rename. |
-| `projects/gait_c3d/rra_adjusted_contact_input.py` | `source_adapter` | Pre-boundary only; retain, hash-seal output, forbid simulation after publish. |
+| `changelog/+c3d-measured-load-diagnostics-31a7c9e2.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+c3d-newton-native-contact-boundary-8f4c2a71.changed.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+c3d-normal-contact-fit-91e6b3c4.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+c3d-predictive-contact-7f2d4a91.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+c3d-residual-sensitivity-54b8e0d3.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+moco-track-toe-bounds-6a42f17c.fixed.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+official-moco-contact-reference-0d7b315e.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+official-moco-inverse-reference-5b741d8e.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+official-moco-track-contact-5f6c8a1e.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+official-opensim-rra-reference-6c31e7a4.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+opensim-contact-cuda-a617e4c2.changed.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+opensim-contact-parity-b8d402f1.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+opensim-forward-contact-3e7a61b9.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+opensim-modern-motion-types-5de8b9c1.fixed.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+opensim-modern-transform-functions-2a9d71c4.fixed.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+rra-adjusted-contact-input-1cf458d2.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `changelog/+s001-moco-contact-calibration-figures-31e8d6a4.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `newton/_src/opensim/contact.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
+| `newton/_src/opensim/dynamics.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
+| `newton/_src/opensim/kinematics.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
+| `newton/_src/opensim/parser.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
+| `newton/tests/test_gait_c3d_architecture.py` | `native_architecture_test` | Enforces native dependency closure. |
+| `newton/tests/test_gait_c3d_contact_calibration.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_measured_load_diagnostics.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_moco_contact_calibration.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_newton_native_contact.py` | `native_architecture_test` | Enforces native dependency closure. |
+| `newton/tests/test_gait_c3d_opensim_contact_parity.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_opensim_moco_contact_reference.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_opensim_moco_inverse_reference.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_opensim_moco_track_reference.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_opensim_rra_reference.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_pipeline.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_predictive_contact.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_residual_sensitivity.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_gait_c3d_rra_adjusted_contact_input.py` | `reference_or_adapter_test` | Reference/adapter behavior test only. |
+| `newton/tests/test_opensim.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
+| `projects/gait_c3d/ARCHITECTURE_BOUNDARIES.json` | `architecture_policy` | Machine-readable architecture policy. |
+| `projects/gait_c3d/FORWARD_DYNAMICS_ROADMAP.md` | `documentation/changelog` | Documents scope and provenance. |
+| `projects/gait_c3d/NATIVE_ARCHITECTURE_AUDIT.md` | `documentation/changelog` | Documents scope and provenance. |
+| `projects/gait_c3d/README.md` | `documentation/changelog` | Documents scope and provenance. |
+| `projects/gait_c3d/__init__.py` | `compatibility_entrypoint` | Lazy launcher for explicit reference-only pipeline. |
+| `projects/gait_c3d/adapters/__init__.py` | `adapter_namespace` | Physically isolated source-adapter namespace. |
+| `projects/gait_c3d/adapters/prepare_newton_contact_input.py` | `source_adapter` | Pre-boundary conversion only; hash-seal neutral output. |
+| `projects/gait_c3d/adapters/rra_adjusted_contact_input.py` | `source_adapter` | Pre-boundary conversion only; hash-seal neutral output. |
+| `projects/gait_c3d/compatibility/__init__.py` | `compatibility_namespace` | Physically isolated compatibility namespace. |
+| `projects/gait_c3d/compatibility/contact_calibration.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/human_shoe.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/measured_load_diagnostics.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/moco_contact_calibration.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/pipeline.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/predictive_contact.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/residual_sensitivity.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/torque_reconstruction.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/compatibility/viewer.py` | `compatibility_reference` | Reference-only CLI; never production reachable. |
+| `projects/gait_c3d/newton_contact_calibration.py` | `native_runtime` | Production mechanics; neutral Newton APIs only. |
+| `projects/gait_c3d/oracles/__init__.py` | `oracle_namespace` | Physically isolated oracle namespace. |
+| `projects/gait_c3d/oracles/opensim_contact_parity.py` | `cross_runtime_oracle` | Offline cross-runtime parity oracle. |
+| `projects/gait_c3d/oracles/opensim_moco_contact_reference.py` | `cross_runtime_oracle` | Offline cross-runtime parity oracle. |
+| `projects/gait_c3d/oracles/opensim_moco_inverse_reference.py` | `official_oracle` | Offline official OpenSim oracle. |
+| `projects/gait_c3d/oracles/opensim_moco_track_reference.py` | `official_oracle` | Offline official OpenSim oracle. |
+| `projects/gait_c3d/oracles/opensim_rra_reference.py` | `official_oracle` | Offline official OpenSim oracle. |
 
-## Production dependency closure
+## Production chain
 
 ```text
-official RRA/source assets
-  -> rra_adjusted_contact_input.py          [file adapter]
-  -> prepare_newton_contact_input.py        [source conversion boundary]
-  -> motion_and_targets.npz + topology.json [sealed neutral artifact]
-  -> newton_contact_calibration.py           [Newton-native runtime]
+source/RRA files
+  -> adapters/prepare_newton_contact_input.py
+  -> sealed newton_contact_input_v1
+  -> newton_contact_calibration.py
+  -> ModelBuilder / Model / State / CollisionPipeline / Contacts / SolverSemiImplicit
 ```
 
-The production runtime uses `newton.ModelBuilder`, `newton.Model`, `newton.State`, `newton.CollisionPipeline`, `newton.Contacts`, and `SolverSemiImplicit`. It does not directly import `opensim`, `newton.opensim`, an oracle module, or a compatibility-reference module. Importing the public `newton` package currently initializes its exported `newton.opensim` namespace, but the production source neither references nor calls it.
+## Beyond contact
 
-## Quarantined compatibility executables
+The historical scaling, IK, inverse dynamics, torque reconstruction, Static Optimization, shoe replay, and visualization modules are now physically isolated under `compatibility/`. They are not yet rebuilt as neutral Newton production mechanics.
 
-`measured_load_diagnostics.py`, `predictive_contact.py`, `contact_calibration.py`, `residual_sensitivity.py`, and `moco_contact_calibration.py` execute OpenSim-shaped compatibility mechanics. They declare `ARCHITECTURE_ROLE="compatibility_reference"`, require `--reference-only`, publish `production_eligible=false`, and are excluded from the production dependency closure.
+The next native model milestone is a neutral articulated gait compiler. It must implement the one-coordinate coupled knee (transform, Jacobian, and bias acceleration), explicit MTP mechanics, native actuators/passive forces, and native inverse-dynamics parity before any free forward rollout. Current `add_osim()` output is rejected for predictive use because it creates 27 independent D6 DOFs from 23 source coordinates.
 
-## Native blockers found
+## Enforcement
 
-1. `add_osim()` produces 27 independent D6 DOFs from 23 source coordinates. Each one-DOF knee incorrectly becomes independent rotation plus two translation DOFs; it is not predictive-ready.
-2. A native single-coordinate coupled knee transform, Jacobian, and bias acceleration is required before articulated forward dynamics.
-3. MTP must explicitly use either a weld or a ±30 degree native DOF with passive `-25*q-2*qdot` mechanics.
-4. Native RRA/CMC are not implemented. Official RRATool/CMC remain offline oracles.
-
-## Automated enforcement
-
-`newton/tests/test_gait_c3d_architecture.py` parses direct and dynamic imports and real call sites, checks transitive production dependencies, discovers committed and untracked modules independently of the allowlist, requires explicit reference acknowledgement, and imports the native runtime in a subprocess that blocks official OpenSim and all adapter/oracle project modules.
+`ARCHITECTURE_BOUNDARIES.json` classifies every current Python module. `test_gait_c3d_architecture.py` checks every module, transitive production imports, real native calls, explicit compatibility acknowledgement, and a subprocess import with adapters/oracles blocked.

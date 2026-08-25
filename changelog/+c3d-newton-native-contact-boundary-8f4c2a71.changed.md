@@ -1,1 +1,1 @@
-Moved S001 prescribed contact calibration behind a sealed source-conversion boundary and onto Newton ModelBuilder, CollisionPipeline, Contacts, and SolverSemiImplicit APIs; quarantined OpenSim-shaped mechanics as reference-only.
+Moved S001 prescribed contact calibration behind a sealed source-conversion boundary and onto Newton ModelBuilder, CollisionPipeline, Contacts, and SolverSemiImplicit APIs; physically isolated OpenSim adapters, oracles, and compatibility executables from production gait modules.

@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare and optionally run exact human-shoe replay from mapped C3D gait."""
+"""OFFLINE COMPATIBILITY REFERENCE ONLY. This prescribed replay does not provide Newton-native coupled human-shoe dynamics.
+
+Prepare and optionally run exact human-shoe replay from mapped C3D gait."""
 
 from __future__ import annotations
 
@@ -18,6 +20,8 @@ from projects.human_shoe.replay import (
     find_contact_windows,
     replay_prescribed_shoe_load,
 )
+
+ARCHITECTURE_ROLE = "compatibility_reference"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _BASELINE_EXPERIMENT = _REPOSITORY_ROOT / "experiments/human_shoe/baseline_gait2354.json"
@@ -92,6 +96,11 @@ def create_parser() -> argparse.ArgumentParser:
     """Create the mapped human-shoe replay parser."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: this is an OpenSim-compatible prescribed replay",
+    )
+    parser.add_argument(
         "--data-dir",
         default="/home/jo31399/newton-data/gait/processed/trial_101/latest",
         help="Completed gait-pipeline artifact directory.",
@@ -104,7 +113,10 @@ def create_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Prepare and optionally execute the exact mapped human-shoe replay."""
-    args = create_parser().parse_args(argv)
+    parser = create_parser()
+    args = parser.parse_args(argv)
+    if not args.reference_only:
+        parser.error("--reference-only is required; this replay is not Newton-native coupled dynamics")
     data_dir = Path(args.data_dir).resolve()
     experiment_path, windows = prepare_experiment(data_dir)
     print(f"[gait_c3d] human-shoe experiment: {experiment_path}")
@@ -142,6 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         },
     }
     integration_qc = {
+        "architecture_role": ARCHITECTURE_ROLE,
+        "reference_only": True,
+        "production_eligible": False,
         "status": "passed" if all(gate["passed"] for gate in gates.values()) else "failed",
         "gates": gates,
         "frame": "virtual-overground stationary ground",

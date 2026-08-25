@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Visualize the analyzed C3D treadmill trial as exact overground gait."""
+"""REFERENCE VIEWER ONLY. It imports OpenSim-compatible assets for visualization and is not a production mechanics entrypoint.
+
+Visualize the analyzed C3D treadmill trial as exact overground gait."""
 
 from __future__ import annotations
 
@@ -16,6 +18,8 @@ import newton.examples
 from newton import opensim
 
 DEFAULT_DATA_DIR = Path("/home/jo31399/newton-data/gait/processed/trial_101/latest")
+ARCHITECTURE_ROLE = "compatibility_reference"
+
 _CORE_FIELDS = (
     "times",
     "coords",
@@ -522,6 +526,11 @@ class Example:
         """Create the standard Newton example command-line parser."""
         parser = newton.examples.create_parser()
         parser.add_argument(
+            "--reference-only",
+            action="store_true",
+            help="required acknowledgement: this visualizes OpenSim-compatible reference artifacts",
+        )
+        parser.add_argument(
             "--data-dir",
             type=str,
             default=str(DEFAULT_DATA_DIR),
@@ -575,6 +584,8 @@ def main() -> None:
     """Run the analyzed overground gait visualizer."""
     parser = Example.create_parser()
     viewer, args = newton.examples.init(parser)
+    if not args.reference_only:
+        parser.error("--reference-only is required; this viewer consumes compatibility artifacts")
     newton.examples.run(Example(viewer, args), args)
 
 

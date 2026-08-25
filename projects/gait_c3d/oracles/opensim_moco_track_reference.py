@@ -34,8 +34,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from projects.gait_c3d import opensim_moco_contact_reference as _contact
-from projects.gait_c3d import opensim_moco_inverse_reference as _inverse
+from projects.gait_c3d.oracles import opensim_moco_contact_reference as _contact
+from projects.gait_c3d.oracles import opensim_moco_inverse_reference as _inverse
 
 ARCHITECTURE_ROLE = "official_oracle"
 

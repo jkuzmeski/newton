@@ -35,22 +35,22 @@ extraction configuration, Trial C3D hash, and all three belt-export hashes.
 Run from the repository root with the worktree environment:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.pipeline
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.compatibility.pipeline --reference-only
 ```
 
 Useful deterministic/staged options are:
 
 ```bash
 # Re-extract both C3Ds, then run every stage.
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.pipeline \
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.compatibility.pipeline --reference-only \
   --rebuild-cache
 
 # Validate through inverse dynamics without the slower muscle optimization.
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.pipeline \
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.compatibility.pipeline --reference-only \
   --skip-static-optimization
 
 # Change stride search or coarse Static Optimization resolution.
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.pipeline \
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m projects.gait_c3d.compatibility.pipeline --reference-only \
   --search-time 20 --so-nodes 12
 ```
 
@@ -185,7 +185,7 @@ After producing a complete pipeline artifact, verify the inverse-to-forward
 dynamics bridge with:
 
 ```bash
-uv run --extra examples --extra opensim -m projects.gait_c3d.torque_reconstruction
+uv run --extra examples --extra opensim -m projects.gait_c3d.compatibility.torque_reconstruction --reference-only
 ```
 
 The diagnostic first evaluates every frame pointwise using the exact filtered
@@ -205,7 +205,7 @@ The canonical production contact route is:
 
 ```text
 accepted source/RRA artifacts
-  -> projects.gait_c3d.prepare_newton_contact_input
+  -> projects.gait_c3d.adapters.prepare_newton_contact_input
   -> sealed newton_contact_input_v1 JSON/NPZ
   -> projects.gait_c3d.newton_contact_calibration
   -> newton.ModelBuilder / Model / State / CollisionPipeline / Contacts / SolverSemiImplicit
@@ -224,7 +224,7 @@ Convert and calibrate with:
 native_input=/home/jo31399/newton-data/gait/processed/trial_101/newton_contact_input_v1
 native_fit=/home/jo31399/newton-data/gait/processed/trial_101/stage2_newton_native_contact_v1
 
-.venv/bin/python -m projects.gait_c3d.prepare_newton_contact_input \
+.venv/bin/python -m projects.gait_c3d.adapters.prepare_newton_contact_input \
   --output-dir "$native_input" --device cuda:0
 
 .venv/bin/python -m projects.gait_c3d.newton_contact_calibration \
@@ -244,7 +244,7 @@ The roadmap's non-predictive integration harness is separate from the pointwise
 torque-reconstruction artifact:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.measured_load_diagnostics   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage1_engineering_measured_load_tracking
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.compatibility.measured_load_diagnostics   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage1_engineering_measured_load_tracking
 ```
 
 The canonical run performs 1.0, 0.5, and 0.25 ms convergence, conditionally adds
@@ -263,9 +263,9 @@ geometry, then evaluate contact without passing measured loads to the contact
 model:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact --reference-only init   --model /home/jo31399/newton-data/gait/processed/trial_101/latest/S001_scaled.osim   --analysis /home/jo31399/newton-data/gait/processed/trial_101/latest/analysis.npz   --output /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --body-height 1.695898298375747
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.compatibility.predictive_contact --reference-only init   --model /home/jo31399/newton-data/gait/processed/trial_101/latest/S001_scaled.osim   --analysis /home/jo31399/newton-data/gait/processed/trial_101/latest/analysis.npz   --output /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --body-height 1.695898298375747
 
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.predictive_contact --reference-only evaluate   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.compatibility.predictive_contact --reference-only evaluate   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact
 ```
 
 The initial sidecar is intentionally uncalibrated. Measured GRF, COP, impulse,
@@ -280,7 +280,7 @@ parameters. It keeps the right side held out and writes full prescribed QC to a
 separate artifact:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.contact_calibration   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_normal_contact_calibration   --max-nfev 40   --prescribed-qc-output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact_calibrated
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.compatibility.contact_calibration   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_normal_contact_calibration   --max-nfev 40   --prescribed-qc-output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage2_prescribed_contact_calibrated
 ```
 
 This fit adjusts ground height, four bilateral role-shared vertical center
@@ -299,10 +299,10 @@ without them. A development environment can install the reference runtime with
 ```bash
 out=/home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4
 
-.venv/bin/python -m projects.gait_c3d.opensim_rra_reference prepare   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir "$out" --initial-time 20.60 --final-time 21.66   --tool-name trial101_official_opensim_rra_fy4 --fy-optimal-force 4
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_rra_reference prepare   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir "$out" --initial-time 20.60 --final-time 21.66   --tool-name trial101_official_opensim_rra_fy4 --fy-optimal-force 4
 
-.venv/bin/python -m projects.gait_c3d.opensim_rra_reference run   --output-dir "$out"
-.venv/bin/python -m projects.gait_c3d.opensim_rra_reference summarize   --output-dir "$out"
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_rra_reference run   --output-dir "$out"
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_rra_reference summarize   --output-dir "$out"
 ```
 
 The adapter generates the pinned gait2354 RRA residual/reserve ForceSet and CMC
@@ -320,7 +320,7 @@ the corrected contact-target grid. Original ID generalized forces are deliberate
 excluded and must be regenerated:
 
 ```bash
-.venv/bin/python -m projects.gait_c3d.rra_adjusted_contact_input   --rra-reference /home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output /home/jo31399/newton-data/gait/processed/trial_101/rra_adjusted_contact_input
+.venv/bin/python -m projects.gait_c3d.adapters.rra_adjusted_contact_input   --rra-reference /home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output /home/jo31399/newton-data/gait/processed/trial_101/rra_adjusted_contact_input
 ```
 
 ### Official MocoInverse reference
@@ -334,9 +334,9 @@ preserves sealed failures as reusable failed-guess artifacts:
 rra=/home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4
 out=/home/jo31399/newton-data/gait/processed/trial_101/opensim_moco_inverse_reference
 
-.venv/bin/python -m projects.gait_c3d.opensim_moco_inverse_reference prepare   "$rra" "$out" --mesh-interval 0.05 --max-iterations 1000
-.venv/bin/python -m projects.gait_c3d.opensim_moco_inverse_reference run "$out"
-.venv/bin/python -m projects.gait_c3d.opensim_moco_inverse_reference summarize "$out"
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_moco_inverse_reference prepare   "$rra" "$out" --mesh-interval 0.05 --max-iterations 1000
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_moco_inverse_reference run "$out"
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_moco_inverse_reference summarize "$out"
 ```
 
 MocoInverse prescribes the accepted RRA motion. It is a muscle-redundancy
@@ -345,7 +345,7 @@ required before interpretation.
 
 ### Official 3-D Moco contact topology
 
-`projects.gait_c3d.opensim_moco_contact_reference` pins the current official
+`projects.gait_c3d.oracles.opensim_moco_contact_reference` pins the current official
 example3DWalking topology: six spheres per foot, with four on the calcaneus and
 two on the toe body. It generates matching official XML and Newton augmentation
 specs, MocoContactTrackingGoal groups with toe alternative frames, and independent
@@ -360,7 +360,7 @@ scaled S001 heel/forefoot landmarks and actual articulated toe frames:
 ```bash
 out=/home/jo31399/newton-data/gait/processed/trial_101/stage2_moco12_contact_calibration_s001_v1
 
-.venv/bin/python -m projects.gait_c3d.moco_contact_calibration \
+.venv/bin/python -m projects.gait_c3d.compatibility.moco_contact_calibration \
   --reference-only --output-dir "$out" --device cuda:0 --stride 4 --max-nfev 80
 ```
 
@@ -370,7 +370,7 @@ convergence, and the complete QC gate dashboard. Add or regenerate them on an
 existing artifact, then run the optional official OpenSim parity plot, with:
 
 ```bash
-MPLBACKEND=Agg .venv/bin/python -m projects.gait_c3d.moco_contact_calibration \
+MPLBACKEND=Agg .venv/bin/python -m projects.gait_c3d.compatibility.moco_contact_calibration \
   --reference-only --output-dir "$out" --add-diagnostics --official-parity
 ```
 
@@ -393,10 +393,10 @@ contact=/home/jo31399/newton-data/gait/processed/trial_101/opensim_moco_contact_
 loads=/home/jo31399/newton-data/gait/processed/trial_101/latest/trial_grf_context.xml
 out=/home/jo31399/newton-data/gait/processed/trial_101/opensim_moco_track_reference
 
-.venv/bin/python -m projects.gait_c3d.opensim_moco_track_reference prepare \
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_moco_track_reference prepare \
   "$rra" "$contact" "$loads" "$out" --mesh-interval 0.05 --max-iterations 1000
-.venv/bin/python -m projects.gait_c3d.opensim_moco_track_reference run "$out"
-.venv/bin/python -m projects.gait_c3d.opensim_moco_track_reference summarize "$out"
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_moco_track_reference run "$out"
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_moco_track_reference summarize "$out"
 ```
 
 The adapter records and rechecks the accepted model's effective MTP lock state.
@@ -412,7 +412,7 @@ Validate the Newton-native SmoothSphereHalfSpace port against official OpenSim
 on the same sidecar, state, frame, and all stride samples:
 
 ```bash
-.venv/bin/python -m projects.gait_c3d.opensim_contact_parity   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_initial_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/opensim_newton_contact_parity   --full-frames --device cpu
+.venv/bin/python -m projects.gait_c3d.oracles.opensim_contact_parity   --sidecar /home/jo31399/newton-data/gait/processed/trial_101/stage2_initial_contact_sidecar.json   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/opensim_newton_contact_parity   --full-frames --device cpu
 ```
 
 The mixed component gate is `abs(delta) <= atol + 1e-4 * vector_scale`, with
@@ -426,7 +426,7 @@ Run the frozen preliminary timing and inertial audit without accepting a timing
 change:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.residual_sensitivity   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage4_residual_sensitivity_preliminary
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python   -m projects.gait_c3d.compatibility.residual_sensitivity   --reference-only   --data-dir /home/jo31399/newton-data/gait/processed/trial_101/latest   --output-dir /home/jo31399/newton-data/gait/processed/trial_101/stage4_residual_sensitivity_preliminary
 ```
 
 The artifact evaluates every integer wrench lag from -20 to +20 ms on one common
@@ -443,7 +443,7 @@ marker residuals, activation-colored muscles, COM trail, bilateral COP/GRF, and 
 pelvis-following overground camera:
 
 ```bash
-uv run --extra examples --extra opensim -m projects.gait_c3d.viewer \
+uv run --extra examples --extra opensim -m projects.gait_c3d.compatibility.viewer --reference-only \
   --download-geometry
 ```
 
@@ -471,7 +471,7 @@ human-shoe replay can identify a complete right stance on stationary overground.
 Prepare and run that adapter with:
 
 ```bash
-uv run --extra examples --extra opensim -m projects.gait_c3d.human_shoe \
+uv run --extra examples --extra opensim -m projects.gait_c3d.compatibility.human_shoe --reference-only \
   --replay-dt 0.001
 ```
 

@@ -14,7 +14,7 @@ from unittest import mock
 import numpy as np
 
 import newton.opensim as osim
-from projects.gait_c3d import residual_sensitivity
+from projects.gait_c3d.compatibility import residual_sensitivity
 
 
 class TestGaitC3DResidualSensitivity(unittest.TestCase):

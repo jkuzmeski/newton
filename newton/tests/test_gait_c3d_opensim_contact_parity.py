@@ -13,8 +13,8 @@ from pathlib import Path
 
 import numpy as np
 
-from projects.gait_c3d import opensim_contact_parity as parity
-from projects.gait_c3d import predictive_contact
+from projects.gait_c3d.compatibility import predictive_contact
+from projects.gait_c3d.oracles import opensim_contact_parity as parity
 
 _REAL_SIDECAR = Path(
     "/home/jo31399/newton-data/gait/processed/trial_101/"

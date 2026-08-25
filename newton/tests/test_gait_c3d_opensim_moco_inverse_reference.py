@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
-from projects.gait_c3d import opensim_moco_inverse_reference as moco
+from projects.gait_c3d.oracles import opensim_moco_inverse_reference as moco
 
 
 class _FakeSolution:

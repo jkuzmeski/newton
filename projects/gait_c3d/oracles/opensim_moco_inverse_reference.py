@@ -4,7 +4,7 @@
 """Adapter for the official OpenSim ``MocoInverse`` walking example.
 
 The input to this adapter is an *accepted* output directory from
-:mod:`projects.gait_c3d.opensim_rra_reference`.  MocoInverse prescribes the
+:mod:`projects.gait_c3d.oracles.opensim_rra_reference`.  MocoInverse prescribes the
 RRA-adjusted motion; it is therefore an inverse reference, not a Newton-native
 prediction and not a forward-dynamics validation.
 
@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from projects.gait_c3d import rra_adjusted_contact_input as _rra_contact
+from projects.gait_c3d.adapters import rra_adjusted_contact_input as _rra_contact
 
 ARCHITECTURE_ROLE = "official_oracle"
 

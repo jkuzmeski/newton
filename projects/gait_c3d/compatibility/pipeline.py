@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Build the S001 C3D-to-OpenSim gait analysis artifacts.
+"""OFFLINE SOURCE/ANALYSIS REFERENCE ONLY. It uses newton.opensim compatibility mechanics; production simulation begins at the sealed neutral Newton artifact.
+
+Build the S001 C3D-to-OpenSim gait analysis artifacts.
 
 The raw human data remain outside the repository. This project pipeline records
 all inferred treadmill timing, units, axes, and frame transformations rather
@@ -25,6 +27,8 @@ import numpy as np
 
 import newton.examples
 import newton.opensim as osim
+
+ARCHITECTURE_ROLE = "compatibility_reference"
 
 _SCHEMA_VERSION = "gait_c3d_analysis_3"
 _BELT_ANCHOR_INDICES = np.array([0, 1356, 22244, 43139, 52098, 53223], dtype=float)
@@ -1421,6 +1425,9 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         warnings.append("A contact-active COP is not plausibly associated with its assigned foot.")
     qc = {
         "schema_version": _SCHEMA_VERSION,
+        "architecture_role": ARCHITECTURE_ROLE,
+        "reference_only": True,
+        "production_eligible": False,
         "status": "research_demo_passed_with_provenance_warnings" if core_pass else "research_demo_failed_qc",
         "gates": gates,
         "warnings": warnings,
@@ -1559,6 +1566,9 @@ def run_pipeline(args: argparse.Namespace) -> Path:
         output_dir / "manifest.json",
         {
             "schema_version": _SCHEMA_VERSION,
+            "architecture_role": ARCHITECTURE_ROLE,
+            "reference_only": True,
+            "production_eligible": False,
             "runtime": runtime,
             "source_hashes": source_hashes,
             "input_directory": str(incoming),
@@ -1635,6 +1645,11 @@ def create_parser() -> argparse.ArgumentParser:
     """Create the gait-pipeline CLI parser."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--reference-only",
+        action="store_true",
+        help="required acknowledgement: scaling/IK/ID/SO use newton.opensim compatibility mechanics",
+    )
+    parser.add_argument(
         "--input-dir",
         default="/home/jo31399/newton-data/gait/incoming",
         help="Directory containing the five staged source files.",
@@ -1658,7 +1673,11 @@ def create_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run the command-line pipeline."""
-    run_pipeline(create_parser().parse_args(argv))
+    parser = create_parser()
+    args = parser.parse_args(argv)
+    if not args.reference_only:
+        parser.error("--reference-only is required; the analysis pipeline is not Newton-native mechanics")
+    run_pipeline(args)
     return 0
 
 

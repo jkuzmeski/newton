@@ -1,7 +1,7 @@
 {
   "adapter_entrypoints": [
-    "projects/gait_c3d/prepare_newton_contact_input.py",
-    "projects/gait_c3d/rra_adjusted_contact_input.py"
+    "projects/gait_c3d/adapters/prepare_newton_contact_input.py",
+    "projects/gait_c3d/adapters/rra_adjusted_contact_input.py"
   ],
   "baseline_commit": "6f66a393",
   "compatibility_library_files": [
@@ -17,19 +17,27 @@
     "Native RRA and CMC tools are not implemented; official runs remain offline oracles."
   ],
   "modules": {
-    "projects/gait_c3d/contact_calibration.py": "compatibility_reference",
-    "projects/gait_c3d/measured_load_diagnostics.py": "compatibility_reference",
-    "projects/gait_c3d/moco_contact_calibration.py": "compatibility_reference",
+    "projects/gait_c3d/__init__.py": "compatibility_entrypoint",
+    "projects/gait_c3d/adapters/__init__.py": "adapter_namespace",
+    "projects/gait_c3d/adapters/prepare_newton_contact_input.py": "source_adapter",
+    "projects/gait_c3d/adapters/rra_adjusted_contact_input.py": "source_adapter",
+    "projects/gait_c3d/compatibility/__init__.py": "compatibility_namespace",
+    "projects/gait_c3d/compatibility/contact_calibration.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/human_shoe.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/measured_load_diagnostics.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/moco_contact_calibration.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/pipeline.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/predictive_contact.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/residual_sensitivity.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/torque_reconstruction.py": "compatibility_reference",
+    "projects/gait_c3d/compatibility/viewer.py": "compatibility_reference",
     "projects/gait_c3d/newton_contact_calibration.py": "native_runtime",
-    "projects/gait_c3d/opensim_contact_parity.py": "cross_runtime_oracle",
-    "projects/gait_c3d/opensim_moco_contact_reference.py": "cross_runtime_oracle",
-    "projects/gait_c3d/opensim_moco_inverse_reference.py": "official_oracle",
-    "projects/gait_c3d/opensim_moco_track_reference.py": "official_oracle",
-    "projects/gait_c3d/opensim_rra_reference.py": "official_oracle",
-    "projects/gait_c3d/predictive_contact.py": "compatibility_reference",
-    "projects/gait_c3d/prepare_newton_contact_input.py": "source_adapter",
-    "projects/gait_c3d/residual_sensitivity.py": "compatibility_reference",
-    "projects/gait_c3d/rra_adjusted_contact_input.py": "source_adapter"
+    "projects/gait_c3d/oracles/__init__.py": "oracle_namespace",
+    "projects/gait_c3d/oracles/opensim_contact_parity.py": "cross_runtime_oracle",
+    "projects/gait_c3d/oracles/opensim_moco_contact_reference.py": "cross_runtime_oracle",
+    "projects/gait_c3d/oracles/opensim_moco_inverse_reference.py": "official_oracle",
+    "projects/gait_c3d/oracles/opensim_moco_track_reference.py": "official_oracle",
+    "projects/gait_c3d/oracles/opensim_rra_reference.py": "official_oracle"
   },
   "native_runtime_requirements": {
     "forbidden_import_fragments": [
@@ -60,9 +68,28 @@
     "projects/gait_c3d/newton_contact_calibration.py"
   ],
   "reference_only_roles": [
+    "compatibility_entrypoint",
     "compatibility_reference",
-    "official_oracle",
-    "cross_runtime_oracle"
+    "cross_runtime_oracle",
+    "official_oracle"
   ],
+  "relocated_modules": {
+    "projects/gait_c3d/contact_calibration.py": "projects/gait_c3d/compatibility/contact_calibration.py",
+    "projects/gait_c3d/human_shoe.py": "projects/gait_c3d/compatibility/human_shoe.py",
+    "projects/gait_c3d/measured_load_diagnostics.py": "projects/gait_c3d/compatibility/measured_load_diagnostics.py",
+    "projects/gait_c3d/moco_contact_calibration.py": "projects/gait_c3d/compatibility/moco_contact_calibration.py",
+    "projects/gait_c3d/opensim_contact_parity.py": "projects/gait_c3d/oracles/opensim_contact_parity.py",
+    "projects/gait_c3d/opensim_moco_contact_reference.py": "projects/gait_c3d/oracles/opensim_moco_contact_reference.py",
+    "projects/gait_c3d/opensim_moco_inverse_reference.py": "projects/gait_c3d/oracles/opensim_moco_inverse_reference.py",
+    "projects/gait_c3d/opensim_moco_track_reference.py": "projects/gait_c3d/oracles/opensim_moco_track_reference.py",
+    "projects/gait_c3d/opensim_rra_reference.py": "projects/gait_c3d/oracles/opensim_rra_reference.py",
+    "projects/gait_c3d/pipeline.py": "projects/gait_c3d/compatibility/pipeline.py",
+    "projects/gait_c3d/predictive_contact.py": "projects/gait_c3d/compatibility/predictive_contact.py",
+    "projects/gait_c3d/prepare_newton_contact_input.py": "projects/gait_c3d/adapters/prepare_newton_contact_input.py",
+    "projects/gait_c3d/residual_sensitivity.py": "projects/gait_c3d/compatibility/residual_sensitivity.py",
+    "projects/gait_c3d/rra_adjusted_contact_input.py": "projects/gait_c3d/adapters/rra_adjusted_contact_input.py",
+    "projects/gait_c3d/torque_reconstruction.py": "projects/gait_c3d/compatibility/torque_reconstruction.py",
+    "projects/gait_c3d/viewer.py": "projects/gait_c3d/compatibility/viewer.py"
+  },
   "schema_version": "gait_c3d_architecture_boundaries_1"
 }

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from projects.gait_c3d import rra_adjusted_contact_input as adjusted
+from projects.gait_c3d.adapters import rra_adjusted_contact_input as adjusted
 
 
 class TestRRAAdjustedContactInput(unittest.TestCase):

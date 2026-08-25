@@ -16,7 +16,7 @@ from unittest import mock
 import numpy as np
 
 import newton.opensim as osim
-from projects.gait_c3d import predictive_contact
+from projects.gait_c3d.compatibility import predictive_contact
 
 
 class TestGaitC3DPredictiveContact(unittest.TestCase):

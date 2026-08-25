@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest import mock
 
-from projects.gait_c3d import opensim_rra_reference as rra
+from projects.gait_c3d.oracles import opensim_rra_reference as rra
 
 
 class TestOpenSimRRAReference(unittest.TestCase):
@@ -176,7 +176,7 @@ class TestOpenSimRRAReference(unittest.TestCase):
         command = [
             sys.executable,
             "-c",
-            "import sys; import projects.gait_c3d.opensim_rra_reference; print('opensim' in sys.modules)",
+            "import sys; import projects.gait_c3d.oracles.opensim_rra_reference; print('opensim' in sys.modules)",
         ]
         completed = subprocess.run(command, check=True, capture_output=True, text=True)
         self.assertEqual(completed.stdout.strip(), "False")

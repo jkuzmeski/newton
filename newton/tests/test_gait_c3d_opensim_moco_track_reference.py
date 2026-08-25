@@ -15,8 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from projects.gait_c3d import opensim_moco_contact_reference as contact
-from projects.gait_c3d import opensim_moco_track_reference as moco
+from projects.gait_c3d.oracles import opensim_moco_contact_reference as contact
+from projects.gait_c3d.oracles import opensim_moco_track_reference as moco
 
 _HAS_OFFICIAL = importlib.util.find_spec("opensim") is not None
 _REAL_RRA = Path("/home/jo31399/newton-data/gait/processed/trial_101/opensim_rra_official_reference_fy4")
