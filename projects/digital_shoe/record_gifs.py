@@ -16,7 +16,7 @@ from .report import write_report
 
 EXPERIMENTS = {
     "instron": {"frames": 180, "gif_fps": 12},
-    "drop": {"frames": 180, "gif_fps": 24},
+    "drop": {"frames": 240, "gif_fps": 24},
     "rocker": {"frames": 72, "gif_fps": 12},
 }
 

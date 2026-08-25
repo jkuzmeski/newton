@@ -137,7 +137,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertNotIn(directory, first)
         self.assertIn("Mechanical experiment loops", first)
         self.assertIn(".experiment-grid{display:block}", first)
-        self.assertIn("shoe surface is hidden", first)
+        self.assertIn("An 80 kg body-weight load", first)
 
     def test_validates_physical_holdout_manifest(self):
         """Accept the planned acquisition matrix and reject leakage across splits."""

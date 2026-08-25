@@ -95,10 +95,10 @@ def _experiment_media(media_dir: str | Path | None) -> str:
     labels = {
         "instron": ("Virtual Instron", "Held-out compression cycle after viscoelastic warm-up."),
         "drop": (
-            "Guided drop",
-            "A 5 kg rigid mass released 40 mm above the exposed colored spring bed; the shoe surface is hidden.",
+            "Free six-DOF body-weight drop",
+            "An 80 kg body-weight load carried by the calibrated shoe last above exposed springs; this impact extrapolates beyond the fitted amplitude.",
         ),
-        "rocker": ("Rigid rocker", "Controlled heel-to-toe loading and center-of-pressure travel."),
+        "rocker": ("Rigid rocker", "Controlled heel-to-toe loading shown as springs and COP travel only."),
     }
     cards = []
     missing = []

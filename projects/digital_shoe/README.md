@@ -63,7 +63,7 @@ uv run --extra examples -m projects.digital_shoe.showcase \
   --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json \
   --mode instron --viewer gl
 
-# A 5 kg vertically guided mass dropped from 40 mm.
+# An 80 kg free six-DOF body-weight drop carried by the calibrated shoe last.
 uv run --extra examples -m projects.digital_shoe.showcase \
   --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json \
   --mode drop --viewer gl
@@ -85,8 +85,8 @@ uv run --extra examples -m projects.digital_shoe.record_gifs \
 The command writes `instron.gif`, `drop.gif`, and `rocker.gif` beside the
 artifact, then rewrites `validation_report.html` as a portable single file. It
 records every display frame at 720 px. Instron and rocker play at 12 FPS. The
-drop is sampled at 240 Hz and plays at 24 FPS, making its short impact about ten
-times slower than real time. The report places each animation on its own
+drop is sampled at 240 Hz for one second and plays at 24 FPS, making its impact
+and rebound about ten times slower than real time. The report places each animation on its own
 full-width row.
 Add `--clear-kernel-cache` if a prior interrupted Warp compilation left a
 missing `.ptx` cache entry.
@@ -95,15 +95,17 @@ Use `--viewer null --num-frames N --test` for a headless audit. Useful minimum
 runs are 180 frames for Instron, 60 for drop, and 80 for rocker.
 
 The scenes do not use proxy shoe boxes. The Virtual Instron uses the posed
-shoe-last and calibrated midsole meshes. The rocker renders the calibrated
-midsole mesh with its ground-contact deformation. The drop intentionally hides
-the shoe surface so every colored spring and its length change remains visible;
-only the opaque drop mass is shown above the spring bed. The mass is placed
-above the highest midsole vertex and cannot intersect the shoe at rest.
+shoe-last and calibrated midsole meshes. The drop is a free six-DOF 80 kg body
+carried by the calibrated full-foot last; it renders the last above the exposed
+colored springs and does not render the shoe surface. The rocker also renders
+only its spring bed, so spring length and contact-color changes remain visible.
 
-The drop demo adds 40 N·s/m per-column normal damping for impact stability. That
-value is clearly a scenario parameter and was not identified by the current
-normal-compression tests. Friction is also not claimed as fitted.
+The drop demo adds 5 N·s/m per-column normal damping for impact stability. That
+value is a scenario parameter and was not identified by the current
+normal-compression tests. Friction is also not claimed as fitted. The 80 kg,
+40 mm drop reaches about 20 mm column compression, slightly beyond the original
+17.9 mm full-foot test amplitude, so it is an extrapolative mechanical showcase
+rather than a validated impact prediction.
 
 ### Warp cache recovery
 

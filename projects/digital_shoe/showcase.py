@@ -65,21 +65,6 @@ def _accumulate_drop_metrics(
             wp.atomic_add(impulse, 0, force[0] * dt)
 
 
-@wp.kernel
-def _project_vertical_guide(
-    carrier: wp.int32,
-    body_q: wp.array[wp.transform],
-    body_qd: wp.array[wp.spatial_vector],
-):
-    """Keep the drop body on its vertical guide without an articulated joint."""
-    pose = body_q[carrier]
-    position = wp.transform_get_translation(pose)
-    velocity = body_qd[carrier]
-    linear = wp.spatial_top(velocity)
-    body_q[carrier] = wp.transform(wp.vec3(0.0, 0.0, position[2]), wp.quat_identity())
-    body_qd[carrier] = wp.spatial_vector(wp.vec3(0.0, 0.0, linear[2]), wp.vec3(0.0, 0.0, 0.0))
-
-
 def _look_at(eye, target):
     delta = np.asarray(target, dtype=np.float64) - np.asarray(eye, dtype=np.float64)
     delta /= np.linalg.norm(delta)
@@ -184,7 +169,9 @@ class Example:
 
         self.viewer.set_model(self.model)
         span = float(np.ptp(anchor[:, 0]))
-        self.viewer.set_camera(*_look_at((0.8 * span, -0.9 * span, 0.55 * span), (0.0, 0.0, 0.015)))
+        self._camera_eye_offset = np.array([0.8 * span, -0.9 * span, 0.55 * span], dtype=np.float64)
+        self._camera_target_offset = np.array([0.0, 0.0, 0.015], dtype=np.float64)
+        self.viewer.set_camera(*_look_at(self._camera_eye_offset, self._camera_target_offset))
 
     @staticmethod
     def _instron_mesh_mapping(vertices: np.ndarray, fixture) -> tuple[np.ndarray, np.ndarray]:
@@ -201,22 +188,25 @@ class Example:
         fraction[~active] = 0.0
         return np.ascontiguousarray(column_index), np.ascontiguousarray(fraction, dtype=np.float32)
 
+    def _add_fullfoot_last_visual(self, builder, *, label: str) -> None:
+        """Attach the baked, calibrated full-foot Instron last to the carrier."""
+        mesh_data = self.shoe.visual_mesh("fullfoot_last")
+        mesh = newton.Mesh(
+            np.asarray(mesh_data.vertices_m, dtype=np.float32),
+            np.asarray(mesh_data.triangles, dtype=np.int32).reshape(-1),
+        )
+        builder.add_shape_mesh(
+            self.carrier,
+            mesh=mesh,
+            cfg=newton.ModelBuilder.ShapeConfig(density=0.0, has_shape_collision=False),
+            color=(0.68, 0.72, 0.76),
+            label=label,
+        )
+
     def _add_instron_indenter_visual(self, builder) -> None:
         """Render the calibrated shoe last or rearfoot punch instead of a proxy box."""
-        visual = newton.ModelBuilder.ShapeConfig(density=0.0, has_shape_collision=False)
         if self.fixture_name == "fullfoot_last":
-            mesh_data = self.shoe.visual_mesh("fullfoot_last")
-            mesh = newton.Mesh(
-                np.asarray(mesh_data.vertices_m, dtype=np.float32),
-                np.asarray(mesh_data.triangles, dtype=np.int32).reshape(-1),
-            )
-            builder.add_shape_mesh(
-                self.carrier,
-                mesh=mesh,
-                cfg=visual,
-                color=(0.68, 0.72, 0.76),
-                label="calibrated_shoe_last",
-            )
+            self._add_fullfoot_last_visual(builder, label="calibrated_shoe_last")
             return
         fixture_data = self.shoe.raw["instron_fixtures"][self.fixture_name]
         radius = float(fixture_data["indenter"]["radius_m"])
@@ -226,25 +216,9 @@ class Example:
             xform=wp.transform(wp.vec3(0.0, 0.0, top + 0.005), wp.quat_identity()),
             radius=radius,
             half_height=0.005,
-            cfg=visual,
+            cfg=newton.ModelBuilder.ShapeConfig(density=0.0, has_shape_collision=False),
             color=(0.68, 0.72, 0.76),
             label="calibrated_rearfoot_punch",
-        )
-
-    def _add_drop_mass_visual(self, builder, *, center_z: float, half_height: float) -> None:
-        """Place the visible drop mass entirely above the calibrated midsole."""
-        bed = self.shoe.column_bed
-        hx = 0.5 * float(np.ptp(bed.anchor_bottom_m[:, 0])) + 0.01
-        hy = 0.5 * float(np.ptp(bed.anchor_bottom_m[:, 1])) + 0.01
-        builder.add_shape_box(
-            self.carrier,
-            xform=wp.transform(wp.vec3(0.0, 0.0, center_z), wp.quat_identity()),
-            hx=hx,
-            hy=hy,
-            hz=half_height,
-            cfg=newton.ModelBuilder.ShapeConfig(density=0.0, has_shape_collision=False),
-            color=(0.32, 0.38, 0.46),
-            label="guided_drop_mass",
         )
 
     def _build_instron(self, builder):
@@ -269,32 +243,34 @@ class Example:
 
     def _build_drop(self, builder, args):
         bed = self.shoe.column_bed
-        self.drop_mass_kg = float(getattr(args, "drop_mass", 5.0))
+        self.drop_mass_kg = float(getattr(args, "drop_mass", 80.0))
         self.drop_height_m = float(getattr(args, "drop_height", 0.04))
-        hx = 0.5 * float(np.ptp(bed.anchor_bottom_m[:, 0])) + 0.01
-        hy = 0.5 * float(np.ptp(bed.anchor_bottom_m[:, 1])) + 0.01
-        hz = 0.015
-        midsole_top = float(np.max(self.shoe.visual_mesh("midsole").vertices_m[:, 2]))
-        mass_center_z = midsole_top + 0.005 + hz
+        shoe_last = self.shoe.visual_mesh("fullfoot_last").vertices_m
+        lower = np.min(shoe_last, axis=0)
+        upper = np.max(shoe_last, axis=0)
+        center = 0.5 * (lower + upper)
+        size_x = float(upper[0] - lower[0])
+        size_y = float(upper[1] - lower[1])
+        effective_height = 0.35
         inertia = wp.mat33(
-            self.drop_mass_kg * (hy * hy + hz * hz) / 3.0,
+            self.drop_mass_kg * (size_y**2 + effective_height**2) / 12.0,
             0.0,
             0.0,
             0.0,
-            self.drop_mass_kg * (hx * hx + hz * hz) / 3.0,
+            self.drop_mass_kg * (size_x**2 + effective_height**2) / 12.0,
             0.0,
             0.0,
             0.0,
-            self.drop_mass_kg * (hx * hx + hy * hy) / 3.0,
+            self.drop_mass_kg * (size_x**2 + size_y**2) / 12.0,
         )
         self.carrier = builder.add_body(
             mass=self.drop_mass_kg,
-            com=wp.vec3(0.0, 0.0, mass_center_z),
+            com=wp.vec3(float(center[0]), float(center[1]), float(center[2])),
             inertia=inertia,
-            label="guided_drop_mass",
+            label="free_body_weight_drop",
         )
-        self._add_drop_mass_visual(builder, center_z=mass_center_z, half_height=hz)
-        self.foundation_config = FoundationConfig(stretch_floor=0.05, normal_damping=40.0)
+        self._add_fullfoot_last_visual(builder, label="free_drop_shoe_last")
+        self.foundation_config = FoundationConfig(stretch_floor=0.05, normal_damping=5.0)
         return (
             bed.anchor_bottom_m,
             np.zeros(len(bed.rest_length_m)),
@@ -391,12 +367,6 @@ class Example:
                     device=self.device,
                 )
                 self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
-                wp.launch(
-                    _project_vertical_guide,
-                    dim=1,
-                    inputs=[self.carrier, self.state_1.body_q, self.state_1.body_qd],
-                    device=self.device,
-                )
                 self.state_0, self.state_1 = self.state_1, self.state_0
             self.sim_time += self.sim_dt
 
@@ -411,11 +381,19 @@ class Example:
         elif self.mode == "rocker":
             _, entry["pitch_deg"] = self._rocker_pose(self.sim_time)
         else:
-            entry["height_m"] = float(self.state_0.body_q.numpy()[self.carrier, 2])
-            entry["velocity_m_s"] = float(self.state_0.body_qd.numpy()[self.carrier, 2])
+            body_q = self.state_0.body_q.numpy()[self.carrier]
+            body_qd = self.state_0.body_qd.numpy()[self.carrier]
+            entry["position_x_m"] = float(body_q[0])
+            entry["position_y_m"] = float(body_q[1])
+            entry["height_m"] = float(body_q[2])
+            entry["velocity_m_s"] = float(body_qd[2])
         self.history.append(entry)
 
     def render(self) -> None:
+        if self.mode == "drop" and self.history:
+            last = self.history[-1]
+            position = np.array([last["position_x_m"], last["position_y_m"], last["height_m"]], dtype=np.float64)
+            self.viewer.set_camera(*_look_at(position + self._camera_eye_offset, position + self._camera_target_offset))
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
         color_reference_m = 0.003 if self.mode == "drop" else 0.010
@@ -467,7 +445,7 @@ class Example:
                     device=self.device,
                 )
             self.viewer.log_lines("digital_shoe/columns", self._points, self._tops, self._colors, width=0.003)
-        if self.mode != "drop":
+        if self.mode == "instron":
             self.viewer.log_mesh(
                 "digital_shoe/midsole",
                 self._mesh_points,
@@ -504,7 +482,7 @@ class Example:
         elif self.mode == "rocker":
             start, stop = 0.0, self._rocker_period
         else:
-            start, stop = 0.0, 0.75
+            start, stop = 0.0, 1.0
         frame_index = max(0, len(self.history) - 1)
         if not start <= self.sim_time <= stop or frame_index % self._gif_stride:
             return
@@ -547,6 +525,10 @@ class Example:
         values = np.asarray([entry["normal_force_n"] for entry in self.history])
         if not np.all(np.isfinite(values)):
             raise AssertionError("showcase produced nonfinite force")
+        if not np.all(np.isfinite(self.state_0.body_q.numpy())) or not np.all(
+            np.isfinite(self.state_0.body_qd.numpy())
+        ):
+            raise AssertionError("showcase produced a nonfinite rigid-body state")
         getattr(self, f"_test_{self.mode}")(values)
 
     def _test_instron(self, force: np.ndarray) -> None:
@@ -565,14 +547,16 @@ class Example:
         )
 
     def _test_drop(self, force: np.ndarray) -> None:
-        """Require finite impact, meaningful compression, and no densification-clamp contact."""
+        """Require a finite body-weight impact with meaningful shoe compression."""
         peak = float(self._peak_force.numpy()[0])
         compression = float(self._peak_compression.numpy()[0])
         impulse = float(self._impulse.numpy()[0])
+        if self.model.joint_count != 0:
+            raise AssertionError("drop body is not free six-DOF")
         if peak <= 3.0 * self.drop_mass_kg * 9.81:
             raise AssertionError(f"drop impact too small: {peak:.1f} N")
-        if not 0.001 < compression < 0.95 * float(self.shoe.column_bed.rest_length_m.min()):
-            raise AssertionError(f"drop compression outside safe range: {compression:.6f} m")
+        if not 0.001 < compression < 0.05:
+            raise AssertionError(f"drop compression outside the showcase range: {compression:.6f} m")
         print(
             f"[digital shoe / drop] {self.drop_mass_kg:.1f} kg from {1000 * self.drop_height_m:.0f} mm: peak {peak:.0f} N, compression {1000 * compression:.1f} mm, first-contact impulse {impulse:.2f} N·s"
         )
@@ -594,7 +578,7 @@ if __name__ == "__main__":
     parser.add_argument("--artifact", type=Path, default=Path(DEFAULT_ARTIFACT))
     parser.add_argument("--mode", choices=["instron", "drop", "rocker"], default="instron")
     parser.add_argument("--fixture", choices=["rearfoot_punch", "fullfoot_last"], default="fullfoot_last")
-    parser.add_argument("--drop-mass", type=float, default=5.0, help="Guided drop mass [kg].")
+    parser.add_argument("--drop-mass", type=float, default=80.0, help="Free drop effective body mass [kg].")
     parser.add_argument("--drop-height", type=float, default=0.04, help="Initial outsole clearance [m].")
     parser.add_argument("--record-gif", type=Path, help="Write an infinite GIF loop from the OpenGL viewer.")
     parser.add_argument("--gif-width", type=int, default=720, help="Recorded GIF width in pixels.")
