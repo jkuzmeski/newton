@@ -65,6 +65,20 @@ def _accumulate_drop_metrics(
             wp.atomic_add(impulse, 0, force[0] * dt)
 
 
+@wp.kernel
+def _accumulate_frame_compression(
+    compression: wp.array[wp.float32],
+    frame_compression: wp.array[wp.float32],
+    frame_max_compression: wp.array[wp.float32],
+):
+    """Retain every column's peak compression over one displayed frame."""
+    i = wp.tid()
+    value = compression[i]
+    if value > frame_compression[i]:
+        frame_compression[i] = value
+    wp.atomic_max(frame_max_compression, 0, value)
+
+
 def _look_at(eye, target):
     delta = np.asarray(target, dtype=np.float64) - np.asarray(eye, dtype=np.float64)
     delta /= np.linalg.norm(delta)
@@ -143,6 +157,8 @@ class Example:
         self._points = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._tops = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._colors = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
+        self._frame_compression = wp.zeros(self.column_count, dtype=wp.float32, device=self.device)
+        self._frame_max_compression = wp.zeros(1, dtype=wp.float32, device=self.device)
         midsole_mesh = self.shoe.visual_mesh("midsole")
         self._mesh_source = wp.array(
             np.ascontiguousarray(midsole_mesh.vertices_m, np.float32), dtype=wp.vec3, device=self.device
@@ -312,6 +328,8 @@ class Example:
 
     def simulate(self) -> None:
         """Advance one display frame while keeping all shoe forces in the portable runtime."""
+        self._frame_compression.zero_()
+        self._frame_max_compression.zero_()
         for _ in range(self.sim_substeps):
             if self.mode == "instron":
                 self.state_0.body_q.assign(self._instron_pose(self.sim_time).reshape(1, 7))
@@ -368,12 +386,26 @@ class Example:
                 )
                 self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
                 self.state_0, self.state_1 = self.state_1, self.state_0
+            wp.launch(
+                _accumulate_frame_compression,
+                dim=self.column_count,
+                inputs=[
+                    self.foundation.compression,
+                    self._frame_compression,
+                    self._frame_max_compression,
+                ],
+                device=self.device,
+            )
             self.sim_time += self.sim_dt
 
     def step(self) -> None:
         self.simulate()
         diagnostics = self.foundation.diagnostics()
-        entry = {"time_s": self.sim_time, **diagnostics}
+        entry = {
+            "time_s": self.sim_time,
+            "frame_max_compression_mm": 1000.0 * float(self._frame_max_compression.numpy()[0]),
+            **diagnostics,
+        }
         if self.mode == "instron":
             phase = self.sim_time % self._period
             entry["depth_m"] = float(np.interp(phase, self._cycle_time, self._cycle_depth))
@@ -396,11 +428,11 @@ class Example:
             self.viewer.set_camera(*_look_at(position + self._camera_eye_offset, position + self._camera_target_offset))
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
-        color_reference_m = 0.003 if self.mode == "drop" else 0.010
+        color_reference_m = 0.020
         wp.launch(
             column_colors,
             dim=self.column_count,
-            inputs=[self.foundation.compression, color_reference_m, self._colors],
+            inputs=[self._frame_compression, color_reference_m, self._colors],
             device=self.device,
         )
         if self.mode == "instron":
@@ -455,10 +487,26 @@ class Example:
                 roughness=0.85,
             )
         point_radius = 0.0018 if self.mode == "drop" else 0.0025
-        self.viewer.log_points("digital_shoe/contact", self._points, radii=point_radius, colors=self._colors)
-        last = self.history[-1] if self.history else {"normal_force_n": 0.0, "active_columns": 0}
+        if self.mode == "instron":
+            self.viewer.log_points(
+                "digital_shoe/spring_bases", self._fixed_bottom, radii=point_radius, colors=self._colors
+            )
+            self.viewer.log_points("digital_shoe/spring_tops", self._points, radii=point_radius, colors=self._colors)
+        else:
+            self.viewer.log_points("digital_shoe/spring_bases", self._points, radii=point_radius, colors=self._colors)
+            self.viewer.log_points("digital_shoe/spring_tops", self._tops, radii=point_radius, colors=self._colors)
+        last = (
+            self.history[-1]
+            if self.history
+            else {
+                "normal_force_n": 0.0,
+                "active_columns": 0,
+                "frame_max_compression_mm": 0.0,
+            }
+        )
         self.viewer.log_scalar("/digital_shoe/force_n", last["normal_force_n"])
         self.viewer.log_scalar("/digital_shoe/active_columns", last["active_columns"])
+        self.viewer.log_scalar("/digital_shoe/heatmap_max_compression_mm", last["frame_max_compression_mm"])
         if self.mode == "instron":
             self.viewer.log_scalar("/digital_shoe/measured_force_n", last.get("measured_force_n", 0.0))
             self.viewer.log_scalar("/digital_shoe/compression_mm", 1000.0 * last.get("depth_m", 0.0))
@@ -503,16 +551,37 @@ class Example:
         from PIL import Image
 
         self._gif_path.parent.mkdir(parents=True, exist_ok=True)
-        palette = self._gif_frames[0].convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
-        frames = [palette]
-        frames.extend(frame.quantize(palette=palette, dither=Image.Dither.NONE) for frame in self._gif_frames[1:])
+        tile_width, tile_height, columns = 120, 68, 16
+        rows = math.ceil((len(self._gif_frames) + 1) / columns)
+        palette_source = Image.new("RGB", (columns * tile_width, rows * tile_height))
+        value = np.linspace(0.0, 1.0, tile_width, dtype=np.float32)
+        gradient = np.zeros((tile_width, 3), dtype=np.float32)
+        first = value < 1.0 / 3.0
+        second = (value >= 1.0 / 3.0) & (value < 2.0 / 3.0)
+        third = value >= 2.0 / 3.0
+        gradient[first, 1] = 3.0 * value[first]
+        gradient[first, 2] = 1.0
+        gradient[second, 0] = 3.0 * value[second] - 1.0
+        gradient[second, 1] = 1.0
+        gradient[second, 2] = 2.0 - 3.0 * value[second]
+        gradient[third, 0] = 1.0
+        gradient[third, 1] = 3.0 - 3.0 * value[third]
+        gradient_image = Image.fromarray(
+            np.repeat((255.0 * gradient).astype(np.uint8)[None, :, :], tile_height, axis=0)
+        )
+        palette_source.paste(gradient_image, (0, 0))
+        for index, frame in enumerate(self._gif_frames, start=1):
+            thumbnail = frame.resize((tile_width, tile_height), Image.Resampling.BILINEAR)
+            palette_source.paste(thumbnail, ((index % columns) * tile_width, (index // columns) * tile_height))
+        palette = palette_source.convert("P", palette=Image.Palette.ADAPTIVE, colors=256)
+        frames = [frame.quantize(palette=palette, dither=Image.Dither.NONE) for frame in self._gif_frames]
         frames[0].save(
             self._gif_path,
             save_all=True,
             append_images=frames[1:],
             duration=round(1000.0 / self._gif_fps),
             loop=0,
-            optimize=True,
+            optimize=False,
             disposal=2,
         )
         print(f"[digital shoe / {self.mode}] GIF: {self._gif_path} ({len(frames)} frames)")
@@ -551,8 +620,8 @@ class Example:
         peak = float(self._peak_force.numpy()[0])
         compression = float(self._peak_compression.numpy()[0])
         impulse = float(self._impulse.numpy()[0])
-        if self.model.joint_count != 0:
-            raise AssertionError("drop body is not free six-DOF")
+        if self.model.joint_type.list() != [newton.JointType.FREE]:
+            raise AssertionError("drop body is not a single free six-DOF joint")
         if peak <= 3.0 * self.drop_mass_kg * 9.81:
             raise AssertionError(f"drop impact too small: {peak:.1f} N")
         if not 0.001 < compression < 0.05:

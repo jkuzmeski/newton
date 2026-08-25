@@ -138,6 +138,8 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertIn("Mechanical experiment loops", first)
         self.assertIn(".experiment-grid{display:block}", first)
         self.assertIn("An 80 kg body-weight load", first)
+        self.assertIn("Blue: 0 mm", first)
+        self.assertIn("Red: 20+ mm", first)
 
     def test_validates_physical_holdout_manifest(self):
         """Accept the planned acquisition matrix and reject leakage across splits."""

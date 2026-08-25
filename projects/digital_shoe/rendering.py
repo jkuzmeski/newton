@@ -73,7 +73,15 @@ def deform_instron_mesh(
 
 @wp.kernel
 def column_colors(compression: wp.array[wp.float32], reference_m: wp.float32, colors: wp.array[wp.vec3]):
-    """Map unloaded blue through green to highly compressed red."""
+    """Map compression blue to cyan to yellow to red on one fixed scale."""
     i = wp.tid()
     value = wp.clamp(compression[i] / reference_m, 0.0, 1.0)
-    colors[i] = wp.vec3(value, 1.0 - wp.abs(2.0 * value - 1.0), 1.0 - value)
+    if value < 1.0 / 3.0:
+        blend = 3.0 * value
+        colors[i] = wp.vec3(0.0, blend, 1.0)
+    elif value < 2.0 / 3.0:
+        blend = 3.0 * value - 1.0
+        colors[i] = wp.vec3(blend, 1.0, 1.0 - blend)
+    else:
+        blend = 3.0 * value - 2.0
+        colors[i] = wp.vec3(1.0, 1.0 - blend, 0.0)

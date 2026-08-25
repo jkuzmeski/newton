@@ -87,7 +87,9 @@ artifact, then rewrites `validation_report.html` as a portable single file. It
 records every display frame at 720 px. Instron and rocker play at 12 FPS. The
 drop is sampled at 240 Hz for one second and plays at 24 FPS, making its impact
 and rebound about ten times slower than real time. The report places each animation on its own
-full-width row.
+full-width row. Spring colors use each column's maximum compression within
+the displayed frame on one fixed scale: blue 0 mm, cyan 6.7 mm, yellow 13.3 mm,
+and red 20 mm or more. The report includes the same legend.
 Add `--clear-kernel-cache` if a prior interrupted Warp compilation left a
 missing `.ptx` cache entry.
 
