@@ -42,7 +42,7 @@ from __future__ import annotations
 import numpy as np
 import warp as wp
 
-from .core import EFFECTIVE_POISSON_RATIO, Material
+from .core import EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material
 from .dynamics import POISSON, TAU_S, FoundationConfig, FoundationParams
 
 # Indices into the differentiable ``material_params`` vector.
@@ -266,6 +266,8 @@ class DifferentiableMidsoleFoundation:
         params.g_eq = material.instantaneous_shear_modulus_pa * material.equilibrium_fraction
         params.alpha = material.hyperfoam_exponent
         params.beta = EFFECTIVE_POISSON_RATIO / (1.0 - 2.0 * EFFECTIVE_POISSON_RATIO)
+        params.one_minus_two_poisson = 1.0 - 2.0 * EFFECTIVE_POISSON_RATIO
+        params.tau_s = MAXWELL_RELAXATION_TIME_S
         params.overstress = (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction
         params.pasternak = material.pasternak_n_per_m
         params.inv_h2 = 1.0 / spacing_m**2

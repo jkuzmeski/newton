@@ -1,0 +1,82 @@
+{
+  "$id": "https://newton-physics.github.io/digital-shoe/digital_shoe.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "column_bed": {
+      "required": [
+        "anchor_bottom_m",
+        "rest_length_m",
+        "area_m2",
+        "neighbors",
+        "spacing_m"
+      ],
+      "type": "object"
+    },
+    "constitutive_model": {
+      "properties": {
+        "parameters": {
+          "required": [
+            "instantaneous_shear_modulus_pa",
+            "hyperfoam_exponent",
+            "equilibrium_fraction",
+            "pasternak_n_per_m",
+            "effective_poisson_ratio",
+            "maxwell_relaxation_time_s"
+          ],
+          "type": "object"
+        },
+        "type": {
+          "const": "effective_hyperfoam_maxwell_pasternak_foundation"
+        }
+      },
+      "required": [
+        "type",
+        "parameters"
+      ],
+      "type": "object"
+    },
+    "coordinate_system": {
+      "required": [
+        "handedness",
+        "up_axis",
+        "length_unit",
+        "force_unit",
+        "origin"
+      ],
+      "type": "object"
+    },
+    "identification": {
+      "type": "object"
+    },
+    "instron_fixtures": {
+      "type": "object"
+    },
+    "provenance": {
+      "type": "object"
+    },
+    "schema_version": {
+      "const": "digital_shoe_1"
+    },
+    "shoe": {
+      "required": [
+        "id",
+        "model_scope"
+      ],
+      "type": "object"
+    },
+    "validation": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "shoe",
+    "coordinate_system",
+    "constitutive_model",
+    "column_bed",
+    "validation",
+    "provenance"
+  ],
+  "title": "Portable Digital Shoe",
+  "type": "object"
+}

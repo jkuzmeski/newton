@@ -74,6 +74,7 @@ newton/tests/outputs/
 reports/upstream-sync/
 reports/human_shoe/
 DigitalInstron/processed/v2_cache/
+DigitalInstron/digital_shoe_showcase/
 
 # Viser recordings
 docs/_static/recordings/

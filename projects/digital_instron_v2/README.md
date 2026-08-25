@@ -5,6 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Digital Instron v2
 
+> **Standalone presentation:** Use `projects.digital_instron_v2.export_digital_shoe`
+> to produce a portable `digital_shoe.json`, then run the artifact-only Virtual
+> Instron, guided drop, and rocker examples in `projects/digital_shoe`. See
+> `projects/digital_shoe/README.md`. These examples do not use gait or a human model.
+
 Identify one shoe-level effective viscoelastic midsole model from intact Digital
 Instron bench tests, then exercise that calibrated model in live Newton
 rigid-body physics.

@@ -146,6 +146,8 @@ class InstronReplay:
             np.float32,
         )
         params.beta = dynamics.EFFECTIVE_POISSON_RATIO / (1.0 - 2.0 * dynamics.EFFECTIVE_POISSON_RATIO)
+        params.one_minus_two_poisson = 1.0 - 2.0 * dynamics.EFFECTIVE_POISSON_RATIO
+        params.tau_s = dynamics.MAXWELL_RELAXATION_TIME_S
         params.inv_h2 = 1.0 / geo.spacing_m**2
         params.stretch_floor = 0.05
         self.params = params
@@ -494,6 +496,8 @@ class DifferentiableTrial:
 
         params = FoundationParams()
         params.beta = EFFECTIVE_POISSON_RATIO / (1.0 - 2.0 * EFFECTIVE_POISSON_RATIO)
+        params.one_minus_two_poisson = 1.0 - 2.0 * EFFECTIVE_POISSON_RATIO
+        params.tau_s = MAXWELL_RELAXATION_TIME_S
         params.stretch_floor = 1.0e-3  # match core.predict's stretch clamp
         self.params = params
 
