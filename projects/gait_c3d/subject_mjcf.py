@@ -8,9 +8,25 @@ from __future__ import annotations
 import math
 import os
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from .native_model import SimpleGaitConfig
+
+
+@dataclass(frozen=True, slots=True)
+class SubjectVisualMesh:
+    """One body-local visual mesh referenced by a saved subject MJCF."""
+
+    name: str
+    """Stable mesh and geometry name."""
+
+    body: str
+    """Target simple-model body label."""
+
+    file: str
+    """Mesh path relative to the MJCF file."""
 
 
 def _values(*items: float) -> str:
@@ -89,12 +105,20 @@ def _add_target_actuators(
     )
 
 
-def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait_subject") -> str:
+def subject_mjcf_xml(
+    config: SimpleGaitConfig,
+    *,
+    model_name: str = "simple_gait_subject",
+    visual_meshes: Sequence[SubjectVisualMesh] = (),
+    include_fallback_geometry: bool = True,
+) -> str:
     """Create MJCF for one scaled simple-joint subject.
 
     Args:
         config: Subject-scaled dimensions, masses, and contact parameters.
         model_name: MJCF model label.
+        visual_meshes: Body-local neutral mesh assets.
+        include_fallback_geometry: Include box and capsule visuals when true.
 
     Returns:
         An MJCF XML document. It can be passed directly to
@@ -115,6 +139,17 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
         rgba="0.25 0.45 0.85 1",
     )
 
+    assets = ET.SubElement(root, "asset")
+    mesh_names: set[str] = set()
+    for mesh in visual_meshes:
+        mesh_path = Path(mesh.file)
+        if not mesh.name or mesh.name in mesh_names:
+            raise ValueError(f"empty or duplicate visual mesh name: {mesh.name!r}")
+        if mesh_path.is_absolute() or ".." in mesh_path.parts:
+            raise ValueError(f"visual mesh path must stay relative to the MJCF: {mesh.file!r}")
+        mesh_names.add(mesh.name)
+        ET.SubElement(assets, "mesh", name=mesh.name, file=mesh_path.as_posix())
+
     world = ET.SubElement(root, "worldbody")
     ET.SubElement(
         world,
@@ -128,26 +163,29 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
     pelvis = ET.SubElement(world, "body", name="pelvis", pos=_values(0.0, 0.0, config.pelvis_height))
     ET.SubElement(pelvis, "freejoint", name="pelvis_free")
     _add_inertial(pelvis, config.pelvis_mass, config.pelvis_dimensions)
-    ET.SubElement(
-        pelvis,
-        "geom",
-        name="geometry_pelvis",
-        type="box",
-        size=_values(*(0.5 * value for value in config.pelvis_dimensions)),
-        attrib={"class": "visual"},
-    )
+    if include_fallback_geometry:
+        ET.SubElement(
+            pelvis,
+            "geom",
+            name="geometry_pelvis",
+            type="box",
+            size=_values(*(0.5 * value for value in config.pelvis_dimensions)),
+            attrib={"class": "visual"},
+        )
 
     torso = ET.SubElement(pelvis, "body", name="torso", pos=_values(0.0, 0.0, config.torso_center_offset))
     _add_inertial(torso, config.torso_mass, config.torso_dimensions)
-    ET.SubElement(
-        torso,
-        "geom",
-        name="geometry_torso",
-        type="box",
-        size=_values(*(0.5 * value for value in config.torso_dimensions)),
-        attrib={"class": "visual"},
-    )
+    if include_fallback_geometry:
+        ET.SubElement(
+            torso,
+            "geom",
+            name="geometry_torso",
+            type="box",
+            size=_values(*(0.5 * value for value in config.torso_dimensions)),
+            attrib={"class": "visual"},
+        )
 
+    body_elements = {"pelvis": pelvis, "torso": torso}
     actuator = ET.SubElement(root, "actuator")
     degrees = math.pi / 180.0
     for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
@@ -161,6 +199,7 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
                 -config.pelvis_hip_drop - 0.5 * config.thigh_length,
             ),
         )
+        body_elements[f"femur_{side}"] = femur
         _add_inertial(
             femur,
             config.thigh_mass,
@@ -184,15 +223,16 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
                 armature=0.01,
             )
             _add_target_actuators(actuator, name, limits)
-        ET.SubElement(
-            femur,
-            "geom",
-            name=f"geometry_femur_{side}",
-            type="capsule",
-            size=f"{config.thigh_radius:.9g}",
-            fromto=_values(0.0, 0.0, -0.5 * config.thigh_length, 0.0, 0.0, 0.5 * config.thigh_length),
-            attrib={"class": "visual"},
-        )
+        if include_fallback_geometry:
+            ET.SubElement(
+                femur,
+                "geom",
+                name=f"geometry_femur_{side}",
+                type="capsule",
+                size=f"{config.thigh_radius:.9g}",
+                fromto=_values(0.0, 0.0, -0.5 * config.thigh_length, 0.0, 0.0, 0.5 * config.thigh_length),
+                attrib={"class": "visual"},
+            )
 
         tibia = ET.SubElement(
             femur,
@@ -200,6 +240,7 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
             name=f"tibia_{side}",
             pos=_values(0.0, 0.0, -0.5 * (config.thigh_length + config.shank_length)),
         )
+        body_elements[f"tibia_{side}"] = tibia
         _add_inertial(
             tibia,
             config.shank_mass,
@@ -217,15 +258,16 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
             armature=0.01,
         )
         _add_target_actuators(actuator, knee_name, knee_limits)
-        ET.SubElement(
-            tibia,
-            "geom",
-            name=f"geometry_tibia_{side}",
-            type="capsule",
-            size=f"{config.shank_radius:.9g}",
-            fromto=_values(0.0, 0.0, -0.5 * config.shank_length, 0.0, 0.0, 0.5 * config.shank_length),
-            attrib={"class": "visual"},
-        )
+        if include_fallback_geometry:
+            ET.SubElement(
+                tibia,
+                "geom",
+                name=f"geometry_tibia_{side}",
+                type="capsule",
+                size=f"{config.shank_radius:.9g}",
+                fromto=_values(0.0, 0.0, -0.5 * config.shank_length, 0.0, 0.0, 0.5 * config.shank_length),
+                attrib={"class": "visual"},
+            )
 
         foot = ET.SubElement(
             tibia,
@@ -237,6 +279,7 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
                 -0.5 * config.shank_length - config.contact_radius,
             ),
         )
+        body_elements[f"foot_{side}"] = foot
         _add_inertial(
             foot,
             config.foot_mass,
@@ -275,6 +318,19 @@ def subject_mjcf_xml(config: SimpleGaitConfig, *, model_name: str = "simple_gait
                 attrib={"class": "collision"},
             )
 
+    for mesh in visual_meshes:
+        body = body_elements.get(mesh.body)
+        if body is None:
+            raise ValueError(f"visual mesh {mesh.name!r} references unknown body {mesh.body!r}")
+        ET.SubElement(
+            body,
+            "geom",
+            name=mesh.name,
+            type="mesh",
+            mesh=mesh.name,
+            attrib={"class": "visual"},
+        )
+
     keyframe = ET.SubElement(root, "keyframe")
     ET.SubElement(
         keyframe,
@@ -291,9 +347,19 @@ def write_subject_mjcf(
     output_path: str | os.PathLike,
     *,
     model_name: str = "simple_gait_subject",
+    visual_meshes: Sequence[SubjectVisualMesh] = (),
+    include_fallback_geometry: bool = True,
 ) -> Path:
     """Write a scaled subject MJCF that Newton can load in one builder call."""
     path = Path(output_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(subject_mjcf_xml(config, model_name=model_name), encoding="utf-8")
+    path.write_text(
+        subject_mjcf_xml(
+            config,
+            model_name=model_name,
+            visual_meshes=visual_meshes,
+            include_fallback_geometry=include_fallback_geometry,
+        ),
+        encoding="utf-8",
+    )
     return path

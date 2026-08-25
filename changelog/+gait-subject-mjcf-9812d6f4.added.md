@@ -1,1 +1,1 @@
-Add project-local MJCF export for scaled simple-joint gait subjects, including contacts, a neutral keyframe, and bounded non-root position and velocity controls.
+Add project-local MJCF export and deterministic scaled VTP visual conversion for simple-joint gait subjects, including contacts, a neutral keyframe, bounded non-root controls, and a one-call `ModelBuilder.add_mjcf()` load path.

@@ -61,3 +61,35 @@ builder.add_mjcf(str(path))
 The next adapter stage bakes the scaled VTP display geometry into subject-local
 mesh assets referenced by this MJCF. A separate manifest seals source C3D,
 scaled model, geometry, conversion policy, and output hashes.
+
+## Scaled VTP visual adapter
+
+`compile_scaled_vtp_visuals()` reads the accepted legacy gait2354 display
+geometry references, resolves the pinned VTP assets, applies the already-scaled
+per-mesh factors and body-local transforms, recenters each mesh at the scaled
+body COM, and rotates OpenSim Y-up coordinates into Newton Z-up coordinates. It
+writes deterministic OBJ assets and a manifest containing source/output hashes.
+
+Only pelvis, torso, femur, tibia, and fibula visuals are compiled. The simple
+model merges the source foot bodies, so feet deliberately retain sphere-only
+geometry until their relative transforms are sealed. Meshes are visual-only;
+they never replace the primitive collision/contact policy.
+
+```python
+from projects.gait_c3d.subject_mjcf import write_subject_mjcf
+from projects.gait_c3d.vtp_adapter import compile_scaled_vtp_visuals
+
+visuals = compile_scaled_vtp_visuals(scaled_osim, geometry_dir, bundle_dir, config)
+subject_xml = write_subject_mjcf(
+    config,
+    visuals.root / "subject.xml",
+    visual_meshes=visuals.meshes,
+    include_fallback_geometry=False,
+)
+builder = newton.ModelBuilder()
+builder.add_mjcf(str(subject_xml))
+```
+
+The canonical S001 conversion resolves 13 VTP assets and loads as 8 bodies, 16
+velocity DOFs, 13 non-colliding mesh visuals, 8 foot spheres, and one ground
+plane through one `ModelBuilder.add_mjcf()` call.
