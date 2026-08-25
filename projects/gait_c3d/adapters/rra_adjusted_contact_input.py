@@ -397,7 +397,7 @@ def publish_rra_adjusted_contact_input(
     rra_dir = Path(rra_dir).resolve()
     data_dir = Path(data_dir).resolve()
     output_dir = Path(output_dir).resolve()
-    repository_root = Path(__file__).resolve().parents[2]
+    repository_root = Path(__file__).resolve().parents[3]
     if not rra_dir.is_dir() or not data_dir.is_dir():
         raise FileNotFoundError("RRA reference and source data directories must exist")
     if output_dir.exists():

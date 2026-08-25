@@ -89,7 +89,7 @@ def _write_json(path: Path, value: Any) -> None:
 
 def _runtime_provenance() -> dict[str, Any]:
     """Return runtime and repository provenance."""
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -865,7 +865,7 @@ def run_calibration(
     from scipy.optimize import least_squares
 
     output = Path(output_dir).resolve()
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[3]
     if output.exists():
         raise FileExistsError(output)
     if output == root or output.is_relative_to(root):

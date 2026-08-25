@@ -1,10 +1,11 @@
 # C3D project native-architecture audit
 
-Audited the complete current `projects/gait_c3d` tree plus every branch-changed support file: `61` files.
+Audited the complete current `projects/gait_c3d` tree plus every branch-changed support file: `78` files.
 
 ## Directory contract
 
 - `projects/gait_c3d/newton_*.py`: production Newton-native mechanics.
+- Other top-level legacy module names: deprecated redirects only; no mechanics remain there.
 - `projects/gait_c3d/adapters/`: source conversion before the sealed neutral boundary.
 - `projects/gait_c3d/oracles/`: official or cross-runtime offline reference tools.
 - `projects/gait_c3d/compatibility/`: historical `newton.opensim` analysis/reference executables; every CLI requires `--reference-only`.
@@ -32,6 +33,7 @@ No production module imports any of the three boundary namespaces.
 | `changelog/+opensim-modern-transform-functions-2a9d71c4.fixed.md` | `documentation/changelog` | Documents scope and provenance. |
 | `changelog/+rra-adjusted-contact-input-1cf458d2.added.md` | `documentation/changelog` | Documents scope and provenance. |
 | `changelog/+s001-moco-contact-calibration-figures-31e8d6a4.added.md` | `documentation/changelog` | Documents scope and provenance. |
+| `newton/__init__.py` | `public_namespace_boundary` | Loads `newton.opensim` lazily so core runtime imports do not initialize compatibility code. |
 | `newton/_src/opensim/contact.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
 | `newton/_src/opensim/dynamics.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
 | `newton/_src/opensim/kinematics.py` | `compatibility_library/test` | Optional newton.opensim library or its tests; not production. |
@@ -55,6 +57,22 @@ No production module imports any of the three boundary namespaces.
 | `projects/gait_c3d/FORWARD_DYNAMICS_ROADMAP.md` | `documentation/changelog` | Documents scope and provenance. |
 | `projects/gait_c3d/NATIVE_ARCHITECTURE_AUDIT.md` | `documentation/changelog` | Documents scope and provenance. |
 | `projects/gait_c3d/README.md` | `documentation/changelog` | Documents scope and provenance. |
+| `projects/gait_c3d/contact_calibration.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/contact_calibration.py` for one deprecation period. |
+| `projects/gait_c3d/human_shoe.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/human_shoe.py` for one deprecation period. |
+| `projects/gait_c3d/measured_load_diagnostics.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/measured_load_diagnostics.py` for one deprecation period. |
+| `projects/gait_c3d/moco_contact_calibration.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/moco_contact_calibration.py` for one deprecation period. |
+| `projects/gait_c3d/opensim_contact_parity.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/oracles/opensim_contact_parity.py` for one deprecation period. |
+| `projects/gait_c3d/opensim_moco_contact_reference.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/oracles/opensim_moco_contact_reference.py` for one deprecation period. |
+| `projects/gait_c3d/opensim_moco_inverse_reference.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/oracles/opensim_moco_inverse_reference.py` for one deprecation period. |
+| `projects/gait_c3d/opensim_moco_track_reference.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/oracles/opensim_moco_track_reference.py` for one deprecation period. |
+| `projects/gait_c3d/opensim_rra_reference.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/oracles/opensim_rra_reference.py` for one deprecation period. |
+| `projects/gait_c3d/pipeline.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/pipeline.py` for one deprecation period. |
+| `projects/gait_c3d/predictive_contact.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/predictive_contact.py` for one deprecation period. |
+| `projects/gait_c3d/prepare_newton_contact_input.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/adapters/prepare_newton_contact_input.py` for one deprecation period. |
+| `projects/gait_c3d/residual_sensitivity.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/residual_sensitivity.py` for one deprecation period. |
+| `projects/gait_c3d/rra_adjusted_contact_input.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/adapters/rra_adjusted_contact_input.py` for one deprecation period. |
+| `projects/gait_c3d/torque_reconstruction.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/torque_reconstruction.py` for one deprecation period. |
+| `projects/gait_c3d/viewer.py` | `deprecated_redirect` | Warns and forwards to `projects/gait_c3d/compatibility/viewer.py` for one deprecation period. |
 | `projects/gait_c3d/__init__.py` | `compatibility_entrypoint` | Lazy launcher for explicit reference-only pipeline. |
 | `projects/gait_c3d/adapters/__init__.py` | `adapter_namespace` | Physically isolated source-adapter namespace. |
 | `projects/gait_c3d/adapters/prepare_newton_contact_input.py` | `source_adapter` | Pre-boundary conversion only; hash-seal neutral output. |
@@ -95,4 +113,4 @@ The next native model milestone is a neutral articulated gait compiler. It must 
 
 ## Enforcement
 
-`ARCHITECTURE_BOUNDARIES.json` classifies every current Python module. `test_gait_c3d_architecture.py` checks every module, transitive production imports, real native calls, explicit compatibility acknowledgement, and a subprocess import with adapters/oracles blocked.
+`ARCHITECTURE_BOUNDARIES.json` classifies every current Python module. `test_gait_c3d_architecture.py` checks every module, transitive production imports, real native calls, explicit compatibility acknowledgement, relocated repository-root resolution, and a subprocess import with adapters, oracles, official `opensim`, and `newton.opensim` blocked.

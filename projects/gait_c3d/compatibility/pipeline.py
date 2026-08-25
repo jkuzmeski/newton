@@ -843,7 +843,7 @@ def run_pipeline(args: argparse.Namespace) -> Path:
     """Run the staged C3D pipeline and return the output directory."""
     incoming = Path(args.input_dir).resolve()
     final_output_dir = Path(args.output_dir).resolve()
-    repository_root = Path(__file__).resolve().parents[2]
+    repository_root = Path(__file__).resolve().parents[3]
     if final_output_dir == repository_root or final_output_dir.is_relative_to(repository_root):
         raise ValueError("generated human-data artifacts must stay outside the repository")
     final_output_dir.parent.mkdir(parents=True, exist_ok=True)

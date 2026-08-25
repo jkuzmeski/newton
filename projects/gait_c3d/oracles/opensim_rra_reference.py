@@ -423,7 +423,7 @@ def prepare_reference(
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", tool_name):
         raise ValueError("tool_name must contain only letters, digits, dot, underscore, or hyphen")
 
-    repository_root = Path(__file__).resolve().parents[2]
+    repository_root = Path(__file__).resolve().parents[3]
     if output_dir == repository_root or output_dir.is_relative_to(repository_root):
         raise ValueError("official RRA generated data must stay outside the repository")
     if output_dir == data_dir or output_dir.is_relative_to(data_dir) or data_dir.is_relative_to(output_dir):

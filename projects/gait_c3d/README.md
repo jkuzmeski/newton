@@ -11,6 +11,13 @@ inverse-dynamics, and Static Optimization APIs. It is an analysis pipeline, not 
 synthetic example. Raw acquisitions remain immutable and every cache and generated
 artifact is written outside the Newton checkout.
 
+These OpenSim-shaped analysis steps are offline compatibility references. They
+are not the production simulator. The production path starts at the sealed
+neutral artifact and runs through Newton's core model, collision, contact, state,
+and solver APIs. Source adapters live in `adapters/`, offline comparisons live in
+`oracles/`, and historical analysis tools live in `compatibility/`. The old
+module paths remain warning-based redirects for one deprecation period.
+
 ## Inputs and outputs
 
 The default immutable input directory is

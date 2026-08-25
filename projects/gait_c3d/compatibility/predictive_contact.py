@@ -1267,7 +1267,7 @@ def run_prescribed_contact(
         if output_dir is not None
         else data_dir.parent / f"{data_dir.name}_prescribed_contact"
     )
-    repository_root = Path(__file__).resolve().parents[2]
+    repository_root = Path(__file__).resolve().parents[3]
     if output_dir == repository_root or output_dir.is_relative_to(repository_root):
         raise ValueError("generated contact artifacts must stay outside the repository")
     if output_dir == data_dir or output_dir.is_relative_to(data_dir) or data_dir.is_relative_to(output_dir):

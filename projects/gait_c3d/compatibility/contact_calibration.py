@@ -69,7 +69,7 @@ def _array_sha256(value: np.ndarray) -> str:
 
 def _runtime_provenance() -> dict[str, Any]:
     """Record the exact repository, code, and dependency-lock state."""
-    repository_root = Path(__file__).resolve().parents[2]
+    repository_root = Path(__file__).resolve().parents[3]
 
     def git(*args: str) -> str:
         completed = subprocess.run(
@@ -362,7 +362,7 @@ def _side_metrics(
 def _validate_output_path(output_dir: Path, sidecar_path: Path, source_dir: Path | None) -> Path:
     """Require a new non-overlapping artifact directory outside the repository."""
     output_dir = output_dir.resolve()
-    repository_root = Path(__file__).resolve().parents[2]
+    repository_root = Path(__file__).resolve().parents[3]
     if output_dir == repository_root or output_dir.is_relative_to(repository_root):
         raise ValueError("generated calibration artifacts must stay outside the repository")
     if output_dir.exists():

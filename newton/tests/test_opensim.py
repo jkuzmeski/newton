@@ -4,6 +4,8 @@
 """Tests for the Newton-native OpenSim (.osim) port."""
 
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -213,6 +215,29 @@ _WRAP_OSIM = """<?xml version="1.0" encoding="UTF-8" ?>
     </Model>
 </OpenSimDocument>
 """
+
+
+class TestOsimNamespace(unittest.TestCase):
+    """Test the optional OpenSim compatibility namespace."""
+
+    def test_load_namespace_lazily(self):
+        """Keep core Newton imports isolated while preserving public access."""
+        code = """
+import sys
+import newton
+assert 'newton.opensim' not in sys.modules
+from newton import opensim
+assert opensim is newton.opensim
+assert 'newton.opensim' in sys.modules
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class TestOsimParser(unittest.TestCase):

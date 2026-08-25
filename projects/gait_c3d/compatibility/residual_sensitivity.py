@@ -523,7 +523,7 @@ def run(data_dir: str | os.PathLike, output_dir: str | os.PathLike, device: str 
         source_code = Path(__file__).resolve()
         source_code_name = "residual_sensitivity_source.py"
         shutil.copy2(source_code, stage / source_code_name)
-        repository_root = source_code.parents[2]
+        repository_root = source_code.parents[3]
         source_hashes = {
             "analysis.npz": _sha256(inputs.analysis_path),
             "qc_summary.json": _sha256(inputs.qc_path),

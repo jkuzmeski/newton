@@ -31,13 +31,29 @@
     "projects/gait_c3d/compatibility/residual_sensitivity.py": "compatibility_reference",
     "projects/gait_c3d/compatibility/torque_reconstruction.py": "compatibility_reference",
     "projects/gait_c3d/compatibility/viewer.py": "compatibility_reference",
+    "projects/gait_c3d/contact_calibration.py": "deprecated_redirect",
+    "projects/gait_c3d/human_shoe.py": "deprecated_redirect",
+    "projects/gait_c3d/measured_load_diagnostics.py": "deprecated_redirect",
+    "projects/gait_c3d/moco_contact_calibration.py": "deprecated_redirect",
     "projects/gait_c3d/newton_contact_calibration.py": "native_runtime",
+    "projects/gait_c3d/opensim_contact_parity.py": "deprecated_redirect",
+    "projects/gait_c3d/opensim_moco_contact_reference.py": "deprecated_redirect",
+    "projects/gait_c3d/opensim_moco_inverse_reference.py": "deprecated_redirect",
+    "projects/gait_c3d/opensim_moco_track_reference.py": "deprecated_redirect",
+    "projects/gait_c3d/opensim_rra_reference.py": "deprecated_redirect",
     "projects/gait_c3d/oracles/__init__.py": "oracle_namespace",
     "projects/gait_c3d/oracles/opensim_contact_parity.py": "cross_runtime_oracle",
     "projects/gait_c3d/oracles/opensim_moco_contact_reference.py": "cross_runtime_oracle",
     "projects/gait_c3d/oracles/opensim_moco_inverse_reference.py": "official_oracle",
     "projects/gait_c3d/oracles/opensim_moco_track_reference.py": "official_oracle",
-    "projects/gait_c3d/oracles/opensim_rra_reference.py": "official_oracle"
+    "projects/gait_c3d/oracles/opensim_rra_reference.py": "official_oracle",
+    "projects/gait_c3d/pipeline.py": "deprecated_redirect",
+    "projects/gait_c3d/predictive_contact.py": "deprecated_redirect",
+    "projects/gait_c3d/prepare_newton_contact_input.py": "deprecated_redirect",
+    "projects/gait_c3d/residual_sensitivity.py": "deprecated_redirect",
+    "projects/gait_c3d/rra_adjusted_contact_input.py": "deprecated_redirect",
+    "projects/gait_c3d/torque_reconstruction.py": "deprecated_redirect",
+    "projects/gait_c3d/viewer.py": "deprecated_redirect"
   },
   "native_runtime_requirements": {
     "forbidden_import_fragments": [
@@ -68,6 +84,7 @@
     "projects/gait_c3d/newton_contact_calibration.py"
   ],
   "reference_only_roles": [
+    "deprecated_redirect",
     "compatibility_entrypoint",
     "compatibility_reference",
     "cross_runtime_oracle",

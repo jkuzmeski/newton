@@ -509,7 +509,7 @@ def run_contact_parity(
                 "newton_distribution_version": _package_version("newton"),
                 "numpy_version": np.__version__,
                 "newton_device": device,
-                **_git_runtime(Path(__file__).resolve().parents[2]),
+                **_git_runtime(Path(__file__).resolve().parents[3]),
             },
             "frame": _FRAME,
             "units": {"force": "N", "torque": "N*m", "time": "s"},

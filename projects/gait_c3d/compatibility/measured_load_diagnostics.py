@@ -1607,7 +1607,7 @@ def run_stage1(
         if output_dir is not None
         else data_dir.parent / "stage1_engineering_measured_load_tracking"
     )
-    repository_root = Path(__file__).resolve().parents[2]
+    repository_root = Path(__file__).resolve().parents[3]
     _validate_paths(data_dir, output_dir, repository_root)
     model_path = data_dir / "S001_scaled.osim"
     analysis_path = data_dir / "analysis.npz"

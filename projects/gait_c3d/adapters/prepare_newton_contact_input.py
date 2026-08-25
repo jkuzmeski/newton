@@ -186,7 +186,7 @@ def prepare_newton_contact_input(
 ) -> Path:
     """Publish a hash-sealed neutral Newton contact input artifact."""
     output = Path(output_dir).resolve()
-    repository = Path(__file__).resolve().parents[2]
+    repository = Path(__file__).resolve().parents[3]
     if output.exists():
         raise FileExistsError(output)
     if output == repository or output.is_relative_to(repository):

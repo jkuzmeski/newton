@@ -71,6 +71,40 @@ class TestGaitC3DArchitecture(unittest.TestCase):
             }
             self.assertEqual(declarations.get("ARCHITECTURE_ROLE"), role, relative)
 
+    def test_relocated_modules_do_not_use_the_old_repository_depth(self):
+        """Make moved modules resolve repository paths from their new package depth."""
+        for relative in self.config["relocated_modules"].values():
+            source = (self.root / relative).read_text()
+            self.assertNotIn("parents[2]", source, relative)
+
+    def test_relocated_modules_keep_deprecated_redirects(self):
+        """Preserve old import paths for one deprecation period."""
+        for old, replacement in self.config["relocated_modules"].items():
+            tree = ast.parse((self.root / old).read_text())
+            declarations = {
+                target.id: ast.literal_eval(node.value)
+                for node in tree.body
+                if isinstance(node, ast.Assign)
+                for target in node.targets
+                if isinstance(target, ast.Name) and target.id in {"ARCHITECTURE_ROLE", "_REPLACEMENT"}
+            }
+            self.assertEqual(declarations.get("ARCHITECTURE_ROLE"), "deprecated_redirect", old)
+            self.assertEqual(declarations.get("_REPLACEMENT"), replacement.removesuffix(".py").replace("/", "."), old)
+
+        code = """
+import warnings
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter('always')
+    import projects.gait_c3d.rra_adjusted_contact_input as old
+from projects.gait_c3d.adapters import rra_adjusted_contact_input as replacement
+assert old.main is replacement.main
+assert any(item.category is DeprecationWarning for item in caught)
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", code], cwd=self.root, capture_output=True, text=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_production_entrypoint_is_native_and_transitively_isolated(self):
         """Forbid any native -> adapter/reference dependency path."""
         modules = self.config["modules"]
@@ -121,6 +155,7 @@ class TestGaitC3DArchitecture(unittest.TestCase):
         """Import the production module in a fresh process that blocks boundary modules."""
         blocked = [
             "opensim",
+            "newton.opensim",
             *[
                 relative.removesuffix(".py").replace("/", ".")
                 for relative, role in self.config["modules"].items()
@@ -137,7 +172,10 @@ class Blocker(importlib.abc.MetaPathFinder):
         return None
 sys.meta_path.insert(0, Blocker())
 import projects.gait_c3d.newton_contact_calibration
-assert not any(name == 'opensim' or name.startswith('opensim.') for name in sys.modules)
+assert not any(
+    name == 'opensim' or name.startswith('opensim.') or name == 'newton.opensim' or name.startswith('newton.opensim.')
+    for name in sys.modules
+)
 """
         result = subprocess.run(
             [sys.executable, "-c", code], cwd=self.root, capture_output=True, text=True, check=False

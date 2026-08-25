@@ -23,7 +23,7 @@ from projects.human_shoe.replay import (
 
 ARCHITECTURE_ROLE = "compatibility_reference"
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _BASELINE_EXPERIMENT = _REPOSITORY_ROOT / "experiments/human_shoe/baseline_gait2354.json"
 _CONTACT_SIDECAR = _REPOSITORY_ROOT / "experiments/human_shoe/gait2354_subject01_contacts.json"
 
