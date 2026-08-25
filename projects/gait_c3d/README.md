@@ -93,3 +93,33 @@ builder.add_mjcf(str(subject_xml))
 The canonical S001 conversion resolves 13 VTP assets and loads as 8 bodies, 16
 velocity DOFs, 13 non-colliding mesh visuals, 8 foot spheres, and one ground
 plane through one `ModelBuilder.add_mjcf()` call.
+
+## Direct C3D marker artifacts
+
+The production preprocessing path does not require TRC or MOT intermediates.
+`c3d_to_marker_artifact()` decodes C3D point data directly into finite,
+Newton-frame SI arrays and atomically publishes `markers.npz` plus a hashed
+`manifest.json`. Missing observations are stored as zero with a separate boolean
+validity mask, so device arrays never receive marker NaNs.
+
+```python
+from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
+
+root = c3d_to_marker_artifact(
+    "Cal 101.v3d.c3d",
+    "subjects/S001/static_markers",
+    up_axis="+Z",
+    forward_axis="-Y",
+)
+markers = load_marker_artifact(root)
+device_markers = markers.to_warp("cuda:0")
+```
+
+C3D decoding is an offline boundary and uses `ezc3d` when available:
+
+```bash
+uv run --with ezc3d python -m your_subject_compiler
+```
+
+The saved NPZ/Warp runtime path uses only NumPy and Warp. TRC, MOT, and STO
+remain optional reference exports for OpenSim interoperability.

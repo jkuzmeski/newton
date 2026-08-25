@@ -1,1 +1,1 @@
-Add project-local MJCF export and deterministic scaled VTP visual conversion for simple-joint gait subjects, including contacts, a neutral keyframe, bounded non-root controls, and a one-call `ModelBuilder.add_mjcf()` load path.
+Add direct C3D-to-NPZ/Warp marker conversion plus project-local MJCF and scaled VTP visual compilation for simple-joint gait subjects, with sealed SI arrays, contacts, a neutral keyframe, bounded non-root controls, and a one-call `ModelBuilder.add_mjcf()` load path.
