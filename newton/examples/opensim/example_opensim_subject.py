@@ -157,8 +157,9 @@ class Example:
             include_fallback_geometry=not visual_meshes,
         )
         newton.use_coord_layout_targets = True
+        self.free_root = args.free_root
         builder = newton.ModelBuilder()
-        builder.add_mjcf(str(self.subject_xml))
+        builder.add_mjcf(str(self.subject_xml), floating=True if self.free_root else False)
         self.model = builder.finalize(device=args.device)
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
@@ -172,7 +173,8 @@ class Example:
         self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
         print(
             f"Subject: {self.model.body_count} bodies, {self.model.joint_dof_count} DOFs, "
-            f"{self.model.shape_count} shapes -> {self.subject_xml}"
+            f"{self.model.shape_count} shapes, root {'free' if self.free_root else 'fixed for standing inspection'} "
+            f"-> {self.subject_xml}"
         )
 
     def simulate(self):
@@ -193,7 +195,8 @@ class Example:
         """Verify model structure, root policy, artifacts, and finite state."""
         if not self.subject_xml.is_file():
             raise ValueError("subject MJCF was not published")
-        if self.model.body_count != 8 or self.model.joint_dof_count != 16:
+        expected_dofs = 16 if self.free_root else 10
+        if self.model.body_count != 8 or self.model.joint_dof_count != expected_dofs:
             raise ValueError("subject model has an unexpected topology")
         shape_types = self.model.shape_type.numpy()
         contact_spheres = [
@@ -203,9 +206,17 @@ class Example:
         ]
         if len(contact_spheres) != 8 or any(shape_types[index] != newton.GeoType.SPHERE for index in contact_spheres):
             raise ValueError("subject model must contain eight foot contact spheres")
+        visible_feet = [index for index, label in enumerate(self.model.shape_label) if "/visual_foot_" in label]
+        if len(visible_feet) != 8 or any(shape_types[index] != newton.GeoType.SPHERE for index in visible_feet):
+            raise ValueError("subject viewer must contain eight visible foot spheres")
         ground = [index for index, label in enumerate(self.model.shape_label) if label.endswith("/ground")]
         if len(ground) != 1 or shape_types[ground[0]] != newton.GeoType.PLANE:
             raise ValueError("subject model must contain one ground plane")
+        visual_ground = [
+            index for index, label in enumerate(self.model.shape_label) if label.endswith("/visual_ground")
+        ]
+        if len(visual_ground) != 1 or shape_types[visual_ground[0]] != newton.GeoType.PLANE:
+            raise ValueError("subject viewer must contain one visible ground plane")
         if self.visual_mesh_count:
             connector = [
                 index
@@ -218,9 +229,12 @@ class Example:
         body_qd = self.state_0.body_qd.numpy()
         if not np.all(np.isfinite(body_q)) or not np.all(np.isfinite(body_qd)):
             raise ValueError("subject rollout produced nonfinite body state")
-        root_force = self.control.joint_f.numpy()[:6]
-        if not np.array_equal(root_force, np.zeros(6, dtype=root_force.dtype)):
-            raise ValueError("free pelvis controls must remain exactly zero")
+        if self.free_root:
+            root_force = self.control.joint_f.numpy()[:6]
+            if not np.array_equal(root_force, np.zeros(6, dtype=root_force.dtype)):
+                raise ValueError("free pelvis controls must remain exactly zero")
+        elif body_q[0, 2] < 0.9:
+            raise ValueError("fixed-root standing inspection lost pelvis height")
         if self.marker_placement is not None:
             placement_model = getattr(
                 self.marker_placement,
@@ -264,6 +278,11 @@ def create_parser():
         help="Delete a nonempty subject output directory before rebuilding",
     )
     parser.add_argument("--subject-name", default="example_subject", help="Saved MJCF model name")
+    parser.add_argument(
+        "--free-root",
+        action="store_true",
+        help="Run the unassisted six-DOF pelvis; default fixes the pelvis for standing model inspection",
+    )
     parser.add_argument("--body-mass", type=float, default=81.4, help="Subject body mass [kg]")
     parser.add_argument("--body-height", type=float, default=1.695898298375747, help="Subject standing height [m]")
     parser.add_argument("--hip-width", type=float, default=0.152, help="Hip-joint center spacing [m]")

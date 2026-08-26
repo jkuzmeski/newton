@@ -38,7 +38,7 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         self.assertEqual(model.joint_count, 8)
         self.assertEqual(model.joint_coord_count, 17)
         self.assertEqual(model.joint_dof_count, 16)
-        self.assertEqual(model.shape_count, 15)
+        self.assertEqual(model.shape_count, 24)
         self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 74.0, places=4)
         modes = model.joint_target_mode.numpy()
         np.testing.assert_array_equal(modes[:6], np.zeros(6, dtype=modes.dtype))

@@ -147,10 +147,15 @@ uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_s
 ```
 
 The example always writes a reusable MJCF model and runs it through
-`ModelBuilder.add_mjcf()`, `CollisionPipeline`, and `SolverFeatherstone`. When
-source arguments are supplied it also proves C3D-to-NPZ/Warp conversion and
-scaled VTP-to-OBJ attachment. Its `test_final()` checks finite body state, exact
-root-force exclusion, artifact publication, and uploaded marker arrays.
+`ModelBuilder.add_mjcf()`, `CollisionPipeline`, and `SolverFeatherstone`. Its
+default standing-inspection mode fixes the pelvis because a free-root balance
+controller is not implemented yet; pass `--free-root` to run the explicitly
+unassisted falling model. The saved MJCF itself retains the free joint. When
+source arguments are supplied the example also proves C3D-to-NPZ/Warp
+conversion and scaled VTP-to-OBJ attachment. Its `test_final()` checks finite
+body state, standing pelvis height in inspection mode, exact zero root effort in
+free mode, eight visible foot spheres, one visible ground plane, artifact
+publication, and uploaded marker arrays.
 
 ## Official OpenSim subject building
 

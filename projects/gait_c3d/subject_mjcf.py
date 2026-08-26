@@ -160,6 +160,16 @@ def subject_mjcf_xml(
         attrib={"class": "collision"},
         rgba="0.85 0.85 0.85 1",
     )
+    ET.SubElement(
+        world,
+        "geom",
+        name="visual_ground",
+        type="plane",
+        size="5 5 0.1",
+        pos="0 0 -0.002",
+        attrib={"class": "visual"},
+        rgba="0.78 0.78 0.78 1",
+    )
     pelvis = ET.SubElement(world, "body", name="pelvis", pos=_values(0.0, 0.0, config.pelvis_height))
     ET.SubElement(pelvis, "freejoint", name="pelvis_free")
     _add_inertial(pelvis, config.pelvis_mass, config.pelvis_dimensions)
@@ -187,6 +197,8 @@ def subject_mjcf_xml(
 
     body_elements = {"pelvis": pelvis, "torso": torso}
     actuator = ET.SubElement(root, "actuator")
+    contact = ET.SubElement(root, "contact")
+    ET.SubElement(contact, "exclude", body1="foot_left", body2="foot_right")
     degrees = math.pi / 180.0
     for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
         femur = ET.SubElement(
@@ -316,6 +328,16 @@ def subject_mjcf_xml(
                 size=f"{config.contact_radius:.9g}",
                 pos=_values(*center),
                 attrib={"class": "collision"},
+            )
+            ET.SubElement(
+                foot,
+                "geom",
+                name=f"visual_foot_{side}_{index}",
+                type="sphere",
+                size=f"{config.contact_radius:.9g}",
+                pos=_values(*center),
+                attrib={"class": "visual"},
+                rgba="0.18 0.32 0.58 1",
             )
 
     for mesh in visual_meshes:
