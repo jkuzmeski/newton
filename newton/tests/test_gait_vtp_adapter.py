@@ -24,7 +24,7 @@ _VTP = """<?xml version="1.0"?>
 <VTKFile type="PolyData" version="0.1">
   <PolyData><Piece NumberOfPoints="4" NumberOfPolys="1">
     <Points><DataArray type="Float32" NumberOfComponents="3" format="ascii">
-      0 0 0  0 1 0  1 1 0  1 0 0
+      0 0 -0.05  0 1 0.05  1 1 0.05  1 0 -0.05
     </DataArray></Points>
     <Polys>
       <DataArray type="Int32" Name="connectivity" format="ascii">0 1 2 3</DataArray>
@@ -205,6 +205,17 @@ class TestGaitVTPAdapter(unittest.TestCase):
         self.assertEqual(len(bundle.meshes), 12)
         self.assertEqual(sum(mesh.body == "foot_left" for mesh in bundle.meshes), 3)
         self.assertEqual(sum(mesh.body == "foot_right" for mesh in bundle.meshes), 3)
+        self.assertIsNotNone(bundle.contact_layout)
+        foot_origin_z = (
+            config.pelvis_height
+            - config.pelvis_hip_drop
+            - config.thigh_length
+            - config.shank_length
+            - config.contact_radius
+        )
+        for centers in bundle.contact_layout.centers.values():
+            for center in centers:
+                self.assertAlmostEqual(foot_origin_z + center[2] - bundle.contact_layout.radius, 0.0, places=6)
 
     def test_rejects_two_nonidentity_legacy_scale_levels(self):
         """Reject stale models that would apply subject geometry scaling twice."""
@@ -271,7 +282,7 @@ class TestGaitVTPAdapter(unittest.TestCase):
         self.assertEqual(len(mesh_indices), 6)
         for shape in mesh_indices:
             self.assertFalse(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
-        self.assertEqual(first_obj[1], "v 0 0 1")
+        np.testing.assert_allclose([float(value) for value in first_obj[1].split()[1:]], (0.0, -0.05, 1.0))
 
 
 if __name__ == "__main__":

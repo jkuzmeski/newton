@@ -56,12 +56,22 @@ class DisplayGeometry:
 
 
 @dataclass(frozen=True, slots=True)
+class FootContactLayout:
+    """Mesh-derived sphere contact layout for both merged feet."""
+
+    radius: float
+    centers: dict[str, tuple[tuple[float, float, float], ...]]
+    visual_ground_offset_z: float
+
+
+@dataclass(frozen=True, slots=True)
 class CompiledVisuals:
     """Neutral visual assets and their sealed manifest."""
 
     root: Path
     manifest_path: Path
     meshes: tuple[SubjectVisualMesh, ...]
+    contact_layout: FootContactLayout | None = None
 
 
 def _sha256(path: str | os.PathLike) -> str:
@@ -539,6 +549,7 @@ def _compile_scaled_vtp_visuals(
     assets_dir.mkdir(parents=True)
     mesh_records = []
     meshes: list[SubjectVisualMesh] = []
+    compiled_geometry: list[tuple[Path, str, np.ndarray, np.ndarray, dict]] = []
     exact_transforms = source_body_transforms is not None
     target_transforms = _target_body_transforms(config)
     source_transforms = source_body_transforms or {}
@@ -585,29 +596,73 @@ def _compile_scaled_vtp_visuals(
         _write_obj(output_path, body_local, triangles)
         relative = output_path.relative_to(root).as_posix()
         meshes.append(SubjectVisualMesh(name, target_body, relative))
-        mesh_records.append(
-            {
-                "mesh": asdict(meshes[-1]),
-                "source": {
-                    "file": source_path.name,
-                    "sha256": source_hash,
-                    "scale": entry.scale.tolist(),
-                    "transform": entry.transform.tolist(),
-                    "mass_center": entry.mass_center.tolist(),
-                    "source_body": entry.source_body,
-                    "source_proximal_newton": source_proximal.tolist(),
-                    "target_proximal_newton": target_proximal.tolist(),
-                    "registration_translation": registration.tolist(),
-                    "registration_mode": "official_neutral_body_transform" if exact_transforms else "proximal_anchor",
-                },
-                "output": {
-                    "file": relative,
-                    "sha256": _sha256(output_path),
-                    "vertex_count": int(len(vertices)),
-                    "triangle_count": int(len(triangles)),
-                },
-            }
+        record = {
+            "mesh": asdict(meshes[-1]),
+            "source": {
+                "file": source_path.name,
+                "sha256": source_hash,
+                "scale": entry.scale.tolist(),
+                "transform": entry.transform.tolist(),
+                "mass_center": entry.mass_center.tolist(),
+                "source_body": entry.source_body,
+                "source_proximal_newton": source_proximal.tolist(),
+                "target_proximal_newton": target_proximal.tolist(),
+                "registration_translation": registration.tolist(),
+                "registration_mode": "official_neutral_body_transform" if exact_transforms else "proximal_anchor",
+            },
+            "output": {
+                "file": relative,
+                "sha256": _sha256(output_path),
+                "vertex_count": int(len(vertices)),
+                "triangle_count": int(len(triangles)),
+            },
+        }
+        mesh_records.append(record)
+        compiled_geometry.append((output_path, target_body, body_local, triangles, record))
+    contact_layout = None
+    if exact_transforms:
+        foot_geometry = {
+            side: [vertices for _, body, vertices, _, _ in compiled_geometry if body == f"foot_{side}"]
+            for side in ("left", "right")
+        }
+        if any(not values for values in foot_geometry.values()):
+            raise ValueError("official visual conversion needs talus, calcaneus, and toe geometry for both feet")
+        foot_global_min = min(
+            float(np.min(vertices[:, 2] + target_transforms[f"foot_{side}"][2, 3]))
+            for side, values in foot_geometry.items()
+            for vertices in values
         )
+        visual_ground_offset = -foot_global_min
+        for output_path, _, vertices, triangles, record in compiled_geometry:
+            vertices[:, 2] += visual_ground_offset
+            _write_obj(output_path, vertices, triangles)
+            record["output"]["sha256"] = _sha256(output_path)
+        bounds = {
+            side: (
+                np.min(np.concatenate(values, axis=0), axis=0),
+                np.max(np.concatenate(values, axis=0), axis=0),
+            )
+            for side, values in foot_geometry.items()
+        }
+        minimum_width = min(float(maximum[1] - minimum[1]) for minimum, maximum in bounds.values())
+        radius = min(config.contact_radius, 0.30 * minimum_width)
+        if not math.isfinite(radius) or radius <= 0.005:
+            raise ValueError("converted foot geometry cannot support sphere contacts")
+        centers = {}
+        for side, (minimum, maximum) in bounds.items():
+            heel_x = float(minimum[0] + radius)
+            forefoot_x = float(maximum[0] - radius)
+            lateral_y = float(minimum[1] + radius)
+            medial_y = float(maximum[1] - radius)
+            center_z = float(minimum[2] + radius)
+            centers[side] = (
+                (heel_x, lateral_y, center_z),
+                (heel_x, medial_y, center_z),
+                (forefoot_x, lateral_y, center_z),
+                (forefoot_x, medial_y, center_z),
+            )
+        contact_layout = FootContactLayout(radius, centers, visual_ground_offset)
+
     expected = {"pelvis", "torso", "femur_left", "femur_right", "tibia_left", "tibia_right"}
     if exact_transforms:
         expected.update(("foot_left", "foot_right"))
@@ -624,11 +679,12 @@ def _compile_scaled_vtp_visuals(
         },
         "source_model": {"file": model_path.name, "sha256": _sha256(model_path)},
         "simple_model_config": asdict(config),
+        "contact_layout": asdict(contact_layout) if contact_layout is not None else None,
         "meshes": mesh_records,
     }
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n")
-    return CompiledVisuals(root, manifest_path, tuple(meshes))
+    return CompiledVisuals(root, manifest_path, tuple(meshes), contact_layout)
 
 
 def compile_scaled_vtp_visuals(
@@ -665,4 +721,4 @@ def compile_scaled_vtp_visuals(
             source_body_transforms,
         )
         os.rename(staged_root, root)
-    return CompiledVisuals(root, root / staged.manifest_path.name, staged.meshes)
+    return CompiledVisuals(root, root / staged.manifest_path.name, staged.meshes, staged.contact_layout)

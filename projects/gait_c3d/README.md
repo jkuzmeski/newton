@@ -92,9 +92,13 @@ builder.add_mjcf(str(subject_xml))
 
 The canonical official S001 conversion resolves 19 VTP assets and loads as 8
 bodies, 16 free-root velocity DOFs, 19 non-colliding mesh visuals, 8 foot
-contact spheres, 8 visible sphere overlays, and collision/visual ground planes
-through one `ModelBuilder.add_mjcf()` call. Official default-pose body transforms
-bake talus, calcaneus, and toe meshes into each merged Newton foot frame.
+contact spheres, 8 translucent sphere overlays, and collision/visual ground
+planes through one `ModelBuilder.add_mjcf()` call. Official default-pose body
+transforms bake talus, calcaneus, and toe meshes into each merged Newton foot
+frame. The compiler then shifts the complete visual skeleton by one audited
+vertical offset so the lowest visual sole is at the ground, derives contact
+radius and heel/forefoot/medial/lateral centers from each converted foot's
+body-local bounds, and makes every sphere surface meet that same sole plane.
 
 ## Direct C3D marker artifacts
 

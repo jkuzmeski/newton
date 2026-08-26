@@ -111,6 +111,8 @@ def subject_mjcf_xml(
     model_name: str = "simple_gait_subject",
     visual_meshes: Sequence[SubjectVisualMesh] = (),
     include_fallback_geometry: bool = True,
+    contact_centers: dict[str, tuple[tuple[float, float, float], ...]] | None = None,
+    contact_radius: float | None = None,
 ) -> str:
     """Create MJCF for one scaled simple-joint subject.
 
@@ -119,6 +121,8 @@ def subject_mjcf_xml(
         model_name: MJCF model label.
         visual_meshes: Body-local neutral mesh assets.
         include_fallback_geometry: Include box and capsule visuals when true.
+        contact_centers: Optional mesh-derived sphere centers keyed by side.
+        contact_radius: Optional mesh-derived contact radius [m].
 
     Returns:
         An MJCF XML document. It can be passed directly to
@@ -200,6 +204,26 @@ def subject_mjcf_xml(
     contact = ET.SubElement(root, "contact")
     ET.SubElement(contact, "exclude", body1="foot_left", body2="foot_right")
     degrees = math.pi / 180.0
+    radius = config.contact_radius if contact_radius is None else contact_radius
+    if not math.isfinite(radius) or radius <= 0.0:
+        raise ValueError("contact_radius must be finite and positive")
+    if contact_centers is None:
+        heel_x = -0.32 * config.foot_length
+        forefoot_x = 0.48 * config.foot_length
+        half_width = 0.35 * config.foot_width
+        centers_by_side = dict.fromkeys(
+            ("left", "right"),
+            (
+                (heel_x, -half_width, -config.contact_radius),
+                (heel_x, half_width, -config.contact_radius),
+                (forefoot_x, -half_width, -config.contact_radius),
+                (forefoot_x, half_width, -config.contact_radius),
+            ),
+        )
+    else:
+        centers_by_side = contact_centers
+        if set(centers_by_side) != {"left", "right"} or any(len(values) != 4 for values in centers_by_side.values()):
+            raise ValueError("contact_centers must provide four centers for each foot")
     for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
         femur = ET.SubElement(
             pelvis,
@@ -309,23 +333,13 @@ def subject_mjcf_xml(
             armature=0.005,
         )
         _add_target_actuators(actuator, ankle_name, ankle_limits)
-        heel_x = -0.32 * config.foot_length
-        forefoot_x = 0.48 * config.foot_length
-        half_width = 0.35 * config.foot_width
-        for index, center in enumerate(
-            (
-                (heel_x, -half_width, -config.contact_radius),
-                (heel_x, half_width, -config.contact_radius),
-                (forefoot_x, -half_width, -config.contact_radius),
-                (forefoot_x, half_width, -config.contact_radius),
-            )
-        ):
+        for index, center in enumerate(centers_by_side[side]):
             ET.SubElement(
                 foot,
                 "geom",
                 name=f"contact_{side}_{index}",
                 type="sphere",
-                size=f"{config.contact_radius:.9g}",
+                size=f"{radius:.9g}",
                 pos=_values(*center),
                 attrib={"class": "collision"},
             )
@@ -334,7 +348,7 @@ def subject_mjcf_xml(
                 "geom",
                 name=f"visual_foot_{side}_{index}",
                 type="sphere",
-                size=f"{config.contact_radius:.9g}",
+                size=f"{radius:.9g}",
                 pos=_values(*center),
                 attrib={"class": "visual"},
                 rgba="0.18 0.32 0.58 0.35",
@@ -388,6 +402,8 @@ def write_subject_mjcf(
     model_name: str = "simple_gait_subject",
     visual_meshes: Sequence[SubjectVisualMesh] = (),
     include_fallback_geometry: bool = True,
+    contact_centers: dict[str, tuple[tuple[float, float, float], ...]] | None = None,
+    contact_radius: float | None = None,
 ) -> Path:
     """Write a scaled subject MJCF that Newton can load in one builder call."""
     path = Path(output_path).resolve()
@@ -398,6 +414,8 @@ def write_subject_mjcf(
             model_name=model_name,
             visual_meshes=visual_meshes,
             include_fallback_geometry=include_fallback_geometry,
+            contact_centers=contact_centers,
+            contact_radius=contact_radius,
         ),
         encoding="utf-8",
     )

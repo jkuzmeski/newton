@@ -138,6 +138,7 @@ class Example:
             )
 
         visual_meshes = ()
+        contact_layout = None
         if bool(scaled_osim) != bool(args.geometry_dir):
             raise ValueError("a scaled/template model path and --geometry-dir must be provided together")
         if scaled_osim:
@@ -149,7 +150,13 @@ class Example:
                 source_body_transforms=source_body_transforms,
             )
             visual_meshes = visuals.meshes
+            contact_layout = visuals.contact_layout
             print(f"VTP: {len(visual_meshes)} scaled visual meshes -> {visuals.root}")
+            if contact_layout is not None:
+                print(
+                    f"Contact: radius {contact_layout.radius:.4f} m, visual ground offset "
+                    f"{contact_layout.visual_ground_offset_z:.4f} m"
+                )
 
         self.visual_mesh_count = len(visual_meshes)
         self.subject_xml = write_subject_mjcf(
@@ -158,6 +165,8 @@ class Example:
             model_name=args.subject_name,
             visual_meshes=visual_meshes,
             include_fallback_geometry=not visual_meshes,
+            contact_centers=contact_layout.centers if contact_layout is not None else None,
+            contact_radius=contact_layout.radius if contact_layout is not None else None,
         )
         newton.use_coord_layout_targets = True
         self.free_root = args.free_root
