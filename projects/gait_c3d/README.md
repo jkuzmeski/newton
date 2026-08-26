@@ -143,7 +143,6 @@ uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_s
   --template-osim /home/jo31399/newton-worktrees/c3d-predictive-forward-dynamics/newton/examples/assets/gait2354_subject01.osim \
   --body-mass 81.9312118 \
   --body-height 1.695898298375747 \
-  --official-marker-placement \
   --geometry-dir ~/.cache/newton/opensim-models_Geometry_fa3fb094_d9b05d47/Geometry
 ```
 
@@ -153,31 +152,30 @@ source arguments are supplied it also proves C3D-to-NPZ/Warp conversion and
 scaled VTP-to-OBJ attachment. Its `test_final()` checks finite body state, exact
 root-force exclusion, artifact publication, and uploaded marker arrays.
 
-## OpenSim-referenced C3D ModelScaler
+## Official OpenSim subject building
 
-When `--template-osim` is supplied, the progress example now starts from the
-static C3D rather than a pre-scaled model. The offline adapter uses the pinned
-OpenSim gait2354 default-marker fixture and a declared Trial 101 measurement
-policy derived from ModelScaler semantics. The pelvis and bilateral limb
-measurements follow the OpenSim marker-pair method; the torso substitutes
-shoulder width and sternum-to-ASIS distances because `Top.Head` is a synthesized
-head-cluster centroid rather than the cranial vertex assumed by the original
-setup. Patella-only and official manual overrides are not represented in the
-sealed simple model. The adapter then applies corrected OpenSim-inspired XML
-scaling rules for body geometry,
-mass/COM/inertia, joint frames and CustomJoint translations, markers, wraps,
-and muscle/path points.
+When `--template-osim` is supplied, the progress example starts from static C3D
+and uses official OpenSim 4.6 `ScaleTool` as the default backend. The adapter
+constructs a Trial 101-specific `MeasurementSet` through OpenSim APIs, selects
+`scaling_order = measurements`, preserves mass distribution, and deliberately
+adds no inherited manual subject scales. The pelvis and bilateral limb
+measurements follow the OpenSim marker-pair method. The torso substitutes
+shoulder width and sternum-to-ASIS distances because `Top.Head` is synthesized
+from a head cluster rather than measured at the cranial vertex.
 
-For the canonical S001 static window (0.5–1.0 s), all five recovered segment
-factors are within 0.026% of the accepted reference artifact. The output
-`scaling/manifest.json` records the C3D/template hashes, measurement ratios,
-body factors, subject mass, time window, method reference, and scaled-model
-hash. Marker placement remains a separate oracle stage. With
-`--official-marker-placement`, the example runs the pinned OpenSim 4.6
-MarkerPlacer task weights and coordinate locks against the scaled model, saves
-its placed model/MOT/marker set/setup/log as reference artifacts, and reports
-RMS/max marker error. The placed OpenSim model is not used as the Newton runtime
-model. The current engineering publication gate is RMS <= 0.10 m and maximum
-<= 0.25 m; the canonical run reports 0.0680 m and 0.1714 m. These deliberately
-broad gates only reject broken placement and do not establish high-fidelity
-marker validation.
+One sandboxed ScaleTool run performs both official `ModelScaler` and official
+`MarkerPlacer`. It publishes modern OpenSim 4.6 scaled/placed models, scale XML,
+marker set, static motion, setup, logs, version, source hashes, parsed body
+factors, and marker QC. The canonical S001 run reports 0.0680 m RMS and 0.1714 m
+maximum marker error against broad broken-placement gates of 0.10 m and 0.25 m.
+These gates are not high-fidelity marker acceptance.
+
+The official scaled model is then translated into the declared simple Newton
+model: its modern `attached_geometry/Mesh` and per-joint
+`PhysicalOffsetFrame` data drive VTP registration, segment masses and lengths,
+and the controlled MJCF. The placed OpenSim model stays an oracle artifact and
+is not the Newton runtime model.
+
+Use `--scaling-backend parity` to run the project ModelScaler-derived XML path
+instead. That backend is retained for comparison and fallback only; it is not
+the accepted subject builder.

@@ -193,6 +193,34 @@ def _owned_joint(body: ET.Element) -> ET.Element:
     raise ValueError(f"body {body.get('name')!r} has no owned joint")
 
 
+def _function_value_at_zero(function: ET.Element) -> float:
+    tag = function.tag.rsplit("}", 1)[-1]
+    if tag == "Constant":
+        value_element = _child(function, "value")
+        return float(value_element.text if value_element is not None else "nan")
+    if tag == "LinearFunction":
+        coefficients_element = _child(function, "coefficients")
+        coefficients = _floats(coefficients_element.text if coefficients_element is not None else None)
+        if coefficients.shape != (2,):
+            raise ValueError("LinearFunction must contain slope and intercept")
+        return float(coefficients[1])
+    if tag in {"NaturalCubicSpline", "SimmSpline"}:
+        x_element = _child(function, "x")
+        y_element = _child(function, "y")
+        x = _floats(x_element.text if x_element is not None else None)
+        y = _floats(y_element.text if y_element is not None else None)
+        if len(x) != len(y) or len(x) < 2 or np.any(np.diff(x) <= 0.0):
+            raise ValueError(f"{tag} knots are invalid")
+        return float(np.interp(0.0, x, y))
+    if tag == "MultiplierFunction":
+        scale_element = _child(function, "scale")
+        wrapper = _child(function, "function")
+        if scale_element is None or wrapper is None or len(wrapper) != 1:
+            raise ValueError("MultiplierFunction is missing its scale or nested function")
+        return float(scale_element.text) * _function_value_at_zero(wrapper[0])
+    raise ValueError(f"unsupported zero-pose joint function: {tag}")
+
+
 def _joint_translation_at_zero(joint: ET.Element) -> np.ndarray:
     spatial = _child(joint, "SpatialTransform")
     translation = np.zeros(3, dtype=np.float64)
@@ -201,30 +229,19 @@ def _joint_translation_at_zero(joint: ET.Element) -> np.ndarray:
             continue
         axis_element = _child(transform_axis, "axis")
         function_wrapper = _child(transform_axis, "function")
-        if axis_element is None or function_wrapper is None or len(function_wrapper) != 1:
-            raise ValueError("joint translation axis is missing its axis or scalar function")
-        axis = _floats(axis_element.text)
-        function = function_wrapper[0]
-        tag = function.tag.rsplit("}", 1)[-1]
-        if tag == "Constant":
-            value_element = _child(function, "value")
-            value = float(value_element.text if value_element is not None else "nan")
-        elif tag == "LinearFunction":
-            coefficients_element = _child(function, "coefficients")
-            coefficients = _floats(coefficients_element.text if coefficients_element is not None else None)
-            if coefficients.shape != (2,):
-                raise ValueError("LinearFunction must contain slope and intercept")
-            value = float(coefficients[1])
-        elif tag in {"NaturalCubicSpline", "SimmSpline"}:
-            x_element = _child(function, "x")
-            y_element = _child(function, "y")
-            x = _floats(x_element.text if x_element is not None else None)
-            y = _floats(y_element.text if y_element is not None else None)
-            if len(x) != len(y) or len(x) < 2 or np.any(np.diff(x) <= 0.0):
-                raise ValueError(f"{tag} knots are invalid")
-            value = float(np.interp(0.0, x, y))
+        if function_wrapper is not None and len(function_wrapper) == 1:
+            function = function_wrapper[0]
         else:
-            raise ValueError(f"unsupported zero-pose joint function: {tag}")
+            function_candidates = [
+                child for child in transform_axis if child.tag.rsplit("}", 1)[-1] not in {"coordinates", "axis"}
+            ]
+            if len(function_candidates) != 1:
+                raise ValueError("joint translation axis is missing its scalar function")
+            function = function_candidates[0]
+        if axis_element is None:
+            raise ValueError("joint translation axis is missing its axis")
+        axis = _floats(axis_element.text)
+        value = _function_value_at_zero(function)
         if axis.shape != (3,) or not math.isfinite(value):
             raise ValueError("joint translation axis/value is invalid")
         translation += axis * value
@@ -272,28 +289,67 @@ def simple_config_from_scaled_gait2354(
             raise ValueError(f"body {name!r} has an invalid mass center")
         return value
 
+    version = int(root.get("Version", "0"))
+    joints = {
+        joint.get("name", ""): joint
+        for joint in root.iter()
+        if joint.tag.rsplit("}", 1)[-1].endswith("Joint")
+        and joint.tag.rsplit("}", 1)[-1] != "Joint"
+        and joint.get("name")
+    }
+
+    def joint_frame_translation(joint: ET.Element, socket_tag: str) -> np.ndarray:
+        frame_name = (_child(joint, socket_tag).text or "").strip()
+        frame = next(
+            (
+                candidate
+                for candidate in joint.iter()
+                if candidate.tag.rsplit("}", 1)[-1] == "PhysicalOffsetFrame" and candidate.get("name") == frame_name
+            ),
+            None,
+        )
+        if frame is None:
+            raise ValueError(f"joint {joint.get('name')!r} is missing frame {frame_name!r}")
+        translation = _floats(_child(frame, "translation").text or "")
+        if translation.shape != (3,):
+            raise ValueError(f"joint frame {frame_name!r} has an invalid translation")
+        return translation
+
     pelvis_com = mass_center("pelvis")
     hip_locations = []
     thigh_lengths = []
     shank_lengths = []
     for side in ("l", "r"):
-        hip_joint = _owned_joint(bodies[f"femur_{side}"])
-        hip_parent_element = _child(hip_joint, "location_in_parent")
-        hip_parent = _floats(hip_parent_element.text if hip_parent_element is not None else None)
-        if hip_parent.shape != (3,):
-            raise ValueError(f"hip_{side} has an invalid parent location")
+        if version >= 30000:
+            hip_joint = joints[f"hip_{side}"]
+            hip_parent = joint_frame_translation(hip_joint, "socket_parent_frame")
+            knee_joint = joints[f"knee_{side}"]
+            ankle_joint = joints[f"ankle_{side}"]
+            ankle_parent = joint_frame_translation(ankle_joint, "socket_parent_frame")
+        else:
+            hip_joint = _owned_joint(bodies[f"femur_{side}"])
+            hip_parent_element = _child(hip_joint, "location_in_parent")
+            hip_parent = _floats(hip_parent_element.text if hip_parent_element is not None else None)
+            knee_joint = _owned_joint(bodies[f"tibia_{side}"])
+            ankle_joint = _owned_joint(bodies[f"talus_{side}"])
+            ankle_parent_element = _child(ankle_joint, "location_in_parent")
+            ankle_parent = _floats(ankle_parent_element.text if ankle_parent_element is not None else None)
+        if hip_parent.shape != (3,) or ankle_parent.shape != (3,):
+            raise ValueError(f"scaled leg {side!r} has an invalid parent joint location")
         hip_locations.append(hip_parent - pelvis_com)
-        thigh_lengths.append(float(np.linalg.norm(_joint_translation_at_zero(_owned_joint(bodies[f"tibia_{side}"])))))
-        ankle_joint = _owned_joint(bodies[f"talus_{side}"])
-        ankle_parent_element = _child(ankle_joint, "location_in_parent")
-        ankle_parent = _floats(ankle_parent_element.text if ankle_parent_element is not None else None)
+        thigh_lengths.append(float(np.linalg.norm(_joint_translation_at_zero(knee_joint))))
         shank_lengths.append(float(np.linalg.norm(ankle_parent)))
 
-    back_joint = _owned_joint(bodies["torso"])
-    back_parent_element = _child(back_joint, "location_in_parent")
-    back_child_element = _child(back_joint, "location")
-    back_parent = _floats(back_parent_element.text if back_parent_element is not None else None) - pelvis_com
-    back_child = _floats(back_child_element.text if back_child_element is not None else None) - mass_center("torso")
+    if version >= 30000:
+        back_joint = joints["back"]
+        back_parent = joint_frame_translation(back_joint, "socket_parent_frame") - pelvis_com
+        back_child = joint_frame_translation(back_joint, "socket_child_frame") - mass_center("torso")
+    else:
+        back_joint = _owned_joint(bodies["torso"])
+        back_parent_element = _child(back_joint, "location_in_parent")
+        back_child_element = _child(back_joint, "location")
+        back_parent = _floats(back_parent_element.text if back_parent_element is not None else None) - pelvis_com
+        back_child = _floats(back_child_element.text if back_child_element is not None else None) - mass_center("torso")
     torso_offset = float(back_parent[1] - back_child[1])
     hip_half_width = float(np.mean([abs(location[2]) for location in hip_locations]))
     hip_drop = float(-np.mean([location[1] for location in hip_locations]))
@@ -324,11 +380,9 @@ def simple_config_from_scaled_gait2354(
 
 
 def read_scaled_display_geometry(path: str | os.PathLike) -> tuple[DisplayGeometry, ...]:
-    """Read legacy scaled display entries needed by the simple gait body map."""
+    """Read scaled legacy or modern display entries needed by the simple gait body map."""
     root = ET.parse(path).getroot()
     version = int(root.get("Version", "0"))
-    if version >= 30000:
-        raise ValueError("the initial scaled VTP adapter requires the validated legacy gait2354 layout")
     output: list[DisplayGeometry] = []
     seen_bodies: set[str] = set()
     for body in (element for element in root.iter() if element.tag.rsplit("}", 1)[-1] == "Body"):
@@ -342,6 +396,31 @@ def read_scaled_display_geometry(path: str | os.PathLike) -> tuple[DisplayGeomet
         mass_center = _floats(mass_center_element.text if mass_center_element is not None else None)
         if mass_center.shape != (3,) or not np.all(np.isfinite(mass_center)):
             raise ValueError(f"body {source_body!r} needs a finite three-component mass center")
+        if version >= 30000:
+            for mesh in (element for element in body.iter() if element.tag.rsplit("}", 1)[-1] == "Mesh"):
+                file_element = _child(mesh, "mesh_file")
+                if file_element is None or not (file_element.text or "").strip():
+                    continue
+                socket_element = _child(mesh, "socket_frame")
+                socket_frame = (socket_element.text or "..").strip() if socket_element is not None else ".."
+                if socket_frame not in {"..", f"/bodyset/{source_body}"}:
+                    raise ValueError(f"modern mesh {mesh.get('name')!r} uses unsupported offset frame {socket_frame!r}")
+                scale_element = _child(mesh, "scale_factors")
+                scale = _floats(scale_element.text if scale_element is not None else None)
+                if len(scale) == 0:
+                    scale = np.ones(3)
+                if scale.shape != (3,) or not np.all(np.isfinite(scale)) or np.any(scale <= 0.0):
+                    raise ValueError(f"modern mesh on {source_body!r} has an invalid scale")
+                output.append(
+                    DisplayGeometry(
+                        source_body,
+                        (file_element.text or "").strip(),
+                        np.eye(4),
+                        scale,
+                        mass_center,
+                    )
+                )
+            continue
         for visible in (element for element in body.iter() if element.tag.rsplit("}", 1)[-1] == "VisibleObject"):
             visible_transform_element = _child(visible, "transform")
             visible_scale_element = _child(visible, "scale_factors")

@@ -25,7 +25,11 @@ import newton.examples
 from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
 from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
-from projects.gait_c3d.subject_scaling import place_markers_with_official_opensim, scale_gait2354_from_markers
+from projects.gait_c3d.subject_scaling import (
+    build_subject_with_official_opensim,
+    place_markers_with_official_opensim,
+    scale_gait2354_from_markers,
+)
 from projects.gait_c3d.vtp_adapter import compile_scaled_vtp_visuals, simple_config_from_scaled_gait2354
 
 
@@ -78,18 +82,36 @@ class Example:
             )
 
         scaled_osim = args.scaled_osim
+        self.marker_placement = None
         if args.template_osim:
             if markers is None:
                 raise ValueError("--template-osim requires --c3d")
-            scaling = scale_gait2354_from_markers(
-                markers,
-                args.template_osim,
-                self.subject_dir / "scaling",
-                subject_mass=args.body_mass,
-                time_range=(args.scale_start, args.scale_end),
-            )
-            scaled_osim = str(scaling.model_path)
-            print(f"ModelScaler-derived: {len(scaling.scale_factors)} body factors -> {scaling.model_path}")
+            if args.scaling_backend == "official":
+                official = build_subject_with_official_opensim(
+                    markers,
+                    args.template_osim,
+                    self.subject_dir / "opensim_subject",
+                    subject_mass=args.body_mass,
+                    subject_height=args.body_height,
+                    time_range=(args.scale_start, args.scale_end),
+                )
+                scaled_osim = str(official.scaled_model_path)
+                self.marker_placement = official
+                print(
+                    f"Official ScaleTool: {len(official.scale_factors)} body factors, "
+                    f"MarkerPlacer RMS {official.marker_rms:.4f} m, max {official.marker_max:.4f} m "
+                    f"-> {official.placed_model_path}"
+                )
+            else:
+                scaling = scale_gait2354_from_markers(
+                    markers,
+                    args.template_osim,
+                    self.subject_dir / "scaling_parity",
+                    subject_mass=args.body_mass,
+                    time_range=(args.scale_start, args.scale_end),
+                )
+                scaled_osim = str(scaling.model_path)
+                print(f"Parity scaler: {len(scaling.scale_factors)} body factors -> {scaling.model_path}")
         if scaled_osim:
             config = simple_config_from_scaled_gait2354(scaled_osim, body_height=args.body_height)
             print(
@@ -97,10 +119,9 @@ class Example:
                 f"thigh {config.thigh_length:.3f} m, shank {config.shank_length:.3f} m"
             )
 
-        self.marker_placement = None
-        if args.official_marker_placement:
+        if args.official_marker_placement and self.marker_placement is None:
             if markers is None or not scaled_osim:
-                raise ValueError("--official-marker-placement requires --c3d and a scaled/template model")
+                raise ValueError("--official-marker-placement requires --c3d and a scaled model")
             self.marker_placement = place_markers_with_official_opensim(
                 markers,
                 scaled_osim,
@@ -201,11 +222,20 @@ class Example:
         if not np.array_equal(root_force, np.zeros(6, dtype=root_force.dtype)):
             raise ValueError("free pelvis controls must remain exactly zero")
         if self.marker_placement is not None:
-            if not self.marker_placement.model_path.is_file() or not self.marker_placement.manifest_path.is_file():
+            placement_model = getattr(
+                self.marker_placement,
+                "placed_model_path",
+                getattr(self.marker_placement, "model_path", None),
+            )
+            if (
+                placement_model is None
+                or not placement_model.is_file()
+                or not self.marker_placement.manifest_path.is_file()
+            ):
                 raise ValueError("official OpenSim MarkerPlacer artifacts are missing")
             if not np.isfinite(self.marker_placement.marker_rms) or not np.isfinite(self.marker_placement.marker_max):
                 raise ValueError("official OpenSim MarkerPlacer metrics are nonfinite")
-            if (
+            if hasattr(self.marker_placement, "marker_rms_limit") and (
                 self.marker_placement.marker_rms > self.marker_placement.marker_rms_limit
                 or self.marker_placement.marker_max > self.marker_placement.marker_max_limit
             ):
@@ -241,6 +271,12 @@ def create_parser():
     parser.add_argument("--c3d-up-axis", default="+Z", help="C3D lab axis pointing upward")
     parser.add_argument("--c3d-forward-axis", default="-Y", help="C3D lab axis pointing subject-forward")
     parser.add_argument("--template-osim", help="Pinned generic gait2354 model to scale directly from --c3d")
+    parser.add_argument(
+        "--scaling-backend",
+        choices=("official", "parity"),
+        default="official",
+        help="Subject scaler: official OpenSim ScaleTool (default) or project parity implementation",
+    )
     parser.add_argument("--scaled-osim", help="Optional accepted pre-scaled gait2354 model for VTP visuals")
     parser.add_argument("--scale-start", type=float, default=0.5, help="Static scaling window start [s]")
     parser.add_argument("--scale-end", type=float, default=1.0, help="Static scaling window end [s]")

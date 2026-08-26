@@ -104,6 +104,22 @@ class MarkerPlacementReference:
     marker_max_limit: float
 
 
+@dataclass(frozen=True, slots=True)
+class OfficialSubjectReference:
+    """Official OpenSim ScaleTool and MarkerPlacer subject artifact."""
+
+    root: Path
+    scaled_model_path: Path
+    placed_model_path: Path
+    scale_set_path: Path
+    motion_path: Path
+    marker_set_path: Path
+    manifest_path: Path
+    scale_factors: ScaleFactorSet
+    marker_rms: float
+    marker_max: float
+
+
 def _sha256(path: str | os.PathLike) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -674,4 +690,233 @@ def place_markers_with_official_opensim(
         marker_max,
         max_marker_rms,
         max_marker_error,
+    )
+
+
+_OFFICIAL_SCALETOOL_RUNNER = r"""
+import json
+import os
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+import opensim
+
+root = Path.cwd()
+config = json.loads((root / "runner_config.json").read_text())
+tool = opensim.ScaleTool()
+tool.setName("official_subject_build")
+tool.setPathToSubject(str(root) + os.sep)
+tool.setSubjectMass(config["subject_mass"])
+tool.setSubjectHeight(1000.0 * config["subject_height"])
+tool.setPrintResultFiles(True)
+tool.getGenericModelMaker().setModelFileName("template.osim")
+scaler = tool.getModelScaler()
+scaler.setApply(True)
+scaler.setMarkerFileName("static_markers.trc")
+scaler.setPreserveMassDist(True)
+scaler.setOutputModelFileName("scaled_subject.osim")
+scaler.setOutputScaleFileName("scale_set.xml")
+interval = opensim.ArrayDouble()
+interval.append(config["time_range"][0])
+interval.append(config["time_range"][1])
+scaler.setTimeRange(interval)
+for spec in config["measurements"]:
+    measurement = opensim.Measurement()
+    measurement.setName(spec["name"])
+    pairs = measurement.getMarkerPairSet()
+    for names in spec["pairs"]:
+        pair = opensim.MarkerPair()
+        pair.setMarkerName(0, names[0])
+        pair.setMarkerName(1, names[1])
+        pairs.cloneAndAppend(pair)
+    body_scales = measurement.getBodyScaleSet()
+    for body_name in spec["bodies"]:
+        body_scale = opensim.BodyScale()
+        body_scale.setName(body_name)
+        axes = opensim.ArrayStr()
+        for axis in "XYZ":
+            axes.append(axis)
+        body_scale.setAxisNames(axes)
+        body_scales.cloneAndAppend(body_scale)
+    scaler.addMeasurement(measurement)
+placer = tool.getMarkerPlacer()
+placer.setApply(True)
+placer.setMarkerFileName("static_markers.trc")
+placer.setTimeRange(interval)
+placer.setMoveModelMarkers(True)
+placer.setOutputModelFileName("placed_subject.osim")
+placer.setOutputMotionFileName("static_pose.mot")
+placer.setOutputMarkerFileName("adjusted_markers.xml")
+setup_path = root / "scale_tool_setup.xml"
+tool.printToXML(str(setup_path))
+
+tree = ET.parse(setup_path)
+setup_root = tree.getroot()
+scaler_xml = next(setup_root.iter("ModelScaler"))
+scaler_xml.find("scaling_order").text = " measurements "
+placer_xml = next(setup_root.iter("MarkerPlacer"))
+tasks = placer_xml.find("IKTaskSet")
+if tasks is None:
+    tasks = ET.SubElement(placer_xml, "IKTaskSet", name="gait2354_Scale")
+objects = tasks.find("objects")
+if objects is None:
+    objects = ET.SubElement(tasks, "objects")
+objects.clear()
+for task in config["marker_tasks"]:
+    element = ET.SubElement(objects, "IKMarkerTask", name=task["name"])
+    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
+    ET.SubElement(element, "weight").text = str(task["weight"])
+for task in config["coordinate_tasks"]:
+    element = ET.SubElement(objects, "IKCoordinateTask", name=task["name"])
+    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
+    ET.SubElement(element, "weight").text = str(task["weight"])
+    ET.SubElement(element, "value_type").text = task["value_type"]
+    ET.SubElement(element, "value").text = str(task["value"])
+tree.write(setup_path, encoding="UTF-8", xml_declaration=True)
+print("OPENSIM_VERSION=" + opensim.GetVersionAndDate())
+if not opensim.ScaleTool(str(setup_path)).run():
+    raise RuntimeError("official OpenSim ScaleTool failed")
+"""
+
+
+def build_subject_with_official_opensim(
+    markers: C3DMarkerTrajectory,
+    template_model: str | os.PathLike,
+    output_dir: str | os.PathLike,
+    *,
+    subject_mass: float,
+    subject_height: float,
+    time_range: tuple[float, float],
+    max_marker_rms: float = 0.10,
+    max_marker_error: float = 0.25,
+) -> OfficialSubjectReference:
+    """Build one accepted subject with official OpenSim ScaleTool and MarkerPlacer."""
+    from newton.opensim import write_trc  # noqa: PLC0415
+
+    if not math.isfinite(subject_mass) or subject_mass <= 0.0:
+        raise ValueError("subject_mass must be finite and positive")
+    if not math.isfinite(subject_height) or subject_height <= 0.0:
+        raise ValueError("subject_height must be finite and positive")
+    if max_marker_rms <= 0.0 or max_marker_error <= 0.0:
+        raise ValueError("marker placement limits must be positive")
+    reference = json.loads(_REFERENCE_PATH.read_text())
+    template = Path(template_model).resolve()
+    if _sha256(template) != reference["template_sha256"]:
+        raise ValueError("template model does not match the pinned gait2354 scaling reference")
+    root = Path(output_dir).resolve()
+    if root.exists():
+        raise FileExistsError(root)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{root.name}.", dir=root.parent) as temporary:
+        staged = Path(temporary) / "official_subject"
+        staged.mkdir()
+        shutil.copy2(template, staged / "template.osim")
+        marker_file = staged / "static_markers.trc"
+        write_trc(marker_file, _mapped_marker_trajectory(markers), units="m")
+        measurements = [
+            {"name": name, "pairs": [list(pair) for pair in pairs], "bodies": list(bodies)}
+            for name, pairs, bodies in _MEASUREMENTS
+        ]
+        runner_config = {
+            "subject_mass": subject_mass,
+            "subject_height": subject_height,
+            "time_range": list(time_range),
+            "measurements": measurements,
+            "marker_tasks": reference["marker_tasks"],
+            "coordinate_tasks": reference["coordinate_tasks"],
+        }
+        (staged / "runner_config.json").write_text(json.dumps(runner_config, indent=2, sort_keys=True) + "\n")
+        runner = staged / "run_scale_tool.py"
+        runner.write_text(_OFFICIAL_SCALETOOL_RUNNER)
+        result = subprocess.run(
+            [sys.executable, runner.name],
+            cwd=staged,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        runner_log = staged / "runner_output.log"
+        runner_log.write_text(result.stdout + "\n--- STDERR ---\n" + result.stderr)
+        if result.returncode != 0:
+            if "No module named 'opensim'" in result.stderr:
+                raise ImportError("official subject building requires `uv run --with opensim==4.6 ...`")
+            raise RuntimeError(f"official OpenSim ScaleTool failed:\n{result.stderr[-2000:]}")
+        opensim_log = staged / "opensim.log"
+        log = result.stdout + result.stderr
+        if opensim_log.is_file():
+            log += opensim_log.read_text(errors="replace")
+        marker_matches = re.findall(r"marker error: RMS = ([^,]+), max = ([^ ]+)", log)
+        if not marker_matches:
+            raise ValueError("official ScaleTool log did not report marker error")
+        marker_rms, marker_max = (float(value) for value in marker_matches[-1])
+        if marker_rms > max_marker_rms or marker_max > max_marker_error:
+            raise ValueError(
+                f"official ScaleTool failed the engineering marker gate: RMS {marker_rms:.6f} > {max_marker_rms:.6f} "
+                f"or max {marker_max:.6f} > {max_marker_error:.6f} m"
+            )
+        scale_set = staged / "scale_set.xml"
+        scale_root = ET.parse(scale_set).getroot()
+        scale_factors: ScaleFactorSet = {}
+        body_names = {body for _, _, bodies in _MEASUREMENTS for body in bodies}
+        for scale in scale_root.iter("Scale"):
+            segment = (scale.findtext("segment") or "").strip()
+            if segment in body_names and segment not in scale_factors:
+                values = tuple(float(value) for value in (scale.findtext("scales") or "").split())
+                if len(values) == 3:
+                    scale_factors[segment] = values
+        if set(scale_factors) != body_names:
+            raise ValueError(
+                f"official ScaleTool output is missing body factors: {sorted(body_names - scale_factors.keys())}"
+            )
+        scaled_model = staged / "scaled_subject.osim"
+        placed_model = staged / "placed_subject.osim"
+        motion = staged / "static_pose.mot"
+        marker_set = staged / "adjusted_markers.xml"
+        version_match = re.search(r"OPENSIM_VERSION=(.+)", result.stdout)
+        manifest = {
+            "schema_version": "gait2354_official_subject_build_1",
+            "method_reference": {
+                "name": "official OpenSim ScaleTool and MarkerPlacer",
+                "version": version_match.group(1).strip() if version_match else "unknown",
+                "setup_tasks": reference["opensim_scale_setup_reference"],
+                "measurement_policy": "Trial 101 adaptation; no inherited manual subject scales",
+            },
+            "source": {
+                "c3d_file": markers.source_file,
+                "c3d_sha256": markers.source_sha256,
+                "template_file": template.name,
+                "template_sha256": reference["template_sha256"],
+            },
+            "subject_mass_kg": subject_mass,
+            "subject_height_m": subject_height,
+            "time_range_s": list(time_range),
+            "scale_factors": {name: list(value) for name, value in sorted(scale_factors.items())},
+            "qc": {
+                "passed": True,
+                "marker_rms_m": marker_rms,
+                "marker_rms_limit_m": max_marker_rms,
+                "marker_max_m": marker_max,
+                "marker_max_limit_m": max_marker_error,
+            },
+            "outputs": {},
+        }
+        manifest["outputs"] = {
+            path.name: _sha256(path)
+            for path in sorted(staged.iterdir())
+            if path.is_file() and path.name != "manifest.json"
+        }
+        manifest_path = staged / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n")
+        os.rename(staged, root)
+    return OfficialSubjectReference(
+        root,
+        root / scaled_model.name,
+        root / placed_model.name,
+        root / scale_set.name,
+        root / motion.name,
+        root / marker_set.name,
+        root / manifest_path.name,
+        scale_factors,
+        marker_rms,
+        marker_max,
     )
