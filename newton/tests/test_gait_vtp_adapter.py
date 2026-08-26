@@ -79,7 +79,7 @@ def _modern_scaled_osim() -> str:
         "toes_l": (0.25, "0 0 0"),
         "toes_r": (0.25, "0 0 0"),
     }
-    mapped = {"pelvis", "torso", "femur_l", "femur_r", "tibia_l", "tibia_r"}
+    mapped = set(masses)
     bodies = []
     for name, (mass, com) in masses.items():
         geometry = (
@@ -168,6 +168,43 @@ class TestGaitVTPAdapter(unittest.TestCase):
         self.assertAlmostEqual(config.thigh_length, 0.45)
         self.assertAlmostEqual(config.shank_length, 0.40)
         self.assertAlmostEqual(config.torso_center_offset, 0.38)
+
+    def test_bakes_full_foot_hierarchy_with_official_transforms(self):
+        """Map talus, calcaneus, and toe visuals into merged Newton feet."""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            (source / "mesh.vtp").write_text(_VTP)
+            model_path = source / "scaled.osim"
+            model_path.write_text(_modern_scaled_osim())
+            config = simple_config_from_scaled_gait2354(model_path, body_height=1.70)
+            transforms = {
+                name: np.eye(4)
+                for name in (
+                    "pelvis",
+                    "torso",
+                    "femur_l",
+                    "femur_r",
+                    "tibia_l",
+                    "tibia_r",
+                    "talus_l",
+                    "talus_r",
+                    "calcn_l",
+                    "calcn_r",
+                    "toes_l",
+                    "toes_r",
+                )
+            }
+            bundle = compile_scaled_vtp_visuals(
+                model_path,
+                source,
+                Path(directory) / "bundle",
+                config,
+                source_body_transforms=transforms,
+            )
+        self.assertEqual(len(bundle.meshes), 12)
+        self.assertEqual(sum(mesh.body == "foot_left" for mesh in bundle.meshes), 3)
+        self.assertEqual(sum(mesh.body == "foot_right" for mesh in bundle.meshes), 3)
 
     def test_rejects_two_nonidentity_legacy_scale_levels(self):
         """Reject stale models that would apply subject geometry scaling twice."""

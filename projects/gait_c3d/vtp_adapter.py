@@ -27,6 +27,12 @@ _SOURCE_TO_TARGET = {
     "femur_r": "femur_right",
     "tibia_l": "tibia_left",
     "tibia_r": "tibia_right",
+    "talus_l": "foot_left",
+    "talus_r": "foot_right",
+    "calcn_l": "foot_left",
+    "calcn_r": "foot_right",
+    "toes_l": "foot_left",
+    "toes_r": "foot_right",
 }
 _LEGACY_ALIASES = {
     ("femur_r", "femur.vtp"): ("femur_r.vtp", "r_femur.vtp"),
@@ -492,11 +498,36 @@ def _write_obj(path: Path, vertices: np.ndarray, triangles: np.ndarray) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _target_body_transforms(config: SimpleGaitConfig) -> dict[str, np.ndarray]:
+    """Return neutral simple-model body transforms in Newton world coordinates."""
+    transforms = {}
+
+    def translated(x: float, y: float, z: float) -> np.ndarray:
+        result = np.eye(4)
+        result[:3, 3] = (x, y, z)
+        return result
+
+    transforms["pelvis"] = translated(0.0, 0.0, config.pelvis_height)
+    transforms["torso"] = translated(0.0, 0.0, config.pelvis_height + config.torso_center_offset)
+    for side, sign in (("left", 1.0), ("right", -1.0)):
+        femur_z = config.pelvis_height - config.pelvis_hip_drop - 0.5 * config.thigh_length
+        tibia_z = femur_z - 0.5 * (config.thigh_length + config.shank_length)
+        transforms[f"femur_{side}"] = translated(0.0, sign * config.hip_half_width, femur_z)
+        transforms[f"tibia_{side}"] = translated(0.0, sign * config.hip_half_width, tibia_z)
+        transforms[f"foot_{side}"] = translated(
+            0.4 * config.foot_length,
+            sign * config.hip_half_width,
+            tibia_z - 0.5 * config.shank_length - config.contact_radius,
+        )
+    return transforms
+
+
 def _compile_scaled_vtp_visuals(
     scaled_osim: str | os.PathLike,
     geometry_dir: str | os.PathLike,
     output_dir: str | os.PathLike,
     config: SimpleGaitConfig,
+    source_body_transforms: dict[str, np.ndarray] | None,
 ) -> CompiledVisuals:
     """Compile into a new staging directory."""
     model_path = Path(scaled_osim).resolve()
@@ -508,24 +539,46 @@ def _compile_scaled_vtp_visuals(
     assets_dir.mkdir(parents=True)
     mesh_records = []
     meshes: list[SubjectVisualMesh] = []
+    exact_transforms = source_body_transforms is not None
+    target_transforms = _target_body_transforms(config)
+    source_transforms = source_body_transforms or {}
+    for name, transform in source_transforms.items():
+        array = np.asarray(transform, dtype=np.float64)
+        if array.shape != (4, 4) or not np.all(np.isfinite(array)) or not np.allclose(array[3], (0.0, 0.0, 0.0, 1.0)):
+            raise ValueError(f"source body transform {name!r} is invalid")
+        source_transforms[name] = array
     for entry_index, entry in enumerate(read_scaled_display_geometry(model_path)):
         source_path = _resolve_geometry(entry, source_geometry)
         vertices, triangles = read_vtp(source_path)
+        target_body = _SOURCE_TO_TARGET[entry.source_body]
+        if target_body.startswith("foot_") and not exact_transforms:
+            continue
         scaled = vertices.astype(np.float64) * entry.scale
         transformed = scaled @ entry.transform[:3, :3].T + entry.transform[:3, 3]
-        body_local = (transformed - entry.mass_center) @ _OPENSIM_TO_NEWTON.T
-        source_proximal = (-entry.mass_center) @ _OPENSIM_TO_NEWTON.T
-        target_body = _SOURCE_TO_TARGET[entry.source_body]
-        if target_body == "torso":
-            target_proximal = np.asarray((0.0, 0.0, -0.5 * config.torso_center_offset))
-        elif target_body.startswith("femur_"):
-            target_proximal = np.asarray((0.0, 0.0, 0.5 * config.thigh_length))
-        elif target_body.startswith("tibia_"):
-            target_proximal = np.asarray((0.0, 0.0, 0.5 * config.shank_length))
+        if exact_transforms:
+            if entry.source_body not in source_transforms:
+                raise ValueError(f"missing official neutral transform for body {entry.source_body!r}")
+            source_transform = source_transforms[entry.source_body]
+            target_transform = target_transforms[target_body]
+            ground_opensim = transformed @ source_transform[:3, :3].T + source_transform[:3, 3]
+            ground_newton = ground_opensim @ _OPENSIM_TO_NEWTON.T
+            body_local = (ground_newton - target_transform[:3, 3]) @ target_transform[:3, :3]
+            source_proximal = source_transform[:3, 3] @ _OPENSIM_TO_NEWTON.T
+            target_proximal = target_transform[:3, 3]
+            registration = target_proximal - source_proximal
         else:
-            target_proximal = source_proximal
-        registration = target_proximal - source_proximal
-        body_local += registration
+            body_local = (transformed - entry.mass_center) @ _OPENSIM_TO_NEWTON.T
+            source_proximal = (-entry.mass_center) @ _OPENSIM_TO_NEWTON.T
+            if target_body == "torso":
+                target_proximal = np.asarray((0.0, 0.0, -0.5 * config.torso_center_offset))
+            elif target_body.startswith("femur_"):
+                target_proximal = np.asarray((0.0, 0.0, 0.5 * config.thigh_length))
+            elif target_body.startswith("tibia_"):
+                target_proximal = np.asarray((0.0, 0.0, 0.5 * config.shank_length))
+            else:
+                target_proximal = source_proximal
+            registration = target_proximal - source_proximal
+            body_local += registration
         source_hash = _sha256(source_path)
         name = f"visual_{entry_index:02d}_{target_body}_{source_path.stem}_{source_hash[:8]}"
         output_path = assets_dir / f"{name}.obj"
@@ -545,6 +598,7 @@ def _compile_scaled_vtp_visuals(
                     "source_proximal_newton": source_proximal.tolist(),
                     "target_proximal_newton": target_proximal.tolist(),
                     "registration_translation": registration.tolist(),
+                    "registration_mode": "official_neutral_body_transform" if exact_transforms else "proximal_anchor",
                 },
                 "output": {
                     "file": relative,
@@ -555,6 +609,8 @@ def _compile_scaled_vtp_visuals(
             }
         )
     expected = {"pelvis", "torso", "femur_left", "femur_right", "tibia_left", "tibia_right"}
+    if exact_transforms:
+        expected.update(("foot_left", "foot_right"))
     found = {mesh.body for mesh in meshes}
     if found != expected:
         raise ValueError(f"scaled display mapping is incomplete: expected {sorted(expected)}, got {sorted(found)}")
@@ -580,18 +636,33 @@ def compile_scaled_vtp_visuals(
     geometry_dir: str | os.PathLike,
     output_dir: str | os.PathLike,
     config: SimpleGaitConfig,
+    *,
+    source_body_transforms: str | os.PathLike | dict[str, np.ndarray] | None = None,
 ) -> CompiledVisuals:
     """Atomically bake scaled gait2354 VTP meshes into body-local OBJ assets.
 
     ``config`` must come from the same subject scaling result as ``scaled_osim``
     so proximal joint registration and segment lengths remain consistent.
+    When official neutral body transforms are supplied, all talus, calcaneus,
+    and toe meshes are baked into the merged Newton foot bodies as well.
     """
+    if isinstance(source_body_transforms, (str, os.PathLike)):
+        source_body_transforms = {
+            name: np.asarray(value, dtype=np.float64)
+            for name, value in json.loads(Path(source_body_transforms).read_text()).items()
+        }
     root = Path(output_dir).resolve()
     if root.exists():
         raise FileExistsError(root)
     root.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{root.name}.", dir=root.parent) as temporary:
         staged_root = Path(temporary) / "bundle"
-        staged = _compile_scaled_vtp_visuals(scaled_osim, geometry_dir, staged_root, config)
+        staged = _compile_scaled_vtp_visuals(
+            scaled_osim,
+            geometry_dir,
+            staged_root,
+            config,
+            source_body_transforms,
+        )
         os.rename(staged_root, root)
     return CompiledVisuals(root, root / staged.manifest_path.name, staged.meshes)

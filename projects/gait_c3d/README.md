@@ -90,9 +90,11 @@ builder = newton.ModelBuilder()
 builder.add_mjcf(str(subject_xml))
 ```
 
-The canonical S001 conversion resolves 13 VTP assets and loads as 8 bodies, 16
-velocity DOFs, 13 non-colliding mesh visuals, 8 foot spheres, and one ground
-plane through one `ModelBuilder.add_mjcf()` call.
+The canonical official S001 conversion resolves 19 VTP assets and loads as 8
+bodies, 16 free-root velocity DOFs, 19 non-colliding mesh visuals, 8 foot
+contact spheres, 8 visible sphere overlays, and collision/visual ground planes
+through one `ModelBuilder.add_mjcf()` call. Official default-pose body transforms
+bake talus, calcaneus, and toe meshes into each merged Newton foot frame.
 
 ## Direct C3D marker artifacts
 

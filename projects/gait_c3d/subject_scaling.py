@@ -114,6 +114,7 @@ class OfficialSubjectReference:
     scale_set_path: Path
     motion_path: Path
     marker_set_path: Path
+    body_transforms_path: Path
     manifest_path: Path
     scale_factors: ScaleFactorSet
     marker_rms: float
@@ -776,6 +777,17 @@ tree.write(setup_path, encoding="UTF-8", xml_declaration=True)
 print("OPENSIM_VERSION=" + opensim.GetVersionAndDate())
 if not opensim.ScaleTool(str(setup_path)).run():
     raise RuntimeError("official OpenSim ScaleTool failed")
+model = opensim.Model("scaled_subject.osim")
+state = model.initSystem()
+transforms = {}
+for index in range(model.getBodySet().getSize()):
+    body = model.getBodySet().get(index)
+    transform = body.getTransformInGround(state)
+    transforms[body.getName()] = [
+        [transform.R().get(row, column) for column in range(3)] + [transform.p().get(row)]
+        for row in range(3)
+    ] + [[0.0, 0.0, 0.0, 1.0]]
+(root / "body_transforms.json").write_text(json.dumps(transforms, indent=2, sort_keys=True) + "\n")
 """
 
 
@@ -915,6 +927,7 @@ def build_subject_with_official_opensim(
         root / scale_set.name,
         root / motion.name,
         root / marker_set.name,
+        root / "body_transforms.json",
         root / manifest_path.name,
         scale_factors,
         marker_rms,

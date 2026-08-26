@@ -82,6 +82,7 @@ class Example:
             )
 
         scaled_osim = args.scaled_osim
+        source_body_transforms = None
         self.marker_placement = None
         if args.template_osim:
             if markers is None:
@@ -96,6 +97,7 @@ class Example:
                     time_range=(args.scale_start, args.scale_end),
                 )
                 scaled_osim = str(official.scaled_model_path)
+                source_body_transforms = official.body_transforms_path
                 self.marker_placement = official
                 print(
                     f"Official ScaleTool: {len(official.scale_factors)} body factors, "
@@ -144,6 +146,7 @@ class Example:
                 args.geometry_dir,
                 self.model_dir,
                 config,
+                source_body_transforms=source_body_transforms,
             )
             visual_meshes = visuals.meshes
             print(f"VTP: {len(visual_meshes)} scaled visual meshes -> {visuals.root}")

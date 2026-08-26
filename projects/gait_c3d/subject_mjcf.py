@@ -337,7 +337,7 @@ def subject_mjcf_xml(
                 size=f"{config.contact_radius:.9g}",
                 pos=_values(*center),
                 attrib={"class": "visual"},
-                rgba="0.18 0.32 0.58 1",
+                rgba="0.18 0.32 0.58 0.35",
             )
 
     for mesh in visual_meshes:
