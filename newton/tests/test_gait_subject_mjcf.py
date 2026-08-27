@@ -32,13 +32,13 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = write_subject_mjcf(config, Path(directory) / "subject.xml", model_name="subject_001")
             builder = newton.ModelBuilder()
-            builder.add_mjcf(str(path))
+            builder.add_mjcf(str(path), enable_self_collisions=True)
             model = builder.finalize(device="cpu")
         self.assertEqual(model.body_count, 8)
         self.assertEqual(model.joint_count, 8)
         self.assertEqual(model.joint_coord_count, 17)
         self.assertEqual(model.joint_dof_count, 16)
-        self.assertEqual(model.shape_count, 24)
+        self.assertEqual(model.shape_count, 30)
         self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 74.0, places=4)
         modes = model.joint_target_mode.numpy()
         np.testing.assert_array_equal(modes[:6], np.zeros(6, dtype=modes.dtype))
@@ -48,6 +48,44 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         )
         np.testing.assert_allclose(model.joint_target_ke.numpy()[6:], 100.0)
         np.testing.assert_allclose(model.joint_target_kd.numpy()[6:], 20.0)
+
+    def test_imports_self_collision_proxies_and_neighbor_filters(self):
+        """Import invisible segment proxies and preserve adjacent-link filters."""
+        config = SimpleGaitConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_subject_mjcf(config, Path(directory) / "subject.xml")
+            builder = newton.ModelBuilder()
+            builder.add_mjcf(str(path), enable_self_collisions=True)
+            model = builder.finalize(device="cpu")
+        labels = model.shape_label
+        shape_by_name = {
+            name: next(index for index, label in enumerate(labels) if label.endswith(f"/{name}"))
+            for name in (
+                "collision_pelvis",
+                "collision_torso",
+                "collision_femur_left",
+                "collision_femur_right",
+                "collision_tibia_left",
+                "collision_tibia_right",
+            )
+        }
+        flags = model.shape_flags.numpy()
+        for shape in shape_by_name.values():
+            self.assertTrue(flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+            self.assertFalse(flags[shape] & newton.ShapeFlags.VISIBLE)
+        filters = set(model.shape_collision_filter_pairs)
+        self.assertIn(
+            tuple(sorted((shape_by_name["collision_pelvis"], shape_by_name["collision_femur_left"]))),
+            filters,
+        )
+        self.assertIn(
+            tuple(sorted((shape_by_name["collision_femur_left"], shape_by_name["collision_tibia_left"]))),
+            filters,
+        )
+        self.assertNotIn(
+            tuple(sorted((shape_by_name["collision_femur_left"], shape_by_name["collision_femur_right"]))),
+            filters,
+        )
 
     def test_mujoco_loads_export_and_neutral_keyframe(self):
         """Load the same saved subject with MuJoCo and apply its neutral keyframe."""

@@ -12,7 +12,8 @@ joint set over one-to-one OpenSim mechanics.
 - one revolute knee hinge per side;
 - one revolute ankle hinge per side;
 - box fallback geometry for the pelvis and torso;
-- capsule fallback geometry for each thigh and shank; and
+- capsule fallback geometry for each thigh and shank;
+- invisible box/capsule self-collision proxies for the six non-foot segments; and
 - four contact spheres per foot on a stationary Z-up ground plane.
 
 `SimpleGaitConfig.for_subject()` scales all segment lengths from standing height
@@ -21,11 +22,14 @@ the uniformly scaled hip spacing. The default rounded dimensions and masses are
 derived offline from the sealed S001 reference model, but the runtime does not
 parse or import `.osim` files.
 
-The primitive body shapes are non-colliding visual fallbacks. Foot spheres are
-the only active body contacts. A later source adapter will convert scaled OpenSim
-VTP display meshes into a sealed neutral vertex/index bundle. The same native
-builder will attach those meshes as non-colliding visuals without parsing VTP or
-`.osim` files at runtime.
+The primitive body shapes are non-colliding visual fallbacks. Invisible box and
+capsule proxies on the pelvis, torso, femurs, and tibias provide the first
+self-collision layer; adjacent parent-child links remain filtered so joint
+attachments do not fight their own collision response. Foot spheres are the
+active ground and foot self-contact proxies. A later source adapter will convert
+scaled OpenSim VTP display meshes into a sealed neutral vertex/index bundle. The
+same native builder will attach those meshes as non-colliding visuals without
+parsing VTP or `.osim` files at runtime.
 The model has 8 bodies, 8 joints, 17 generalized coordinates, and 16 velocity
 DOFs. The six free-pelvis controls start and remain uncommanded.
 
@@ -43,7 +47,8 @@ uv run --extra dev -m newton.tests -k test_gait_simple_joints
 
 `write_subject_mjcf()` exports a scaled `SimpleGaitConfig` as a self-contained
 MJCF XML model. The XML includes the full simple-joint topology, inertial
-properties, primitive visuals, foot contacts, a neutral keyframe, and bounded
+properties, primitive visuals, invisible segment self-collision proxies, foot
+contacts, adjacent-link collision exclusions, a neutral keyframe, and bounded
 position/velocity controls for all ten non-root DOFs. It deliberately creates
 no pelvis/root actuator.
 
@@ -55,7 +60,7 @@ from projects.gait_c3d.subject_mjcf import write_subject_mjcf
 
 path = write_subject_mjcf(config, "subject.xml")
 builder = newton.ModelBuilder()
-builder.add_mjcf(str(path))
+builder.add_mjcf(str(path), enable_self_collisions=True)
 ```
 
 The next adapter stage bakes the scaled VTP display geometry into subject-local
@@ -91,9 +96,10 @@ builder.add_mjcf(str(subject_xml))
 ```
 
 The canonical official S001 conversion resolves 19 VTP assets and loads as 8
-bodies, 16 free-root velocity DOFs, 19 non-colliding mesh visuals, 8 foot
-contact spheres, 8 translucent sphere overlays, and collision/visual ground
-planes through one `ModelBuilder.add_mjcf()` call. Official default-pose body
+bodies, 16 free-root velocity DOFs, 19 non-colliding mesh visuals, 6 invisible
+segment self-collision proxies, 8 foot contact spheres, 8 translucent sphere
+overlays, and collision/visual ground planes through one
+`ModelBuilder.add_mjcf()` call. Official default-pose body
 transforms bake talus, calcaneus, and toe meshes into each merged Newton foot
 frame. The compiler then raises the complete neutral target hierarchy by one
 audited root-height offset so visuals, joint centers, COMs, inertias, and
@@ -155,7 +161,8 @@ uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_s
 ```
 
 The example always writes a reusable MJCF model and runs it through
-`ModelBuilder.add_mjcf()`, `CollisionPipeline`, and `SolverFeatherstone`. Its
+`ModelBuilder.add_mjcf()` with nonadjacent self-collision enabled,
+`CollisionPipeline`, and `SolverFeatherstone`. Its
 default standing-inspection mode fixes the pelvis because a free-root balance
 controller is not implemented yet; pass `--free-root` to run the explicitly
 unassisted falling model. The saved MJCF itself retains the free joint. When

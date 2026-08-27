@@ -73,8 +73,9 @@ assert 'newton.opensim' not in sys.modules
         self.assertEqual(self.model.joint_coord_count, 17)
         self.assertEqual(self.model.joint_dof_count, 16)
         self.assertEqual(len(self.build.body_shape_indices), 6)
+        self.assertEqual(len(self.build.collision_shape_indices), 6)
         self.assertEqual(len(self.build.contact_shape_indices), 8)
-        self.assertEqual(self.model.shape_count, 15)
+        self.assertEqual(self.model.shape_count, 21)
         labels = self.model.joint_label
         types = self.model.joint_type.numpy()
         for side in ("left", "right"):
@@ -90,7 +91,7 @@ assert 'newton.opensim' not in sys.modules
         self.assertAlmostEqual(float(np.sum(self.model.body_mass.numpy())), 81.4, places=4)
 
     def test_uses_boxes_capsules_and_foot_spheres(self):
-        """Use primitive fallback bodies and sphere-only foot geometry."""
+        """Use visual fallbacks, invisible self-collision proxies, and foot spheres."""
         shape_types = self.model.shape_type.numpy()
         shape_flags = self.model.shape_flags.numpy()
         for label in ("pelvis", "torso"):
@@ -102,9 +103,63 @@ assert 'newton.opensim' not in sys.modules
                 shape = self.build.body_shape_indices[f"{segment}_{side}"]
                 self.assertEqual(shape_types[shape], newton.GeoType.CAPSULE)
                 self.assertFalse(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+        for label in ("pelvis", "torso"):
+            shape = self.build.collision_shape_indices[label]
+            self.assertEqual(shape_types[shape], newton.GeoType.BOX)
+            self.assertTrue(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+            self.assertFalse(shape_flags[shape] & newton.ShapeFlags.VISIBLE)
+        for side in ("left", "right"):
+            for segment in ("femur", "tibia"):
+                shape = self.build.collision_shape_indices[f"{segment}_{side}"]
+                self.assertEqual(shape_types[shape], newton.GeoType.CAPSULE)
+                self.assertTrue(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+                self.assertFalse(shape_flags[shape] & newton.ShapeFlags.VISIBLE)
         for shape in self.build.contact_shape_indices:
             self.assertEqual(shape_types[shape], newton.GeoType.SPHERE)
             self.assertTrue(shape_flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+
+    def test_enables_nonadjacent_self_collision_and_filters_joints(self):
+        """Enable nonadjacent segment collisions while filtering joint neighbors."""
+        filters = set(self.model.shape_collision_filter_pairs)
+        collision = self.build.collision_shape_indices
+        for name in collision:
+            shape = collision[name]
+            self.assertTrue(self.model.shape_flags.numpy()[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+        for parent, child in (
+            ("pelvis", "torso"),
+            ("pelvis", "femur_left"),
+            ("pelvis", "femur_right"),
+            ("femur_left", "tibia_left"),
+            ("femur_right", "tibia_right"),
+        ):
+            self.assertIn(tuple(sorted((collision[parent], collision[child]))), filters)
+        self.assertNotIn(tuple(sorted((collision["femur_left"], collision["femur_right"]))), filters)
+
+    def test_detects_forced_nonadjacent_self_collision(self):
+        """Detect overlap between nonadjacent segment collision proxies."""
+        state = native_model.initialize_simple_gait_state(self.model, self.build)
+        body_q = state.body_q.numpy()
+        left = self.build.body_indices["femur_left"]
+        right = self.build.body_indices["femur_right"]
+        body_q[right] = body_q[left]
+        state.body_q.assign(body_q)
+        pipeline = newton.CollisionPipeline(self.model)
+        contacts = pipeline.contacts()
+        pipeline.collide(state, contacts)
+        pair = tuple(
+            sorted(
+                (self.build.collision_shape_indices["femur_left"], self.build.collision_shape_indices["femur_right"])
+            )
+        )
+        observed = {
+            tuple(sorted((int(shape0), int(shape1))))
+            for shape0, shape1 in zip(
+                contacts.rigid_contact_shape0.numpy()[: int(contacts.rigid_contact_count.numpy()[0])],
+                contacts.rigid_contact_shape1.numpy()[: int(contacts.rigid_contact_count.numpy()[0])],
+                strict=True,
+            )
+        }
+        self.assertIn(pair, observed)
 
     def test_scales_geometry_and_mass_for_subject(self):
         """Scale all segment lengths and masses from height and body mass."""

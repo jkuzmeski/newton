@@ -4,8 +4,10 @@
 """Build a deliberately simple Newton-native human gait articulation.
 
 The model uses fixed-axis hip rotations and one revolute hinge for each knee
-and ankle. It is an engineering scaffold for solver and contact experiments,
-not an OpenSim-equivalent model or an accepted FD-1 result.
+and ankle. Invisible primitive proxies enable self-collision between nonadjacent
+segments while parent-child link pairs remain filtered. It is an engineering
+scaffold for solver and contact experiments, not an OpenSim-equivalent model or
+an accepted FD-1 result.
 """
 
 from __future__ import annotations
@@ -91,6 +93,18 @@ class SimpleGaitConfig:
     friction: float = 0.8
     """Ground friction coefficient."""
 
+    self_collision_ke: float = 2.5e4
+    """Self-collision normal stiffness [N/m]."""
+
+    self_collision_kd: float = 2.5e2
+    """Self-collision normal damping [N·s/m]."""
+
+    self_collision_kf: float = 1.0e3
+    """Self-collision tangential stiffness [N/m]."""
+
+    self_collision_mu: float = 0.8
+    """Self-collision friction coefficient."""
+
     @classmethod
     def for_subject(
         cls,
@@ -151,6 +165,10 @@ class SimpleGaitConfig:
             ground_kd=reference.ground_kd,
             ground_kf=reference.ground_kf,
             friction=reference.friction,
+            self_collision_ke=reference.self_collision_ke,
+            self_collision_kd=reference.self_collision_kd,
+            self_collision_kf=reference.self_collision_kf,
+            self_collision_mu=reference.self_collision_mu,
         )
 
 
@@ -168,7 +186,10 @@ class SimpleGaitBuild:
     """Joint indices keyed by anatomical label."""
 
     body_shape_indices: dict[str, int]
-    """Primitive fallback shape indices keyed by anatomical label."""
+    """Primitive fallback visual shape indices keyed by anatomical label."""
+
+    collision_shape_indices: dict[str, int]
+    """Self-collision proxy shape indices keyed by anatomical label."""
 
     contact_shape_indices: tuple[int, ...]
     """Foot contact shape indices."""
@@ -299,6 +320,51 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
             label=f"geometry_tibia_{side}",
         )
 
+    self_collision_geometry = builder.ShapeConfig(
+        density=0.0,
+        ke=config.self_collision_ke,
+        kd=config.self_collision_kd,
+        kf=config.self_collision_kf,
+        mu=config.self_collision_mu,
+        collision_filter_parent=True,
+        has_shape_collision=True,
+        has_particle_collision=False,
+        is_visible=False,
+    )
+    collision_shapes = {
+        "pelvis": builder.add_shape_box(
+            bodies["pelvis"],
+            hx=0.5 * config.pelvis_dimensions[0],
+            hy=0.5 * config.pelvis_dimensions[1],
+            hz=0.5 * config.pelvis_dimensions[2],
+            cfg=self_collision_geometry,
+            label="collision_pelvis",
+        ),
+        "torso": builder.add_shape_box(
+            bodies["torso"],
+            hx=0.5 * config.torso_dimensions[0],
+            hy=0.5 * config.torso_dimensions[1],
+            hz=0.5 * config.torso_dimensions[2],
+            cfg=self_collision_geometry,
+            label="collision_torso",
+        ),
+    }
+    for side in ("left", "right"):
+        collision_shapes[f"femur_{side}"] = builder.add_shape_capsule(
+            bodies[f"femur_{side}"],
+            radius=config.thigh_radius,
+            half_height=0.5 * config.thigh_length - config.thigh_radius,
+            cfg=self_collision_geometry,
+            label=f"collision_femur_{side}",
+        )
+        collision_shapes[f"tibia_{side}"] = builder.add_shape_capsule(
+            bodies[f"tibia_{side}"],
+            radius=config.shank_radius,
+            half_height=0.5 * config.shank_length - config.shank_radius,
+            cfg=self_collision_geometry,
+            label=f"collision_tibia_{side}",
+        )
+
     joints: dict[str, int] = {}
     articulation: list[int] = []
     joints["pelvis_free"] = builder.add_joint_free(child=bodies["pelvis"], label="pelvis_free")
@@ -426,6 +492,7 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
         bodies,
         joints,
         body_shapes,
+        collision_shapes,
         tuple(contact_shapes),
         initial_q,
         root_dof_slice,

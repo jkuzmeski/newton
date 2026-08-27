@@ -150,6 +150,7 @@ def subject_mjcf_xml(
         model_name: MJCF model label.
         visual_meshes: Body-local neutral mesh assets.
         include_fallback_geometry: Include box and capsule visuals when true.
+            Collision-aware box and capsule proxies are always emitted separately.
         contact_centers: Optional mesh-derived sphere centers keyed by side.
         contact_radius: Optional mesh-derived contact radius [m].
         inertial_data: Optional OpenSim-derived inertial properties by target body.
@@ -189,6 +190,14 @@ def subject_mjcf_xml(
         friction=_values(config.friction, 0.005, 0.0001),
         solref=_values(-config.ground_ke, -config.ground_kd),
         rgba="0.25 0.45 0.85 1",
+    )
+    self_collision = ET.SubElement(defaults, "default", attrib={"class": "self_collision"})
+    ET.SubElement(
+        self_collision,
+        "geom",
+        friction=_values(config.self_collision_mu, 0.005, 0.0001),
+        solref=_values(-config.self_collision_ke, -config.self_collision_kd),
+        rgba="0.95 0.45 0.18 0.35",
     )
 
     assets = ET.SubElement(root, "asset")
@@ -234,6 +243,14 @@ def subject_mjcf_xml(
             size=_values(*(0.5 * value for value in config.pelvis_dimensions)),
             attrib={"class": "visual"},
         )
+    ET.SubElement(
+        pelvis,
+        "geom",
+        name="collision_pelvis",
+        type="box",
+        size=_values(*(0.5 * value for value in config.pelvis_dimensions)),
+        attrib={"class": "self_collision"},
+    )
 
     torso = ET.SubElement(pelvis, "body", name="torso", pos=_values(0.0, 0.0, config.torso_center_offset))
     _add_inertial(torso, config.torso_mass, config.torso_dimensions, inertials.get("torso"))
@@ -246,11 +263,23 @@ def subject_mjcf_xml(
             size=_values(*(0.5 * value for value in config.torso_dimensions)),
             attrib={"class": "visual"},
         )
+    ET.SubElement(
+        torso,
+        "geom",
+        name="collision_torso",
+        type="box",
+        size=_values(*(0.5 * value for value in config.torso_dimensions)),
+        attrib={"class": "self_collision"},
+    )
 
     body_elements = {"pelvis": pelvis, "torso": torso}
     actuator = ET.SubElement(root, "actuator")
     contact = ET.SubElement(root, "contact")
-    ET.SubElement(contact, "exclude", body1="foot_left", body2="foot_right")
+    ET.SubElement(contact, "exclude", body1="pelvis", body2="torso")
+    for side in ("left", "right"):
+        ET.SubElement(contact, "exclude", body1="pelvis", body2=f"femur_{side}")
+        ET.SubElement(contact, "exclude", body1=f"femur_{side}", body2=f"tibia_{side}")
+        ET.SubElement(contact, "exclude", body1=f"tibia_{side}", body2=f"foot_{side}")
     degrees = math.pi / 180.0
     radius = config.contact_radius if contact_radius is None else contact_radius
     if not math.isfinite(radius) or radius <= 0.0:
@@ -318,6 +347,15 @@ def subject_mjcf_xml(
                 fromto=_values(0.0, 0.0, -0.5 * config.thigh_length, 0.0, 0.0, 0.5 * config.thigh_length),
                 attrib={"class": "visual"},
             )
+        ET.SubElement(
+            femur,
+            "geom",
+            name=f"collision_femur_{side}",
+            type="capsule",
+            size=f"{config.thigh_radius:.9g}",
+            fromto=_values(0.0, 0.0, -0.5 * config.thigh_length, 0.0, 0.0, 0.5 * config.thigh_length),
+            attrib={"class": "self_collision"},
+        )
 
         tibia = ET.SubElement(
             femur,
@@ -354,6 +392,15 @@ def subject_mjcf_xml(
                 fromto=_values(0.0, 0.0, -0.5 * config.shank_length, 0.0, 0.0, 0.5 * config.shank_length),
                 attrib={"class": "visual"},
             )
+        ET.SubElement(
+            tibia,
+            "geom",
+            name=f"collision_tibia_{side}",
+            type="capsule",
+            size=f"{config.shank_radius:.9g}",
+            fromto=_values(0.0, 0.0, -0.5 * config.shank_length, 0.0, 0.0, 0.5 * config.shank_length),
+            attrib={"class": "self_collision"},
+        )
 
         foot = ET.SubElement(
             tibia,

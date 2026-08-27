@@ -202,7 +202,11 @@ class Example:
         newton.use_coord_layout_targets = True
         self.free_root = args.free_root
         builder = newton.ModelBuilder()
-        builder.add_mjcf(str(self.subject_xml), floating=True if self.free_root else False)
+        builder.add_mjcf(
+            str(self.subject_xml),
+            floating=True if self.free_root else False,
+            enable_self_collisions=True,
+        )
         self.model = builder.finalize(device=args.device)
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()

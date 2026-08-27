@@ -336,7 +336,7 @@ class TestGaitVTPAdapter(unittest.TestCase):
                     include_fallback_geometry=False,
                 )
                 builder = newton.ModelBuilder()
-                builder.add_mjcf(str(mjcf))
+                builder.add_mjcf(str(mjcf), enable_self_collisions=True)
                 model = builder.finalize(device="cpu")
                 manifest = json.loads(bundle.manifest_path.read_text())
                 first_obj = (bundle.root / bundle.meshes[0].file).read_text().splitlines()
@@ -349,7 +349,7 @@ class TestGaitVTPAdapter(unittest.TestCase):
         np.testing.assert_allclose(femur_record["source"]["target_proximal_newton"], (0.0, 0.0, 0.225))
         self.assertEqual(model.body_count, 8)
         self.assertEqual(model.joint_dof_count, 16)
-        self.assertEqual(model.shape_count, 25)
+        self.assertEqual(model.shape_count, 31)
         connector = next(
             index for index, label in enumerate(model.shape_label) if label.endswith("/geometry_abdomen_connector")
         )
