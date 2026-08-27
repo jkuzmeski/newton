@@ -61,6 +61,8 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         shape_by_name = {
             name: next(index for index, label in enumerate(labels) if label.endswith(f"/{name}"))
             for name in (
+                "geometry_femur_left",
+                "geometry_tibia_left",
                 "collision_pelvis",
                 "collision_torso",
                 "collision_femur_left",
@@ -71,15 +73,28 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         }
         flags = model.shape_flags.numpy()
         shape_scale = model.shape_scale.numpy()
-        for shape in shape_by_name.values():
+        for name in (
+            "collision_pelvis",
+            "collision_torso",
+            "collision_femur_left",
+            "collision_femur_right",
+            "collision_tibia_left",
+            "collision_tibia_right",
+        ):
+            shape = shape_by_name[name]
             self.assertTrue(flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
             self.assertFalse(flags[shape] & newton.ShapeFlags.VISIBLE)
+        for name in ("geometry_femur_left", "geometry_tibia_left"):
+            shape = shape_by_name[name]
+            self.assertTrue(flags[shape] & newton.ShapeFlags.VISIBLE)
+            self.assertFalse(flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
         expected_thigh_half_length = 0.5 * (config.thigh_length - 2.0 * config.self_collision_joint_clearance)
-        self.assertAlmostEqual(
-            shape_scale[shape_by_name["collision_femur_left"], 1],
-            expected_thigh_half_length,
-            places=6,
-        )
+        for name in ("geometry_femur_left", "collision_femur_left"):
+            self.assertAlmostEqual(
+                shape_scale[shape_by_name[name], 1],
+                expected_thigh_half_length,
+                places=6,
+            )
         filters = set(model.shape_collision_filter_pairs)
         self.assertIn(
             tuple(sorted((shape_by_name["collision_pelvis"], shape_by_name["collision_femur_left"]))),

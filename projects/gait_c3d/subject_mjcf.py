@@ -366,7 +366,14 @@ def subject_mjcf_xml(
                 name=f"geometry_femur_{side}",
                 type="capsule",
                 size=f"{config.thigh_radius:.9g}",
-                fromto=_values(0.0, 0.0, -0.5 * config.thigh_length, 0.0, 0.0, 0.5 * config.thigh_length),
+                fromto=_values(
+                    0.0,
+                    0.0,
+                    -thigh_collision_half_length,
+                    0.0,
+                    0.0,
+                    thigh_collision_half_length,
+                ),
                 attrib={"class": "visual"},
             )
         ET.SubElement(
@@ -418,7 +425,14 @@ def subject_mjcf_xml(
                 name=f"geometry_tibia_{side}",
                 type="capsule",
                 size=f"{config.shank_radius:.9g}",
-                fromto=_values(0.0, 0.0, -0.5 * config.shank_length, 0.0, 0.0, 0.5 * config.shank_length),
+                fromto=_values(
+                    0.0,
+                    0.0,
+                    -shank_collision_half_length,
+                    0.0,
+                    0.0,
+                    shank_collision_half_length,
+                ),
                 attrib={"class": "visual"},
             )
         ET.SubElement(

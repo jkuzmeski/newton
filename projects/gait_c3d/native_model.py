@@ -270,6 +270,16 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
         raise ValueError("thigh_radius must be less than half the thigh length")
     if config.shank_radius >= 0.5 * config.shank_length:
         raise ValueError("shank_radius must be less than half the shank length")
+    thigh_collision_half_height = _trimmed_capsule_half_height(
+        config.thigh_length,
+        config.thigh_radius,
+        config.self_collision_joint_clearance,
+    )
+    shank_collision_half_height = _trimmed_capsule_half_height(
+        config.shank_length,
+        config.shank_radius,
+        config.self_collision_joint_clearance,
+    )
     bodies = {
         "pelvis": _add_body(builder, "pelvis", config.pelvis_mass, config.pelvis_dimensions),
         "torso": _add_body(builder, "torso", config.torso_mass, config.torso_dimensions),
@@ -322,14 +332,14 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
         body_shapes[f"femur_{side}"] = builder.add_shape_capsule(
             bodies[f"femur_{side}"],
             radius=config.thigh_radius,
-            half_height=0.5 * config.thigh_length - config.thigh_radius,
+            half_height=thigh_collision_half_height,
             cfg=fallback_geometry,
             label=f"geometry_femur_{side}",
         )
         body_shapes[f"tibia_{side}"] = builder.add_shape_capsule(
             bodies[f"tibia_{side}"],
             radius=config.shank_radius,
-            half_height=0.5 * config.shank_length - config.shank_radius,
+            half_height=shank_collision_half_height,
             cfg=fallback_geometry,
             label=f"geometry_tibia_{side}",
         )
@@ -344,16 +354,6 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
         has_shape_collision=True,
         has_particle_collision=False,
         is_visible=False,
-    )
-    thigh_collision_half_height = _trimmed_capsule_half_height(
-        config.thigh_length,
-        config.thigh_radius,
-        config.self_collision_joint_clearance,
-    )
-    shank_collision_half_height = _trimmed_capsule_half_height(
-        config.shank_length,
-        config.shank_radius,
-        config.self_collision_joint_clearance,
     )
     collision_shapes = {
         "pelvis": builder.add_shape_box(
