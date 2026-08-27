@@ -798,7 +798,7 @@ add_example_test(
     TestOpenSimExamples,
     name="opensim.example_opensim_subject",
     devices=test_devices,
-    test_options={"num-frames": 5, "show_self_collision": True},
+    test_options={"num-frames": 5, "show_collision": True},
     use_viewer=True,
 )
 

@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 import newton
+from newton.examples.opensim.example_opensim_subject import create_parser
 from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
 
@@ -48,6 +49,30 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         )
         np.testing.assert_allclose(model.joint_target_ke.numpy()[6:], 100.0)
         np.testing.assert_allclose(model.joint_target_kd.numpy()[6:], 20.0)
+
+    def test_cli_exposes_concise_subject_options(self):
+        """Expose concise subject options while accepting legacy names."""
+        parser = create_parser()
+        help_text = parser.format_help()
+        for option in ("--mass", "--height", "--template", "--geometry", "--substeps", "--show-collision"):
+            self.assertIn(option, help_text)
+        for option in ("--body-mass", "--body-height", "--template-osim", "--geometry-dir", "--subject-substeps"):
+            self.assertNotIn(option, help_text)
+        args = parser.parse_args(
+            [
+                "--body-mass",
+                "90",
+                "--body-height",
+                "1.8",
+                "--subject-substeps",
+                "12",
+                "--show-self-collision",
+            ]
+        )
+        self.assertEqual(args.body_mass, 90.0)
+        self.assertEqual(args.body_height, 1.8)
+        self.assertEqual(args.subject_substeps, 12)
+        self.assertTrue(args.show_self_collision)
 
     def test_scales_default_inertia_proxies_with_subject(self):
         """Scale default inertia-derived proxies with subject dimensions."""

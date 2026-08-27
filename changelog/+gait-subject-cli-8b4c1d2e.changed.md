@@ -1,0 +1,1 @@
+Simplify the `opensim_subject` CLI with `--mass`, `--height`, `--template`, `--geometry`, `--substeps`, `--overwrite`, and `--show-collision`; legacy option names remain accepted but hidden from help.

@@ -152,7 +152,7 @@ uv run --extra dev -m newton.examples opensim_subject
 Show the invisible pelvis, torso, femur, and tibia self-collision proxies:
 
 ```bash
-uv run --extra dev -m newton.examples opensim_subject --show-self-collision
+uv run --extra dev -m newton.examples opensim_subject --show-collision
 ```
 
 Run the complete canonical S001 proof with direct C3D decoding and scaled VTP
@@ -161,18 +161,18 @@ visuals:
 ```bash
 uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_subject \
   --subject-dir /tmp/newton-opensim-s001-proof \
-  --overwrite-subject-dir \
+  --overwrite \
   --c3d "/home/jo31399/newton-data/gait/incoming/Cal 101.v3d.c3d" \
-  --template-osim /home/jo31399/newton-data/gait/reference/gait2354_subject01.osim \
-  --body-mass 81.9312118 \
-  --body-height 1.695898298375747 \
-  --geometry-dir ~/.cache/newton/opensim-models_Geometry_fa3fb094_d9b05d47/Geometry
+  --template /home/jo31399/newton-data/gait/reference/gait2354_subject01.osim \
+  --mass 81.9312118 \
+  --height 1.695898298375747 \
+  --geometry ~/.cache/newton/opensim-models_Geometry_fa3fb094_d9b05d47/Geometry
 ```
 
 The example always writes a reusable MJCF model and runs it through
 `ModelBuilder.add_mjcf()` with nonadjacent self-collision enabled,
 `CollisionPipeline`, and `SolverFeatherstone`. Collision proxies are hidden by
-default; `--show-self-collision` reveals them for inspection. Its
+default; `--show-collision` reveals them for inspection. Its
 default standing-inspection mode fixes the pelvis because a free-root balance
 controller is not implemented yet; pass `--free-root` to run the explicitly
 unassisted falling model. The saved MJCF itself retains the free joint. When
@@ -186,11 +186,11 @@ The exact OpenSim COM/inertia and eight stiff sphere contacts require a smaller
 Featherstone step than the earlier approximate model. The example defaults to
 50 solver/contact substeps per 60 Hz display frame (`dt = 1/3000 s`). Ten
 substeps caused nonfinite leg state during the second display frame. Override
-with `--subject-substeps` only when running an explicit convergence study.
+with `--substeps` only when running an explicit convergence study.
 
 ## Official OpenSim subject building
 
-When `--template-osim` is supplied, the progress example starts from static C3D
+When `--template` is supplied, the progress example starts from static C3D
 and uses official OpenSim 4.6 `ScaleTool` as the default backend. The adapter
 constructs a Trial 101-specific `MeasurementSet` through OpenSim APIs, selects
 `scaling_order = measurements`, preserves mass distribution, and deliberately

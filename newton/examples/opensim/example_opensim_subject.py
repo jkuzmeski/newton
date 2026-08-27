@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import argparse
 import shutil
 import tempfile
 from dataclasses import replace
@@ -47,7 +48,7 @@ class Example:
         self.frame_dt = 1.0 / 60.0
         self.sim_substeps = args.subject_substeps
         if self.sim_substeps <= 0:
-            raise ValueError("--subject-substeps must be positive")
+            raise ValueError("--substeps must be positive")
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
         self.subject_dir = (
@@ -71,7 +72,7 @@ class Example:
             hip_width=args.hip_width,
         )
         if args.template_osim and args.scaled_osim:
-            raise ValueError("provide either --template-osim or --scaled-osim, not both")
+            raise ValueError("provide either --template or --scaled-osim, not both")
         self.marker_artifact = None
         self.device_markers = None
         markers = None
@@ -96,7 +97,7 @@ class Example:
         self.marker_placement = None
         if args.template_osim:
             if markers is None:
-                raise ValueError("--template-osim requires --c3d")
+                raise ValueError("--template requires --c3d")
             if args.scaling_backend == "official":
                 official = build_subject_with_official_opensim(
                     markers,
@@ -157,7 +158,7 @@ class Example:
         visual_meshes = ()
         contact_layout = None
         if bool(scaled_osim) != bool(args.geometry_dir):
-            raise ValueError("a scaled/template model path and --geometry-dir must be provided together")
+            raise ValueError("a scaled/template model path and --geometry must be provided together")
         if scaled_osim:
             visuals = compile_scaled_vtp_visuals(
                 scaled_osim,
@@ -355,53 +356,107 @@ class Example:
 
 
 def create_parser():
-    """Create command-line arguments for the subject compiler example."""
+    """Create the concise command-line interface for the subject example."""
     parser = newton.examples.create_parser()
     parser.add_argument("--subject-dir", help="Directory for MJCF, NPZ, manifest, and converted mesh outputs")
     parser.add_argument(
-        "--overwrite-subject-dir",
+        "--overwrite",
+        dest="overwrite_subject_dir",
         action="store_true",
-        help="Delete a nonempty subject output directory before rebuilding",
+        help="Replace an existing subject output directory",
     )
-    parser.add_argument("--subject-name", default="example_subject", help="Saved MJCF model name")
+    parser.add_argument(
+        "--overwrite-subject-dir",
+        dest="overwrite_subject_dir",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--free-root",
         action="store_true",
-        help="Run the unassisted six-DOF pelvis; default fixes the pelvis for standing model inspection",
+        help="Run the unassisted six-DOF pelvis; default fixes the pelvis for standing inspection",
+    )
+    parser.add_argument(
+        "--show-collision",
+        dest="show_self_collision",
+        action="store_true",
+        help="Show the orange self-collision proxies (hidden by default)",
     )
     parser.add_argument(
         "--show-self-collision",
+        dest="show_self_collision",
         action="store_true",
-        help="Show invisible segment self-collision proxies in the viewer (hidden by default)",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--substeps",
+        dest="subject_substeps",
+        type=int,
+        default=50,
+        help="Physics substeps per 60 Hz display frame",
     )
     parser.add_argument(
         "--subject-substeps",
+        dest="subject_substeps",
         type=int,
-        default=50,
-        help="Featherstone/contact substeps per 60 Hz display frame",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument("--body-mass", type=float, default=81.4, help="Subject body mass [kg]")
-    parser.add_argument("--body-height", type=float, default=1.695898298375747, help="Subject standing height [m]")
-    parser.add_argument("--hip-width", type=float, default=0.152, help="Hip-joint center spacing [m]")
-    parser.add_argument("--c3d", help="Optional calibration or dynamic C3D to decode directly")
-    parser.add_argument("--c3d-up-axis", default="+Z", help="C3D lab axis pointing upward")
-    parser.add_argument("--c3d-forward-axis", default="-Y", help="C3D lab axis pointing subject-forward")
-    parser.add_argument("--template-osim", help="Pinned generic gait2354 model to scale directly from --c3d")
+    parser.add_argument("--mass", dest="body_mass", type=float, default=81.4, help="Subject body mass [kg]")
+    parser.add_argument(
+        "--body-mass",
+        dest="body_mass",
+        type=float,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--height",
+        dest="body_height",
+        type=float,
+        default=1.695898298375747,
+        help="Subject standing height [m]",
+    )
+    parser.add_argument(
+        "--body-height",
+        dest="body_height",
+        type=float,
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--c3d", help="Optional calibration or dynamic C3D file")
+    parser.add_argument("--template", dest="template_osim", help="OpenSim template to scale from --c3d")
+    parser.add_argument(
+        "--template-osim",
+        dest="template_osim",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument("--geometry", dest="geometry_dir", help="OpenSim VTP geometry directory")
+    parser.add_argument(
+        "--geometry-dir",
+        dest="geometry_dir",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+
+    # Keep reproducibility controls accepted without crowding the normal help.
+    parser.add_argument("--subject-name", default="example_subject", help=argparse.SUPPRESS)
+    parser.add_argument("--hip-width", type=float, default=0.152, help=argparse.SUPPRESS)
+    parser.add_argument("--c3d-up-axis", default="+Z", help=argparse.SUPPRESS)
+    parser.add_argument("--c3d-forward-axis", default="-Y", help=argparse.SUPPRESS)
     parser.add_argument(
         "--scaling-backend",
         choices=("official", "parity"),
         default="official",
-        help="Subject scaler: official OpenSim ScaleTool (default) or project parity implementation",
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument("--scaled-osim", help="Optional accepted pre-scaled gait2354 model for VTP visuals")
-    parser.add_argument("--scale-start", type=float, default=0.5, help="Static scaling window start [s]")
-    parser.add_argument("--scale-end", type=float, default=1.0, help="Static scaling window end [s]")
-    parser.add_argument(
-        "--official-marker-placement",
-        action="store_true",
-        help="Run official OpenSim 4.6 MarkerPlacer as an offline oracle stage",
-    )
-    parser.add_argument("--geometry-dir", help="Geometry directory containing referenced VTP files")
+    parser.add_argument("--scaled-osim", help=argparse.SUPPRESS)
+    parser.add_argument("--scale-start", type=float, default=0.5, help=argparse.SUPPRESS)
+    parser.add_argument("--scale-end", type=float, default=1.0, help=argparse.SUPPRESS)
+    parser.add_argument("--official-marker-placement", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
