@@ -229,9 +229,12 @@ The official ScaleTool neutral body transforms also map OpenSim COM and full
 inertia tensors into each simple Newton body frame. Talus, calcaneus, and toes
 are combined with the mass-weighted COM and parallel-axis theorem. The saved
 MJCF now preserves all eight official-derived masses, nonzero COM offsets, full
-inertia products, and real left/right foot asymmetry. The canonical one-call
-Newton import agrees with the offline mapping within 1.3e-6 kg, 3.5e-9 m, and
-2.1e-8 kg·m².
+inertia products, and real left/right foot asymmetry. The same mass and inertia
+values also drive the segment proxies: pelvis and torso boxes use the
+inertia-box COM, principal axes, and extents; limb capsules use the longest
+principal axis and the smaller transverse extent before applying joint
+clearance. The canonical one-call Newton import agrees with the offline mapping
+within 1.3e-6 kg, 3.5e-9 m, and 2.1e-8 kg·m².
 
 ## Official joint-center mapping
 

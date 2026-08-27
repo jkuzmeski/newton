@@ -287,6 +287,39 @@ class TestGaitVTPAdapter(unittest.TestCase):
             inertia = model.body_inertia.numpy()[index]
             actual = (inertia[0, 0], inertia[1, 1], inertia[2, 2], inertia[0, 1], inertia[0, 2], inertia[1, 2])
             np.testing.assert_allclose(actual, expected.full_inertia, atol=1.0e-6)
+        shape_transform = model.shape_transform.numpy()
+        shape_scale = model.shape_scale.numpy()
+        for target in ("torso", "femur_left", "tibia_left"):
+            proxy = next(
+                index for index, label in enumerate(model.shape_label) if label.endswith(f"/collision_{target}")
+            )
+            np.testing.assert_allclose(shape_transform[proxy, :3], inertials[target].position, atol=1.0e-6)
+        femur = np.asarray(inertials["femur_left"].full_inertia)
+        inertia = np.asarray(
+            ((femur[0], femur[3], femur[4]), (femur[3], femur[1], femur[5]), (femur[4], femur[5], femur[2]))
+        )
+        principal, _ = np.linalg.eigh(inertia)
+        box_inertia = principal * (12.0 / (8.0 * inertials["femur_left"].mass))
+        half_extents = np.sqrt(
+            np.abs(
+                (
+                    box_inertia[2] + box_inertia[1] - box_inertia[0],
+                    box_inertia[0] + box_inertia[2] - box_inertia[1],
+                    box_inertia[1] + box_inertia[0] - box_inertia[2],
+                )
+            )
+        )
+        femur_proxy = next(
+            index for index, label in enumerate(model.shape_label) if label.endswith("/collision_femur_left")
+        )
+        long_axis = int(np.argmax(half_extents))
+        transverse = [index for index in range(3) if index != long_axis]
+        self.assertAlmostEqual(shape_scale[femur_proxy, 0], min(half_extents[transverse]), places=6)
+        self.assertAlmostEqual(
+            shape_scale[femur_proxy, 1],
+            half_extents[long_axis] - config.self_collision_joint_clearance,
+            places=6,
+        )
         joint_xform_child = model.joint_X_c.numpy()
         for name, expected in centers.items():
             if name.startswith("hip_"):

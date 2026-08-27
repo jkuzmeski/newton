@@ -12,6 +12,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from .native_model import SimpleGaitConfig
 
 
@@ -67,6 +69,136 @@ def _trimmed_capsule_half_height(length: float, radius: float, clearance: float)
     if trimmed_length <= 2.0 * radius:
         raise ValueError("self-collision joint clearance leaves no capsule body")
     return 0.5 * trimmed_length - radius
+
+
+@dataclass(frozen=True, slots=True)
+class _InertiaBox:
+    """Inertia-equivalent box values in one body frame."""
+
+    center: tuple[float, float, float]
+    """Box center at the body-frame COM [m]."""
+
+    half_extents: tuple[float, float, float]
+    """Principal-frame box half-extents [m]."""
+
+    quaternion_wxyz: tuple[float, float, float, float]
+    """Principal-frame orientation as an MJCF ``wxyz`` quaternion."""
+
+    long_axis: tuple[float, float, float]
+    """Principal axis with the largest equivalent box extent."""
+
+    long_half_extent: float
+    """Largest equivalent box half-extent [m]."""
+
+    capsule_radius: float
+    """Smaller transverse equivalent box half-extent [m]."""
+
+
+def _matrix_to_wxyz(matrix: np.ndarray) -> tuple[float, float, float, float]:
+    """Convert a proper rotation matrix to an MJCF ``wxyz`` quaternion."""
+    trace = float(np.trace(matrix))
+    if trace > 0.0:
+        scale = math.sqrt(trace + 1.0) * 2.0
+        quaternion = np.asarray(
+            (
+                0.25 * scale,
+                (matrix[2, 1] - matrix[1, 2]) / scale,
+                (matrix[0, 2] - matrix[2, 0]) / scale,
+                (matrix[1, 0] - matrix[0, 1]) / scale,
+            )
+        )
+    else:
+        diagonal = np.diag(matrix)
+        axis = int(np.argmax(diagonal))
+        if axis == 0:
+            scale = math.sqrt(max(1.0 + matrix[0, 0] - matrix[1, 1] - matrix[2, 2], 0.0)) * 2.0
+            quaternion = np.asarray(
+                (
+                    (matrix[2, 1] - matrix[1, 2]) / scale,
+                    0.25 * scale,
+                    (matrix[0, 1] + matrix[1, 0]) / scale,
+                    (matrix[0, 2] + matrix[2, 0]) / scale,
+                )
+            )
+        elif axis == 1:
+            scale = math.sqrt(max(1.0 + matrix[1, 1] - matrix[0, 0] - matrix[2, 2], 0.0)) * 2.0
+            quaternion = np.asarray(
+                (
+                    (matrix[0, 2] - matrix[2, 0]) / scale,
+                    (matrix[0, 1] + matrix[1, 0]) / scale,
+                    0.25 * scale,
+                    (matrix[1, 2] + matrix[2, 1]) / scale,
+                )
+            )
+        else:
+            scale = math.sqrt(max(1.0 + matrix[2, 2] - matrix[0, 0] - matrix[1, 1], 0.0)) * 2.0
+            quaternion = np.asarray(
+                (
+                    (matrix[1, 0] - matrix[0, 1]) / scale,
+                    (matrix[0, 2] + matrix[2, 0]) / scale,
+                    (matrix[1, 2] + matrix[2, 1]) / scale,
+                    0.25 * scale,
+                )
+            )
+    quaternion /= np.linalg.norm(quaternion)
+    return tuple(float(value) for value in quaternion)
+
+
+def _inertia_box(
+    mass: float,
+    position: tuple[float, float, float],
+    full_inertia: tuple[float, float, float, float, float, float],
+) -> _InertiaBox:
+    """Reproduce the viewer's inertia-box extents from body mass and inertia."""
+    if not math.isfinite(mass) or mass <= 0.0:
+        raise ValueError("inertia-box mass must be finite and positive")
+    if len(position) != 3 or not np.all(np.isfinite(position)):
+        raise ValueError("inertia-box position must contain three finite values")
+    if len(full_inertia) != 6 or not np.all(np.isfinite(full_inertia)):
+        raise ValueError("inertia-box tensor must contain six finite values")
+    ixx, iyy, izz, ixy, ixz, iyz = full_inertia
+    inertia = np.asarray(
+        ((ixx, ixy, ixz), (ixy, iyy, iyz), (ixz, iyz, izz)),
+        dtype=np.float64,
+    )
+    principal, axes = np.linalg.eigh(inertia)
+    if np.any(principal <= 0.0) or not np.all(np.isfinite(principal)):
+        raise ValueError("inertia-box tensor must be positive definite")
+    box_inertia = principal * (12.0 / (8.0 * mass))
+    squared_extents = np.asarray(
+        (
+            box_inertia[2] + box_inertia[1] - box_inertia[0],
+            box_inertia[0] + box_inertia[2] - box_inertia[1],
+            box_inertia[1] + box_inertia[0] - box_inertia[2],
+        )
+    )
+    half_extents = np.sqrt(np.abs(squared_extents))
+    if np.any(half_extents <= 0.0) or not np.all(np.isfinite(half_extents)):
+        raise ValueError("inertia-box tensor produced invalid extents")
+    if np.linalg.det(axes) < 0.0:
+        axes[:, -1] *= -1.0
+    long_axis_index = int(np.argmax(half_extents))
+    transverse = [index for index in range(3) if index != long_axis_index]
+    return _InertiaBox(
+        center=tuple(float(value) for value in position),
+        half_extents=tuple(float(value) for value in half_extents),
+        quaternion_wxyz=_matrix_to_wxyz(axes),
+        long_axis=tuple(float(value) for value in axes[:, long_axis_index]),
+        long_half_extent=float(half_extents[long_axis_index]),
+        capsule_radius=float(np.min(half_extents[transverse])),
+    )
+
+
+def _capsule_fromto(proxy: _InertiaBox, clearance: float) -> tuple[str, float]:
+    """Return body-frame capsule endpoints and radius from an inertia box."""
+    half_length = proxy.long_half_extent - clearance
+    if half_length <= proxy.capsule_radius:
+        raise ValueError("self-collision clearance leaves no inertia-derived capsule body")
+    center = np.asarray(proxy.center)
+    axis = np.asarray(proxy.long_axis)
+    start = center - axis * half_length
+    end = center + axis * half_length
+    return _values(*start, *end), proxy.capsule_radius
 
 
 def _add_inertial(
@@ -164,6 +296,8 @@ def subject_mjcf_xml(
         contact_centers: Optional mesh-derived sphere centers keyed by side.
         contact_radius: Optional mesh-derived contact radius [m].
         inertial_data: Optional OpenSim-derived inertial properties by target body.
+            When provided, body COMs, inertia principal axes, and equivalent box
+            extents drive the segment visual/collision proxies.
         joint_centers: Optional official neutral joint centers in target child frames.
 
     Returns:
@@ -187,18 +321,27 @@ def subject_mjcf_xml(
     expected_centers = {"hip_left", "hip_right", "knee_left", "knee_right", "ankle_left", "ankle_right"}
     if centers and set(centers) != expected_centers:
         raise ValueError(f"joint_centers must contain exactly {sorted(expected_centers)}")
-    thigh_collision_half_height = _trimmed_capsule_half_height(
-        config.thigh_length,
-        config.thigh_radius,
-        config.self_collision_joint_clearance,
-    )
-    shank_collision_half_height = _trimmed_capsule_half_height(
-        config.shank_length,
-        config.shank_radius,
-        config.self_collision_joint_clearance,
-    )
-    thigh_collision_half_length = thigh_collision_half_height + config.thigh_radius
-    shank_collision_half_length = shank_collision_half_height + config.shank_radius
+    nominal_bodies = {
+        "pelvis": (config.pelvis_mass, config.pelvis_dimensions),
+        "torso": (config.torso_mass, config.torso_dimensions),
+        "femur_left": (config.thigh_mass, (2.0 * config.thigh_radius, 2.0 * config.thigh_radius, config.thigh_length)),
+        "femur_right": (config.thigh_mass, (2.0 * config.thigh_radius, 2.0 * config.thigh_radius, config.thigh_length)),
+        "tibia_left": (config.shank_mass, (2.0 * config.shank_radius, 2.0 * config.shank_radius, config.shank_length)),
+        "tibia_right": (config.shank_mass, (2.0 * config.shank_radius, 2.0 * config.shank_radius, config.shank_length)),
+    }
+
+    def inertial_for(name: str) -> SubjectInertial:
+        source = inertials.get(name)
+        if source is not None:
+            return source
+        mass, dimensions = nominal_bodies[name]
+        diagonal = _box_inertia(mass, dimensions)
+        return SubjectInertial(mass, (0.0, 0.0, 0.0), (*diagonal, 0.0, 0.0, 0.0))
+
+    inertia_boxes = {
+        name: _inertia_box(source.mass, source.position, source.full_inertia)
+        for name, source in ((name, inertial_for(name)) for name in nominal_bodies)
+    }
     root = ET.Element("mujoco", model=model_name)
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(root, "option", gravity="0 0 -9.80665", timestep="0.001")
@@ -262,7 +405,9 @@ def subject_mjcf_xml(
             "geom",
             name="geometry_pelvis",
             type="box",
-            size=_values(*(0.5 * value for value in config.pelvis_dimensions)),
+            pos=_values(*inertia_boxes["pelvis"].center),
+            quat=_values(*inertia_boxes["pelvis"].quaternion_wxyz),
+            size=_values(*inertia_boxes["pelvis"].half_extents),
             attrib={"class": "visual"},
         )
     ET.SubElement(
@@ -270,7 +415,9 @@ def subject_mjcf_xml(
         "geom",
         name="collision_pelvis",
         type="box",
-        size=_values(*(0.5 * value for value in config.pelvis_dimensions)),
+        pos=_values(*inertia_boxes["pelvis"].center),
+        quat=_values(*inertia_boxes["pelvis"].quaternion_wxyz),
+        size=_values(*inertia_boxes["pelvis"].half_extents),
         attrib={"class": "self_collision"},
     )
 
@@ -282,7 +429,9 @@ def subject_mjcf_xml(
             "geom",
             name="geometry_torso",
             type="box",
-            size=_values(*(0.5 * value for value in config.torso_dimensions)),
+            pos=_values(*inertia_boxes["torso"].center),
+            quat=_values(*inertia_boxes["torso"].quaternion_wxyz),
+            size=_values(*inertia_boxes["torso"].half_extents),
             attrib={"class": "visual"},
         )
     ET.SubElement(
@@ -290,7 +439,9 @@ def subject_mjcf_xml(
         "geom",
         name="collision_torso",
         type="box",
-        size=_values(*(0.5 * value for value in config.torso_dimensions)),
+        pos=_values(*inertia_boxes["torso"].center),
+        quat=_values(*inertia_boxes["torso"].quaternion_wxyz),
+        size=_values(*inertia_boxes["torso"].half_extents),
         attrib={"class": "self_collision"},
     )
 
@@ -324,6 +475,14 @@ def subject_mjcf_xml(
         if set(centers_by_side) != {"left", "right"} or any(len(values) != 4 for values in centers_by_side.values()):
             raise ValueError("contact_centers must provide four centers for each foot")
     for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
+        femur_fromto, femur_radius = _capsule_fromto(
+            inertia_boxes[f"femur_{side}"],
+            config.self_collision_joint_clearance,
+        )
+        tibia_fromto, tibia_radius = _capsule_fromto(
+            inertia_boxes[f"tibia_{side}"],
+            config.self_collision_joint_clearance,
+        )
         femur = ET.SubElement(
             pelvis,
             "body",
@@ -365,15 +524,8 @@ def subject_mjcf_xml(
                 "geom",
                 name=f"geometry_femur_{side}",
                 type="capsule",
-                size=f"{config.thigh_radius:.9g}",
-                fromto=_values(
-                    0.0,
-                    0.0,
-                    -thigh_collision_half_length,
-                    0.0,
-                    0.0,
-                    thigh_collision_half_length,
-                ),
+                size=f"{femur_radius:.9g}",
+                fromto=femur_fromto,
                 attrib={"class": "visual"},
             )
         ET.SubElement(
@@ -381,15 +533,8 @@ def subject_mjcf_xml(
             "geom",
             name=f"collision_femur_{side}",
             type="capsule",
-            size=f"{config.thigh_radius:.9g}",
-            fromto=_values(
-                0.0,
-                0.0,
-                -thigh_collision_half_length,
-                0.0,
-                0.0,
-                thigh_collision_half_length,
-            ),
+            size=f"{femur_radius:.9g}",
+            fromto=femur_fromto,
             attrib={"class": "self_collision"},
         )
 
@@ -424,15 +569,8 @@ def subject_mjcf_xml(
                 "geom",
                 name=f"geometry_tibia_{side}",
                 type="capsule",
-                size=f"{config.shank_radius:.9g}",
-                fromto=_values(
-                    0.0,
-                    0.0,
-                    -shank_collision_half_length,
-                    0.0,
-                    0.0,
-                    shank_collision_half_length,
-                ),
+                size=f"{tibia_radius:.9g}",
+                fromto=tibia_fromto,
                 attrib={"class": "visual"},
             )
         ET.SubElement(
@@ -440,15 +578,8 @@ def subject_mjcf_xml(
             "geom",
             name=f"collision_tibia_{side}",
             type="capsule",
-            size=f"{config.shank_radius:.9g}",
-            fromto=_values(
-                0.0,
-                0.0,
-                -shank_collision_half_length,
-                0.0,
-                0.0,
-                shank_collision_half_length,
-            ),
+            size=f"{tibia_radius:.9g}",
+            fromto=tibia_fromto,
             attrib={"class": "self_collision"},
         )
 
