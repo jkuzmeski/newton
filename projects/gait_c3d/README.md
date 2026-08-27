@@ -146,6 +146,12 @@ Run the current native subject path with generated fallback geometry:
 uv run --extra dev -m newton.examples opensim_subject
 ```
 
+Show the invisible pelvis, torso, femur, and tibia self-collision proxies:
+
+```bash
+uv run --extra dev -m newton.examples opensim_subject --show-self-collision
+```
+
 Run the complete canonical S001 proof with direct C3D decoding and scaled VTP
 visuals:
 

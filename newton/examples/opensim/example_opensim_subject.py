@@ -201,11 +201,13 @@ class Example:
         )
         newton.use_coord_layout_targets = True
         self.free_root = args.free_root
+        self.show_self_collision = args.show_self_collision
         builder = newton.ModelBuilder()
         builder.add_mjcf(
             str(self.subject_xml),
             floating=True if self.free_root else False,
             enable_self_collisions=True,
+            force_show_colliders=args.show_self_collision,
         )
         self.model = builder.finalize(device=args.device)
         self.state_0 = self.model.state()
@@ -246,6 +248,17 @@ class Example:
         if self.model.body_count != 8 or self.model.joint_dof_count != expected_dofs:
             raise ValueError("subject model has an unexpected topology")
         shape_types = self.model.shape_type.numpy()
+        shape_flags = self.model.shape_flags.numpy()
+        if self.show_self_collision:
+            self_collision_proxies = [
+                index
+                for index, label in enumerate(self.model.shape_label)
+                if label.rsplit("/", 1)[-1].startswith("collision_")
+            ]
+            if len(self_collision_proxies) != 6 or any(
+                not shape_flags[index] & newton.ShapeFlags.VISIBLE for index in self_collision_proxies
+            ):
+                raise ValueError("self-collision proxies were not made visible")
         contact_spheres = [
             index
             for index, label in enumerate(self.model.shape_label)
@@ -355,6 +368,11 @@ def create_parser():
         "--free-root",
         action="store_true",
         help="Run the unassisted six-DOF pelvis; default fixes the pelvis for standing model inspection",
+    )
+    parser.add_argument(
+        "--show-self-collision",
+        action="store_true",
+        help="Show invisible segment self-collision proxies in the viewer",
     )
     parser.add_argument(
         "--subject-substeps",
