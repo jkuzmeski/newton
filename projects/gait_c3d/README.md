@@ -95,10 +95,12 @@ bodies, 16 free-root velocity DOFs, 19 non-colliding mesh visuals, 8 foot
 contact spheres, 8 translucent sphere overlays, and collision/visual ground
 planes through one `ModelBuilder.add_mjcf()` call. Official default-pose body
 transforms bake talus, calcaneus, and toe meshes into each merged Newton foot
-frame. The compiler then shifts the complete visual skeleton by one audited
-vertical offset so the lowest visual sole is at the ground, derives contact
-radius and heel/forefoot/medial/lateral centers from each converted foot's
-body-local bounds, and makes every sphere surface meet that same sole plane.
+frame. The compiler then raises the complete neutral target hierarchy by one
+audited root-height offset so visuals, joint centers, COMs, inertias, and
+contacts remain in one frame while the lowest visual sole meets the ground. It
+derives contact radius and heel/forefoot/medial/lateral centers from each
+converted foot's body-local bounds and makes every sphere surface meet that same
+sole plane.
 
 ## Direct C3D marker artifacts
 
@@ -208,3 +210,20 @@ MJCF now preserves all eight official-derived masses, nonzero COM offsets, full
 inertia products, and real left/right foot asymmetry. The canonical one-call
 Newton import agrees with the offline mapping within 1.3e-6 kg, 3.5e-9 m, and
 2.1e-8 kg·m².
+
+## Official joint-center mapping
+
+The official ScaleTool subprocess exports every source body transform at the
+OpenSim default state. The converter uses the femur, tibia, and talus origins as
+the neutral hip, knee, and ankle centers, rotates them from OpenSim ground into
+Newton ground, applies the same audited root-height registration as the visual
+skeleton, and expresses each center in its simple target child-body frame. The
+MJCF hip, knee, and ankle `joint pos` values come from those mapped centers,
+not from half-length approximations.
+
+On canonical S001, the previous approximate centers were displaced by roughly
+64–70 mm anteriorly and 103 mm vertically from the displayed OpenSim joints.
+After conversion, all six loaded Newton centers agree with the corresponding
+official centers within 0.06 micrometers. The 15 mm tibia/fibula mesh clearance
+remains visual-only, so it does not move the official knee center or any physics
+frame.

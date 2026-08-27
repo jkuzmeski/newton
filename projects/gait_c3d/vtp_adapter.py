@@ -61,7 +61,7 @@ class FootContactLayout:
 
     radius: float
     centers: dict[str, tuple[tuple[float, float, float], ...]]
-    visual_ground_offset_z: float
+    root_height_offset_z: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -532,6 +532,35 @@ def _target_body_transforms(config: SimpleGaitConfig) -> dict[str, np.ndarray]:
     return transforms
 
 
+def joint_centers_from_official_transforms(
+    config: SimpleGaitConfig,
+    source_body_transforms: str | os.PathLike | dict[str, np.ndarray],
+    *,
+    source_ground_offset_z: float,
+) -> dict[str, tuple[float, float, float]]:
+    """Map official neutral hip, knee, and ankle centers into target child frames."""
+    if isinstance(source_body_transforms, (str, os.PathLike)):
+        source_body_transforms = json.loads(Path(source_body_transforms).read_text())
+    source_transforms = {name: np.asarray(value, dtype=np.float64) for name, value in source_body_transforms.items()}
+    target_transforms = _target_body_transforms(config)
+    output = {}
+    for side, source_side in (("left", "l"), ("right", "r")):
+        for joint, source_body, target_body in (
+            ("hip", f"femur_{source_side}", f"femur_{side}"),
+            ("knee", f"tibia_{source_side}", f"tibia_{side}"),
+            ("ankle", f"talus_{source_side}", f"foot_{side}"),
+        ):
+            transform = source_transforms.get(source_body)
+            if transform is None or transform.shape != (4, 4):
+                raise ValueError(f"missing official joint-center body transform {source_body!r}")
+            center_ground = _OPENSIM_TO_NEWTON @ transform[:3, 3]
+            center_ground[2] += source_ground_offset_z
+            target = target_transforms[target_body]
+            center_local = target[:3, :3].T @ (center_ground - target[:3, 3])
+            output[f"{joint}_{side}"] = tuple(float(value) for value in center_local)
+    return output
+
+
 def subject_inertials_from_scaled_gait2354(
     path: str | os.PathLike,
     config: SimpleGaitConfig,
@@ -734,11 +763,7 @@ def _compile_scaled_vtp_visuals(
             for side, values in foot_geometry.items()
             for vertices in values
         )
-        visual_ground_offset = -foot_global_min
-        for output_path, _, vertices, triangles, record in compiled_geometry:
-            vertices[:, 2] += visual_ground_offset
-            _write_obj(output_path, vertices, triangles)
-            record["output"]["sha256"] = _sha256(output_path)
+        root_height_offset = -foot_global_min
         bounds = {
             side: (
                 np.min(np.concatenate(values, axis=0), axis=0),
@@ -763,7 +788,7 @@ def _compile_scaled_vtp_visuals(
                 (forefoot_x, lateral_y, center_z),
                 (forefoot_x, medial_y, center_z),
             )
-        contact_layout = FootContactLayout(radius, centers, visual_ground_offset)
+        contact_layout = FootContactLayout(radius, centers, root_height_offset)
 
     expected = {"pelvis", "torso", "femur_left", "femur_right", "tibia_left", "tibia_right"}
     if exact_transforms:

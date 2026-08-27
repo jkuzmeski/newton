@@ -141,6 +141,7 @@ def subject_mjcf_xml(
     contact_centers: dict[str, tuple[tuple[float, float, float], ...]] | None = None,
     contact_radius: float | None = None,
     inertial_data: dict[str, SubjectInertial] | None = None,
+    joint_centers: dict[str, tuple[float, float, float]] | None = None,
 ) -> str:
     """Create MJCF for one scaled simple-joint subject.
 
@@ -152,6 +153,7 @@ def subject_mjcf_xml(
         contact_centers: Optional mesh-derived sphere centers keyed by side.
         contact_radius: Optional mesh-derived contact radius [m].
         inertial_data: Optional OpenSim-derived inertial properties by target body.
+        joint_centers: Optional official neutral joint centers in target child frames.
 
     Returns:
         An MJCF XML document. It can be passed directly to
@@ -170,6 +172,10 @@ def subject_mjcf_xml(
     }
     if unknown_inertials:
         raise ValueError(f"inertial_data contains unknown bodies: {sorted(unknown_inertials)}")
+    centers = joint_centers or {}
+    expected_centers = {"hip_left", "hip_right", "knee_left", "knee_right", "ankle_left", "ankle_right"}
+    if centers and set(centers) != expected_centers:
+        raise ValueError(f"joint_centers must contain exactly {sorted(expected_centers)}")
     root = ET.Element("mujoco", model=model_name)
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(root, "option", gravity="0 0 -9.80665", timestep="0.001")
@@ -284,7 +290,7 @@ def subject_mjcf_xml(
             (2.0 * config.thigh_radius, 2.0 * config.thigh_radius, config.thigh_length),
             inertials.get(f"femur_{side}"),
         )
-        hip_position = (0.0, 0.0, 0.5 * config.thigh_length)
+        hip_position = centers.get(f"hip_{side}", (0.0, 0.0, 0.5 * config.thigh_length))
         hip_specs = (
             ("flexion", (0.0, -1.0, 0.0), (-30.0 * degrees, 120.0 * degrees), 0.5),
             ("adduction", (lateral_sign, 0.0, 0.0), (-25.0 * degrees, 45.0 * degrees), 0.5),
@@ -331,7 +337,7 @@ def subject_mjcf_xml(
         _add_joint(
             tibia,
             name=knee_name,
-            position=(0.0, 0.0, 0.5 * config.shank_length),
+            position=centers.get(f"knee_{side}", (0.0, 0.0, 0.5 * config.shank_length)),
             axis=(0.0, 1.0, 0.0),
             limits=knee_limits,
             damping=0.3,
@@ -371,7 +377,7 @@ def subject_mjcf_xml(
         _add_joint(
             foot,
             name=ankle_name,
-            position=(-0.4 * config.foot_length, 0.0, config.contact_radius),
+            position=centers.get(f"ankle_{side}", (-0.4 * config.foot_length, 0.0, config.contact_radius)),
             axis=(0.0, -1.0, 0.0),
             limits=ankle_limits,
             damping=0.2,
@@ -451,6 +457,7 @@ def write_subject_mjcf(
     contact_centers: dict[str, tuple[tuple[float, float, float], ...]] | None = None,
     contact_radius: float | None = None,
     inertial_data: dict[str, SubjectInertial] | None = None,
+    joint_centers: dict[str, tuple[float, float, float]] | None = None,
 ) -> Path:
     """Write a scaled subject MJCF that Newton can load in one builder call."""
     path = Path(output_path).resolve()
@@ -464,6 +471,7 @@ def write_subject_mjcf(
             contact_centers=contact_centers,
             contact_radius=contact_radius,
             inertial_data=inertial_data,
+            joint_centers=joint_centers,
         ),
         encoding="utf-8",
     )

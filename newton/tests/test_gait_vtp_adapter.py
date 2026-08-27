@@ -15,6 +15,7 @@ from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
 from projects.gait_c3d.vtp_adapter import (
     compile_scaled_vtp_visuals,
+    joint_centers_from_official_transforms,
     read_scaled_display_geometry,
     read_vtp,
     simple_config_from_scaled_gait2354,
@@ -225,7 +226,14 @@ class TestGaitVTPAdapter(unittest.TestCase):
         )
         for centers in bundle.contact_layout.centers.values():
             for center in centers:
-                self.assertAlmostEqual(foot_origin_z + center[2] - bundle.contact_layout.radius, 0.0, places=6)
+                self.assertAlmostEqual(
+                    foot_origin_z
+                    + bundle.contact_layout.root_height_offset_z
+                    + center[2]
+                    - bundle.contact_layout.radius,
+                    0.0,
+                    places=6,
+                )
 
     def test_preserves_official_inertia_in_saved_mjcf(self):
         """Map source COM/full inertia and merged-foot parallel axes into Newton."""
@@ -256,7 +264,17 @@ class TestGaitVTPAdapter(unittest.TestCase):
                     )
                 }
                 inertials = subject_inertials_from_scaled_gait2354(model_path, config, transforms)
-                path = write_subject_mjcf(config, Path(directory) / "subject.xml", inertial_data=inertials)
+                centers = joint_centers_from_official_transforms(
+                    config,
+                    transforms,
+                    source_ground_offset_z=0.0,
+                )
+                path = write_subject_mjcf(
+                    config,
+                    Path(directory) / "subject.xml",
+                    inertial_data=inertials,
+                    joint_centers=centers,
+                )
                 builder = newton.ModelBuilder()
                 builder.add_mjcf(str(path), floating=False)
                 model = builder.finalize(device="cpu")
@@ -269,6 +287,14 @@ class TestGaitVTPAdapter(unittest.TestCase):
             inertia = model.body_inertia.numpy()[index]
             actual = (inertia[0, 0], inertia[1, 1], inertia[2, 2], inertia[0, 1], inertia[0, 2], inertia[1, 2])
             np.testing.assert_allclose(actual, expected.full_inertia, atol=1.0e-6)
+        joint_xform_child = model.joint_X_c.numpy()
+        for name, expected in centers.items():
+            if name.startswith("hip_"):
+                side = name.removeprefix("hip_")
+                joint = next(index for index, label in enumerate(model.joint_label) if f"/hip_flexion_{side}_" in label)
+            else:
+                joint = next(index for index, label in enumerate(model.joint_label) if label.endswith(f"/{name}"))
+            np.testing.assert_allclose(joint_xform_child[joint, :3], expected, atol=1.0e-6)
 
     def test_rejects_two_nonidentity_legacy_scale_levels(self):
         """Reject stale models that would apply subject geometry scaling twice."""

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +33,7 @@ from projects.gait_c3d.subject_scaling import (
 )
 from projects.gait_c3d.vtp_adapter import (
     compile_scaled_vtp_visuals,
+    joint_centers_from_official_transforms,
     simple_config_from_scaled_gait2354,
     subject_inertials_from_scaled_gait2354,
 )
@@ -88,6 +90,7 @@ class Example:
         scaled_osim = args.scaled_osim
         source_body_transforms = None
         inertial_data = None
+        joint_centers = None
         self.marker_placement = None
         if args.template_osim:
             if markers is None:
@@ -165,13 +168,24 @@ class Example:
             contact_layout = visuals.contact_layout
             print(f"VTP: {len(visual_meshes)} scaled visual meshes -> {visuals.root}")
             if contact_layout is not None:
+                config = replace(
+                    config,
+                    pelvis_height=config.pelvis_height + contact_layout.root_height_offset_z,
+                )
+                if source_body_transforms is not None:
+                    joint_centers = joint_centers_from_official_transforms(
+                        config,
+                        source_body_transforms,
+                        source_ground_offset_z=contact_layout.root_height_offset_z,
+                    )
                 print(
-                    f"Contact: radius {contact_layout.radius:.4f} m, visual ground offset "
-                    f"{contact_layout.visual_ground_offset_z:.4f} m"
+                    f"Contact: radius {contact_layout.radius:.4f} m, root height offset "
+                    f"{contact_layout.root_height_offset_z:.4f} m"
                 )
 
         self.visual_mesh_count = len(visual_meshes)
         self.inertial_data = inertial_data
+        self.joint_centers = joint_centers
         self.subject_xml = write_subject_mjcf(
             config,
             self.model_dir / "subject.xml",
@@ -181,6 +195,7 @@ class Example:
             contact_centers=contact_layout.centers if contact_layout is not None else None,
             contact_radius=contact_layout.radius if contact_layout is not None else None,
             inertial_data=inertial_data,
+            joint_centers=joint_centers,
         )
         newton.use_coord_layout_targets = True
         self.free_root = args.free_root
@@ -260,6 +275,20 @@ class Example:
                     raise ValueError(f"OpenSim-derived mass changed for {name}")
                 if not np.allclose(body_com[body], expected.position, atol=1.0e-6):
                     raise ValueError(f"OpenSim-derived COM changed for {name}")
+        if self.joint_centers is not None:
+            joint_xform_child = self.model.joint_X_c.numpy()
+            for name, expected in self.joint_centers.items():
+                if name.startswith("hip_"):
+                    side = name.removeprefix("hip_")
+                    joint = next(
+                        index for index, label in enumerate(self.model.joint_label) if f"/hip_flexion_{side}_" in label
+                    )
+                else:
+                    joint = next(
+                        index for index, label in enumerate(self.model.joint_label) if label.endswith(f"/{name}")
+                    )
+                if not np.allclose(joint_xform_child[joint, :3], expected, atol=1.0e-6):
+                    raise ValueError(f"official joint center changed for {name}")
         body_q = self.state_0.body_q.numpy()
         body_qd = self.state_0.body_qd.numpy()
         if not np.all(np.isfinite(body_q)) or not np.all(np.isfinite(body_qd)):
