@@ -190,3 +190,21 @@ is not the Newton runtime model.
 Use `--scaling-backend parity` to run the project ModelScaler-derived XML path
 instead. That backend is retained for comparison and fallback only; it is not
 the accepted subject builder.
+
+## Neutral-pose visual clearance and inertial preservation
+
+The official foot geometry drives the ground/contact layout. Visual-only
+`tibia` and `fibula` mesh geoms receive a subject-scaled distal offset (15 mm
+for canonical S001); body transforms, joints, contact spheres, COMs, and
+inertias do not move. On S001 this removes the 8.60 mm femur/tibia penetration,
+leaves 0.176 mm knee surface clearance, and reduces the tibia/fibula-to-foot gap
+from 3.20 mm to approximately 1.93 mm on both sides. This gate covers the
+neutral pose only; range-of-motion mesh intersection remains separate work.
+
+The official ScaleTool neutral body transforms also map OpenSim COM and full
+inertia tensors into each simple Newton body frame. Talus, calcaneus, and toes
+are combined with the mass-weighted COM and parallel-axis theorem. The saved
+MJCF now preserves all eight official-derived masses, nonzero COM offsets, full
+inertia products, and real left/right foot asymmetry. The canonical one-call
+Newton import agrees with the offline mapping within 1.3e-6 kg, 3.5e-9 m, and
+2.1e-8 kg·m².

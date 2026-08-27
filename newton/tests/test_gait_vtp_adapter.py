@@ -18,6 +18,7 @@ from projects.gait_c3d.vtp_adapter import (
     read_scaled_display_geometry,
     read_vtp,
     simple_config_from_scaled_gait2354,
+    subject_inertials_from_scaled_gait2354,
 )
 
 _VTP = """<?xml version="1.0"?>
@@ -88,7 +89,10 @@ def _modern_scaled_osim() -> str:
             if name in mapped
             else ""
         )
-        bodies.append(f"<Body name='{name}'><mass>{mass}</mass><mass_center>{com}</mass_center>{geometry}</Body>")
+        bodies.append(
+            f"<Body name='{name}'><mass>{mass}</mass><mass_center>{com}</mass_center>"
+            f"<inertia>1 1.2 1.4 0.01 0.02 0.03</inertia>{geometry}</Body>"
+        )
 
     def frames(parent_name: str, parent_body: str, parent_xyz: str, child_name: str, child_body: str) -> str:
         return (
@@ -205,6 +209,12 @@ class TestGaitVTPAdapter(unittest.TestCase):
         self.assertEqual(len(bundle.meshes), 12)
         self.assertEqual(sum(mesh.body == "foot_left" for mesh in bundle.meshes), 3)
         self.assertEqual(sum(mesh.body == "foot_right" for mesh in bundle.meshes), 3)
+        expected_tibia_offset = -0.015 * config.shank_length / 0.40337880793491127
+        for mesh in bundle.meshes:
+            if mesh.body.startswith("tibia_"):
+                np.testing.assert_allclose(mesh.position, (0.0, 0.0, expected_tibia_offset))
+            else:
+                np.testing.assert_allclose(mesh.position, (0.0, 0.0, 0.0))
         self.assertIsNotNone(bundle.contact_layout)
         foot_origin_z = (
             config.pelvis_height
@@ -216,6 +226,49 @@ class TestGaitVTPAdapter(unittest.TestCase):
         for centers in bundle.contact_layout.centers.values():
             for center in centers:
                 self.assertAlmostEqual(foot_origin_z + center[2] - bundle.contact_layout.radius, 0.0, places=6)
+
+    def test_preserves_official_inertia_in_saved_mjcf(self):
+        """Map source COM/full inertia and merged-foot parallel axes into Newton."""
+        previous_layout = newton.use_coord_layout_targets
+        newton.use_coord_layout_targets = True
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                source = Path(directory) / "source"
+                source.mkdir()
+                model_path = source / "scaled.osim"
+                model_path.write_text(_modern_scaled_osim())
+                config = simple_config_from_scaled_gait2354(model_path, body_height=1.70)
+                transforms = {
+                    name: np.eye(4)
+                    for name in (
+                        "pelvis",
+                        "torso",
+                        "femur_l",
+                        "femur_r",
+                        "tibia_l",
+                        "tibia_r",
+                        "talus_l",
+                        "talus_r",
+                        "calcn_l",
+                        "calcn_r",
+                        "toes_l",
+                        "toes_r",
+                    )
+                }
+                inertials = subject_inertials_from_scaled_gait2354(model_path, config, transforms)
+                path = write_subject_mjcf(config, Path(directory) / "subject.xml", inertial_data=inertials)
+                builder = newton.ModelBuilder()
+                builder.add_mjcf(str(path), floating=False)
+                model = builder.finalize(device="cpu")
+        finally:
+            newton.use_coord_layout_targets = previous_layout
+        for name, expected in inertials.items():
+            index = next(index for index, label in enumerate(model.body_label) if label.endswith(f"/{name}"))
+            self.assertAlmostEqual(float(model.body_mass.numpy()[index]), expected.mass, places=5)
+            np.testing.assert_allclose(model.body_com.numpy()[index], expected.position, atol=1.0e-6)
+            inertia = model.body_inertia.numpy()[index]
+            actual = (inertia[0, 0], inertia[1, 1], inertia[2, 2], inertia[0, 1], inertia[0, 2], inertia[1, 2])
+            np.testing.assert_allclose(actual, expected.full_inertia, atol=1.0e-6)
 
     def test_rejects_two_nonidentity_legacy_scale_levels(self):
         """Reject stale models that would apply subject geometry scaling twice."""

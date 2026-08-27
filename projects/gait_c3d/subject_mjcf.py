@@ -28,6 +28,23 @@ class SubjectVisualMesh:
     file: str
     """Mesh path relative to the MJCF file."""
 
+    position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    """Visual-only offset in the target body frame [m]."""
+
+
+@dataclass(frozen=True, slots=True)
+class SubjectInertial:
+    """One subject body's inertial properties in the target body frame."""
+
+    mass: float
+    """Body mass [kg]."""
+
+    position: tuple[float, float, float]
+    """Center of mass in the target body frame [m]."""
+
+    full_inertia: tuple[float, float, float, float, float, float]
+    """Inertia about COM as Ixx, Iyy, Izz, Ixy, Ixz, Iyz [kg·m²]."""
+
 
 def _values(*items: float) -> str:
     return " ".join(f"{item:.9g}" for item in items)
@@ -46,14 +63,24 @@ def _add_inertial(
     body: ET.Element,
     mass: float,
     dimensions: tuple[float, float, float],
+    inertial: SubjectInertial | None = None,
 ) -> None:
-    ET.SubElement(
-        body,
-        "inertial",
-        mass=f"{mass:.9g}",
-        pos="0 0 0",
-        diaginertia=_values(*_box_inertia(mass, dimensions)),
-    )
+    if inertial is None:
+        ET.SubElement(
+            body,
+            "inertial",
+            mass=f"{mass:.9g}",
+            pos="0 0 0",
+            diaginertia=_values(*_box_inertia(mass, dimensions)),
+        )
+    else:
+        ET.SubElement(
+            body,
+            "inertial",
+            mass=f"{inertial.mass:.9g}",
+            pos=_values(*inertial.position),
+            fullinertia=_values(*inertial.full_inertia),
+        )
 
 
 def _add_joint(
@@ -113,6 +140,7 @@ def subject_mjcf_xml(
     include_fallback_geometry: bool = True,
     contact_centers: dict[str, tuple[tuple[float, float, float], ...]] | None = None,
     contact_radius: float | None = None,
+    inertial_data: dict[str, SubjectInertial] | None = None,
 ) -> str:
     """Create MJCF for one scaled simple-joint subject.
 
@@ -123,11 +151,25 @@ def subject_mjcf_xml(
         include_fallback_geometry: Include box and capsule visuals when true.
         contact_centers: Optional mesh-derived sphere centers keyed by side.
         contact_radius: Optional mesh-derived contact radius [m].
+        inertial_data: Optional OpenSim-derived inertial properties by target body.
 
     Returns:
         An MJCF XML document. It can be passed directly to
         :meth:`newton.ModelBuilder.add_mjcf`.
     """
+    inertials = inertial_data or {}
+    unknown_inertials = set(inertials) - {
+        "pelvis",
+        "torso",
+        "femur_left",
+        "femur_right",
+        "tibia_left",
+        "tibia_right",
+        "foot_left",
+        "foot_right",
+    }
+    if unknown_inertials:
+        raise ValueError(f"inertial_data contains unknown bodies: {sorted(unknown_inertials)}")
     root = ET.Element("mujoco", model=model_name)
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(root, "option", gravity="0 0 -9.80665", timestep="0.001")
@@ -176,7 +218,7 @@ def subject_mjcf_xml(
     )
     pelvis = ET.SubElement(world, "body", name="pelvis", pos=_values(0.0, 0.0, config.pelvis_height))
     ET.SubElement(pelvis, "freejoint", name="pelvis_free")
-    _add_inertial(pelvis, config.pelvis_mass, config.pelvis_dimensions)
+    _add_inertial(pelvis, config.pelvis_mass, config.pelvis_dimensions, inertials.get("pelvis"))
     if include_fallback_geometry:
         ET.SubElement(
             pelvis,
@@ -188,7 +230,7 @@ def subject_mjcf_xml(
         )
 
     torso = ET.SubElement(pelvis, "body", name="torso", pos=_values(0.0, 0.0, config.torso_center_offset))
-    _add_inertial(torso, config.torso_mass, config.torso_dimensions)
+    _add_inertial(torso, config.torso_mass, config.torso_dimensions, inertials.get("torso"))
     if include_fallback_geometry:
         ET.SubElement(
             torso,
@@ -240,6 +282,7 @@ def subject_mjcf_xml(
             femur,
             config.thigh_mass,
             (2.0 * config.thigh_radius, 2.0 * config.thigh_radius, config.thigh_length),
+            inertials.get(f"femur_{side}"),
         )
         hip_position = (0.0, 0.0, 0.5 * config.thigh_length)
         hip_specs = (
@@ -281,6 +324,7 @@ def subject_mjcf_xml(
             tibia,
             config.shank_mass,
             (2.0 * config.shank_radius, 2.0 * config.shank_radius, config.shank_length),
+            inertials.get(f"tibia_{side}"),
         )
         knee_name = f"knee_{side}"
         knee_limits = (0.0, 150.0 * degrees)
@@ -320,6 +364,7 @@ def subject_mjcf_xml(
             foot,
             config.foot_mass,
             (config.foot_length, config.foot_width, 2.0 * config.contact_radius),
+            inertials.get(f"foot_{side}"),
         )
         ankle_name = f"ankle_{side}"
         ankle_limits = (-50.0 * degrees, 30.0 * degrees)
@@ -364,6 +409,7 @@ def subject_mjcf_xml(
             name=mesh.name,
             type="mesh",
             mesh=mesh.name,
+            pos=_values(*mesh.position),
             attrib={"class": "visual"},
         )
     if visual_meshes:
@@ -404,6 +450,7 @@ def write_subject_mjcf(
     include_fallback_geometry: bool = True,
     contact_centers: dict[str, tuple[tuple[float, float, float], ...]] | None = None,
     contact_radius: float | None = None,
+    inertial_data: dict[str, SubjectInertial] | None = None,
 ) -> Path:
     """Write a scaled subject MJCF that Newton can load in one builder call."""
     path = Path(output_path).resolve()
@@ -416,6 +463,7 @@ def write_subject_mjcf(
             include_fallback_geometry=include_fallback_geometry,
             contact_centers=contact_centers,
             contact_radius=contact_radius,
+            inertial_data=inertial_data,
         ),
         encoding="utf-8",
     )

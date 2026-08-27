@@ -30,7 +30,11 @@ from projects.gait_c3d.subject_scaling import (
     place_markers_with_official_opensim,
     scale_gait2354_from_markers,
 )
-from projects.gait_c3d.vtp_adapter import compile_scaled_vtp_visuals, simple_config_from_scaled_gait2354
+from projects.gait_c3d.vtp_adapter import (
+    compile_scaled_vtp_visuals,
+    simple_config_from_scaled_gait2354,
+    subject_inertials_from_scaled_gait2354,
+)
 
 
 class Example:
@@ -83,6 +87,7 @@ class Example:
 
         scaled_osim = args.scaled_osim
         source_body_transforms = None
+        inertial_data = None
         self.marker_placement = None
         if args.template_osim:
             if markers is None:
@@ -120,6 +125,13 @@ class Example:
                 f"Scale: {config.pelvis_mass + config.torso_mass + 2.0 * (config.thigh_mass + config.shank_mass + config.foot_mass):.3f} kg, "
                 f"thigh {config.thigh_length:.3f} m, shank {config.shank_length:.3f} m"
             )
+            if source_body_transforms is not None:
+                inertial_data = subject_inertials_from_scaled_gait2354(
+                    scaled_osim,
+                    config,
+                    source_body_transforms,
+                )
+                print("Inertia: official OpenSim COM/full tensors mapped to all 8 Newton bodies")
 
         if args.official_marker_placement and self.marker_placement is None:
             if markers is None or not scaled_osim:
@@ -159,6 +171,7 @@ class Example:
                 )
 
         self.visual_mesh_count = len(visual_meshes)
+        self.inertial_data = inertial_data
         self.subject_xml = write_subject_mjcf(
             config,
             self.model_dir / "subject.xml",
@@ -167,6 +180,7 @@ class Example:
             include_fallback_geometry=not visual_meshes,
             contact_centers=contact_layout.centers if contact_layout is not None else None,
             contact_radius=contact_layout.radius if contact_layout is not None else None,
+            inertial_data=inertial_data,
         )
         newton.use_coord_layout_targets = True
         self.free_root = args.free_root
@@ -237,6 +251,15 @@ class Example:
             ]
             if len(connector) != 1 or shape_types[connector[0]] != newton.GeoType.BOX:
                 raise ValueError("scaled visual model must contain an abdomen connector")
+        if self.inertial_data is not None:
+            body_mass = self.model.body_mass.numpy()
+            body_com = self.model.body_com.numpy()
+            for name, expected in self.inertial_data.items():
+                body = next(index for index, label in enumerate(self.model.body_label) if label.endswith(f"/{name}"))
+                if abs(float(body_mass[body]) - expected.mass) > 2.0e-5:
+                    raise ValueError(f"OpenSim-derived mass changed for {name}")
+                if not np.allclose(body_com[body], expected.position, atol=1.0e-6):
+                    raise ValueError(f"OpenSim-derived COM changed for {name}")
         body_q = self.state_0.body_q.numpy()
         body_qd = self.state_0.body_qd.numpy()
         if not np.all(np.isfinite(body_q)) or not np.all(np.isfinite(body_qd)):

@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from .native_model import SimpleGaitConfig
-from .subject_mjcf import SubjectVisualMesh
+from .subject_mjcf import SubjectInertial, SubjectVisualMesh
 
 _SCHEMA = "gait_c3d_scaled_vtp_visuals_1"
 _SOURCE_TO_TARGET = {
@@ -532,6 +532,105 @@ def _target_body_transforms(config: SimpleGaitConfig) -> dict[str, np.ndarray]:
     return transforms
 
 
+def subject_inertials_from_scaled_gait2354(
+    path: str | os.PathLike,
+    config: SimpleGaitConfig,
+    source_body_transforms: str | os.PathLike | dict[str, np.ndarray],
+) -> dict[str, SubjectInertial]:
+    """Map official scaled body inertia into the simple Newton body frames."""
+    if isinstance(source_body_transforms, (str, os.PathLike)):
+        source_body_transforms = json.loads(Path(source_body_transforms).read_text())
+    source_transforms = {name: np.asarray(value, dtype=np.float64) for name, value in source_body_transforms.items()}
+    root = ET.parse(path).getroot()
+    bodies = {
+        body.get("name", ""): body for body in root.iter() if body.tag.rsplit("}", 1)[-1] == "Body" and body.get("name")
+    }
+    groups = {
+        "pelvis": ("pelvis",),
+        "torso": ("torso",),
+        "femur_left": ("femur_l",),
+        "femur_right": ("femur_r",),
+        "tibia_left": ("tibia_l",),
+        "tibia_right": ("tibia_r",),
+        "foot_left": ("talus_l", "calcn_l", "toes_l"),
+        "foot_right": ("talus_r", "calcn_r", "toes_r"),
+    }
+    target_transforms = _target_body_transforms(config)
+    output = {}
+    for target, sources in groups.items():
+        parts = []
+        for source in sources:
+            if source not in bodies or source not in source_transforms:
+                raise ValueError(f"missing scaled inertial source {source!r}")
+            body = bodies[source]
+            mass_element = _child(body, "mass")
+            com_element = _child(body, "mass_center")
+            inertia_element = _child(body, "inertia")
+            mass = float(mass_element.text if mass_element is not None else "nan")
+            com = _floats(com_element.text if com_element is not None else None)
+            values = _floats(inertia_element.text if inertia_element is not None else None)
+            if (
+                not math.isfinite(mass)
+                or mass <= 0.0
+                or com.shape != (3,)
+                or values.shape != (6,)
+                or not np.all(np.isfinite(com))
+                or not np.all(np.isfinite(values))
+            ):
+                raise ValueError(f"body {source!r} has invalid inertial data")
+            inertia = np.asarray(
+                (
+                    (values[0], values[3], values[4]),
+                    (values[3], values[1], values[5]),
+                    (values[4], values[5], values[2]),
+                )
+            )
+            transform = source_transforms[source]
+            if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
+                raise ValueError(f"body {source!r} has an invalid neutral transform")
+            source_rotation = transform[:3, :3]
+            if (
+                not np.allclose(transform[3], (0.0, 0.0, 0.0, 1.0), atol=1.0e-12)
+                or not np.allclose(source_rotation @ source_rotation.T, np.eye(3), atol=1.0e-9)
+                or not math.isclose(float(np.linalg.det(source_rotation)), 1.0, abs_tol=1.0e-9)
+            ):
+                raise ValueError(f"body {source!r} has an invalid neutral transform")
+            rotation = _OPENSIM_TO_NEWTON @ source_rotation
+            com_ground = _OPENSIM_TO_NEWTON @ (transform[:3, :3] @ com + transform[:3, 3])
+            inertia_ground = rotation @ inertia @ rotation.T
+            parts.append((mass, com_ground, inertia_ground))
+        total_mass = sum(part[0] for part in parts)
+        combined_com = sum(mass * com for mass, com, _ in parts) / total_mass
+        combined_inertia = np.zeros((3, 3))
+        for mass, com, inertia in parts:
+            offset = com - combined_com
+            combined_inertia += inertia + mass * (np.dot(offset, offset) * np.eye(3) - np.outer(offset, offset))
+        target_transform = target_transforms[target]
+        target_rotation = target_transform[:3, :3]
+        local_com = target_rotation.T @ (combined_com - target_transform[:3, 3])
+        local_inertia = target_rotation.T @ combined_inertia @ target_rotation
+        eigenvalues = np.linalg.eigvalsh(local_inertia)
+        if (
+            np.any(eigenvalues <= 0.0)
+            or not np.all(np.isfinite(local_inertia))
+            or eigenvalues[2] > eigenvalues[0] + eigenvalues[1] + 1.0e-9
+        ):
+            raise ValueError(f"combined inertia for {target!r} is not physical positive definite")
+        output[target] = SubjectInertial(
+            total_mass,
+            tuple(float(value) for value in local_com),
+            (
+                float(local_inertia[0, 0]),
+                float(local_inertia[1, 1]),
+                float(local_inertia[2, 2]),
+                float(local_inertia[0, 1]),
+                float(local_inertia[0, 2]),
+                float(local_inertia[1, 2]),
+            ),
+        )
+    return output
+
+
 def _compile_scaled_vtp_visuals(
     scaled_osim: str | os.PathLike,
     geometry_dir: str | os.PathLike,
@@ -595,7 +694,10 @@ def _compile_scaled_vtp_visuals(
         output_path = assets_dir / f"{name}.obj"
         _write_obj(output_path, body_local, triangles)
         relative = output_path.relative_to(root).as_posix()
-        meshes.append(SubjectVisualMesh(name, target_body, relative))
+        clearance_offset_z = 0.0
+        if exact_transforms and target_body.startswith("tibia_"):
+            clearance_offset_z = -0.015 * config.shank_length / 0.40337880793491127
+        meshes.append(SubjectVisualMesh(name, target_body, relative, (0.0, 0.0, clearance_offset_z)))
         record = {
             "mesh": asdict(meshes[-1]),
             "source": {
