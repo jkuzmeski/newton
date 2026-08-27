@@ -148,7 +148,7 @@ uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_s
   --subject-dir /tmp/newton-opensim-s001-proof \
   --overwrite-subject-dir \
   --c3d "/home/jo31399/newton-data/gait/incoming/Cal 101.v3d.c3d" \
-  --template-osim /home/jo31399/newton-worktrees/c3d-predictive-forward-dynamics/newton/examples/assets/gait2354_subject01.osim \
+  --template-osim /home/jo31399/newton-data/gait/reference/gait2354_subject01.osim \
   --body-mass 81.9312118 \
   --body-height 1.695898298375747 \
   --geometry-dir ~/.cache/newton/opensim-models_Geometry_fa3fb094_d9b05d47/Geometry
