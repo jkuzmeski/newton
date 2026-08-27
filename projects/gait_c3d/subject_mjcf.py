@@ -296,8 +296,9 @@ def subject_mjcf_xml(
         contact_centers: Optional mesh-derived sphere centers keyed by side.
         contact_radius: Optional mesh-derived contact radius [m].
         inertial_data: Optional OpenSim-derived inertial properties by target body.
-            When provided, body COMs, inertia principal axes, and equivalent box
-            extents drive the segment visual/collision proxies.
+            Proxy geometry always comes from mass and inertia. When provided,
+            these values replace the scaled nominal fallback values and drive
+            the body COMs, principal axes, and equivalent box extents.
         joint_centers: Optional official neutral joint centers in target child frames.
 
     Returns:

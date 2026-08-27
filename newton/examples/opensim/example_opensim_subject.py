@@ -372,7 +372,7 @@ def create_parser():
     parser.add_argument(
         "--show-self-collision",
         action="store_true",
-        help="Show invisible segment self-collision proxies in the viewer",
+        help="Show invisible segment self-collision proxies in the viewer (hidden by default)",
     )
     parser.add_argument(
         "--subject-substeps",

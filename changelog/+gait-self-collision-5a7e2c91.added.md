@@ -1,1 +1,1 @@
-Add calibrated box and capsule self-collision proxies to the Newton-native gait subject and its MJCF export, with limb proxies shortened at each joint to prevent segment overlap.
+Add calibrated, inertia-derived box and capsule self-collision proxies to the Newton-native gait subject and its MJCF export, with limb proxies shortened at each joint to prevent segment overlap. Keep the proxies hidden by default and reveal them with the viewer's `--show-self-collision` option.

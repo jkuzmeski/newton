@@ -49,6 +49,39 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         np.testing.assert_allclose(model.joint_target_ke.numpy()[6:], 100.0)
         np.testing.assert_allclose(model.joint_target_kd.numpy()[6:], 20.0)
 
+    def test_scales_default_inertia_proxies_with_subject(self):
+        """Scale default inertia-derived proxies with subject dimensions."""
+        config = SimpleGaitConfig.for_subject(body_mass=100.0, body_height=2.0, hip_width=0.25)
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_subject_mjcf(config, Path(directory) / "subject.xml")
+            builder = newton.ModelBuilder()
+            builder.add_mjcf(str(path), enable_self_collisions=True)
+            model = builder.finalize(device="cpu")
+        labels = model.shape_label
+        shape_by_name = {
+            name: next(index for index, label in enumerate(labels) if label.endswith(f"/{name}"))
+            for name in ("collision_pelvis", "collision_femur_left", "collision_tibia_left")
+        }
+        scales = model.shape_scale.numpy()
+        np.testing.assert_allclose(
+            scales[shape_by_name["collision_pelvis"]],
+            0.5 * np.asarray(config.pelvis_dimensions),
+            atol=1.0e-6,
+        )
+        self.assertAlmostEqual(scales[shape_by_name["collision_femur_left"], 0], config.thigh_radius, places=6)
+        self.assertAlmostEqual(
+            scales[shape_by_name["collision_femur_left"], 1],
+            0.5 * (config.thigh_length - 2.0 * config.self_collision_joint_clearance),
+            places=6,
+        )
+        self.assertAlmostEqual(scales[shape_by_name["collision_tibia_left"], 0], config.shank_radius, places=6)
+        self.assertAlmostEqual(
+            scales[shape_by_name["collision_tibia_left"], 1],
+            0.5 * (config.shank_length - 2.0 * config.self_collision_joint_clearance),
+            places=6,
+        )
+        self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 100.0, places=4)
+
     def test_imports_self_collision_proxies_and_neighbor_filters(self):
         """Import invisible segment proxies and preserve adjacent-link filters."""
         config = SimpleGaitConfig()
@@ -57,6 +90,13 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             builder = newton.ModelBuilder()
             builder.add_mjcf(str(path), enable_self_collisions=True)
             model = builder.finalize(device="cpu")
+            visible_builder = newton.ModelBuilder()
+            visible_builder.add_mjcf(
+                str(path),
+                enable_self_collisions=True,
+                force_show_colliders=True,
+            )
+            visible_model = visible_builder.finalize(device="cpu")
         labels = model.shape_label
         shape_by_name = {
             name: next(index for index, label in enumerate(labels) if label.endswith(f"/{name}"))
@@ -88,6 +128,10 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             shape = shape_by_name[name]
             self.assertTrue(flags[shape] & newton.ShapeFlags.VISIBLE)
             self.assertFalse(flags[shape] & newton.ShapeFlags.COLLIDE_SHAPES)
+        visible_flags = visible_model.shape_flags.numpy()
+        for label, flag in zip(visible_model.shape_label, visible_flags, strict=True):
+            if label.rsplit("/", 1)[-1].startswith("collision_"):
+                self.assertTrue(flag & newton.ShapeFlags.VISIBLE)
         expected_thigh_half_length = 0.5 * (config.thigh_length - 2.0 * config.self_collision_joint_clearance)
         for name in ("geometry_femur_left", "collision_femur_left"):
             self.assertAlmostEqual(

@@ -171,7 +171,8 @@ uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_s
 
 The example always writes a reusable MJCF model and runs it through
 `ModelBuilder.add_mjcf()` with nonadjacent self-collision enabled,
-`CollisionPipeline`, and `SolverFeatherstone`. Its
+`CollisionPipeline`, and `SolverFeatherstone`. Collision proxies are hidden by
+default; `--show-self-collision` reveals them for inspection. Its
 default standing-inspection mode fixes the pelvis because a free-root balance
 controller is not implemented yet; pass `--free-root` to run the explicitly
 unassisted falling model. The saved MJCF itself retains the free joint. When
