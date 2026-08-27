@@ -143,7 +143,9 @@ remain optional reference exports for OpenSim interoperability.
 
 ## Reusable progress example
 
-Run the current native subject path with generated fallback geometry:
+Run the current native subject path with generated fallback geometry. Interactive
+runs without `--subject` store the reusable bundle at
+`projects/gait_c3d/subjects/example_subject`.
 
 ```bash
 uv run --extra dev -m newton.examples opensim_subject
@@ -163,7 +165,7 @@ any source paths:
 
 ```bash
 uv run --extra dev -m newton.examples opensim_subject \
-  --subject /tmp/newton-opensim-s001-proof
+  --subject projects/gait_c3d/subjects/S001
 ```
 
 Run the complete canonical S001 proof with direct C3D decoding and scaled VTP
@@ -171,7 +173,7 @@ visuals:
 
 ```bash
 uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_subject \
-  --subject /tmp/newton-opensim-s001-proof \
+  --subject projects/gait_c3d/subjects/S001 \
   --overwrite \
   --c3d "/home/jo31399/newton-data/gait/incoming/Cal 101.v3d.c3d" \
   --template /home/jo31399/newton-data/gait/reference/gait2354_subject01.osim \

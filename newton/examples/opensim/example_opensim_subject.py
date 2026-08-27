@@ -149,13 +149,24 @@ class Example:
             raise ValueError("--substeps must be positive")
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
+        default_subject_dir = (
+            Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "example_subject"
+        )
+        use_project_subject_dir = args.subject_dir is None and not args.test
         self.subject_dir = (
             Path(args.subject_dir).expanduser().resolve()
             if args.subject_dir
+            else default_subject_dir
+            if use_project_subject_dir
             else Path(tempfile.mkdtemp(prefix="newton-opensim-subject-"))
         )
         compile_requested = any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
-        if args.subject_dir and self.subject_dir.is_dir() and not compile_requested:
+        if (
+            (args.subject_dir or use_project_subject_dir)
+            and self.subject_dir.is_dir()
+            and not compile_requested
+            and not args.overwrite_subject_dir
+        ):
             self.subject_xml, bundle_manifest = _read_subject_bundle(self.subject_dir)
             self.model_dir = self.subject_xml.parent
             subject_metadata = bundle_manifest.get("subject", {})

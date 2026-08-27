@@ -74,3 +74,7 @@ docs/_static/viser/
 
 # Notebook checkpoints
 **/*.ipynb_checkpoints/
+
+# Locally compiled gait subject bundles
+/projects/gait_c3d/subjects/*
+!/projects/gait_c3d/subjects/.gitkeep
