@@ -1,0 +1,440 @@
+{
+  "coordinate_tasks": [
+    {
+      "apply": true,
+      "name": "subtalar_angle_r",
+      "value": 0.0,
+      "value_type": "default_value",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "mtp_angle_r",
+      "value": 0.0,
+      "value_type": "default_value",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "subtalar_angle_l",
+      "value": 0.0,
+      "value_type": "default_value",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "mtp_angle_l",
+      "value": 0.0,
+      "value_type": "default_value",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "lumbar_extension",
+      "value": 0.0,
+      "value_type": "manual_value",
+      "weight": 1000.0
+    }
+  ],
+  "marker_positions": {
+    "L.ASIS": [
+      0.02831302,
+      0.0272876,
+      -0.13125155
+    ],
+    "L.Acromium": [
+      -0.10418250999999999,
+      0.52381746,
+      -0.17514824
+    ],
+    "L.Ankle.Lat": [
+      -0.0813414289926654,
+      -0.9502479425402601,
+      -0.14270467
+    ],
+    "L.Ankle.Med": [
+      -0.0645767589926654,
+      -0.9272559825402602,
+      -0.05277805000000001
+    ],
+    "L.Heel": [
+      -0.15443209899266538,
+      -0.9672032725402601,
+      -0.088034
+    ],
+    "L.Knee.Lat": [
+      -0.08108277,
+      -0.5134919600000001,
+      -0.14972268
+    ],
+    "L.Knee.Med": [
+      -0.06360334000000001,
+      -0.5136806199999999,
+      -0.034748140000000004
+    ],
+    "L.Midfoot.Lat": [
+      0.0014633210073345948,
+      -0.9758599625402601,
+      -0.15657214
+    ],
+    "L.Midfoot.Sup": [
+      0.017463681007334614,
+      -0.9572553825402601,
+      -0.059780440000000004
+    ],
+    "L.Shank.Front": [
+      -0.032395628992665404,
+      -0.6434312825402602,
+      -0.11640907
+    ],
+    "L.Shank.Rear": [
+      -0.1022320789926654,
+      -0.6363463025402601,
+      -0.17349011
+    ],
+    "L.Shank.Upper": [
+      -0.08394331899266541,
+      -0.5933590725402601,
+      -0.16496945000000002
+    ],
+    "L.Thigh.Front": [
+      0.03817474999999999,
+      -0.31655975999999997,
+      -0.11962076
+    ],
+    "L.Thigh.Rear": [
+      -0.05732177000000001,
+      -0.38316551,
+      -0.16793898000000002
+    ],
+    "L.Thigh.Upper": [
+      -0.04998977,
+      -0.27446603999999997,
+      -0.18278473
+    ],
+    "L.Toe.Lat": [
+      0.0643672410073346,
+      -1.00027711254026,
+      -0.16178866
+    ],
+    "L.Toe.Med": [
+      0.0796580710073346,
+      -0.9806113025402601,
+      -0.061399880000000004
+    ],
+    "L.Toe.Tip": [
+      0.12949102100733462,
+      -0.9837216025402601,
+      -0.08537865
+    ],
+    "R.ASIS": [
+      0.02342148,
+      0.03628304,
+      0.13084011
+    ],
+    "R.Acromium": [
+      -0.10382653,
+      0.51261066,
+      0.16588025
+    ],
+    "R.Ankle.Lat": [
+      -0.0851580589926654,
+      -0.9523195925402601,
+      0.14103996000000002
+    ],
+    "R.Ankle.Med": [
+      -0.0730468789926654,
+      -0.9378850925402602,
+      0.052195380000000006
+    ],
+    "R.Heel": [
+      -0.1522712989926654,
+      -0.9763712625402601,
+      0.08879353000000001
+    ],
+    "R.Knee.Lat": [
+      -0.07568224000000001,
+      -0.49367959,
+      0.14698552
+    ],
+    "R.Knee.Med": [
+      -0.07189823000000001,
+      -0.51055476,
+      0.025894930000000004
+    ],
+    "R.Midfoot.Lat": [
+      -0.013741968992665402,
+      -0.9869675225402601,
+      0.15976897
+    ],
+    "R.Midfoot.Sup": [
+      -0.009263388992665392,
+      -0.9600524825402601,
+      0.053950670000000006
+    ],
+    "R.Shank.Front": [
+      -0.02659511899266541,
+      -0.6170550925402601,
+      0.10530979
+    ],
+    "R.Shank.Rear": [
+      -0.08895933899266541,
+      -0.6670170725402601,
+      0.16586822
+    ],
+    "R.Shank.Upper": [
+      -0.10495051899266541,
+      -0.5815564325402601,
+      0.15577802000000002
+    ],
+    "R.Thigh.Front": [
+      0.03604483,
+      -0.34914431,
+      0.08486588
+    ],
+    "R.Thigh.Rear": [
+      -0.036820990000000005,
+      -0.40824029,
+      0.1674758
+    ],
+    "R.Thigh.Upper": [
+      -0.026096610000000006,
+      -0.28759503,
+      0.17744097
+    ],
+    "R.Toe.Lat": [
+      0.0769179310073346,
+      -1.00984238254026,
+      0.16722616
+    ],
+    "R.Toe.Med": [
+      0.07781508100733461,
+      -0.99006127254026,
+      0.05984387
+    ],
+    "R.Toe.Tip": [
+      0.13897521100733462,
+      -0.99001874254026,
+      0.09123849
+    ],
+    "Sternum": [
+      0.017313010000000004,
+      0.39066405000000004,
+      -0.00325415
+    ],
+    "Top.Head": [
+      -0.006989189999999992,
+      0.7790144600000001,
+      0.00377827
+    ],
+    "V.Sacral": [
+      -0.17255913,
+      0.04028205,
+      0.0070546
+    ]
+  },
+  "marker_tasks": [
+    {
+      "apply": true,
+      "name": "Sternum",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Acromium",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Acromium",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "Top.Head",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.ASIS",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "L.ASIS",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "V.Sacral",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "R.Thigh.Upper",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Thigh.Front",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Thigh.Rear",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Knee.Lat",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "R.Knee.Med",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "R.Shank.Upper",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Shank.Front",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Shank.Rear",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Ankle.Lat",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "R.Ankle.Med",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "R.Heel",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "R.Midfoot.Sup",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Midfoot.Lat",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Toe.Lat",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Toe.Med",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "R.Toe.Tip",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "L.Thigh.Upper",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Thigh.Front",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Thigh.Rear",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Knee.Lat",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "L.Knee.Med",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "L.Shank.Upper",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Shank.Front",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Shank.Rear",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Ankle.Lat",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "L.Ankle.Med",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "L.Heel",
+      "weight": 1000.0
+    },
+    {
+      "apply": true,
+      "name": "L.Midfoot.Sup",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Midfoot.Lat",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Toe.Lat",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Toe.Med",
+      "weight": 1.0
+    },
+    {
+      "apply": true,
+      "name": "L.Toe.Tip",
+      "weight": 1000.0
+    }
+  ],
+  "opensim_scale_setup_reference": {
+    "path": "Pipelines/Gait2354_Simbody/subject01_Setup_Scale.xml",
+    "ref": "d9b05d470b1a481c222372c85b75772faf8f7792",
+    "repository": "https://github.com/opensim-org/opensim-models",
+    "sha256": "a94d5eb88f18f6ff13914758d8bca26777cd9589fe10da1fdbc7adb7a69767dc"
+  },
+  "template_sha256": "d22c504cc48103a560c725a6d7e909528eac8fac497c2514cbded71014882a8d"
+}
