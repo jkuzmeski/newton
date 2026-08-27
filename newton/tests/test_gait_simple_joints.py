@@ -179,6 +179,11 @@ assert 'newton.opensim' not in sys.modules
             0.5 * np.asarray(config.pelvis_dimensions),
             atol=1.0e-6,
         )
+        thigh_collision = scaled_build.collision_shape_indices["femur_left"]
+        expected_thigh_half_height = (
+            0.5 * (config.thigh_length - 2.0 * config.self_collision_joint_clearance) - config.thigh_radius
+        )
+        self.assertAlmostEqual(shape_scale[thigh_collision, 1], expected_thigh_half_height, places=6)
 
     def test_initializes_finite_bilateral_pose(self):
         """Initialize finite mirrored legs with feet tangent to the ground."""

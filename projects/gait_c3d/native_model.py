@@ -72,6 +72,9 @@ class SimpleGaitConfig:
     shank_radius: float = 0.05
     """Shank capsule radius [m]."""
 
+    self_collision_joint_clearance: float = 0.035
+    """Distance to stop each limb collision proxy short of its joints [m]."""
+
     pelvis_hip_drop: float = 0.05
     """Vertical hip offset below the pelvis center [m]."""
 
@@ -158,6 +161,7 @@ class SimpleGaitConfig:
             torso_dimensions=scale_dimensions(reference.torso_dimensions),
             thigh_radius=length_scale * reference.thigh_radius,
             shank_radius=length_scale * reference.shank_radius,
+            self_collision_joint_clearance=length_scale * reference.self_collision_joint_clearance,
             pelvis_hip_drop=length_scale * reference.pelvis_hip_drop,
             torso_center_offset=length_scale * reference.torso_center_offset,
             contact_radius=length_scale * reference.contact_radius,
@@ -238,6 +242,16 @@ def _add_body(
 def _joint_frame(translation: tuple[float, float, float]) -> wp.transform:
     """Construct a translated identity joint frame."""
     return wp.transform(translation, wp.quat_identity())
+
+
+def _trimmed_capsule_half_height(length: float, radius: float, clearance: float) -> float:
+    """Return the capsule half-height after shortening both joint ends [m]."""
+    if not math.isfinite(clearance) or clearance < 0.0:
+        raise ValueError("self_collision_joint_clearance must be finite and nonnegative")
+    trimmed_length = length - 2.0 * clearance
+    if trimmed_length <= 2.0 * radius:
+        raise ValueError("self-collision joint clearance leaves no capsule body")
+    return 0.5 * trimmed_length - radius
 
 
 def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGaitBuild:
@@ -331,6 +345,16 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
         has_particle_collision=False,
         is_visible=False,
     )
+    thigh_collision_half_height = _trimmed_capsule_half_height(
+        config.thigh_length,
+        config.thigh_radius,
+        config.self_collision_joint_clearance,
+    )
+    shank_collision_half_height = _trimmed_capsule_half_height(
+        config.shank_length,
+        config.shank_radius,
+        config.self_collision_joint_clearance,
+    )
     collision_shapes = {
         "pelvis": builder.add_shape_box(
             bodies["pelvis"],
@@ -353,14 +377,14 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
         collision_shapes[f"femur_{side}"] = builder.add_shape_capsule(
             bodies[f"femur_{side}"],
             radius=config.thigh_radius,
-            half_height=0.5 * config.thigh_length - config.thigh_radius,
+            half_height=thigh_collision_half_height,
             cfg=self_collision_geometry,
             label=f"collision_femur_{side}",
         )
         collision_shapes[f"tibia_{side}"] = builder.add_shape_capsule(
             bodies[f"tibia_{side}"],
             radius=config.shank_radius,
-            half_height=0.5 * config.shank_length - config.shank_radius,
+            half_height=shank_collision_half_height,
             cfg=self_collision_geometry,
             label=f"collision_tibia_{side}",
         )

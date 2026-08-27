@@ -59,6 +59,16 @@ def _box_inertia(mass: float, dimensions: tuple[float, float, float]) -> tuple[f
     )
 
 
+def _trimmed_capsule_half_height(length: float, radius: float, clearance: float) -> float:
+    """Return the capsule half-height after shortening both joint ends [m]."""
+    if not math.isfinite(clearance) or clearance < 0.0:
+        raise ValueError("self_collision_joint_clearance must be finite and nonnegative")
+    trimmed_length = length - 2.0 * clearance
+    if trimmed_length <= 2.0 * radius:
+        raise ValueError("self-collision joint clearance leaves no capsule body")
+    return 0.5 * trimmed_length - radius
+
+
 def _add_inertial(
     body: ET.Element,
     mass: float,
@@ -177,6 +187,18 @@ def subject_mjcf_xml(
     expected_centers = {"hip_left", "hip_right", "knee_left", "knee_right", "ankle_left", "ankle_right"}
     if centers and set(centers) != expected_centers:
         raise ValueError(f"joint_centers must contain exactly {sorted(expected_centers)}")
+    thigh_collision_half_height = _trimmed_capsule_half_height(
+        config.thigh_length,
+        config.thigh_radius,
+        config.self_collision_joint_clearance,
+    )
+    shank_collision_half_height = _trimmed_capsule_half_height(
+        config.shank_length,
+        config.shank_radius,
+        config.self_collision_joint_clearance,
+    )
+    thigh_collision_half_length = thigh_collision_half_height + config.thigh_radius
+    shank_collision_half_length = shank_collision_half_height + config.shank_radius
     root = ET.Element("mujoco", model=model_name)
     ET.SubElement(root, "compiler", angle="radian", autolimits="true")
     ET.SubElement(root, "option", gravity="0 0 -9.80665", timestep="0.001")
@@ -353,7 +375,14 @@ def subject_mjcf_xml(
             name=f"collision_femur_{side}",
             type="capsule",
             size=f"{config.thigh_radius:.9g}",
-            fromto=_values(0.0, 0.0, -0.5 * config.thigh_length, 0.0, 0.0, 0.5 * config.thigh_length),
+            fromto=_values(
+                0.0,
+                0.0,
+                -thigh_collision_half_length,
+                0.0,
+                0.0,
+                thigh_collision_half_length,
+            ),
             attrib={"class": "self_collision"},
         )
 
@@ -398,7 +427,14 @@ def subject_mjcf_xml(
             name=f"collision_tibia_{side}",
             type="capsule",
             size=f"{config.shank_radius:.9g}",
-            fromto=_values(0.0, 0.0, -0.5 * config.shank_length, 0.0, 0.0, 0.5 * config.shank_length),
+            fromto=_values(
+                0.0,
+                0.0,
+                -shank_collision_half_length,
+                0.0,
+                0.0,
+                shank_collision_half_length,
+            ),
             attrib={"class": "self_collision"},
         )
 

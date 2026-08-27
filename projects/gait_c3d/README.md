@@ -24,8 +24,10 @@ parse or import `.osim` files.
 
 The primitive body shapes are non-colliding visual fallbacks. Invisible box and
 capsule proxies on the pelvis, torso, femurs, and tibias provide the first
-self-collision layer; adjacent parent-child links remain filtered so joint
-attachments do not fight their own collision response. Foot spheres are the
+self-collision layer. Limb proxy ends stop short of each joint by the configured
+clearance so adjacent segments do not overlap at their rounded ends. Adjacent
+parent-child links remain filtered so joint attachments do not fight their own
+collision response. Foot spheres are the
 active ground and foot self-contact proxies. A later source adapter will convert
 scaled OpenSim VTP display meshes into a sealed neutral vertex/index bundle. The
 same native builder will attach those meshes as non-colliding visuals without
