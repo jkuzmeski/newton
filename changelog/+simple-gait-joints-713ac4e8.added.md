@@ -1,0 +1,1 @@
+Add a scalable project-local Newton-native gait articulation with box pelvis/torso geometry, capsule thighs/shanks, hinge knees and ankles, sphere-only foot contact, and a finite Featherstone rollout.
