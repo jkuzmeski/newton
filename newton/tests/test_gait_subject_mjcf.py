@@ -54,9 +54,24 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         """Expose concise subject options while accepting legacy names."""
         parser = create_parser()
         help_text = parser.format_help()
-        for option in ("--mass", "--height", "--template", "--geometry", "--substeps", "--show-collision"):
+        for option in (
+            "--subject",
+            "--mass",
+            "--height",
+            "--template",
+            "--geometry",
+            "--substeps",
+            "--show-collision",
+        ):
             self.assertIn(option, help_text)
-        for option in ("--body-mass", "--body-height", "--template-osim", "--geometry-dir", "--subject-substeps"):
+        for option in (
+            "--body-mass",
+            "--body-height",
+            "--template-osim",
+            "--geometry-dir",
+            "--subject-dir",
+            "--subject-substeps",
+        ):
             self.assertNotIn(option, help_text)
         args = parser.parse_args(
             [

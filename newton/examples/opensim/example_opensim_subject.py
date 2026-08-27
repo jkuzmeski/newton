@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import tempfile
 from dataclasses import replace
@@ -39,9 +40,106 @@ from projects.gait_c3d.vtp_adapter import (
     subject_inertials_from_scaled_gait2354,
 )
 
+_SUBJECT_BUNDLE_SCHEMA = "gait_subject_bundle_1"
+
+
+def _read_subject_bundle(subject_dir: Path) -> tuple[Path, dict]:
+    """Read one compiled subject bundle and return its MJCF path and metadata."""
+    manifest_path = subject_dir / "subject.json"
+    if not manifest_path.is_file():
+        raise FileNotFoundError(
+            f"subject bundle is missing {manifest_path}; rebuild it with source inputs or choose another subject"
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") != _SUBJECT_BUNDLE_SCHEMA:
+        raise ValueError(f"unsupported subject bundle schema in {manifest_path}")
+    model_file = manifest.get("artifacts", {}).get("model")
+    if not isinstance(model_file, str) or Path(model_file).is_absolute() or ".." in Path(model_file).parts:
+        raise ValueError("subject bundle model path must be relative")
+    model_path = (subject_dir / model_file).resolve()
+    try:
+        model_path.relative_to(subject_dir.resolve())
+    except ValueError as error:
+        raise ValueError("subject bundle model path escapes the bundle") from error
+    if not model_path.is_file():
+        raise FileNotFoundError(f"subject bundle model is missing: {model_path}")
+    return model_path, manifest
+
+
+def _write_subject_bundle_manifest(
+    subject_dir: Path,
+    *,
+    args,
+    config: SimpleGaitConfig,
+    visual_mesh_count: int,
+) -> None:
+    """Publish the metadata needed to reopen one compiled subject folder."""
+    artifacts = {"model": "model/subject.xml"}
+    for name in ("markers", "opensim_subject"):
+        path = subject_dir / name
+        if path.is_dir() or path.is_file():
+            artifacts[name] = name
+    if (subject_dir / "model" / "manifest.json").is_file():
+        artifacts["model_manifest"] = "model/manifest.json"
+    manifest = {
+        "schema_version": _SUBJECT_BUNDLE_SCHEMA,
+        "subject": {
+            "name": args.subject_name,
+            "mass_kg": float(
+                sum(
+                    (
+                        config.pelvis_mass,
+                        config.torso_mass,
+                        2.0 * config.thigh_mass,
+                        2.0 * config.shank_mass,
+                        2.0 * config.foot_mass,
+                    )
+                )
+            ),
+            "height_m": float(args.body_height),
+            "hip_width_m": float(2.0 * config.hip_half_width),
+            "visual_mesh_count": int(visual_mesh_count),
+        },
+        "artifacts": artifacts,
+        "sources": {
+            "c3d": Path(args.c3d).name if args.c3d else None,
+            "template": Path(args.template_osim).name if args.template_osim else None,
+            "scaled_model": Path(args.scaled_osim).name if args.scaled_osim else None,
+        },
+    }
+    (subject_dir / "subject.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
 
 class Example:
     """Compile, load, and simulate one reusable subject model."""
+
+    def _init_runtime(self, args):
+        """Load the saved MJCF and initialize the common Newton runtime."""
+        newton.use_coord_layout_targets = True
+        self.free_root = args.free_root
+        self.show_self_collision = args.show_self_collision
+        builder = newton.ModelBuilder()
+        builder.add_mjcf(
+            str(self.subject_xml),
+            floating=True if self.free_root else False,
+            enable_self_collisions=True,
+            force_show_colliders=self.show_self_collision,
+        )
+        self.model = builder.finalize(device=args.device)
+        self.state_0 = self.model.state()
+        self.state_1 = self.model.state()
+        self.control = self.model.control()
+        newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
+        self.pipeline = newton.CollisionPipeline(self.model)
+        self.contacts = self.pipeline.contacts()
+        self.solver = newton.solvers.SolverFeatherstone(self.model, angular_damping=0.01)
+        self.viewer.set_model(self.model)
+        self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
+        print(
+            f"Subject: {self.model.body_count} bodies, {self.model.joint_dof_count} DOFs, "
+            f"{self.model.shape_count} shapes, root {'free' if self.free_root else 'fixed for standing inspection'} "
+            f"-> {self.subject_xml}"
+        )
 
     def __init__(self, viewer, args):
         self.viewer = viewer
@@ -56,12 +154,29 @@ class Example:
             if args.subject_dir
             else Path(tempfile.mkdtemp(prefix="newton-opensim-subject-"))
         )
+        compile_requested = any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
+        if args.subject_dir and self.subject_dir.is_dir() and not compile_requested:
+            self.subject_xml, bundle_manifest = _read_subject_bundle(self.subject_dir)
+            self.model_dir = self.subject_xml.parent
+            subject_metadata = bundle_manifest.get("subject", {})
+            self.visual_mesh_count = int(subject_metadata.get("visual_mesh_count", 0))
+            self.inertial_data = None
+            self.joint_centers = None
+            self.marker_placement = None
+            self.marker_artifact = None
+            self.device_markers = None
+            marker_dir = self.subject_dir / "markers"
+            if (marker_dir / "manifest.json").is_file():
+                self.marker_artifact = marker_dir
+                self.device_markers = load_marker_artifact(marker_dir).to_warp(args.device)
+            self._init_runtime(args)
+            return
         if self.subject_dir.exists() and any(self.subject_dir.iterdir()):
             if args.overwrite_subject_dir:
                 shutil.rmtree(self.subject_dir)
             else:
                 raise FileExistsError(
-                    f"subject directory is not empty: {self.subject_dir}; pass --overwrite-subject-dir to rebuild"
+                    f"subject directory is not empty: {self.subject_dir}; pass --overwrite to rebuild"
                 )
         self.subject_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir = self.subject_dir / "model"
@@ -200,32 +315,13 @@ class Example:
             inertial_data=inertial_data,
             joint_centers=joint_centers,
         )
-        newton.use_coord_layout_targets = True
-        self.free_root = args.free_root
-        self.show_self_collision = args.show_self_collision
-        builder = newton.ModelBuilder()
-        builder.add_mjcf(
-            str(self.subject_xml),
-            floating=True if self.free_root else False,
-            enable_self_collisions=True,
-            force_show_colliders=args.show_self_collision,
+        _write_subject_bundle_manifest(
+            self.subject_dir,
+            args=args,
+            config=config,
+            visual_mesh_count=len(visual_meshes),
         )
-        self.model = builder.finalize(device=args.device)
-        self.state_0 = self.model.state()
-        self.state_1 = self.model.state()
-        self.control = self.model.control()
-        newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
-        self.pipeline = newton.CollisionPipeline(self.model)
-        self.contacts = self.pipeline.contacts()
-        self.solver = newton.solvers.SolverFeatherstone(self.model, angular_damping=0.01)
-
-        self.viewer.set_model(self.model)
-        self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
-        print(
-            f"Subject: {self.model.body_count} bodies, {self.model.joint_dof_count} DOFs, "
-            f"{self.model.shape_count} shapes, root {'free' if self.free_root else 'fixed for standing inspection'} "
-            f"-> {self.subject_xml}"
-        )
+        self._init_runtime(args)
 
     def simulate(self):
         """Advance one display frame through native Newton APIs."""
@@ -358,7 +454,17 @@ class Example:
 def create_parser():
     """Create the concise command-line interface for the subject example."""
     parser = newton.examples.create_parser()
-    parser.add_argument("--subject-dir", help="Directory for MJCF, NPZ, manifest, and converted mesh outputs")
+    parser.add_argument(
+        "--subject",
+        dest="subject_dir",
+        help="Compiled subject folder to load or rebuild",
+    )
+    parser.add_argument(
+        "--subject-dir",
+        dest="subject_dir",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--overwrite",
         dest="overwrite_subject_dir",

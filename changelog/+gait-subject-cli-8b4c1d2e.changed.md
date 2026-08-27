@@ -1,1 +1,1 @@
-Simplify the `opensim_subject` CLI with `--mass`, `--height`, `--template`, `--geometry`, `--substeps`, `--overwrite`, and `--show-collision`; legacy option names remain accepted but hidden from help.
+Simplify the `opensim_subject` CLI with a self-contained `--subject` folder workflow and `--mass`, `--height`, `--template`, `--geometry`, `--substeps`, `--overwrite`, and `--show-collision`; legacy option names remain accepted but hidden from help. A compiled subject can be reopened without repeating source paths.

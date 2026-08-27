@@ -155,12 +155,23 @@ Show the invisible pelvis, torso, femur, and tibia self-collision proxies:
 uv run --extra dev -m newton.examples opensim_subject --show-collision
 ```
 
+Each compiled subject folder is self-contained. `subject.json` stores the
+subject mass, height, hip width, and artifact locations; the model folder stores
+MJCF, inertials, collision proxies, and compiled VTP visuals; marker and offline
+OpenSim artifacts stay under the same subject root. Reopen the subject without
+any source paths:
+
+```bash
+uv run --extra dev -m newton.examples opensim_subject \
+  --subject /tmp/newton-opensim-s001-proof
+```
+
 Run the complete canonical S001 proof with direct C3D decoding and scaled VTP
 visuals:
 
 ```bash
 uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_subject \
-  --subject-dir /tmp/newton-opensim-s001-proof \
+  --subject /tmp/newton-opensim-s001-proof \
   --overwrite \
   --c3d "/home/jo31399/newton-data/gait/incoming/Cal 101.v3d.c3d" \
   --template /home/jo31399/newton-data/gait/reference/gait2354_subject01.osim \
