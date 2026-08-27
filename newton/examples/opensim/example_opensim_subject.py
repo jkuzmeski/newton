@@ -45,7 +45,9 @@ class Example:
     def __init__(self, viewer, args):
         self.viewer = viewer
         self.frame_dt = 1.0 / 60.0
-        self.sim_substeps = 10
+        self.sim_substeps = args.subject_substeps
+        if self.sim_substeps <= 0:
+            raise ValueError("--subject-substeps must be positive")
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
         self.subject_dir = (
@@ -293,6 +295,9 @@ class Example:
         body_qd = self.state_0.body_qd.numpy()
         if not np.all(np.isfinite(body_q)) or not np.all(np.isfinite(body_qd)):
             raise ValueError("subject rollout produced nonfinite body state")
+        if not self.free_root:
+            if np.any(np.abs(body_q[:, :2]) > 1.0) or np.any(body_q[:, 2] < -0.05) or np.any(body_q[:, 2] > 2.5):
+                raise ValueError("standing inspection moved one or more bodies outside the visible subject bounds")
         if self.free_root:
             root_force = self.control.joint_f.numpy()[:6]
             if not np.array_equal(root_force, np.zeros(6, dtype=root_force.dtype)):
@@ -346,6 +351,12 @@ def create_parser():
         "--free-root",
         action="store_true",
         help="Run the unassisted six-DOF pelvis; default fixes the pelvis for standing model inspection",
+    )
+    parser.add_argument(
+        "--subject-substeps",
+        type=int,
+        default=50,
+        help="Featherstone/contact substeps per 60 Hz display frame",
     )
     parser.add_argument("--body-mass", type=float, default=81.4, help="Subject body mass [kg]")
     parser.add_argument("--body-height", type=float, default=1.695898298375747, help="Subject standing height [m]")

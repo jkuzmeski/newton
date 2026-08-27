@@ -165,6 +165,12 @@ body state, standing pelvis height in inspection mode, exact zero root effort in
 free mode, eight visible foot spheres, one visible ground plane, artifact
 publication, and uploaded marker arrays.
 
+The exact OpenSim COM/inertia and eight stiff sphere contacts require a smaller
+Featherstone step than the earlier approximate model. The example defaults to
+50 solver/contact substeps per 60 Hz display frame (`dt = 1/3000 s`). Ten
+substeps caused nonfinite leg state during the second display frame. Override
+with `--subject-substeps` only when running an explicit convergence study.
+
 ## Official OpenSim subject building
 
 When `--template-osim` is supplied, the progress example starts from static C3D
