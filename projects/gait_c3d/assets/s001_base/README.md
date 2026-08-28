@@ -4,4 +4,11 @@ This tracked neutral bundle is the canonical **S001** marker-placement reference
 
 The source placement and geometry were produced offline from the S001 gait2354 ScaleTool conversion. The source OpenSim/C3D files remain external; `model/manifest.json` records source and output hashes for the checked-in neutral assets. Runtime fitting does not import OpenSim.
 
-The native subject scaler uses this bundle as its base. It applies one uniform length scale to body-local geometry, marker sites, body frames, contacts, and inertias, and a separate mass scale to inertial values.
+The base-bundle scaler remains available for simple uniform rescaling. The
+static-calibration writer uses this bundle as a mesh and mass template, then
+applies per-side segment scales and calibrated body frames to the MJCF.
+
+The bundle also includes `model/segment_calibration.json`, generated from the
+S001 static calibration C3D over 0.5--1.0 s with a 6 mm marker radius. It
+contains the CODA/Bell--Brand hip centers, per-side endpoint frames, medial/
+lateral widths, and the flat-foot calibration policy.

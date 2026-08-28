@@ -1492,6 +1492,10 @@
     "sha256": "6c39f0c0b5379b5cf6f4b231ba482f1355bd64b7d22b9db8c97ed34dde3e78d0"
   },
   "schema_version": "gait_c3d_scaled_vtp_visuals_1",
+  "segment_calibration": {
+    "file": "segment_calibration.json",
+    "sha256": "720360de5d22fb152b30005d46b67a4d06188b3fe22be6b8f97f3c93a671d686"
+  },
   "simple_model_config": {
     "contact_radius": 0.024563156709816878,
     "foot_length": 0.25,

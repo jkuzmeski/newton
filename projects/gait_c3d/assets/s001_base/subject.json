@@ -4,9 +4,19 @@
     "marker_layout": "model/marker_layout.json",
     "marker_placement": "model/adjusted_markers.xml",
     "model": "model/subject.xml",
-    "model_manifest": "model/manifest.json"
+    "model_manifest": "model/manifest.json",
+    "segment_calibration": "model/segment_calibration.json"
   },
   "base_marker_set": "S001",
+  "calibration": {
+    "hip_method": "coda_bell_brand",
+    "marker_radius_m": 0.006,
+    "schema_version": "gait_static_segment_calibration_1",
+    "time_range_s": [
+      0.5,
+      1.0
+    ]
+  },
   "schema_version": "gait_subject_bundle_1",
   "sources": {
     "base_marker_set": "S001",

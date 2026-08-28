@@ -521,10 +521,10 @@ def subject_mjcf_xml(
         centers_by_side = dict.fromkeys(
             ("left", "right"),
             (
-                (heel_x, -half_width, -config.contact_radius),
-                (heel_x, half_width, -config.contact_radius),
-                (forefoot_x, -half_width, -config.contact_radius),
-                (forefoot_x, half_width, -config.contact_radius),
+                (heel_x, -half_width, -radius),
+                (heel_x, half_width, -radius),
+                (forefoot_x, -half_width, -radius),
+                (forefoot_x, half_width, -radius),
             ),
         )
     else:
@@ -647,14 +647,14 @@ def subject_mjcf_xml(
             pos=_values(
                 0.4 * config.foot_length,
                 0.0,
-                -0.5 * config.shank_length - config.contact_radius,
+                -0.5 * config.shank_length - radius,
             ),
         )
         body_elements[f"foot_{side}"] = foot
         _add_inertial(
             foot,
             config.foot_mass,
-            (config.foot_length, config.foot_width, 2.0 * config.contact_radius),
+            (config.foot_length, config.foot_width, 2.0 * radius),
             inertials.get(f"foot_{side}"),
         )
         ankle_name = f"ankle_{side}"
@@ -662,7 +662,7 @@ def subject_mjcf_xml(
         _add_joint(
             foot,
             name=ankle_name,
-            position=centers.get(f"ankle_{side}", (-0.4 * config.foot_length, 0.0, config.contact_radius)),
+            position=centers.get(f"ankle_{side}", (-0.4 * config.foot_length, 0.0, radius)),
             axis=(0.0, -1.0, 0.0),
             limits=ankle_limits,
             damping=0.2,

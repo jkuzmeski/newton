@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import tempfile
@@ -26,12 +27,14 @@ import warp as wp
 import newton
 import newton.examples
 from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
+from projects.gait_c3d.calibrated_subject import write_calibrated_subject_mjcf
 from projects.gait_c3d.marker_layout import (
     compile_subject_marker_layout,
     load_subject_marker_layout,
     scale_subject_marker_layout_from_base,
 )
 from projects.gait_c3d.native_model import SimpleGaitConfig
+from projects.gait_c3d.segment_calibration import build_static_segment_calibration, load_static_segment_calibration
 from projects.gait_c3d.subject_mjcf import scale_subject_mjcf_from_base, write_subject_mjcf
 from projects.gait_c3d.subject_scaling import (
     build_subject_with_official_opensim,
@@ -95,6 +98,9 @@ def _write_subject_bundle_manifest(
         path = subject_dir / name
         if path.is_dir() or path.is_file():
             artifacts[name] = name
+    calibration_path = subject_dir / "calibration" / "segment_calibration.json"
+    if calibration_path.is_file():
+        artifacts["calibration"] = "calibration/segment_calibration.json"
     if (subject_dir / "model" / "manifest.json").is_file():
         artifacts["model_manifest"] = "model/manifest.json"
     if (subject_dir / "model" / "marker_layout.json").is_file():
@@ -123,11 +129,17 @@ def _write_subject_bundle_manifest(
         "sources": {
             "base_marker_set": getattr(args, "base_marker_set", None),
             "base_subject": Path(args.base_subject).name if args.base_subject else None,
+            "static_calibration": Path(args.static_calibration).name if args.static_calibration else None,
             "c3d": Path(args.c3d).name if args.c3d else None,
             "template": Path(args.template_osim).name if args.template_osim else None,
             "scaled_model": Path(args.scaled_osim).name if args.scaled_osim else None,
         },
     }
+    if calibration_path.is_file():
+        manifest["calibration"] = {
+            "file": "calibration/segment_calibration.json",
+            "sha256": hashlib.sha256(calibration_path.read_bytes()).hexdigest(),
+        }
     (subject_dir / "subject.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -140,6 +152,7 @@ class Example:
         self.free_root = args.free_root
         self.show_self_collision = args.show_self_collision
         self.show_markers = args.show_markers
+        self.show_calibration = args.show_calibration
         builder = newton.ModelBuilder()
         builder.add_mjcf(
             str(self.subject_xml),
@@ -175,6 +188,17 @@ class Example:
             raise ValueError(
                 "--show-markers requires compiled marker sites; rebuild with --marker-demo, --base-subject, or source inputs"
             )
+        self.calibration_point_array = None
+        self.calibration_point_radii = None
+        self.calibration_point_colors = None
+        if self.show_calibration:
+            if self.calibration_points is None:
+                raise ValueError("--show-calibration requires --static-cal")
+            points = np.asarray(self.calibration_points, dtype=np.float32)
+            self.calibration_point_array = wp.array(points, dtype=wp.vec3, device=self.model.device)
+            self.calibration_point_radii = wp.full(len(points), 0.016, dtype=wp.float32, device=self.model.device)
+            colors = np.tile(np.asarray((0.95, 0.15, 0.10), dtype=np.float32), (len(points), 1))
+            self.calibration_point_colors = wp.array(colors, dtype=wp.vec3, device=self.model.device)
         self.pipeline = newton.CollisionPipeline(self.model)
         self.contacts = self.pipeline.contacts()
         self.solver = newton.solvers.SolverFeatherstone(self.model, angular_damping=0.01)
@@ -194,18 +218,27 @@ class Example:
             raise ValueError("--substeps must be positive")
         self.sim_dt = self.frame_dt / self.sim_substeps
         self.sim_time = 0.0
+        self.calibration = None
+        self.calibration_points = None
         default_subject_dir = (
             Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "example_subject"
         )
         default_base_output_dir = (
             Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "S001_scaled"
         )
-        use_project_subject_dir = args.subject_dir is None and not args.test and not args.base_subject
+        default_calibrated_output_dir = (
+            Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "calibrated_subject"
+        )
+        use_project_subject_dir = (
+            args.subject_dir is None and not args.test and not args.base_subject and not args.static_calibration
+        )
         self.subject_dir = (
             Path(args.subject_dir).expanduser().resolve()
             if args.subject_dir
             else default_base_output_dir
             if args.base_subject and not args.test
+            else default_calibrated_output_dir
+            if args.static_calibration and not args.test
             else default_subject_dir
             if use_project_subject_dir
             else Path(tempfile.mkdtemp(prefix="newton-opensim-subject-"))
@@ -213,8 +246,15 @@ class Example:
         compile_requested = (
             args.base_subject
             or args.marker_demo
+            or args.static_calibration
             or any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
         )
+        if args.static_calibration and args.c3d:
+            raise ValueError("--static-cal cannot be combined with --c3d")
+        if args.static_calibration and args.marker_demo:
+            raise ValueError("--static-cal cannot be combined with --marker-demo")
+        if args.static_calibration and any((args.template_osim, args.scaled_osim, args.geometry_dir)):
+            raise ValueError("--static-cal cannot be combined with OpenSim or geometry source inputs")
         if args.base_subject and args.marker_demo:
             raise ValueError("--base-subject cannot be combined with --marker-demo")
         if args.base_subject and any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir)):
@@ -244,6 +284,29 @@ class Example:
             if marker_dir is not None and (marker_dir / "manifest.json").is_file():
                 self.marker_artifact = marker_dir
                 self.device_markers = load_marker_artifact(marker_dir).to_warp(args.device)
+            calibration_path = _resolve_subject_artifact(self.subject_dir, bundle_manifest, "calibration")
+            if calibration_path is not None:
+                if calibration_path.is_dir():
+                    calibration_path = calibration_path / "segment_calibration.json"
+                self.calibration = load_static_segment_calibration(calibration_path)
+                model_manifest_path = _resolve_subject_artifact(self.subject_dir, bundle_manifest, "model_manifest")
+                if model_manifest_path is not None:
+                    model_manifest = json.loads(model_manifest_path.read_text(encoding="utf-8"))
+                    ground_offset = np.asarray(model_manifest.get("ground", {}).get("global_offset_m", (0.0, 0.0, 0.0)))
+                    self.calibration_points = (
+                        np.asarray(
+                            [
+                                self.calibration.pelvis["hip_centers_m"]["left"],
+                                self.calibration.pelvis["hip_centers_m"]["right"],
+                                self.calibration.segments["shank_left"]["proximal_m"],
+                                self.calibration.segments["shank_right"]["proximal_m"],
+                                self.calibration.segments["shank_left"]["distal_m"],
+                                self.calibration.segments["shank_right"]["distal_m"],
+                            ],
+                            dtype=np.float64,
+                        )
+                        + ground_offset
+                    )
             self._init_runtime(args)
             return
         if args.base_subject and Path(args.base_subject).expanduser().resolve() == self.subject_dir:
@@ -257,6 +320,92 @@ class Example:
                 )
         self.subject_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir = self.subject_dir / "model"
+
+        if args.static_calibration:
+            base_subject = (
+                Path(args.base_subject).expanduser().resolve()
+                if args.base_subject
+                else (Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "assets" / "s001_base")
+            )
+            base_manifest_path = base_subject / "subject.json"
+            if not base_manifest_path.is_file():
+                raise FileNotFoundError(f"base subject bundle is missing: {base_manifest_path}")
+            base_manifest = json.loads(base_manifest_path.read_text(encoding="utf-8"))
+            base_metadata = base_manifest.get("subject", {})
+            args.base_subject = str(base_subject)
+            args.base_marker_set = base_manifest.get("base_marker_set") or base_manifest.get("sources", {}).get(
+                "base_marker_set"
+            )
+            args.body_mass = float(args.body_mass) if args.body_mass is not None else float(base_metadata["mass_kg"])
+            args.body_height = (
+                float(args.body_height) if args.body_height is not None else float(base_metadata["height_m"])
+            )
+            marker_artifact = c3d_to_marker_artifact(
+                args.static_calibration,
+                self.subject_dir / "markers",
+                up_axis=args.c3d_up_axis,
+                forward_axis=args.c3d_forward_axis,
+            )
+            markers = load_marker_artifact(marker_artifact)
+            calibration_path = self.subject_dir / "calibration" / "segment_calibration.json"
+            self.calibration = build_static_segment_calibration(
+                markers,
+                calibration_path,
+                marker_radius=args.marker_radius,
+                time_range=(args.calibration_start, args.calibration_end),
+            )
+            base_calibration = base_subject / "model" / "segment_calibration.json"
+            if not base_calibration.is_file():
+                raise FileNotFoundError(f"base segment calibration is missing: {base_calibration}")
+            calibrated = write_calibrated_subject_mjcf(
+                base_subject,
+                self.calibration,
+                self.model_dir / "subject.xml",
+                body_mass=args.body_mass,
+                model_name=args.subject_name,
+                base_calibration=base_calibration,
+            )
+            calibrated_manifest = json.loads((self.model_dir / "manifest.json").read_text(encoding="utf-8"))
+            ground_offset = np.asarray(calibrated_manifest["ground"]["global_offset_m"], dtype=np.float64)
+            self.calibration_points = (
+                np.asarray(
+                    [
+                        self.calibration.pelvis["hip_centers_m"]["left"],
+                        self.calibration.pelvis["hip_centers_m"]["right"],
+                        self.calibration.segments["shank_left"]["proximal_m"],
+                        self.calibration.segments["shank_right"]["proximal_m"],
+                        self.calibration.segments["shank_left"]["distal_m"],
+                        self.calibration.segments["shank_right"]["distal_m"],
+                    ],
+                    dtype=np.float64,
+                )
+                + ground_offset
+            )
+            self.subject_xml = calibrated.path
+            self.visual_mesh_count = int(base_metadata.get("visual_mesh_count", 0))
+            self.marker_layout = None
+            self.inertial_data = None
+            self.joint_centers = None
+            self.marker_placement = None
+            self.marker_artifact = marker_artifact
+            self.device_markers = markers.to_warp(args.device)
+            print(
+                f"Static calibration: {len(self.calibration.marker_positions)} markers, "
+                f"CODA/Bell-Brand hips, flat feet -> {calibration_path}"
+            )
+            print(f"Calibrated MJCF: {self.subject_xml}")
+            _write_subject_bundle_manifest(
+                self.subject_dir,
+                args=args,
+                config=SimpleGaitConfig.for_subject(
+                    body_mass=args.body_mass,
+                    body_height=args.body_height,
+                    hip_width=args.hip_width,
+                ),
+                visual_mesh_count=self.visual_mesh_count,
+            )
+            self._init_runtime(args)
+            return
 
         if args.base_subject:
             base_subject = Path(args.base_subject).expanduser().resolve()
@@ -658,6 +807,13 @@ class Example:
                 self.marker_radii,
                 self.marker_colors,
             )
+        if self.show_calibration and self.calibration_point_array is not None:
+            self.viewer.log_points(
+                "subject/calibration_joint_centers",
+                self.calibration_point_array,
+                self.calibration_point_radii,
+                self.calibration_point_colors,
+            )
         self.viewer.end_frame()
 
 
@@ -712,6 +868,16 @@ def create_parser():
     parser.add_argument(
         "--base-subject",
         help="Scale a compiled subject bundle, normally S001, with its real bone meshes and marker layout",
+    )
+    parser.add_argument(
+        "--static-cal",
+        dest="static_calibration",
+        help="Build a calibrated native subject from a static calibration C3D",
+    )
+    parser.add_argument(
+        "--show-calibration",
+        action="store_true",
+        help="Show calibrated hip, knee, and ankle centers (requires --static-cal)",
     )
     parser.add_argument(
         "--show-self-collision",
@@ -775,6 +941,9 @@ def create_parser():
     # Keep reproducibility controls accepted without crowding the normal help.
     parser.add_argument("--subject-name", default="example_subject", help=argparse.SUPPRESS)
     parser.add_argument("--hip-width", type=float, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--marker-radius", type=float, default=0.006, help=argparse.SUPPRESS)
+    parser.add_argument("--calibration-start", type=float, default=0.5, help=argparse.SUPPRESS)
+    parser.add_argument("--calibration-end", type=float, default=1.0, help=argparse.SUPPRESS)
     parser.add_argument("--c3d-up-axis", default="+Z", help=argparse.SUPPRESS)
     parser.add_argument("--c3d-forward-axis", default="-Y", help=argparse.SUPPRESS)
     parser.add_argument(

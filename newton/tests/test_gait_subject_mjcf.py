@@ -3,6 +3,7 @@
 
 """Test the saved MJCF form of a scaled gait subject."""
 
+import json
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -12,8 +13,11 @@ import numpy as np
 
 import newton
 from newton.examples.opensim.example_opensim_subject import _resolve_subject_artifact, create_parser
+from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
+from projects.gait_c3d.calibrated_subject import write_calibrated_subject_mjcf
 from projects.gait_c3d.marker_layout import scale_subject_marker_layout_from_base
 from projects.gait_c3d.native_model import SimpleGaitConfig
+from projects.gait_c3d.segment_calibration import build_static_segment_calibration, load_static_segment_calibration
 from projects.gait_c3d.subject_mjcf import scale_subject_mjcf_from_base, write_subject_mjcf
 
 
@@ -67,6 +71,84 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         self.assertAlmostEqual(scaled.config.contact_radius, scaled.length_scale * 0.0245631567, places=7)
         self.assertEqual(sum(1 for flags in model.shape_flags.numpy() if flags & newton.ShapeFlags.SITE), 35)
         np.testing.assert_allclose(scaled_vertex, scaled.length_scale * base_vertex, atol=1.0e-8)
+
+    def test_scales_bilateral_geometry_from_static_segment_dimensions(self):
+        """Scale each leg segment independently from changed static landmarks."""
+        base = Path(__file__).parents[2] / "projects" / "gait_c3d" / "assets" / "s001_base"
+        base_calibration = load_static_segment_calibration(base / "model" / "segment_calibration.json")
+        marker_positions = {name: value.copy() for name, value in base_calibration.marker_positions.items()}
+        for name in ("LKNE", "LMKNE"):
+            marker_positions[name][2] -= 0.04
+        for name in ("RANK", "RMANK"):
+            marker_positions[name][1] += 0.01 if name == "RMANK" else -0.01
+        names = tuple(marker_positions)
+        trajectory = C3DMarkerTrajectory(
+            times=np.asarray((0.5,), dtype=np.float64),
+            positions=np.asarray([[marker_positions[name] for name in names]], dtype=np.float32),
+            valid=np.ones((1, len(names)), dtype=bool),
+            marker_names=names,
+            rate=100.0,
+            first_frame=0,
+            lab_to_newton=np.eye(3),
+            source_file="personalized_static.c3d",
+            source_sha256="1" * 64,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            target_calibration = build_static_segment_calibration(
+                trajectory,
+                Path(directory) / "calibration.json",
+                marker_radius=0.006,
+            )
+            output = Path(directory) / "model" / "subject.xml"
+            write_calibrated_subject_mjcf(
+                base,
+                target_calibration,
+                output,
+                body_mass=90.0,
+                base_calibration=base_calibration,
+            )
+            manifest = json.loads((output.parent / "manifest.json").read_text(encoding="utf-8"))
+        scales = manifest["segment_scales"]
+        self.assertGreater(scales["thigh_left"][2], 1.05)
+        self.assertLess(scales["shank_left"][2], 0.95)
+        self.assertGreater(scales["shank_right"][0], 1.10)
+
+    def test_builds_s001_calibrated_model_with_flat_foot_contacts(self):
+        """Build calibrated S001 frames and keep every foot contact on z=0."""
+        base = Path(__file__).parents[2] / "projects" / "gait_c3d" / "assets" / "s001_base"
+        calibration = load_static_segment_calibration(base / "model" / "segment_calibration.json")
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "model" / "subject.xml"
+            write_calibrated_subject_mjcf(base, calibration, output, body_mass=81.9312118)
+            builder = newton.ModelBuilder()
+            builder.add_mjcf(str(output), floating=False, parse_sites=True, enable_self_collisions=True)
+            model = builder.finalize(device="cpu")
+            state = model.state()
+            newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+            body_q = state.body_q.numpy()
+            shape_body = model.shape_body.numpy()
+            shape_transform = model.shape_transform.numpy()
+            body_names = {label.rsplit("/", 1)[-1]: index for index, label in enumerate(model.body_label)}
+
+        def rotate(point_quaternion, point):
+            """Rotate one point by an xyzw quaternion."""
+            x, y, z, w = point_quaternion[3], point_quaternion[4], point_quaternion[5], point_quaternion[6]
+            q = np.asarray((x, y, z), dtype=np.float64)
+            return point + 2.0 * np.cross(q, w * point + np.cross(q, point))
+
+        foot_bodies = {body_names["foot_left"], body_names["foot_right"]}
+        contact_indices = [
+            index for index, label in enumerate(model.shape_label) if label.rsplit("/", 1)[-1].startswith("contact_")
+        ]
+        self.assertEqual(len(contact_indices), 8)
+        for body in foot_bodies:
+            up = rotate(body_q[body], np.asarray((0.0, 0.0, 1.0)))
+            np.testing.assert_allclose(up, (0.0, 0.0, 1.0), atol=1.0e-6)
+        for index in contact_indices:
+            body = shape_body[index]
+            center = body_q[body, :3] + rotate(body_q[body], shape_transform[index, :3])
+            radius = float(model.shape_scale.numpy()[index, 0])
+            self.assertAlmostEqual(center[2] - radius, 0.0, delta=1.0e-5)
 
     def test_applies_explicit_base_hip_width_to_xml_and_marker_frames(self):
         """Keep explicit hip width consistent across MJCF and marker layout."""
@@ -170,6 +252,8 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             "--show-markers",
             "--marker-demo",
             "--base-subject",
+            "--static-cal",
+            "--show-calibration",
         ):
             self.assertIn(option, help_text)
         for option in (

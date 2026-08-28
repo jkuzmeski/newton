@@ -214,6 +214,33 @@ The target hip width defaults to the scaled S001 width. Pass `--hip-width` to
 apply an explicit width; the MJCF femur frames and marker-layout frames are
 updated together.
 
+## Static per-segment calibration
+
+Use a static calibration C3D to build a personalized model with Visual3D-style
+segment definitions. The compiler averages valid samples in the calibration
+window, builds a CODA pelvis, applies the Bell--Brand hip regression, finds
+knee and ankle centers from medial/lateral marker pairs, and builds a flat
+forward/left/up foot frame. It saves the calibration next to the MJCF so the
+model can be reopened without the C3D file. The definitions follow the
+[Visual3D CODA pelvis](https://wiki.has-motion.com/doku.php?id=visual3d:documentation:modeling:segments:coda_pelvis),
+[hip landmark](https://wiki.has-motion.com/doku.php?id=visual3d:documentation:modeling:segments:hip_joint_landmarks),
+and [segment geometry](https://wiki.has-motion.com/doku.php?id=visual3d:documentation:modeling:segments:segment_geometry)
+references.
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
+  --static-cal "/path/to/static_calibration.c3d" \
+  --subject /tmp/s001_calibrated_subject \
+  --overwrite \
+  --show-markers \
+  --show-calibration
+```
+
+The saved bundle contains `calibration/segment_calibration.json`, marker data,
+actual S001-derived meshes, and `model/subject.xml`. Its four foot contact
+spheres are generated from the calibrated foot mesh frame and their surfaces
+are placed on `z=0`.
+
 ## Reusable progress example
 
 Run the current native subject path with generated fallback geometry. Interactive

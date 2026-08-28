@@ -128,9 +128,18 @@ so the saved model is self-describing.
   runtime dependency.
 - The tracked S001 base bundle displays the 35 placed markers on the actual
   19-mesh neutral bone geometry without an OpenSim runtime.
+- A static calibration C3D builds a saved personalized MJCF from the S001
+  segment templates, with per-side thigh/shank/foot scales and all contacts
+  tangent to the declared flat ground plane.
 - Scaling from the S001 base applies one audited length factor to the MJCF
   meshes, marker sites, body frames, contacts, and inertial geometry, plus a
   separate mass factor to inertial values.
+- The S001 static calibration publishes a sealed Visual3D-style segment
+  artifact with CODA/Bell--Brand hip centers, medial/lateral knee and ankle
+  centers, per-side lengths and widths, and a horizontal flat-foot frame.
+- A calibrated subject compiler saves the static calibration, personalized
+  MJCF, per-segment mesh geometry, collision proxies, and flat-ground contacts
+  as a reusable subject bundle.
 
 ## Phase 2 — synthetic native marker IK
 
@@ -278,6 +287,11 @@ until its example and automated checks both pass.
   `scale_subject_marker_layout_from_base()` derive a self-contained target
   bundle from S001. Explicit hip-width overrides update both femur frames and
   marker-layout body transforms.
+- Static segment calibration: `segment_calibration.py` averages valid C3D
+  samples, constructs the CODA/Bell--Brand pelvis and hip centers, derives
+  bilateral endpoint frames, and constrains both feet to a horizontal Z-up
+  frame. `calibrated_subject.py` consumes that artifact and writes a saved
+  personalized MJCF.
 - Branch commit: `ab7eeda9` (`Add S001 base marker geometry`).
 - Implementation: `projects/gait_c3d/marker_layout.py`, marker sites in
   `projects/gait_c3d/subject_mjcf.py`, and the `--show-markers` overlay in
@@ -293,9 +307,11 @@ until its example and automated checks both pass.
   site world positions reproduce the converted reference positions within
   0.10 micrometers maximum error.
 - Focused validation: the gait suite passes with one optional dependency skip
-  when `ezc3d` is unavailable; base scaling tests verify 35 imported sites,
-  19 visible non-colliding meshes, scaled inertias, marker frames, and explicit
-  hip width; the base example is runnable without OpenSim.
+  when `ezc3d` is unavailable; calibration tests verify CODA landmarks,
+  per-side dimensions, sealed provenance, and tamper rejection; base scaling
+  tests verify 35 imported sites, 19 visible non-colliding meshes, scaled
+  inertias, marker frames, explicit hip width, calibrated body frames, and flat
+  foot contacts; the base example is runnable without OpenSim.
 - Reusable commands:
 
   ```bash
@@ -324,8 +340,19 @@ until its example and automated checks both pass.
     --show-markers
   ```
 
-- Remaining limitations: S001-to-target scaling is currently isotropic in
-  length with independent uniform mass scaling; it does not fit dynamic markers
-  or solve native generalized coordinates. The source C3D/VTP inputs used to
-  produce S001 are not bundled, but the neutral base geometry and placement are
-  tracked for reproducible runtime visualization.
+  ```bash
+  uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
+    --static-cal /path/to/static_calibration.c3d \
+    --subject /tmp/s001_calibrated_subject \
+    --overwrite \
+    --show-markers \
+    --show-calibration
+  ```
+
+- Remaining limitations: the static calibration path requires the offline
+  `ezc3d` dependency and currently keeps the torso on the S001 template frame;
+  mass scaling is uniform, segment geometry is per-side, and anisotropic
+  segment inertias still use a mean-square scale approximation. It does not fit
+  dynamic markers or solve native generalized coordinates. The source C3D/VTP
+  inputs used to produce S001 are not bundled, but the neutral base geometry,
+  placement, and static calibration are tracked for reproducible model builds.
