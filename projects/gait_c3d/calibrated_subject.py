@@ -166,6 +166,26 @@ def _segment_basis(calibration: SegmentCalibration, name: str) -> np.ndarray:
     return np.asarray(segment[key], dtype=np.float64)
 
 
+def _base_torso_distal_local(base_root: Path) -> np.ndarray:
+    """Return the S001 sacrum marker in the base torso body frame."""
+    layout = json.loads((base_root / "model" / "marker_layout.json").read_text(encoding="utf-8"))
+    marker = next(entry for entry in layout["markers"] if entry["name"] == "V.Sacral")
+    pelvis = next(
+        body
+        for body in ET.parse(base_root / "model" / "subject.xml").getroot().iter("body")
+        if body.get("name") == "pelvis"
+    )
+    torso = next(
+        body
+        for body in ET.parse(base_root / "model" / "subject.xml").getroot().iter("body")
+        if body.get("name") == "torso"
+    )
+    pelvis_position = np.asarray([float(value) for value in pelvis.get("pos", "0 0 0").split()], dtype=np.float64)
+    torso_position = np.asarray([float(value) for value in torso.get("pos", "0 0 0").split()], dtype=np.float64)
+    marker_position = np.asarray(marker["position_m"], dtype=np.float64)
+    return pelvis_position + marker_position - (pelvis_position + torso_position)
+
+
 def _base_pelvis_marker_positions(base_root: Path) -> dict[str, np.ndarray]:
     """Load base ASIS/sacrum positions in the base pelvis body frame."""
     layout = json.loads((base_root / "model" / "marker_layout.json").read_text(encoding="utf-8"))
@@ -283,6 +303,17 @@ def write_calibrated_subject_mjcf(
     scale = {
         "pelvis": np.full(3, target_asis / reference_asis),
     }
+    if "torso" in target_calibration.segments and "torso" in reference_calibration.segments:
+        target_torso = target_calibration.segments["torso"]
+        reference_torso = reference_calibration.segments["torso"]
+        scale["torso"] = np.asarray(
+            (
+                float(target_torso["depth_m"]) / float(reference_torso["depth_m"]),
+                float(target_torso["width_m"]) / float(reference_torso["width_m"]),
+                float(target_torso["length_m"]) / float(reference_torso["length_m"]),
+            ),
+            dtype=np.float64,
+        )
     for side in ("left", "right"):
         for segment_name in (f"thigh_{side}", f"shank_{side}", f"foot_{side}"):
             target_segment = target_calibration.segments[segment_name]
@@ -336,11 +367,13 @@ def write_calibrated_subject_mjcf(
         )
     torso_offset = np.asarray((0.0, 0.0, 0.38004881829313497), dtype=np.float64)
     if "torso" in bodies:
-        # Keep the torso hard-linked to the pelvis until its own calibrated
-        # dynamic coordinates are introduced. Surface-marker fitting here would
-        # move an S001 mesh template independently of its fixed parent.
-        torso_rotation = target_pelvis_rotation
-        torso_origin = target_pelvis_origin + target_pelvis_rotation @ torso_offset
+        if "torso" in target_calibration.segments:
+            torso_record = target_calibration.segments["torso"]
+            torso_origin = np.asarray(torso_record["distal_m"], dtype=np.float64)
+            torso_rotation = np.asarray(torso_record["basis_forward_left_longitudinal"], dtype=np.float64)
+        else:
+            torso_rotation = target_pelvis_rotation
+            torso_origin = target_pelvis_origin + target_pelvis_rotation @ torso_offset
         body_world["torso"] = (torso_origin, torso_rotation)
     # Transform mesh vertices into calibrated body frames before computing the common floor.
     mesh_file = {mesh.get("name"): mesh.get("file") for mesh in root.iter("mesh") if mesh.get("name")}
@@ -353,8 +386,8 @@ def write_calibrated_subject_mjcf(
             segment_key = "pelvis"
             proximal = np.zeros(3)
         elif body_name == "torso":
-            segment_key = "pelvis"
-            proximal = np.zeros(3)
+            segment_key = "torso" if "torso" in scale else "pelvis"
+            proximal = _base_torso_distal_local(base_root) if segment_key == "torso" else np.zeros(3)
         elif body_name.startswith("femur_"):
             segment_key = f"thigh_{body_name.removeprefix('femur_')}"
             proximal = _source_joint_position(body, "hip_flexion")
@@ -396,6 +429,19 @@ def write_calibrated_subject_mjcf(
                     body_mesh_min_z.get(body_name, math.inf), float(np.min(transformed[:, 2]))
                 )
         body_mesh_vertices[body_name] = records
+    torso_mesh_min_z = 0.0
+    torso_mesh_z_scale = 1.0
+    if "torso" in scale and body_mesh_vertices.get("torso"):
+        torso_values = np.concatenate([vertices for _, _, vertices in body_mesh_vertices["torso"]], axis=0)
+        torso_mesh_min_z = float(np.min(torso_values[:, 2]))
+        torso_mesh_max_z = float(np.max(torso_values[:, 2]))
+        if not math.isfinite(torso_mesh_max_z) or torso_mesh_max_z <= torso_mesh_min_z:
+            raise ValueError("base torso mesh has no finite longitudinal extent")
+        torso_mesh_z_scale = float(target_calibration.segments["torso"]["length_m"]) / (
+            torso_mesh_max_z - torso_mesh_min_z
+        )
+        for _, _, vertices in body_mesh_vertices["torso"]:
+            vertices[:, 2] = (vertices[:, 2] - torso_mesh_min_z) * torso_mesh_z_scale
     foot_origins = {side: body_world[f"foot_{side}"][0][2] for side in ("left", "right")}
     foot_world_min = min(foot_origins[side] + body_mesh_min_z[f"foot_{side}"] for side in ("left", "right"))
     foot_offsets = {
@@ -453,11 +499,15 @@ def write_calibrated_subject_mjcf(
                 proximal = _source_joint_position(body, "ankle")
                 for joint in body.findall("joint"):
                     joint.set("pos", "0 0 0")
+            elif body_name == "torso" and "torso" in scale:
+                proximal = _base_torso_distal_local(base_root)
             else:
                 proximal = np.zeros(3)
             segment_key = (
-                "pelvis"
-                if body_name in {"pelvis", "torso"}
+                "torso"
+                if body_name == "torso" and "torso" in scale
+                else "pelvis"
+                if body_name == "pelvis" or body_name == "torso"
                 else (
                     f"thigh_{body_name.removeprefix('femur_')}"
                     if body_name.startswith("femur_")
@@ -482,6 +532,8 @@ def write_calibrated_subject_mjcf(
                     ) @ target_pelvis_rotation
                 else:
                     inertial_position = (position - proximal) * body_scale
+                    if body_name == "torso" and segment_key == "torso":
+                        inertial_position[2] = (inertial_position[2] - torso_mesh_min_z) * torso_mesh_z_scale
                 inertial.set("pos", _fmt(inertial_position))
                 inertial.set("mass", f"{float(inertial.get('mass', 'nan')) * mass_scale:.9g}")
                 inertia_scale = mass_scale * float(np.mean(body_scale**2))
@@ -512,6 +564,9 @@ def write_calibrated_subject_mjcf(
                                 values = (
                                     pelvis_source @ pelvis_map_rotation + pelvis_map_translation
                                 ) @ target_pelvis_rotation
+                            elif body_name == "torso" and attribute == "pos" and segment_key == "torso":
+                                values = (values - proximal) * body_scale
+                                values[2] = (values[2] - torso_mesh_min_z) * torso_mesh_z_scale
                             else:
                                 values = values * body_scale[: values.size]
                             geom.set(attribute, _fmt(values))

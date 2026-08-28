@@ -220,7 +220,9 @@ Use a static calibration C3D to build a personalized model with Visual3D-style
 segment definitions. The compiler averages valid samples in the calibration
 window, builds a CODA pelvis, applies the Bell--Brand hip regression, finds
 knee and ankle centers from medial/lateral marker pairs, and builds a flat
-forward/left/up foot frame. It saves the calibration next to the MJCF so the
+forward/left/up foot frame. The merged torso uses the distal sacrum and
+superior head as its endpoints, with C7, T10, sternum, clavicle, and acromion
+markers defining its frame. It saves the calibration next to the MJCF so the
 model can be reopened without the C3D file. The definitions follow the
 [Visual3D CODA pelvis](https://wiki.has-motion.com/doku.php?id=visual3d:documentation:modeling:segments:coda_pelvis),
 [hip landmark](https://wiki.has-motion.com/doku.php?id=visual3d:documentation:modeling:segments:hip_joint_landmarks),

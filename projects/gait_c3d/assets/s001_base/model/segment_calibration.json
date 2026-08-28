@@ -496,7 +496,7 @@
   "schema_version": "gait_static_segment_calibration_1",
   "seal": {
     "algorithm": "sha256",
-    "content_sha256": "9e74574957466fbbe306367feb54bce36aea49ea9c6efca60c22f306069fa99e"
+    "content_sha256": "8f471a4bfeb4e90e8472d5abb796e7d2cf86655b980e5343fe9ff7082ab2b2c5"
   },
   "segments": {
     "foot_left": {
@@ -769,6 +769,59 @@
       "width_markers": [
         "RKNE",
         "RMKNE"
+      ]
+    },
+    "torso": {
+      "basis_forward_left_longitudinal": [
+        [
+          0.9974480451847468,
+          0.049187175389739365,
+          -0.05174957907371173
+        ],
+        [
+          -0.05013422387880467,
+          0.99859499576621,
+          -0.01716374163033062
+        ],
+        [
+          0.05083263472610108,
+          0.019714365520144706,
+          0.9985125873212319
+        ]
+      ],
+      "depth_m": 0.1640630965547249,
+      "depth_markers": [
+        "C7",
+        "CLAV"
+      ],
+      "distal_m": [
+        0.15697028042346822,
+        0.005077875324287544,
+        1.1224420405193871
+      ],
+      "distal_marker": "VSAC",
+      "length_m": 0.675260403503759,
+      "orientation_method": "visual3d_trunk_clav_c7_strn_t10",
+      "origin_m": [
+        0.15697028042346822,
+        0.005077875324287544,
+        1.1224420405193871
+      ],
+      "proximal_m": [
+        0.2503914667987356,
+        0.005146245013319833,
+        1.5695941144344854
+      ],
+      "superior_m": [
+        0.2830047264110808,
+        0.009795107020466935,
+        1.7858195187998753
+      ],
+      "superior_marker": "TOPHEAD",
+      "width_m": 0.3583219711113936,
+      "width_markers": [
+        "LSHO",
+        "RSHO"
       ]
     }
   },

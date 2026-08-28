@@ -1494,7 +1494,7 @@
   "schema_version": "gait_c3d_scaled_vtp_visuals_1",
   "segment_calibration": {
     "file": "segment_calibration.json",
-    "sha256": "77b70ef09e1ca1316c8cb0c8611599024bea655837157ddfba9d6098ec6ef706"
+    "sha256": "909c34544f36914b201534bd96b7624b765aaebfc6f12f55381cd0466b34aeec"
   },
   "simple_model_config": {
     "contact_radius": 0.024563156709816878,

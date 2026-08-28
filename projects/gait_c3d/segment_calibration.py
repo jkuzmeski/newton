@@ -398,6 +398,36 @@ def build_static_segment_calibration(
             "width_markers": (f"{prefix}MTH1", f"{prefix}MTH5"),
             "flat_ground": True,
         }
+    torso = None
+    torso_required = ("C7", "CLAV", "STRN", "T10", "TOPHEAD", "VSAC", "LSHO", "RSHO")
+    if all(name in marker_positions for name in torso_required):
+        torso_proximal = 0.5 * (marker_positions["CLAV"] + marker_positions["C7"])
+        torso_distal = 0.5 * (marker_positions["STRN"] + marker_positions["T10"])
+        torso_axis = _unit(torso_proximal - torso_distal, name="torso longitudinal axis")
+        torso_left = _unit(
+            _project(marker_positions["LSHO"] - marker_positions["RSHO"], torso_axis),
+            name="torso left axis",
+        )
+        torso_forward = _unit(np.cross(torso_left, torso_axis), name="torso forward axis")
+        if torso_forward[0] < 0.0:
+            torso_forward = -torso_forward
+            torso_left = -torso_left
+        torso_basis = np.column_stack((torso_forward, torso_left, torso_axis))
+        torso = {
+            "proximal_m": _as_list(torso_proximal),
+            "distal_m": _as_list(marker_positions["VSAC"]),
+            "origin_m": _as_list(marker_positions["VSAC"]),
+            "superior_m": _as_list(marker_positions["TOPHEAD"]),
+            "basis_forward_left_longitudinal": torso_basis.tolist(),
+            "length_m": float(np.linalg.norm(marker_positions["TOPHEAD"] - marker_positions["VSAC"])),
+            "width_m": float(np.linalg.norm(marker_positions["LSHO"] - marker_positions["RSHO"])),
+            "depth_m": float(np.linalg.norm(marker_positions["C7"] - marker_positions["CLAV"])),
+            "orientation_method": "visual3d_trunk_clav_c7_strn_t10",
+            "width_markers": ["LSHO", "RSHO"],
+            "depth_markers": ["C7", "CLAV"],
+            "distal_marker": "VSAC",
+            "superior_marker": "TOPHEAD",
+        }
     manifest = {
         "schema_version": _SCHEMA,
         "coordinate_system": {
@@ -420,7 +450,7 @@ def build_static_segment_calibration(
         },
         "base_marker_set": "S001" if markers.source_file.startswith("Cal 101") else None,
         "pelvis": pelvis,
-        "segments": segments,
+        "segments": segments | ({"torso": torso} if torso is not None else {}),
         "markers": {name: _as_list(value) for name, value in marker_positions.items()},
     }
     manifest["seal"] = {"algorithm": "sha256", "content_sha256": hashlib.sha256(_canonical_json(manifest)).hexdigest()}
@@ -467,14 +497,12 @@ def load_static_segment_calibration(path: str | os.PathLike) -> SegmentCalibrati
     ):
         raise ValueError("segment calibration markers are incomplete or invalid")
     segments = manifest.get("segments")
-    if not isinstance(segments, dict) or set(segments) != {
-        "thigh_left",
-        "thigh_right",
-        "shank_left",
-        "shank_right",
-        "foot_left",
-        "foot_right",
-    }:
+    required_segments = {"thigh_left", "thigh_right", "shank_left", "shank_right", "foot_left", "foot_right"}
+    if (
+        not isinstance(segments, dict)
+        or not required_segments.issubset(segments)
+        or set(segments) - required_segments - {"torso"}
+    ):
         raise ValueError("segment calibration segments are incomplete")
     for name, segment in segments.items():
         if not isinstance(segment, dict):
