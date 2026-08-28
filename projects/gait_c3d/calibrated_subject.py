@@ -166,6 +166,40 @@ def _segment_basis(calibration: SegmentCalibration, name: str) -> np.ndarray:
     return np.asarray(segment[key], dtype=np.float64)
 
 
+def _torso_basis(marker_positions: dict[str, np.ndarray]) -> np.ndarray | None:
+    """Build a forward/left/up torso frame from static shoulder landmarks."""
+    required = ("STRN", "LSHO", "RSHO")
+    if any(name not in marker_positions for name in required):
+        return None
+    sternum = np.asarray(marker_positions["STRN"], dtype=np.float64)
+    shoulder_mid = 0.5 * (
+        np.asarray(marker_positions["LSHO"], dtype=np.float64) + np.asarray(marker_positions["RSHO"], dtype=np.float64)
+    )
+    up = shoulder_mid - sternum
+    up /= np.linalg.norm(up)
+    left = np.asarray(marker_positions["LSHO"], dtype=np.float64) - np.asarray(
+        marker_positions["RSHO"], dtype=np.float64
+    )
+    left -= np.dot(left, up) * up
+    left /= np.linalg.norm(left)
+    forward = np.cross(left, up)
+    forward /= np.linalg.norm(forward)
+    if forward[0] < 0.0:
+        forward = -forward
+        left = -left
+    return np.column_stack((forward, left, up))
+
+
+def _base_torso_marker_positions(base_root: Path) -> dict[str, np.ndarray]:
+    """Load base torso marker positions in the base torso body frame."""
+    layout = json.loads((base_root / "model" / "marker_layout.json").read_text(encoding="utf-8"))
+    return {
+        entry["name"]: np.asarray(entry["position_m"], dtype=np.float64)
+        for entry in layout["markers"]
+        if entry["name"] in {"Sternum", "L.Acromium", "R.Acromium"}
+    }
+
+
 def _pelvis_basis(calibration: SegmentCalibration) -> np.ndarray:
     """Convert CODA right/anterior/up axes to Newton forward/left/up axes."""
     coda = np.asarray(calibration.pelvis["basis_right_anterior_up"], dtype=np.float64)
@@ -348,7 +382,25 @@ def write_calibrated_subject_mjcf(
         )
     torso_offset = np.asarray((0.0, 0.0, 0.38004881829313497), dtype=np.float64)
     if "torso" in bodies:
-        body_world["torso"] = (target_pelvis_origin + target_pelvis_rotation @ torso_offset, target_pelvis_rotation)
+        torso_rotation = _torso_basis(target_markers)
+        if torso_rotation is None:
+            torso_rotation = target_pelvis_rotation
+            torso_origin = target_pelvis_origin + target_pelvis_rotation @ torso_offset
+        else:
+            base_torso_markers = _base_torso_marker_positions(base_root)
+            target_torso_markers = {
+                "Sternum": target_markers["STRN"],
+                "L.Acromium": target_markers["LSHO"],
+                "R.Acromium": target_markers["RSHO"],
+            }
+            torso_origin = np.mean(
+                [
+                    target_torso_markers[name] - torso_rotation @ position
+                    for name, position in base_torso_markers.items()
+                ],
+                axis=0,
+            )
+        body_world["torso"] = (torso_origin, torso_rotation)
     # Transform mesh vertices into calibrated body frames before computing the common floor.
     mesh_file = {mesh.get("name"): mesh.get("file") for mesh in root.iter("mesh") if mesh.get("name")}
     body_mesh_vertices: dict[str, list[tuple[ET.Element, Path, np.ndarray]]] = {}
