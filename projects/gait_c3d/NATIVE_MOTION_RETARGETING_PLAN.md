@@ -354,7 +354,8 @@ until its example and automated checks both pass.
 
 - Remaining limitations: the static calibration path requires the offline
   `ezc3d` dependency and retains a fixed torso-to-pelvis topology, although its
-  neutral torso frame is now calibrated from the sternum and shoulder markers;
+  neutral torso remains on the S001 template frame and stays fixed to the
+  calibrated pelvis;
   mass scaling is uniform, segment geometry is per-side, and anisotropic
   segment inertias still use a mean-square scale approximation. It does not fit
   dynamic markers or solve native generalized coordinates. The source C3D/VTP
