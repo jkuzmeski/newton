@@ -941,7 +941,7 @@ def create_parser():
     # Keep reproducibility controls accepted without crowding the normal help.
     parser.add_argument("--subject-name", default="example_subject", help=argparse.SUPPRESS)
     parser.add_argument("--hip-width", type=float, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--marker-radius", type=float, default=0.006, help=argparse.SUPPRESS)
+    parser.add_argument("--marker-radius", type=float, default=0.006, help="Static marker radius [m]")
     parser.add_argument("--calibration-start", type=float, default=0.5, help=argparse.SUPPRESS)
     parser.add_argument("--calibration-end", type=float, default=1.0, help=argparse.SUPPRESS)
     parser.add_argument("--c3d-up-axis", default="+Z", help=argparse.SUPPRESS)
