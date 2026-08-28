@@ -146,6 +146,8 @@ so the saved model is self-describing.
 
 ## Phase 2 — synthetic native marker IK
 
+**Status:** complete on `jkuzmeski/mocap-native-ik`; Phase 3 is next.
+
 Generate target markers from known configurations of the native MJCF, then
 recover those configurations through the public Newton IK API. Start with
 Levenberg-Marquardt, analytic Jacobians, one seed, joint-limit objectives, and a
@@ -367,6 +369,7 @@ until its example and automated checks both pass.
 
 ### Phase 2
 
+- Branch commit: `47c7f381` (`Add synthetic native gait marker IK`).
 - Implementation: `projects/gait_c3d/native_motion_fit.py` binds imported MJCF
   sites to public `newton.ik.IKObjectivePosition` objectives and solves with
   analytic LM, one seed, and temporal warm starts. Invalid marker handling

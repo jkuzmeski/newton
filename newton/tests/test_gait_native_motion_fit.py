@@ -4,11 +4,12 @@
 """Test synthetic native marker IK."""
 
 import unittest
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
-import newton
 
+import newton
 from projects.gait_c3d.native_motion_fit import (
     joint_limit_violation,
     marker_attachments_from_model,
@@ -84,10 +85,7 @@ class TestNativeMotionFit(unittest.TestCase):
             [marker_positions_from_joint_q(self.model, self.attachments, target) for target in target_coordinates]
         )
         frames = solve_marker_sequence(self.model, self.attachments, targets, self.seed, iterations=60)
-        jumps = [
-            np.linalg.norm(current.joint_q[7:] - previous.joint_q[7:])
-            for previous, current in zip(frames, frames[1:])
-        ]
+        jumps = [np.linalg.norm(current.joint_q[7:] - previous.joint_q[7:]) for previous, current in pairwise(frames)]
         self.assertLess(max(jumps), 0.25)
         self.assertTrue(all(frame.marker_rms < 1.0e-4 for frame in frames))
 

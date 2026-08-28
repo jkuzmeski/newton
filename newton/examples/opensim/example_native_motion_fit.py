@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -63,14 +64,15 @@ class Example:
         self.seed = self.model.joint_q.numpy().copy()
         self.target_coordinates = self._make_target_coordinates(args.frames)
         full_targets = np.asarray(
-            [marker_positions_from_joint_q(self.model, self.attachments, coordinates) for coordinates in self.target_coordinates]
+            [
+                marker_positions_from_joint_q(self.model, self.attachments, coordinates)
+                for coordinates in self.target_coordinates
+            ]
         )
         rng = np.random.default_rng(args.seed)
         visible_targets = full_targets[:, visible]
         if args.noise_mm:
-            visible_targets = visible_targets + rng.normal(
-                0.0, args.noise_mm * 1.0e-3, size=visible_targets.shape
-            )
+            visible_targets = visible_targets + rng.normal(0.0, args.noise_mm * 1.0e-3, size=visible_targets.shape)
         self.target_sequence = visible_targets
         neutral_visible = marker_positions_from_joint_q(self.model, self.visible_attachments, self.seed)
         neutral_errors = neutral_visible - visible_targets[0]
@@ -84,8 +86,12 @@ class Example:
             joint_limit_weight=args.joint_limit_weight,
         )
         self.frame_index = 0
-        self.target_points = wp.array(self.frames[0].target_markers.astype(np.float32), dtype=wp.vec3, device=self.model.device)
-        self.predicted_points = wp.array(self.frames[0].predicted_markers.astype(np.float32), dtype=wp.vec3, device=self.model.device)
+        self.target_points = wp.array(
+            self.frames[0].target_markers.astype(np.float32), dtype=wp.vec3, device=self.model.device
+        )
+        self.predicted_points = wp.array(
+            self.frames[0].predicted_markers.astype(np.float32), dtype=wp.vec3, device=self.model.device
+        )
         self.radii = wp.full(len(self.visible_attachments), 0.012, dtype=wp.float32, device=self.model.device)
         self.target_colors = wp.full(
             len(self.visible_attachments), wp.vec3(0.95, 0.15, 0.10), dtype=wp.vec3, device=self.model.device
@@ -124,9 +130,7 @@ class Example:
                 (0.025 * np.sin(phase), 0.018 * np.cos(phase), 0.012 * np.sin(phase + 0.4)), dtype=np.float32
             )
             angle = 0.08 * np.sin(phase)
-            coordinates_frame[3:7] = np.asarray(
-                (0.0, 0.0, np.sin(angle / 2.0), np.cos(angle / 2.0)), dtype=np.float32
-            )
+            coordinates_frame[3:7] = np.asarray((0.0, 0.0, np.sin(angle / 2.0), np.cos(angle / 2.0)), dtype=np.float32)
             coordinates_frame[7:] = amplitudes * np.sin(phase + np.arange(len(amplitudes)) * 0.27)
             # Knee hinge coordinates are nonnegative in the native MJCF.
             coordinates_frame[13] = 0.18 + 0.08 * np.sin(phase)
@@ -171,8 +175,7 @@ class Example:
             if frame.joint_limit_violation > 1.0e-5:
                 raise ValueError("synthetic IK violated a native joint limit")
         jumps = [
-            np.linalg.norm(current.joint_q[7:] - previous.joint_q[7:])
-            for previous, current in zip(self.frames, self.frames[1:])
+            np.linalg.norm(current.joint_q[7:] - previous.joint_q[7:]) for previous, current in pairwise(self.frames)
         ]
         if jumps and max(jumps) > 0.8:
             raise ValueError("warm-started synthetic IK produced a frame jump")

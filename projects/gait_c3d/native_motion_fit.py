@@ -218,7 +218,6 @@ def solve_marker_sequence(
     return tuple(frames)
 
 
-
 def free_root_quaternion_slice(model: newton.Model) -> slice | None:
     """Return the free-root quaternion coordinate slice, if the model has one."""
     joint_types = model.joint_type.numpy()
