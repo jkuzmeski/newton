@@ -179,6 +179,41 @@ compiler command below to inspect its 35 subject-specific sites with the same
 their native bodies. `marker_layout.json` remains the sealed provenance and
 name-mapping artifact used by later motion-retargeting phases.
 
+## S001 base marker placement and geometry
+
+`assets/s001_base` is the tracked canonical **S001** base subject. It contains
+35 placed markers, the final neutral MJCF, and the 19 actual S001 bone meshes.
+This is the Phase 1 visual gate: the green marker points are imported MJCF
+sites and the gray meshes are the corresponding non-colliding bone visuals.
+No OpenSim runtime is needed to open the bundle.
+
+Inspect the exact S001 placement on its actual bone geometry:
+
+```bash
+uv run --extra dev -m newton.examples opensim_subject \
+  --subject projects/gait_c3d/assets/s001_base \
+  --show-markers \
+  --paused
+```
+
+Create a new native subject by scaling the complete S001 base. The scaler applies
+the same length factor to bone meshes, marker sites, body frames, contacts, and
+inertial geometry, and applies the mass factor to inertias:
+
+```bash
+uv run --extra dev -m newton.examples opensim_subject \
+  --base-subject projects/gait_c3d/assets/s001_base \
+  --subject /tmp/s001_scaled_subject \
+  --height 1.80 \
+  --mass 90.0 \
+  --overwrite \
+  --show-markers
+```
+
+The target hip width defaults to the scaled S001 width. Pass `--hip-width` to
+apply an explicit width; the MJCF femur frames and marker-layout frames are
+updated together.
+
 ## Reusable progress example
 
 Run the current native subject path with generated fallback geometry. Interactive

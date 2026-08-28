@@ -1,0 +1,641 @@
+{
+  "base_marker_set": "S001",
+  "conversion": {
+    "opensim_to_newton": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        -1.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ]
+    ],
+    "position_convention": "row_vectors",
+    "source_ground_offset_z_m": 0.03831109549021945
+  },
+  "coordinate_system": {
+    "forward_axis": "X",
+    "frame": "Newton target body-local",
+    "left_axis": "Y",
+    "length_unit": "m",
+    "up_axis": "Z"
+  },
+  "markers": [
+    {
+      "body": "torso",
+      "name": "Sternum",
+      "position_m": [
+        0.10412225638657976,
+        -0.011335596124342701,
+        -0.17965826483997116
+      ],
+      "site_name": "marker_Sternum",
+      "source_body": "torso"
+    },
+    {
+      "body": "torso",
+      "name": "R.Acromium",
+      "position_m": [
+        -0.006557650423710176,
+        -0.1770595660990425,
+        0.086305076029356
+      ],
+      "site_name": "marker_R.Acromium",
+      "source_body": "torso"
+    },
+    {
+      "body": "torso",
+      "name": "L.Acromium",
+      "position_m": [
+        0.04035417960359752,
+        0.1781773208283259,
+        0.08586733483465614
+      ],
+      "site_name": "marker_L.Acromium",
+      "source_body": "torso"
+    },
+    {
+      "body": "torso",
+      "name": "Top.Head",
+      "position_m": [
+        0.07399964027785519,
+        0.0064002757815831285,
+        0.27786566775479793
+      ],
+      "site_name": "marker_Top.Head",
+      "source_body": "torso"
+    },
+    {
+      "body": "pelvis",
+      "name": "R.ASIS",
+      "position_m": [
+        0.018852811044229312,
+        -0.11479095519577714,
+        -0.07244608877313785
+      ],
+      "site_name": "marker_R.ASIS",
+      "source_body": "pelvis"
+    },
+    {
+      "body": "pelvis",
+      "name": "L.ASIS",
+      "position_m": [
+        0.029712639695716137,
+        0.11835526023376855,
+        -0.0702825275297716
+      ],
+      "site_name": "marker_L.ASIS",
+      "source_body": "pelvis"
+    },
+    {
+      "body": "pelvis",
+      "name": "V.Sacral",
+      "position_m": [
+        -0.1559796042059935,
+        0.010066412294554811,
+        0.022804809879067633
+      ],
+      "site_name": "marker_V.Sacral",
+      "source_body": "pelvis"
+    },
+    {
+      "body": "femur_right",
+      "name": "R.Thigh.Upper",
+      "position_m": [
+        -0.07092369986479001,
+        -0.09282306997581682,
+        -0.08326235337385401
+      ],
+      "site_name": "marker_R.Thigh.Upper",
+      "source_body": "femur_r"
+    },
+    {
+      "body": "femur_right",
+      "name": "R.Thigh.Front",
+      "position_m": [
+        -0.07182503195992733,
+        -0.08142885319787121,
+        -0.15978254912130396
+      ],
+      "site_name": "marker_R.Thigh.Front",
+      "source_body": "femur_r"
+    },
+    {
+      "body": "femur_right",
+      "name": "R.Thigh.Rear",
+      "position_m": [
+        -0.026228358553617145,
+        -0.08118684892561223,
+        -0.14855263261824359
+      ],
+      "site_name": "marker_R.Thigh.Rear",
+      "source_body": "femur_r"
+    },
+    {
+      "body": "femur_right",
+      "name": "R.Knee.Lat",
+      "position_m": [
+        -0.06389201652411124,
+        -0.07060951761107861,
+        -0.30446008688500487
+      ],
+      "site_name": "marker_R.Knee.Lat",
+      "source_body": "femur_r"
+    },
+    {
+      "body": "femur_right",
+      "name": "R.Knee.Med",
+      "position_m": [
+        -0.06831243050235412,
+        0.05489995310180367,
+        -0.3136022916254085
+      ],
+      "site_name": "marker_R.Knee.Med",
+      "source_body": "femur_r"
+    },
+    {
+      "body": "tibia_right",
+      "name": "R.Shank.Upper",
+      "position_m": [
+        -0.09037554791235458,
+        -0.08785982494349465,
+        -0.055585743869509985
+      ],
+      "site_name": "marker_R.Shank.Upper",
+      "source_body": "tibia_r"
+    },
+    {
+      "body": "tibia_right",
+      "name": "R.Shank.Front",
+      "position_m": [
+        -0.046861398811954086,
+        -0.07291800570011472,
+        -0.06315263907303792
+      ],
+      "site_name": "marker_R.Shank.Front",
+      "source_body": "tibia_r"
+    },
+    {
+      "body": "tibia_right",
+      "name": "R.Shank.Rear",
+      "position_m": [
+        -0.08905663260040544,
+        -0.07163200857314236,
+        -0.12977584363300587
+      ],
+      "site_name": "marker_R.Shank.Rear",
+      "source_body": "tibia_r"
+    },
+    {
+      "body": "tibia_right",
+      "name": "R.Ankle.Lat",
+      "position_m": [
+        -0.06832279533162611,
+        -0.04455419882666237,
+        -0.3084161547835462
+      ],
+      "site_name": "marker_R.Ankle.Lat",
+      "source_body": "tibia_r"
+    },
+    {
+      "body": "tibia_right",
+      "name": "R.Ankle.Med",
+      "position_m": [
+        -0.056089944041378376,
+        0.04428129735879857,
+        -0.2982078833555337
+      ],
+      "site_name": "marker_R.Ankle.Med",
+      "source_body": "tibia_r"
+    },
+    {
+      "body": "foot_right",
+      "name": "R.Heel",
+      "position_m": [
+        -0.24582648058555415,
+        -0.014287482499507287,
+        -0.09188077380040004
+      ],
+      "site_name": "marker_R.Heel",
+      "source_body": "calcn_r"
+    },
+    {
+      "body": "foot_right",
+      "name": "R.Toe.Lat",
+      "position_m": [
+        -0.041279194717782644,
+        -0.07439972404807352,
+        -0.13811226323544898
+      ],
+      "site_name": "marker_R.Toe.Lat",
+      "source_body": "calcn_r"
+    },
+    {
+      "body": "foot_right",
+      "name": "R.Toe.Med",
+      "position_m": [
+        -0.01259975363570097,
+        0.037387608576158415,
+        -0.11235919116741278
+      ],
+      "site_name": "marker_R.Toe.Med",
+      "source_body": "calcn_r"
+    },
+    {
+      "body": "foot_right",
+      "name": "R.Toe.Tip",
+      "position_m": [
+        -0.0024207057509796487,
+        -0.008704343091290909,
+        -0.10066276196873147
+      ],
+      "site_name": "marker_R.Toe.Tip",
+      "source_body": "calcn_r"
+    },
+    {
+      "body": "femur_left",
+      "name": "L.Thigh.Upper",
+      "position_m": [
+        -0.07785153709104724,
+        0.09076011121903707,
+        -0.08607234325351265
+      ],
+      "site_name": "marker_L.Thigh.Upper",
+      "source_body": "femur_l"
+    },
+    {
+      "body": "femur_left",
+      "name": "L.Thigh.Front",
+      "position_m": [
+        -0.07982823217603145,
+        0.08087153445366152,
+        -0.16213963209156212
+      ],
+      "site_name": "marker_L.Thigh.Front",
+      "source_body": "femur_l"
+    },
+    {
+      "body": "femur_left",
+      "name": "L.Thigh.Rear",
+      "position_m": [
+        -0.03701012701752669,
+        0.08719418916628549,
+        -0.15322939824775805
+      ],
+      "site_name": "marker_L.Thigh.Rear",
+      "source_body": "femur_l"
+    },
+    {
+      "body": "femur_left",
+      "name": "L.Knee.Lat",
+      "position_m": [
+        -0.058168496821902047,
+        0.07326967820735131,
+        -0.32111353936271897
+      ],
+      "site_name": "marker_L.Knee.Lat",
+      "source_body": "femur_l"
+    },
+    {
+      "body": "femur_left",
+      "name": "L.Knee.Med",
+      "position_m": [
+        -0.07129666616340834,
+        -0.052253624577215094,
+        -0.3229480040020636
+      ],
+      "site_name": "marker_L.Knee.Med",
+      "source_body": "femur_l"
+    },
+    {
+      "body": "tibia_left",
+      "name": "L.Shank.Upper",
+      "position_m": [
+        -0.08924000504915375,
+        0.08391855777688378,
+        -0.052275018514701344
+      ],
+      "site_name": "marker_L.Shank.Upper",
+      "source_body": "tibia_l"
+    },
+    {
+      "body": "tibia_left",
+      "name": "L.Shank.Front",
+      "position_m": [
+        -0.04191852826389966,
+        0.07335520767238368,
+        -0.05868089984414809
+      ],
+      "site_name": "marker_L.Shank.Front",
+      "source_body": "tibia_l"
+    },
+    {
+      "body": "tibia_left",
+      "name": "L.Shank.Rear",
+      "position_m": [
+        -0.08400300299775731,
+        0.06864990218917613,
+        -0.1273538439880289
+      ],
+      "site_name": "marker_L.Shank.Rear",
+      "source_body": "tibia_l"
+    },
+    {
+      "body": "tibia_left",
+      "name": "L.Ankle.Lat",
+      "position_m": [
+        -0.06850678351688277,
+        0.041953595981093494,
+        -0.30745663930323525
+      ],
+      "site_name": "marker_L.Ankle.Lat",
+      "source_body": "tibia_l"
+    },
+    {
+      "body": "tibia_left",
+      "name": "L.Ankle.Med",
+      "position_m": [
+        -0.051085211728879115,
+        -0.048673356241954846,
+        -0.2950640973388368
+      ],
+      "site_name": "marker_L.Ankle.Med",
+      "source_body": "tibia_l"
+    },
+    {
+      "body": "foot_left",
+      "name": "L.Heel",
+      "position_m": [
+        -0.24588392151062646,
+        0.01234944690759257,
+        -0.08526145897610447
+      ],
+      "site_name": "marker_L.Heel",
+      "source_body": "calcn_l"
+    },
+    {
+      "body": "foot_left",
+      "name": "L.Toe.Lat",
+      "position_m": [
+        -0.04182850864634867,
+        0.0755387554652176,
+        -0.13286400901231915
+      ],
+      "site_name": "marker_L.Toe.Lat",
+      "source_body": "calcn_l"
+    },
+    {
+      "body": "foot_left",
+      "name": "L.Toe.Med",
+      "position_m": [
+        -0.010740073510431866,
+        -0.03521051768053965,
+        -0.11056012548843043
+      ],
+      "site_name": "marker_L.Toe.Med",
+      "source_body": "calcn_l"
+    },
+    {
+      "body": "foot_left",
+      "name": "L.Toe.Tip",
+      "position_m": [
+        -0.004107298646859145,
+        0.015608581250529219,
+        -0.10008813833185898
+      ],
+      "site_name": "marker_L.Toe.Tip",
+      "source_body": "calcn_l"
+    }
+  ],
+  "schema_version": "gait_subject_marker_layout_1",
+  "seal": {
+    "algorithm": "sha256",
+    "content_sha256": "01c302059db8f93c2ac8f209b33950224e1da346f1713a8c00eb6b3687217d5b"
+  },
+  "source": {
+    "body_transforms_file": "body_transforms.json",
+    "body_transforms_sha256": "68bc1bd7284edb6a6c04f974d9ce3cee4713993be5e27e5bd4c1f916f20d5936",
+    "marker_set_file": "adjusted_markers.xml",
+    "marker_set_sha256": "360eb53595c51b386e45e75c8827bd1d18065a9f51fa7e8767ae6eafed255e65"
+  },
+  "target": {
+    "neutral_body_transforms": {
+      "femur_left": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0761315877902333
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.7866476171221353
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "femur_right": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          -0.0761315877902333
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.7866476171221353
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "foot_left": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.1
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0761315877902333
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.11831109549021934
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "foot_right": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.1
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          -0.0761315877902333
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.11831109549021934
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "pelvis": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          1.0718723224020525
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "tibia_left": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0761315877902333
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.360000499457675
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "tibia_right": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          -0.0761315877902333
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          0.360000499457675
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "torso": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0,
+          1.4519211406951875
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  }
+}

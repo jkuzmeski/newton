@@ -126,6 +126,11 @@ so the saved model is self-describing.
 - The reusable `opensim_subject --marker-demo --show-markers` example displays
   imported neutral marker sites from a clean checkout without an OpenSim
   runtime dependency.
+- The tracked S001 base bundle displays the 35 placed markers on the actual
+  19-mesh neutral bone geometry without an OpenSim runtime.
+- Scaling from the S001 base applies one audited length factor to the MJCF
+  meshes, marker sites, body frames, contacts, and inertial geometry, plus a
+  separate mass factor to inertial values.
 
 ## Phase 2 — synthetic native marker IK
 
@@ -263,20 +268,36 @@ until its example and automated checks both pass.
 ### Phase 1
 
 - Branch: `jkuzmeski/mocap-native-ik`.
+- Base marker set: tracked `projects/gait_c3d/assets/s001_base`, identified as
+  `S001`; it contains the final neutral MJCF, 35 placed markers, and 19 actual
+  subject-specific bone meshes. The source OpenSim/C3D inputs remain external.
+- Actual-geometry visualization: `opensim_subject --subject
+  projects/gait_c3d/assets/s001_base --show-markers --paused` overlays imported
+  marker sites on the S001 bone meshes.
+- Base scaling: `scale_subject_mjcf_from_base()` and
+  `scale_subject_marker_layout_from_base()` derive a self-contained target
+  bundle from S001. Explicit hip-width overrides update both femur frames and
+  marker-layout body transforms.
+- Branch commit: `ecbab23b` plus the base-geometry/scaling implementation in
+  the working tree.
 - Implementation: `projects/gait_c3d/marker_layout.py`, marker sites in
   `projects/gait_c3d/subject_mjcf.py`, and the `--show-markers` overlay in
   `opensim_subject`.
 - Artifacts: `model/marker_layout.json`, marker `<site>` elements in
   `model/subject.xml`, and the `marker_layout` reference in `subject.json`.
+  The tracked S001 base adds `assets/s001_base/model/subject.xml`, its actual
+  `Geometry/*.obj` meshes, and sealed base/scaled manifests.
 - Clean-checkout example: the tracked compact OpenSim-output-style fixture builds
   ten sealed marker sites without executing OpenSim.
 - Canonical S001 result: 35 sealed marker sites; one-call Newton import produces
   8 bodies, 10 fixed-root inspection DOFs, and 79 shapes/sites. Imported neutral
   site world positions reproduce the converted reference positions within
   0.10 micrometers maximum error.
-- Focused validation: all 34 gait tests pass with one optional dependency skip;
-  the `opensim_subject` example passes on CPU and CUDA; pre-commit passes.
-- Reusable command:
+- Focused validation: the gait suite passes with one optional dependency skip
+  when `ezc3d` is unavailable; base scaling tests verify 35 imported sites,
+  19 visible non-colliding meshes, scaled inertias, marker frames, and explicit
+  hip width; the base example is runnable without OpenSim.
+- Reusable commands:
 
   ```bash
   uv run --extra dev -m newton.examples opensim_subject \
@@ -287,5 +308,25 @@ until its example and automated checks both pass.
     --paused
   ```
 
-- Remaining limitation: this phase publishes neutral marker attachments. It does
-  not yet fit dynamic markers or solve native generalized coordinates.
+  ```bash
+  uv run --extra dev -m newton.examples opensim_subject \
+    --subject projects/gait_c3d/assets/s001_base \
+    --show-markers \
+    --paused
+  ```
+
+  ```bash
+  uv run --extra dev -m newton.examples opensim_subject \
+    --base-subject projects/gait_c3d/assets/s001_base \
+    --subject /tmp/s001_scaled_subject \
+    --height 1.80 \
+    --mass 90.0 \
+    --overwrite \
+    --show-markers
+  ```
+
+- Remaining limitations: S001-to-target scaling is currently isotropic in
+  length with independent uniform mass scaling; it does not fit dynamic markers
+  or solve native generalized coordinates. The source C3D/VTP inputs used to
+  produce S001 are not bundled, but the neutral base geometry and placement are
+  tracked for reproducible runtime visualization.

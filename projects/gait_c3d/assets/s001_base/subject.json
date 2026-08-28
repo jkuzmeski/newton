@@ -1,0 +1,23 @@
+{
+  "artifacts": {
+    "body_transforms": "model/body_transforms.json",
+    "marker_layout": "model/marker_layout.json",
+    "marker_placement": "model/adjusted_markers.xml",
+    "model": "model/subject.xml",
+    "model_manifest": "model/manifest.json"
+  },
+  "base_marker_set": "S001",
+  "schema_version": "gait_subject_bundle_1",
+  "sources": {
+    "base_marker_set": "S001",
+    "c3d": "Cal 101.v3d.c3d",
+    "template": "gait2354_subject01.osim"
+  },
+  "subject": {
+    "height_m": 1.695898298375747,
+    "hip_width_m": 0.1522631755804666,
+    "mass_kg": 81.9312118,
+    "name": "S001_base",
+    "visual_mesh_count": 19
+  }
+}

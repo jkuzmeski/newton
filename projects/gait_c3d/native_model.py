@@ -175,6 +175,78 @@ class SimpleGaitConfig:
             self_collision_mu=reference.self_collision_mu,
         )
 
+    @classmethod
+    def for_subject_from_base(
+        cls,
+        base: SimpleGaitConfig,
+        *,
+        base_height: float,
+        body_mass: float,
+        body_height: float,
+        hip_width: float | None = None,
+    ) -> SimpleGaitConfig:
+        """Scale every physical value from an explicitly compiled base subject.
+
+        Args:
+            base: Base subject configuration, normally the canonical S001 model.
+            base_height: Standing height represented by ``base`` [m].
+            body_mass: Target subject body mass [kg].
+            body_height: Target subject standing height [m].
+            hip_width: Optional target hip-joint center spacing [m].
+
+        Returns:
+            A target configuration with base proportions, mass distribution, and
+            contact dimensions scaled from the supplied base.
+        """
+        if not isinstance(base, cls):
+            raise TypeError("base must be a SimpleGaitConfig")
+        if not math.isfinite(base_height) or base_height <= 0.0:
+            raise ValueError("base_height must be finite and positive")
+        if not math.isfinite(body_mass) or body_mass <= 0.0:
+            raise ValueError("body_mass must be finite and positive")
+        if not math.isfinite(body_height) or body_height <= 0.0:
+            raise ValueError("body_height must be finite and positive")
+        if hip_width is not None and (not math.isfinite(hip_width) or hip_width <= 0.0):
+            raise ValueError("hip_width must be finite and positive")
+        base_mass = base.pelvis_mass + base.torso_mass + 2.0 * (base.thigh_mass + base.shank_mass + base.foot_mass)
+        if not math.isfinite(base_mass) or base_mass <= 0.0:
+            raise ValueError("base configuration must have finite positive total mass")
+        length_scale = body_height / base_height
+        mass_scale = body_mass / base_mass
+
+        def scale_dimensions(values: tuple[float, float, float]) -> tuple[float, float, float]:
+            return tuple(length_scale * value for value in values)
+
+        return cls(
+            pelvis_height=length_scale * base.pelvis_height,
+            pelvis_mass=mass_scale * base.pelvis_mass,
+            torso_mass=mass_scale * base.torso_mass,
+            thigh_mass=mass_scale * base.thigh_mass,
+            shank_mass=mass_scale * base.shank_mass,
+            foot_mass=mass_scale * base.foot_mass,
+            hip_half_width=0.5 * hip_width if hip_width is not None else length_scale * base.hip_half_width,
+            thigh_length=length_scale * base.thigh_length,
+            shank_length=length_scale * base.shank_length,
+            foot_length=length_scale * base.foot_length,
+            foot_width=length_scale * base.foot_width,
+            pelvis_dimensions=scale_dimensions(base.pelvis_dimensions),
+            torso_dimensions=scale_dimensions(base.torso_dimensions),
+            thigh_radius=length_scale * base.thigh_radius,
+            shank_radius=length_scale * base.shank_radius,
+            self_collision_joint_clearance=length_scale * base.self_collision_joint_clearance,
+            pelvis_hip_drop=length_scale * base.pelvis_hip_drop,
+            torso_center_offset=length_scale * base.torso_center_offset,
+            contact_radius=length_scale * base.contact_radius,
+            ground_ke=base.ground_ke,
+            ground_kd=base.ground_kd,
+            ground_kf=base.ground_kf,
+            friction=base.friction,
+            self_collision_ke=base.self_collision_ke,
+            self_collision_kd=base.self_collision_kd,
+            self_collision_kf=base.self_collision_kf,
+            self_collision_mu=base.self_collision_mu,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SimpleGaitBuild:

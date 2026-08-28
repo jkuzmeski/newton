@@ -12,7 +12,11 @@ from pathlib import Path
 import numpy as np
 
 import newton
-from projects.gait_c3d.marker_layout import compile_subject_marker_layout, load_subject_marker_layout
+from projects.gait_c3d.marker_layout import (
+    compile_subject_marker_layout,
+    load_subject_marker_layout,
+    scale_subject_marker_layout_from_base,
+)
 from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
 from projects.gait_c3d.vtp_adapter import simple_gait_body_transforms
@@ -59,7 +63,7 @@ def _write_synthetic_sources(root: Path, config: SimpleGaitConfig, offset: float
         expected[name] = (target_body, local)
         marker_lines.append(
             f'<Marker name="{name}"><socket_parent_frame>/bodyset/{source_body}</socket_parent_frame>'
-            f'<location>{local[0]} {local[1]} {local[2]}</location></Marker>'
+            f"<location>{local[0]} {local[1]} {local[2]}</location></Marker>"
         )
     marker_path = root / "adjusted_markers.xml"
     marker_path.write_text(
@@ -97,6 +101,43 @@ class TestSubjectMarkerLayout(unittest.TestCase):
             self.assertEqual(marker.body, body)
             np.testing.assert_allclose(marker.position, position, atol=1.0e-12)
             self.assertEqual(marker.site_name, f"marker_{marker.name}")
+
+    def test_scales_marker_layout_from_base(self):
+        """Scale S001-style marker positions and neutral frames together."""
+        config = SimpleGaitConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker_path, transforms_path, _ = _write_synthetic_sources(root, config, 0.02)
+            base_path = root / "base_layout.json"
+            base = compile_subject_marker_layout(
+                marker_path,
+                transforms_path,
+                config,
+                base_path,
+                source_ground_offset_z=0.02,
+            )
+            scaled = scale_subject_marker_layout_from_base(
+                base.path,
+                root / "scaled_layout.json",
+                length_scale=1.5,
+            )
+            base_manifest = json.loads(base.path.read_text(encoding="utf-8"))
+            scaled_manifest = json.loads(scaled.path.read_text(encoding="utf-8"))
+            base_layout_hash = hashlib.sha256(base.path.read_bytes()).hexdigest()
+        self.assertEqual(len(scaled.markers), len(base.markers))
+        self.assertAlmostEqual(scaled.source_ground_offset_z, 0.03)
+        for marker, original in zip(scaled.markers, base.markers, strict=True):
+            np.testing.assert_allclose(marker.position, 1.5 * np.asarray(original.position), atol=1.0e-12)
+        for name, transform in scaled.target_body_transforms.items():
+            expected_transform = base.target_body_transforms[name].copy()
+            expected_transform[:3, 3] *= 1.5
+            np.testing.assert_allclose(transform, expected_transform, atol=1.0e-12)
+        self.assertEqual(scaled_manifest["derived_from"]["layout_file"], base.path.name)
+        self.assertEqual(scaled_manifest["derived_from"]["layout_sha256"], base_layout_hash)
+        self.assertEqual(
+            [(marker["name"], marker["site_name"]) for marker in base_manifest["markers"]],
+            [(marker["name"], marker["site_name"]) for marker in scaled_manifest["markers"]],
+        )
 
     def test_rejects_tampered_layout(self):
         """Reject marker data changed without updating the content seal."""

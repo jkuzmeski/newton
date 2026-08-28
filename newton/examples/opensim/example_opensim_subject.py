@@ -26,9 +26,13 @@ import warp as wp
 import newton
 import newton.examples
 from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
-from projects.gait_c3d.marker_layout import compile_subject_marker_layout, load_subject_marker_layout
+from projects.gait_c3d.marker_layout import (
+    compile_subject_marker_layout,
+    load_subject_marker_layout,
+    scale_subject_marker_layout_from_base,
+)
 from projects.gait_c3d.native_model import SimpleGaitConfig
-from projects.gait_c3d.subject_mjcf import write_subject_mjcf
+from projects.gait_c3d.subject_mjcf import scale_subject_mjcf_from_base, write_subject_mjcf
 from projects.gait_c3d.subject_scaling import (
     build_subject_with_official_opensim,
     place_markers_with_official_opensim,
@@ -97,6 +101,7 @@ def _write_subject_bundle_manifest(
         artifacts["marker_layout"] = "model/marker_layout.json"
     manifest = {
         "schema_version": _SUBJECT_BUNDLE_SCHEMA,
+        "base_marker_set": getattr(args, "base_marker_set", None),
         "subject": {
             "name": args.subject_name,
             "mass_kg": float(
@@ -116,6 +121,8 @@ def _write_subject_bundle_manifest(
         },
         "artifacts": artifacts,
         "sources": {
+            "base_marker_set": getattr(args, "base_marker_set", None),
+            "base_subject": Path(args.base_subject).name if args.base_subject else None,
             "c3d": Path(args.c3d).name if args.c3d else None,
             "template": Path(args.template_osim).name if args.template_osim else None,
             "scaled_model": Path(args.scaled_osim).name if args.scaled_osim else None,
@@ -166,7 +173,7 @@ class Example:
             self._update_marker_points()
         elif self.show_markers:
             raise ValueError(
-                "--show-markers requires compiled marker sites; rebuild the subject with --marker-demo or source inputs"
+                "--show-markers requires compiled marker sites; rebuild with --marker-demo, --base-subject, or source inputs"
             )
         self.pipeline = newton.CollisionPipeline(self.model)
         self.contacts = self.pipeline.contacts()
@@ -190,15 +197,28 @@ class Example:
         default_subject_dir = (
             Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "example_subject"
         )
-        use_project_subject_dir = args.subject_dir is None and not args.test
+        default_base_output_dir = (
+            Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "S001_scaled"
+        )
+        use_project_subject_dir = args.subject_dir is None and not args.test and not args.base_subject
         self.subject_dir = (
             Path(args.subject_dir).expanduser().resolve()
             if args.subject_dir
+            else default_base_output_dir
+            if args.base_subject and not args.test
             else default_subject_dir
             if use_project_subject_dir
             else Path(tempfile.mkdtemp(prefix="newton-opensim-subject-"))
         )
-        compile_requested = args.marker_demo or any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
+        compile_requested = (
+            args.base_subject
+            or args.marker_demo
+            or any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
+        )
+        if args.base_subject and args.marker_demo:
+            raise ValueError("--base-subject cannot be combined with --marker-demo")
+        if args.base_subject and any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir)):
+            raise ValueError("--base-subject cannot be combined with C3D, OpenSim, or geometry source inputs")
         if args.marker_demo and any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir)):
             raise ValueError("--marker-demo cannot be combined with subject source inputs")
         if (
@@ -226,6 +246,8 @@ class Example:
                 self.device_markers = load_marker_artifact(marker_dir).to_warp(args.device)
             self._init_runtime(args)
             return
+        if args.base_subject and Path(args.base_subject).expanduser().resolve() == self.subject_dir:
+            raise ValueError("--base-subject and --subject must refer to different bundles")
         if self.subject_dir.exists() and any(self.subject_dir.iterdir()):
             if args.overwrite_subject_dir:
                 shutil.rmtree(self.subject_dir)
@@ -236,6 +258,61 @@ class Example:
         self.subject_dir.mkdir(parents=True, exist_ok=True)
         self.model_dir = self.subject_dir / "model"
 
+        if args.base_subject:
+            base_subject = Path(args.base_subject).expanduser().resolve()
+            base_manifest_path = base_subject / "subject.json"
+            if not base_manifest_path.is_file():
+                raise FileNotFoundError(f"base subject bundle is missing: {base_manifest_path}")
+            base_manifest = json.loads(base_manifest_path.read_text(encoding="utf-8"))
+            base_metadata = base_manifest.get("subject", {})
+            args.base_marker_set = base_manifest.get("base_marker_set") or base_manifest.get("sources", {}).get(
+                "base_marker_set"
+            )
+            args.body_mass = float(args.body_mass) if args.body_mass is not None else float(base_metadata["mass_kg"])
+            args.body_height = (
+                float(args.body_height) if args.body_height is not None else float(base_metadata["height_m"])
+            )
+            args.hip_width = float(args.hip_width) if args.hip_width is not None else None
+            scaled = scale_subject_mjcf_from_base(
+                base_subject,
+                self.model_dir / "subject.xml",
+                body_mass=args.body_mass,
+                body_height=args.body_height,
+                hip_width=args.hip_width,
+                model_name=args.subject_name,
+            )
+            base_layout = base_subject / "model" / "marker_layout.json"
+            if not base_layout.is_file():
+                raise FileNotFoundError(f"base subject marker layout is missing: {base_layout}")
+            self.marker_layout = scale_subject_marker_layout_from_base(
+                base_layout,
+                self.model_dir / "marker_layout.json",
+                length_scale=scaled.length_scale,
+                hip_width=2.0 * scaled.config.hip_half_width,
+            )
+            self.subject_xml = scaled.path
+            self.visual_mesh_count = int(base_metadata.get("visual_mesh_count", 0))
+            self.inertial_data = None
+            self.joint_centers = None
+            self.marker_placement = None
+            self.marker_artifact = None
+            self.device_markers = None
+            print(
+                f"Base subject: {base_subject} -> {self.subject_xml} "
+                f"(length x{scaled.length_scale:.6g}, mass x{scaled.mass_scale:.6g})"
+            )
+            print(f"Markers: {len(self.marker_layout.markers)} S001 sites -> {self.marker_layout.path}")
+            _write_subject_bundle_manifest(
+                self.subject_dir,
+                args=args,
+                config=scaled.config,
+                visual_mesh_count=self.visual_mesh_count,
+            )
+            self._init_runtime(args)
+            return
+
+        args.body_mass = float(args.body_mass) if args.body_mass is not None else 81.4
+        args.body_height = float(args.body_height) if args.body_height is not None else 1.695898298375747
         config = SimpleGaitConfig.for_subject(
             body_mass=args.body_mass,
             body_height=args.body_height,
@@ -633,6 +710,10 @@ def create_parser():
         help="Build the tracked compact neutral-marker demonstration subject",
     )
     parser.add_argument(
+        "--base-subject",
+        help="Scale a compiled subject bundle, normally S001, with its real bone meshes and marker layout",
+    )
+    parser.add_argument(
         "--show-self-collision",
         dest="show_self_collision",
         action="store_true",
@@ -653,7 +734,7 @@ def create_parser():
         default=argparse.SUPPRESS,
         help=argparse.SUPPRESS,
     )
-    parser.add_argument("--mass", dest="body_mass", type=float, default=81.4, help="Subject body mass [kg]")
+    parser.add_argument("--mass", dest="body_mass", type=float, default=None, help="Subject body mass [kg]")
     parser.add_argument(
         "--body-mass",
         dest="body_mass",
@@ -665,7 +746,7 @@ def create_parser():
         "--height",
         dest="body_height",
         type=float,
-        default=1.695898298375747,
+        default=None,
         help="Subject standing height [m]",
     )
     parser.add_argument(
@@ -693,7 +774,7 @@ def create_parser():
 
     # Keep reproducibility controls accepted without crowding the normal help.
     parser.add_argument("--subject-name", default="example_subject", help=argparse.SUPPRESS)
-    parser.add_argument("--hip-width", type=float, default=0.152, help=argparse.SUPPRESS)
+    parser.add_argument("--hip-width", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--c3d-up-axis", default="+Z", help=argparse.SUPPRESS)
     parser.add_argument("--c3d-forward-axis", default="-Y", help=argparse.SUPPRESS)
     parser.add_argument(

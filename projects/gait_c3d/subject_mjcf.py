@@ -5,16 +5,25 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import os
+import shutil
+import tempfile
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
 
 from .native_model import SimpleGaitConfig
+
+
+def _canonical_json(value: dict) -> bytes:
+    """Serialize manifest content deterministically for a SHA-256 seal."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
 
 
 @dataclass(frozen=True, slots=True)
@@ -732,6 +741,319 @@ def subject_mjcf_xml(
     )
     ET.indent(root)
     return ET.tostring(root, encoding="unicode") + "\n"
+
+
+@dataclass(frozen=True, slots=True)
+class ScaledSubjectMJCF:
+    """A native MJCF scaled from a compiled base subject."""
+
+    path: Path
+    """Scaled MJCF path."""
+
+    base_subject: Path
+    """Compiled subject bundle used as the scaling reference."""
+
+    config: SimpleGaitConfig
+    """Target native configuration derived from the base subject."""
+
+    length_scale: float
+    """Uniform length scale relative to the base subject."""
+
+    mass_scale: float
+    """Uniform mass scale relative to the base subject."""
+
+
+def _format_scaled_values(text: str, scale: float, *, name: str) -> str:
+    """Scale a finite whitespace-separated MJCF vector."""
+    values = np.asarray([float(value) for value in text.split()], dtype=np.float64)
+    if values.size == 0 or not np.all(np.isfinite(values)):
+        raise ValueError(f"MJCF {name} must contain finite numeric values")
+    return " ".join(f"{float(value * scale):.9g}" for value in values)
+
+
+def _scale_obj_vertices(source: Path, destination: Path, scale: float) -> None:
+    """Copy an OBJ while applying a uniform scale to its vertex positions."""
+    output = []
+    for source_line in source.read_text(encoding="utf-8").splitlines():
+        fields = source_line.split()
+        output_line = source_line
+        if fields and fields[0] == "v":
+            if len(fields) < 4:
+                raise ValueError(f"OBJ vertex is incomplete: {source}")
+            values = np.asarray([float(value) for value in fields[1:4]], dtype=np.float64)
+            if not np.all(np.isfinite(values)):
+                raise ValueError(f"OBJ vertex is nonfinite: {source}")
+            output_line = "v " + " ".join(f"{float(value * scale):.9g}" for value in values)
+        output.append(output_line)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
+def scale_subject_mjcf_from_base(
+    base_subject_dir: str | os.PathLike,
+    output_path: str | os.PathLike,
+    *,
+    body_height: float,
+    body_mass: float,
+    hip_width: float | None = None,
+    model_name: str | None = None,
+) -> ScaledSubjectMJCF:
+    """Scale a complete native subject bundle from its neutral base geometry.
+
+    The source MJCF, body-local OBJ meshes, marker site positions, joint frames,
+    contacts, COMs, and inertia tensors are all scaled together. This keeps the
+    S001 subject placement as the reference instead of mixing nominal geometry
+    with subject-specific marker attachments.
+
+    Args:
+        base_subject_dir: Compiled base subject bundle, normally S001.
+        output_path: Destination MJCF path. Its sibling ``Geometry`` directory
+            and model manifest are created as part of the scaled bundle.
+        body_height: Target subject standing height [m].
+        body_mass: Target subject body mass [kg].
+        hip_width: Optional target hip-joint center spacing [m].
+        model_name: Optional MJCF model name.
+
+    Returns:
+        Metadata and path for the scaled native subject.
+
+    Raises:
+        FileNotFoundError: If the base bundle is incomplete.
+        ValueError: If the base bundle or target scale is invalid.
+    """
+    base_root = Path(base_subject_dir).expanduser().resolve()
+    base_xml = base_root / "model" / "subject.xml"
+    base_model_manifest = base_root / "model" / "manifest.json"
+    base_bundle_manifest = base_root / "subject.json"
+    base_marker_layout = base_root / "model" / "marker_layout.json"
+    for path in (base_xml, base_model_manifest, base_bundle_manifest, base_marker_layout):
+        if not path.is_file():
+            raise FileNotFoundError(f"base subject artifact is missing: {path}")
+    output = Path(output_path).expanduser().resolve()
+    if output == base_xml:
+        raise ValueError("scaled subject output must not overwrite its base MJCF")
+    if output.exists():
+        raise FileExistsError(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if (output.parent / "Geometry").exists() or (output.parent / "manifest.json").exists():
+        raise FileExistsError(f"scaled subject output directory is not empty: {output.parent}")
+
+    try:
+        model_manifest = json.loads(base_model_manifest.read_text(encoding="utf-8"))
+        bundle_manifest = json.loads(base_bundle_manifest.read_text(encoding="utf-8"))
+        marker_layout_manifest = json.loads(base_marker_layout.read_text(encoding="utf-8"))
+        if not isinstance(marker_layout_manifest, dict) or not isinstance(marker_layout_manifest.get("seal"), dict):
+            raise ValueError("base subject marker layout must be a sealed JSON object")
+        marker_layout_seal = marker_layout_manifest.pop("seal")
+        expected_layout_hash = hashlib.sha256(_canonical_json(marker_layout_manifest)).hexdigest()
+        if marker_layout_seal != {"algorithm": "sha256", "content_sha256": expected_layout_hash}:
+            raise ValueError("base subject marker layout seal mismatch")
+        native_layout_metadata = model_manifest.get("native_marker_layout")
+        if isinstance(native_layout_metadata, dict):
+            expected_layout_file_hash = native_layout_metadata.get("sha256")
+            actual_layout_file_hash = hashlib.sha256(base_marker_layout.read_bytes()).hexdigest()
+            if expected_layout_file_hash != actual_layout_file_hash:
+                raise ValueError("base subject marker layout hash mismatch")
+        native_metadata = model_manifest.get("native_subject")
+        if isinstance(native_metadata, dict):
+            expected_xml_hash = native_metadata.get("sha256")
+            actual_xml_hash = hashlib.sha256(base_xml.read_bytes()).hexdigest()
+            if expected_xml_hash != actual_xml_hash:
+                raise ValueError("base subject MJCF hash mismatch")
+        base_values = model_manifest.get("simple_model_config")
+        base_metadata = bundle_manifest.get("subject")
+        if not isinstance(base_values, dict) or not isinstance(base_metadata, dict):
+            raise ValueError("base subject does not contain a simple model configuration")
+        base_config = SimpleGaitConfig(**base_values)
+        root = ET.parse(base_xml).getroot()
+        expected_mesh_hashes = {
+            record.get("output", {}).get("file"): record.get("output", {}).get("sha256")
+            for record in model_manifest.get("meshes", [])
+            if isinstance(record, dict)
+        }
+        base_pelvis = next(
+            (
+                element
+                for element in root.iter()
+                if element.tag.rsplit("}", 1)[-1] == "body" and element.get("name") == "pelvis"
+            ),
+            None,
+        )
+        if base_pelvis is None:
+            raise ValueError("base MJCF is missing its pelvis body")
+        base_pelvis_position = np.asarray(
+            [float(value) for value in base_pelvis.get("pos", "").split()], dtype=np.float64
+        )
+        if base_pelvis_position.shape != (3,) or not np.all(np.isfinite(base_pelvis_position)):
+            raise ValueError("base MJCF pelvis position must contain three finite values")
+        # The compiler's visual-ground registration is already baked into the
+        # final MJCF, so use that final root height rather than the pre-offset
+        # value retained in the visual compiler manifest.
+        contact_radii = [
+            float(element.get("size", "nan"))
+            for element in root.iter()
+            if element.tag.rsplit("}", 1)[-1] == "geom"
+            and (element.get("name") or "").startswith(("contact_left_", "contact_right_"))
+        ]
+        if (
+            not contact_radii
+            or not np.all(np.isfinite(contact_radii))
+            or not np.allclose(contact_radii, contact_radii[0])
+        ):
+            raise ValueError("base MJCF must contain finite, uniform foot contact radii")
+        base_config = replace(
+            base_config,
+            pelvis_height=float(base_pelvis_position[2]),
+            contact_radius=contact_radii[0],
+        )
+        base_height = float(base_metadata.get("height_m", "nan"))
+        base_mass_metadata = float(base_metadata.get("mass_kg", "nan"))
+        if not math.isfinite(base_height) or base_height <= 0.0:
+            raise ValueError("base subject height must be finite and positive")
+        base_mass = (
+            base_config.pelvis_mass
+            + base_config.torso_mass
+            + 2.0 * (base_config.thigh_mass + base_config.shank_mass + base_config.foot_mass)
+        )
+        if not math.isfinite(base_mass) or base_mass <= 0.0:
+            raise ValueError("base subject mass must be finite and positive")
+        if math.isfinite(base_mass_metadata) and not math.isclose(base_mass, base_mass_metadata, rel_tol=1.0e-5):
+            raise ValueError("base subject mass metadata does not match its native configuration")
+        target_config = SimpleGaitConfig.for_subject_from_base(
+            base_config,
+            base_height=base_height,
+            body_mass=body_mass,
+            body_height=body_height,
+            hip_width=hip_width,
+        )
+        length_scale = body_height / base_height
+        mass_scale = body_mass / base_mass
+        if model_name is not None:
+            if not model_name or any(character.isspace() for character in model_name):
+                raise ValueError("model_name must be nonempty and contain no whitespace")
+            root.set("model", model_name)
+
+        staged = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+        try:
+            staged_xml = staged / output.name
+            staged_geometry = staged / "Geometry"
+            copied_meshes: set[Path] = set()
+            for element in root.iter():
+                tag = element.tag.rsplit("}", 1)[-1]
+                for attribute in ("pos", "fromto", "size"):
+                    if attribute in element.attrib:
+                        element.set(
+                            attribute,
+                            _format_scaled_values(element.attrib[attribute], length_scale, name=attribute),
+                        )
+                if tag == "inertial":
+                    if "mass" not in element.attrib or "fullinertia" not in element.attrib:
+                        raise ValueError("base MJCF inertial must contain mass and fullinertia")
+                    element.set("mass", f"{float(element.attrib['mass']) * mass_scale:.9g}")
+                    element.set(
+                        "fullinertia",
+                        _format_scaled_values(
+                            element.attrib["fullinertia"],
+                            mass_scale * length_scale * length_scale,
+                            name="fullinertia",
+                        ),
+                    )
+                elif tag == "key" and "qpos" in element.attrib:
+                    values = np.asarray([float(value) for value in element.attrib["qpos"].split()], dtype=np.float64)
+                    if values.size < 3 or not np.all(np.isfinite(values)):
+                        raise ValueError("base MJCF keyframe qpos must contain finite values")
+                    values[:3] *= length_scale
+                    element.set("qpos", " ".join(f"{float(value):.9g}" for value in values))
+                elif tag == "mesh":
+                    mesh_file = element.get("file")
+                    if not mesh_file:
+                        raise ValueError("base MJCF mesh is missing its file")
+                    relative = Path(mesh_file)
+                    if relative.is_absolute() or ".." in relative.parts:
+                        raise ValueError(f"base MJCF mesh path is unsafe: {mesh_file!r}")
+                    source_mesh = (base_xml.parent / relative).resolve()
+                    try:
+                        source_mesh.relative_to(base_xml.parent.resolve())
+                    except ValueError as error:
+                        raise ValueError(f"base MJCF mesh path escapes its bundle: {mesh_file!r}") from error
+                    if not source_mesh.is_file():
+                        raise FileNotFoundError(f"base MJCF mesh is missing: {source_mesh}")
+                    expected_mesh_hash = expected_mesh_hashes.get(relative.as_posix())
+                    if expected_mesh_hash is not None:
+                        actual_mesh_hash = hashlib.sha256(source_mesh.read_bytes()).hexdigest()
+                        if expected_mesh_hash != actual_mesh_hash:
+                            raise ValueError(f"base MJCF mesh hash mismatch: {relative.as_posix()}")
+                    destination_mesh = staged / relative
+                    if destination_mesh not in copied_meshes:
+                        if source_mesh.suffix.lower() == ".obj":
+                            _scale_obj_vertices(source_mesh, destination_mesh, length_scale)
+                        else:
+                            destination_mesh.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(source_mesh, destination_mesh)
+                        copied_meshes.add(destination_mesh)
+            # The femur body translations encode the two hip centers in this
+            # reduced model. Apply an explicit target width after uniform scaling.
+            for body in root.iter():
+                if body.tag.rsplit("}", 1)[-1] != "body" or body.get("name") not in {
+                    "femur_left",
+                    "femur_right",
+                }:
+                    continue
+                position = np.asarray([float(value) for value in body.get("pos", "").split()], dtype=np.float64)
+                if position.shape != (3,) or not np.all(np.isfinite(position)):
+                    raise ValueError(f"base MJCF femur body {body.get('name')!r} has an invalid position")
+                position[1] = (
+                    target_config.hip_half_width if body.get("name") == "femur_left" else -target_config.hip_half_width
+                )
+                body.set("pos", " ".join(f"{float(value):.9g}" for value in position))
+            staged_xml.write_text(ET.tostring(root, encoding="unicode") + "\n", encoding="utf-8")
+            base_marker_set = bundle_manifest.get("base_marker_set")
+            if base_marker_set is None:
+                base_marker_set = bundle_manifest.get("sources", {}).get("base_marker_set")
+            scaled_manifest = {
+                "schema_version": "gait_subject_mjcf_from_base_1",
+                "coordinate_system": {"frame": "Newton world/body-local", "length_unit": "m", "up_axis": "Z"},
+                "base_marker_set": base_marker_set,
+                "source_subject": base_root.name,
+                "source_model": {
+                    "file": base_xml.name,
+                    "sha256": hashlib.sha256(base_xml.read_bytes()).hexdigest(),
+                },
+                "source_marker_layout": {
+                    "file": base_marker_layout.name,
+                    "sha256": hashlib.sha256(base_marker_layout.read_bytes()).hexdigest(),
+                },
+                "meshes": [
+                    {
+                        "file": path.relative_to(staged).as_posix(),
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    }
+                    for path in sorted(copied_meshes)
+                ],
+                "scale": {"length": length_scale, "mass": mass_scale},
+                "simple_model_config": asdict(target_config),
+            }
+            scaled_manifest["seal"] = {
+                "algorithm": "sha256",
+                "content_sha256": hashlib.sha256(_canonical_json(scaled_manifest)).hexdigest(),
+            }
+            (staged / "manifest.json").write_text(
+                json.dumps(scaled_manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
+            )
+            shutil.copytree(staged_geometry, output.parent / "Geometry")
+            os.replace(staged_xml, output)
+            os.replace(staged / "manifest.json", output.parent / "manifest.json")
+        finally:
+            shutil.rmtree(staged, ignore_errors=True)
+    except Exception:
+        if output.exists():
+            output.unlink()
+        shutil.rmtree(output.parent / "Geometry", ignore_errors=True)
+        manifest = output.parent / "manifest.json"
+        if manifest.exists():
+            manifest.unlink()
+        raise
+    return ScaledSubjectMJCF(output, base_root, target_config, length_scale, mass_scale)
 
 
 def write_subject_mjcf(

@@ -5,14 +5,16 @@
 
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
 
 import newton
 from newton.examples.opensim.example_opensim_subject import _resolve_subject_artifact, create_parser
+from projects.gait_c3d.marker_layout import scale_subject_marker_layout_from_base
 from projects.gait_c3d.native_model import SimpleGaitConfig
-from projects.gait_c3d.subject_mjcf import write_subject_mjcf
+from projects.gait_c3d.subject_mjcf import scale_subject_mjcf_from_base, write_subject_mjcf
 
 
 class TestGaitSubjectMJCF(unittest.TestCase):
@@ -26,6 +28,90 @@ class TestGaitSubjectMJCF(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         newton.use_coord_layout_targets = cls.previous_target_layout
+
+    def test_scales_complete_s001_subject_from_base_geometry(self):
+        """Scale S001 meshes, marker sites, frames, and inertias as one MJCF."""
+        base = Path(__file__).parents[2] / "projects" / "gait_c3d" / "assets" / "s001_base"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "model" / "subject.xml"
+            scaled = scale_subject_mjcf_from_base(
+                base,
+                output,
+                body_height=1.8,
+                body_mass=90.0,
+                model_name="scaled_s001",
+            )
+            builder = newton.ModelBuilder()
+            builder.add_mjcf(str(output), floating=True, parse_sites=True, enable_self_collisions=True)
+            model = builder.finalize(device="cpu")
+            shape_flags = model.shape_flags.numpy()
+            visual_meshes = [
+                index
+                for index, label in enumerate(model.shape_label)
+                if label.rsplit("/", 1)[-1].startswith("visual_")
+                and model.shape_type.numpy()[index] == newton.GeoType.MESH
+            ]
+            self.assertEqual(len(visual_meshes), 19)
+            self.assertTrue(all(shape_flags[index] & newton.ShapeFlags.VISIBLE for index in visual_meshes))
+            self.assertTrue(all(not shape_flags[index] & newton.ShapeFlags.COLLIDE_SHAPES for index in visual_meshes))
+            obj = Path(directory) / "model" / "Geometry" / "visual_00_pelvis_sacrum_ec82986d.obj"
+            base_obj = base / "model" / "Geometry" / obj.name
+            base_vertex = np.asarray([float(value) for value in base_obj.read_text().splitlines()[0].split()[1:]])
+            scaled_vertex = np.asarray([float(value) for value in obj.read_text().splitlines()[0].split()[1:]])
+            root = ET.parse(output).getroot()
+            pelvis = next(body for body in root.iter("body") if body.get("name") == "pelvis")
+            pelvis_position = np.asarray([float(value) for value in pelvis.get("pos").split()])
+        self.assertAlmostEqual(scaled.length_scale, 1.8 / 1.695898298375747)
+        self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 90.0, places=4)
+        self.assertAlmostEqual(pelvis_position[2], scaled.config.pelvis_height, places=7)
+        self.assertAlmostEqual(scaled.config.contact_radius, scaled.length_scale * 0.0245631567, places=7)
+        self.assertEqual(sum(1 for flags in model.shape_flags.numpy() if flags & newton.ShapeFlags.SITE), 35)
+        np.testing.assert_allclose(scaled_vertex, scaled.length_scale * base_vertex, atol=1.0e-8)
+
+    def test_applies_explicit_base_hip_width_to_xml_and_marker_frames(self):
+        """Keep explicit hip width consistent across MJCF and marker layout."""
+        base = Path(__file__).parents[2] / "projects" / "gait_c3d" / "assets" / "s001_base"
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "model" / "subject.xml"
+            scaled = scale_subject_mjcf_from_base(
+                base,
+                output,
+                body_height=1.8,
+                body_mass=90.0,
+                hip_width=0.30,
+            )
+            layout_path = Path(directory) / "model" / "marker_layout.json"
+            layout = scale_subject_marker_layout_from_base(
+                base / "model" / "marker_layout.json",
+                layout_path,
+                length_scale=scaled.length_scale,
+                hip_width=0.30,
+            )
+            root = ET.parse(output).getroot()
+            femur_positions = {
+                body.get("name"): np.asarray([float(value) for value in body.get("pos").split()])
+                for body in root.iter("body")
+                if body.get("name") in {"femur_left", "femur_right"}
+            }
+            builder = newton.ModelBuilder()
+            builder.add_mjcf(str(output), floating=True, parse_sites=True)
+            model = builder.finalize(device="cpu")
+            shape_body = model.shape_body.numpy()
+            shape_transform = model.shape_transform.numpy()
+            sites = {
+                model.shape_label[index].rsplit("/", 1)[-1]: index
+                for index, flags in enumerate(model.shape_flags.numpy())
+                if flags & newton.ShapeFlags.SITE
+            }
+        self.assertAlmostEqual(femur_positions["femur_left"][1], 0.15, places=7)
+        self.assertAlmostEqual(femur_positions["femur_right"][1], -0.15, places=7)
+        self.assertAlmostEqual(layout.target_body_transforms["femur_left"][1, 3], 0.15, places=7)
+        self.assertAlmostEqual(layout.target_body_transforms["femur_right"][1, 3], -0.15, places=7)
+        body_by_name = {label.rsplit("/", 1)[-1]: index for index, label in enumerate(model.body_label)}
+        for marker in layout.markers:
+            site = sites[marker.site_name]
+            self.assertEqual(shape_body[site], body_by_name[marker.body])
+            np.testing.assert_allclose(shape_transform[site, :3], marker.position, atol=1.0e-7)
 
     def test_loads_scaled_subject_in_one_builder_call(self):
         """Load all bodies, simple joints, contacts, and controls with add_mjcf."""
@@ -83,6 +169,7 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             "--show-collision",
             "--show-markers",
             "--marker-demo",
+            "--base-subject",
         ):
             self.assertIn(option, help_text)
         for option in (

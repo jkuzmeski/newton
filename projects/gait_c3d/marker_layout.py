@@ -275,6 +275,73 @@ def compile_subject_marker_layout(
     return load_subject_marker_layout(output)
 
 
+def scale_subject_marker_layout_from_base(
+    base_layout_path: str | os.PathLike,
+    output_path: str | os.PathLike,
+    *,
+    length_scale: float,
+    hip_width: float | None = None,
+) -> SubjectMarkerLayout:
+    """Scale a sealed marker layout from the canonical base placement.
+
+    Marker positions, neutral body-frame translations, and the shared vertical
+    registration are scaled together. Rotations and source provenance remain
+    unchanged, and the output records the base-layout hash for auditability.
+
+    Args:
+        base_layout_path: Sealed marker layout used as the reference placement.
+        output_path: Destination sealed marker-layout JSON.
+        length_scale: Uniform physical scale relative to the base [1].
+        hip_width: Optional target hip-joint center spacing [m]. When supplied,
+            leg body-frame translations are updated to this spacing.
+
+    Returns:
+        The verified scaled marker layout.
+    """
+    if not math.isfinite(length_scale) or length_scale <= 0.0:
+        raise ValueError("length_scale must be finite and positive")
+    if hip_width is not None and (not math.isfinite(hip_width) or hip_width <= 0.0):
+        raise ValueError("hip_width must be finite and positive")
+    base_path = Path(base_layout_path).expanduser().resolve()
+    output = Path(output_path).expanduser().resolve()
+    if base_path == output:
+        raise ValueError("scaled marker layout output must not overwrite its base layout")
+    if output.exists():
+        raise FileExistsError(output)
+    load_subject_marker_layout(base_path)
+    manifest = json.loads(base_path.read_text(encoding="utf-8"))
+    manifest.pop("seal", None)
+    target = manifest["target"]["neutral_body_transforms"]
+    for name, transform in target.items():
+        for row in transform[:3]:
+            row[3] = float(row[3] * length_scale)
+        if hip_width is not None and name in {"femur_left", "tibia_left", "foot_left"}:
+            transform[1][3] = float(0.5 * hip_width)
+        elif hip_width is not None and name in {"femur_right", "tibia_right", "foot_right"}:
+            transform[1][3] = float(-0.5 * hip_width)
+    conversion = manifest["conversion"]
+    conversion["source_ground_offset_z_m"] = float(conversion["source_ground_offset_z_m"] * length_scale)
+    for marker in manifest["markers"]:
+        marker["position_m"] = [float(value * length_scale) for value in marker["position_m"]]
+    manifest["derived_from"] = {
+        "layout_file": base_path.name,
+        "layout_sha256": _sha256(base_path),
+        "length_scale": float(length_scale),
+        "hip_width_m": float(hip_width) if hip_width is not None else None,
+    }
+    manifest["seal"] = {
+        "algorithm": "sha256",
+        "content_sha256": hashlib.sha256(_canonical_json(manifest)).hexdigest(),
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=output.parent, delete=False) as stream:
+        staged = Path(stream.name)
+        json.dump(manifest, stream, indent=2, sort_keys=True, allow_nan=False)
+        stream.write("\n")
+    os.replace(staged, output)
+    return load_subject_marker_layout(output)
+
+
 def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
     """Verify and load a sealed neutral subject marker layout."""
     layout_path = Path(path).resolve()
@@ -308,9 +375,7 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
     expected_target_bodies = set(_SOURCE_TO_TARGET.values())
     if not isinstance(raw_target_transforms, dict) or set(raw_target_transforms) != expected_target_bodies:
         raise ValueError("subject marker layout target transforms are missing or incomplete")
-    target_transforms = {
-        name: _validate_transform(name, value) for name, value in raw_target_transforms.items()
-    }
+    target_transforms = {name: _validate_transform(name, value) for name, value in raw_target_transforms.items()}
     expected_frame = {
         "frame": "Newton target body-local",
         "length_unit": "m",
@@ -321,9 +386,10 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
     if manifest.get("coordinate_system") != expected_frame:
         raise ValueError("subject marker layout coordinate system is invalid")
     conversion = manifest.get("conversion", {})
-    if conversion.get("opensim_to_newton") != _OPENSIM_TO_NEWTON.tolist() or conversion.get(
-        "position_convention"
-    ) != "row_vectors":
+    if (
+        conversion.get("opensim_to_newton") != _OPENSIM_TO_NEWTON.tolist()
+        or conversion.get("position_convention") != "row_vectors"
+    ):
         raise ValueError("subject marker layout conversion metadata is invalid")
     offset = conversion.get("source_ground_offset_z_m")
     if not isinstance(offset, (int, float)) or not math.isfinite(offset):

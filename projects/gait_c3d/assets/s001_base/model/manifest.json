@@ -1,0 +1,1536 @@
+{
+  "base_marker_set": "S001",
+  "contact_layout": {
+    "centers": {
+      "left": [
+        [
+          -0.20506010636910765,
+          -0.0010614551687162625,
+          -0.09374432458813012
+        ],
+        [
+          -0.20506010636910765,
+          0.03170792503664427,
+          -0.09374432458813012
+        ],
+        [
+          -0.024113655017705755,
+          -0.0010614551687162625,
+          -0.09374432458813012
+        ],
+        [
+          -0.024113655017705755,
+          0.03170792503664427,
+          -0.09374432458813012
+        ]
+      ],
+      "right": [
+        [
+          -0.2050607393167002,
+          -0.03168318434582576,
+          -0.09374793878040243
+        ],
+        [
+          -0.2050607393167002,
+          0.0010676912672634119,
+          -0.09374793878040243
+        ],
+        [
+          -0.024115592197198905,
+          -0.03168318434582576,
+          -0.09374793878040243
+        ],
+        [
+          -0.024115592197198905,
+          0.0010676912672634119,
+          -0.09374793878040243
+        ]
+      ]
+    },
+    "radius": 0.024563156709816878,
+    "root_height_offset_z": 0.03831109549021945
+  },
+  "coordinate_system": {
+    "frame": "Newton body-local",
+    "length_unit": "m",
+    "up_axis": "Z",
+    "visual_only": true
+  },
+  "meshes": [
+    {
+      "mesh": {
+        "body": "pelvis",
+        "file": "Geometry/visual_00_pelvis_sacrum_ec82986d.obj",
+        "name": "visual_00_pelvis_sacrum_ec82986d",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_00_pelvis_sacrum_ec82986d.obj",
+        "sha256": "2103a52bad21431290710bc22d961edd78545a3004e07a0933548c031ccbf350",
+        "triangle_count": 380,
+        "vertex_count": 192
+      },
+      "source": {
+        "file": "sacrum.vtp",
+        "mass_center": [
+          -0.06446110682967597,
+          0.0,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.0,
+          0.0,
+          0.103561226911833
+        ],
+        "scale": [
+          0.9117579935772223,
+          0.9117579935772223,
+          0.9117579935772223
+        ],
+        "sha256": "ec82986d7d7f45ad98e9e158c7f583bca2a48b0d59b38207de83ad9dee015e45",
+        "source_body": "pelvis",
+        "source_proximal_newton": [
+          0.0,
+          0.0,
+          0.93
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0,
+          1.033561226911833
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "pelvis",
+        "file": "Geometry/visual_01_pelvis_pelvis_302c8103.obj",
+        "name": "visual_01_pelvis_pelvis_302c8103",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_01_pelvis_pelvis_302c8103.obj",
+        "sha256": "fd69b61491cdf71b733ee273b9e2eb7db50e6a54cae6d7184e0504cfe3688f72",
+        "triangle_count": 242,
+        "vertex_count": 125
+      },
+      "source": {
+        "file": "pelvis.vtp",
+        "mass_center": [
+          -0.06446110682967597,
+          0.0,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.0,
+          0.0,
+          0.103561226911833
+        ],
+        "scale": [
+          0.9117579935772223,
+          0.9117579935772223,
+          0.9117579935772223
+        ],
+        "sha256": "302c81039c0b16a1f04dd3f393897dc006ed74efd923cc7761a9d3b7f86266ca",
+        "source_body": "pelvis",
+        "source_proximal_newton": [
+          0.0,
+          0.0,
+          0.93
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0,
+          1.033561226911833
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "pelvis",
+        "file": "Geometry/visual_02_pelvis_l_pelvis_221ff377.obj",
+        "name": "visual_02_pelvis_l_pelvis_221ff377",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_02_pelvis_l_pelvis_221ff377.obj",
+        "sha256": "cec69bdfd600d904cd8db55eb8bd8ef470f7481165f2d58c1a925238d00b1eaa",
+        "triangle_count": 242,
+        "vertex_count": 125
+      },
+      "source": {
+        "file": "l_pelvis.vtp",
+        "mass_center": [
+          -0.06446110682967597,
+          0.0,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.0,
+          0.0,
+          0.103561226911833
+        ],
+        "scale": [
+          0.9117579935772223,
+          0.9117579935772223,
+          0.9117579935772223
+        ],
+        "sha256": "221ff377284b3d4607286de7b66b6e30c449b2328db577f308065022d3e8dbec",
+        "source_body": "pelvis",
+        "source_proximal_newton": [
+          0.0,
+          0.0,
+          0.93
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0,
+          1.033561226911833
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "femur_right",
+        "file": "Geometry/visual_03_femur_right_femur_r_2bf9d3ed.obj",
+        "name": "visual_03_femur_right_femur_r_2bf9d3ed",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_03_femur_right_femur_r_2bf9d3ed.obj",
+        "sha256": "662b970374aacd3c227cdc8e129c589c412f210afe088dcca6beaa05d5c36d72",
+        "triangle_count": 908,
+        "vertex_count": 456
+      },
+      "source": {
+        "file": "femur_r.vtp",
+        "mass_center": [
+          0.0,
+          -0.19318336577448422,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.06446110682967597,
+          0.0,
+          -0.12139648678517168
+        ],
+        "scale": [
+          1.136372739849907,
+          1.136372739849907,
+          1.136372739849907
+        ],
+        "sha256": "2bf9d3edb7861f6b392f0ef547ad912b186a56ccaf262df3a6b7b45910791a57",
+        "source_body": "femur_r",
+        "source_proximal_newton": [
+          -0.06446110682967597,
+          -0.0761315877902333,
+          0.8697330084170874
+        ],
+        "target_proximal_newton": [
+          0.0,
+          -0.0761315877902333,
+          0.7483365216319158
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "tibia_right",
+        "file": "Geometry/visual_04_tibia_right_r_tibia_2958b9c9.obj",
+        "name": "visual_04_tibia_right_r_tibia_2958b9c9",
+        "position": [
+          0.0,
+          0.0,
+          -0.015
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_04_tibia_right_r_tibia_2958b9c9.obj",
+        "sha256": "9baeea008d8aaa712cb17ab0083b19357bb2be36e2cf667ff9b8e9c183874941",
+        "triangle_count": 390,
+        "vertex_count": 186
+      },
+      "source": {
+        "file": "r_tibia.vtp",
+        "mass_center": [
+          0.0,
+          -0.17514140064921205,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.0695746152218597,
+          0.0,
+          -0.09824416348680831
+        ],
+        "scale": [
+          0.9380900082487202,
+          0.9380900082487202,
+          0.9380900082487202
+        ],
+        "sha256": "2958b9c93409fe921b343460da1b1415e196f3c01393b4765477ea2107c71123",
+        "source_body": "tibia_r",
+        "source_proximal_newton": [
+          -0.0695746152218597,
+          -0.0761315877902333,
+          0.4199335674542638
+        ],
+        "target_proximal_newton": [
+          0.0,
+          -0.0761315877902333,
+          0.3216894039674555
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "tibia_right",
+        "file": "Geometry/visual_05_tibia_right_fibula_640f87b7.obj",
+        "name": "visual_05_tibia_right_fibula_640f87b7",
+        "position": [
+          0.0,
+          0.0,
+          -0.015
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_05_tibia_right_fibula_640f87b7.obj",
+        "sha256": "1d48748c688d5cd6ee11495e9928b2e3b5d2b6ae02cbea02dc70227ded3fa3d0",
+        "triangle_count": 240,
+        "vertex_count": 122
+      },
+      "source": {
+        "file": "fibula.vtp",
+        "mass_center": [
+          0.0,
+          -0.17514140064921205,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.0695746152218597,
+          0.0,
+          -0.09824416348680831
+        ],
+        "scale": [
+          0.9380900082487202,
+          0.9380900082487202,
+          0.9380900082487202
+        ],
+        "sha256": "640f87b7e3ecdc8c8efd092b571fea40a01e24b645d6c5036cd89086dbc56ed5",
+        "source_body": "tibia_r",
+        "source_proximal_newton": [
+          -0.0695746152218597,
+          -0.0761315877902333,
+          0.4199335674542638
+        ],
+        "target_proximal_newton": [
+          0.0,
+          -0.0761315877902333,
+          0.3216894039674555
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "foot_right",
+        "file": "Geometry/visual_06_foot_right_talus_9a24dff8.obj",
+        "name": "visual_06_foot_right_talus_9a24dff8",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_06_foot_right_talus_9a24dff8.obj",
+        "sha256": "cd5f811d1a5fe23e504aa58ee78a888bddcc8238556267df0972bfa7220e34ac",
+        "triangle_count": 194,
+        "vertex_count": 99
+      },
+      "source": {
+        "file": "talus.vtp",
+        "mass_center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.1695746152218597,
+          0.0,
+          0.06344524048064731
+        ],
+        "scale": [
+          1.0571463763502815,
+          1.0571463763502815,
+          1.0571463763502815
+        ],
+        "sha256": "9a24dff87d3bbeb523fc813acde53dbdb44ebf48f8f92ee1250afe267fd48008",
+        "source_body": "talus_r",
+        "source_proximal_newton": [
+          -0.0695746152218597,
+          -0.0761315877902333,
+          0.016554759519352535
+        ],
+        "target_proximal_newton": [
+          0.1,
+          -0.0761315877902333,
+          0.07999999999999985
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "foot_right",
+        "file": "Geometry/visual_07_foot_right_foot_7a876838.obj",
+        "name": "visual_07_foot_right_foot_7a876838",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_07_foot_right_foot_7a876838.obj",
+        "sha256": "0d5857580ce7a6098d7c80027d4994a24fd944740aaa92287bb85ba524ebabef",
+        "triangle_count": 1955,
+        "vertex_count": 1000
+      },
+      "source": {
+        "file": "foot.vtp",
+        "mass_center": [
+          0.08665059113033714,
+          0.025995173964478476,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.22113154473300134,
+          0.008372588292509198,
+          0.10779247308067204
+        ],
+        "scale": [
+          0.866501861756173,
+          0.866501861756173,
+          0.866501861756173
+        ],
+        "sha256": "7a8768387702064d85375e9902b6181575d2cfe69f41a7170824039ea83c20c8",
+        "source_body": "calcn_r",
+        "source_proximal_newton": [
+          -0.12113154473300132,
+          -0.0845041760827425,
+          -0.02779247308067219
+        ],
+        "target_proximal_newton": [
+          0.1,
+          -0.0761315877902333,
+          0.07999999999999985
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "foot_right",
+        "file": "Geometry/visual_08_foot_right_bofoot_9f7184c1.obj",
+        "name": "visual_08_foot_right_bofoot_9f7184c1",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_08_foot_right_bofoot_9f7184c1.obj",
+        "sha256": "d3d162f8a000f2c54e1c684f1d84075ba35e79bb07f02bb4c1054082cfab5694",
+        "triangle_count": 1860,
+        "vertex_count": 958
+      },
+      "source": {
+        "file": "bofoot.vtp",
+        "mass_center": [
+          0.02998110108898153,
+          0.005199036480207028,
+          -0.015163850073186333
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.06620000357599788,
+          0.009285645410141055,
+          0.10953014768299761
+        ],
+        "scale": [
+          0.866501861756173,
+          0.866501861756173,
+          0.866501861756173
+        ],
+        "sha256": "9f7184c162d3681abb46ca58e1591493cbf97b029d55622905db14b6b3e414ad",
+        "source_body": "toes_r",
+        "source_proximal_newton": [
+          0.033799996424002124,
+          -0.08541723320037435,
+          -0.029530147682997766
+        ],
+        "target_proximal_newton": [
+          0.1,
+          -0.0761315877902333,
+          0.07999999999999985
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "femur_left",
+        "file": "Geometry/visual_09_femur_left_l_femur_3a5df196.obj",
+        "name": "visual_09_femur_left_l_femur_3a5df196",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_09_femur_left_l_femur_3a5df196.obj",
+        "sha256": "2e3c9e2297e66cf1abe55b0c3e13a4130ae0da4868562df02b31b9973e4e7a5e",
+        "triangle_count": 908,
+        "vertex_count": 456
+      },
+      "source": {
+        "file": "l_femur.vtp",
+        "mass_center": [
+          0.0,
+          -0.19318336577448422,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.06446110682967597,
+          0.0,
+          -0.12139648678517168
+        ],
+        "scale": [
+          1.136372739849907,
+          1.136372739849907,
+          1.136372739849907
+        ],
+        "sha256": "3a5df196a9e5cfb0095d5d4272e8aca886f33507c099f3b269095bd19b2d5042",
+        "source_body": "femur_l",
+        "source_proximal_newton": [
+          -0.06446110682967597,
+          0.0761315877902333,
+          0.8697330084170874
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0761315877902333,
+          0.7483365216319158
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "tibia_left",
+        "file": "Geometry/visual_10_tibia_left_l_tibia_5528711a.obj",
+        "name": "visual_10_tibia_left_l_tibia_5528711a",
+        "position": [
+          0.0,
+          0.0,
+          -0.015
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_10_tibia_left_l_tibia_5528711a.obj",
+        "sha256": "a3bfc2852c60228492a93d1294c67dbca1c13d2a566446bbe44c7f9e98d026b0",
+        "triangle_count": 390,
+        "vertex_count": 186
+      },
+      "source": {
+        "file": "l_tibia.vtp",
+        "mass_center": [
+          0.0,
+          -0.17514140064921205,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.0695746152218597,
+          0.0,
+          -0.09824416348680831
+        ],
+        "scale": [
+          0.9380900082487202,
+          0.9380900082487202,
+          0.9380900082487202
+        ],
+        "sha256": "5528711a8c8c2f2e2944962c8d43dfcedac4412938c28d3d2e321ac73e709d66",
+        "source_body": "tibia_l",
+        "source_proximal_newton": [
+          -0.0695746152218597,
+          0.0761315877902333,
+          0.4199335674542638
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0761315877902333,
+          0.3216894039674555
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "tibia_left",
+        "file": "Geometry/visual_11_tibia_left_l_fibula_21cdc2c3.obj",
+        "name": "visual_11_tibia_left_l_fibula_21cdc2c3",
+        "position": [
+          0.0,
+          0.0,
+          -0.015
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_11_tibia_left_l_fibula_21cdc2c3.obj",
+        "sha256": "5daa9895310cbf9f0fea3854426ba06ad1646d92b909a92d618925642952b462",
+        "triangle_count": 240,
+        "vertex_count": 122
+      },
+      "source": {
+        "file": "l_fibula.vtp",
+        "mass_center": [
+          0.0,
+          -0.17514140064921205,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.0695746152218597,
+          0.0,
+          -0.09824416348680831
+        ],
+        "scale": [
+          0.9380900082487202,
+          0.9380900082487202,
+          0.9380900082487202
+        ],
+        "sha256": "21cdc2c3638ecf498ce29fc4d2af9bedab92f10cb536cd9c72c3de6aacb9cb92",
+        "source_body": "tibia_l",
+        "source_proximal_newton": [
+          -0.0695746152218597,
+          0.0761315877902333,
+          0.4199335674542638
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0761315877902333,
+          0.3216894039674555
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "foot_left",
+        "file": "Geometry/visual_12_foot_left_l_talus_fd829c17.obj",
+        "name": "visual_12_foot_left_l_talus_fd829c17",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_12_foot_left_l_talus_fd829c17.obj",
+        "sha256": "81f0083bc7022e3f533ab542a44dbf4786cb5a499d5cf15b342567e4464d54e5",
+        "triangle_count": 194,
+        "vertex_count": 99
+      },
+      "source": {
+        "file": "l_talus.vtp",
+        "mass_center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.1695746152218597,
+          0.0,
+          0.06344524048064731
+        ],
+        "scale": [
+          1.0571463763502815,
+          1.0571463763502815,
+          1.0571463763502815
+        ],
+        "sha256": "fd829c17c14c6b319105ac458123b989add482988012d79279a5b97830e4d9b5",
+        "source_body": "talus_l",
+        "source_proximal_newton": [
+          -0.0695746152218597,
+          0.0761315877902333,
+          0.016554759519352535
+        ],
+        "target_proximal_newton": [
+          0.1,
+          0.0761315877902333,
+          0.07999999999999985
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "foot_left",
+        "file": "Geometry/visual_13_foot_left_l_foot_3fe52ebe.obj",
+        "name": "visual_13_foot_left_l_foot_3fe52ebe",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_13_foot_left_l_foot_3fe52ebe.obj",
+        "sha256": "d3178466306132863dd13e00f786baf515ca2b838d3bb94e3ee5f46dbd714766",
+        "triangle_count": 1955,
+        "vertex_count": 1000
+      },
+      "source": {
+        "file": "l_foot.vtp",
+        "mass_center": [
+          0.08665059113033714,
+          0.025995173964478476,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.22113154473300134,
+          -0.008372588292509198,
+          0.10779247308067204
+        ],
+        "scale": [
+          0.866501861756173,
+          0.866501861756173,
+          0.866501861756173
+        ],
+        "sha256": "3fe52ebe9b889f1597e9139b29f0bf770e35861a2b462c7ed95e5178f539fe44",
+        "source_body": "calcn_l",
+        "source_proximal_newton": [
+          -0.12113154473300132,
+          0.0845041760827425,
+          -0.02779247308067219
+        ],
+        "target_proximal_newton": [
+          0.1,
+          0.0761315877902333,
+          0.07999999999999985
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "foot_left",
+        "file": "Geometry/visual_14_foot_left_l_bofoot_73bbc705.obj",
+        "name": "visual_14_foot_left_l_bofoot_73bbc705",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_14_foot_left_l_bofoot_73bbc705.obj",
+        "sha256": "d652e14d45551368fd43b5fc01119358a7a4bf86feac7676c6d14633f4acfd74",
+        "triangle_count": 1860,
+        "vertex_count": 958
+      },
+      "source": {
+        "file": "l_bofoot.vtp",
+        "mass_center": [
+          0.02998110108898153,
+          0.005199036480207028,
+          0.015163850073186333
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.06620008720438732,
+          -0.009308413340366264,
+          0.10952548524074104
+        ],
+        "scale": [
+          0.866501861756173,
+          0.866501861756173,
+          0.866501861756173
+        ],
+        "sha256": "73bbc7054bd28aa1570c0eec739d1d0e4661815dbcb37b5929157bca999e3b9b",
+        "source_body": "toes_l",
+        "source_proximal_newton": [
+          0.03379991279561269,
+          0.08544000113059956,
+          -0.0295254852407412
+        ],
+        "target_proximal_newton": [
+          0.1,
+          0.0761315877902333,
+          0.07999999999999985
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "torso",
+        "file": "Geometry/visual_15_torso_hat_spine_e5497b48.obj",
+        "name": "visual_15_torso_hat_spine_e5497b48",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_15_torso_hat_spine_e5497b48.obj",
+        "sha256": "10c5364b892683c1f634cae88585bf4d3b281218ffb4971046ca57bc76948425",
+        "triangle_count": 10738,
+        "vertex_count": 5434
+      },
+      "source": {
+        "file": "hat_spine.vtp",
+        "mass_center": [
+          -0.028663200809280427,
+          0.3057407820854413,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.09181384663699263,
+          0.0,
+          0.4093020089972743
+        ],
+        "scale": [
+          0.9554400269760143,
+          0.9554400269760143,
+          0.9554400269760143
+        ],
+        "sha256": "e5497b482a344917d2de8f1df4c8efc4ff86aa52812f4ce4c8127c98f0f5b584",
+        "source_body": "torso",
+        "source_proximal_newton": [
+          -0.09181384663699263,
+          0.0,
+          1.0043080362076937
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0,
+          1.413610045204968
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "torso",
+        "file": "Geometry/visual_16_torso_hat_jaw_ccce7bf1.obj",
+        "name": "visual_16_torso_hat_jaw_ccce7bf1",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_16_torso_hat_jaw_ccce7bf1.obj",
+        "sha256": "0dcb898345426224c642e5ead5ab82a7a9e6c1f14b163299f79236b388867edf",
+        "triangle_count": 2916,
+        "vertex_count": 1459
+      },
+      "source": {
+        "file": "hat_jaw.vtp",
+        "mass_center": [
+          -0.028663200809280427,
+          0.3057407820854413,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.09181384663699263,
+          0.0,
+          0.4093020089972743
+        ],
+        "scale": [
+          0.9554400269760143,
+          0.9554400269760143,
+          0.9554400269760143
+        ],
+        "sha256": "ccce7bf1756dd6eeb5cd54dfdceaf86d5acc9db4229ea08c502357d92d11de95",
+        "source_body": "torso",
+        "source_proximal_newton": [
+          -0.09181384663699263,
+          0.0,
+          1.0043080362076937
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0,
+          1.413610045204968
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "torso",
+        "file": "Geometry/visual_17_torso_hat_skull_4c29f62d.obj",
+        "name": "visual_17_torso_hat_skull_4c29f62d",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_17_torso_hat_skull_4c29f62d.obj",
+        "sha256": "ef49c57fdea749af6c383864bea33640775105f5252fec2131ba99a844adca8f",
+        "triangle_count": 6617,
+        "vertex_count": 3305
+      },
+      "source": {
+        "file": "hat_skull.vtp",
+        "mass_center": [
+          -0.028663200809280427,
+          0.3057407820854413,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.09181384663699263,
+          0.0,
+          0.4093020089972743
+        ],
+        "scale": [
+          0.9554400269760143,
+          0.9554400269760143,
+          0.9554400269760143
+        ],
+        "sha256": "4c29f62d830085be1ff6a5a3441e3214a2fbee027da46ad8d74b4699052a390e",
+        "source_body": "torso",
+        "source_proximal_newton": [
+          -0.09181384663699263,
+          0.0,
+          1.0043080362076937
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0,
+          1.413610045204968
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    },
+    {
+      "mesh": {
+        "body": "torso",
+        "file": "Geometry/visual_18_torso_hat_ribs_c455e842.obj",
+        "name": "visual_18_torso_hat_ribs_c455e842",
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      "output": {
+        "file": "Geometry/visual_18_torso_hat_ribs_c455e842.obj",
+        "sha256": "6b3b890178c6d72847807888cc49c8aed767cdce201a3c1b58c59e49469d26c6",
+        "triangle_count": 5442,
+        "vertex_count": 2767
+      },
+      "source": {
+        "file": "hat_ribs.vtp",
+        "mass_center": [
+          -0.028663200809280427,
+          0.3057407820854413,
+          0.0
+        ],
+        "registration_mode": "official_neutral_body_transform",
+        "registration_translation": [
+          0.09181384663699263,
+          0.0,
+          0.4093020089972743
+        ],
+        "scale": [
+          0.9554400269760143,
+          0.9554400269760143,
+          0.9554400269760143
+        ],
+        "sha256": "c455e84225c570ab733fe3bbbf910926ce282a8991a7eda6990d8c3c4569bae6",
+        "source_body": "torso",
+        "source_proximal_newton": [
+          -0.09181384663699263,
+          0.0,
+          1.0043080362076937
+        ],
+        "target_proximal_newton": [
+          0.0,
+          0.0,
+          1.413610045204968
+        ],
+        "transform": [
+          [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      }
+    }
+  ],
+  "native_marker_layout": {
+    "file": "marker_layout.json",
+    "sha256": "9d3b1d89ff9e84b9ea1148537ac9111348bbe8c7cc13652f4f4acb4c13a450e6"
+  },
+  "native_subject": {
+    "file": "subject.xml",
+    "sha256": "6c39f0c0b5379b5cf6f4b231ba482f1355bd64b7d22b9db8c97ed34dde3e78d0"
+  },
+  "schema_version": "gait_c3d_scaled_vtp_visuals_1",
+  "simple_model_config": {
+    "contact_radius": 0.024563156709816878,
+    "foot_length": 0.25,
+    "foot_mass": 1.7076314649707112,
+    "foot_width": 0.1,
+    "friction": 0.8,
+    "ground_kd": 1000.0,
+    "ground_ke": 100000.0,
+    "ground_kf": 1000.0,
+    "hip_half_width": 0.0761315877902333,
+    "pelvis_dimensions": [
+      0.24,
+      0.22,
+      0.16
+    ],
+    "pelvis_height": 1.0718723224020525,
+    "pelvis_hip_drop": 0.060266991582912606,
+    "pelvis_mass": 12.837211683502325,
+    "self_collision_joint_clearance": 0.035,
+    "self_collision_kd": 250.0,
+    "self_collision_ke": 25000.0,
+    "self_collision_kf": 1000.0,
+    "self_collision_mu": 0.8,
+    "shank_length": 0.40337880793491127,
+    "shank_mass": 4.041263680356618,
+    "shank_radius": 0.05,
+    "thigh_length": 0.4499154273940093,
+    "thigh_mass": 10.138748471644995,
+    "thigh_radius": 0.07,
+    "torso_center_offset": 0.38004881829313497,
+    "torso_dimensions": [
+      0.32,
+      0.25,
+      0.55
+    ],
+    "torso_mass": 37.31871288255298
+  },
+  "source_model": {
+    "file": "scaled_subject.osim",
+    "sha256": "1bdc8ac4ddd5e731b2237d0a01722a6e603f012243158d0822135906c19f2291"
+  }
+}
