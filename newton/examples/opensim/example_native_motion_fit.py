@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from itertools import pairwise
 from pathlib import Path
 
@@ -13,11 +14,15 @@ import warp as wp
 
 import newton
 import newton.examples
+from projects.gait_c3d.c3d_adapter import read_c3d_markers
 from projects.gait_c3d.native_motion_fit import (
+    fit_c3d_marker_motion,
     free_root_quaternion_slice,
+    map_c3d_markers_to_native,
     marker_attachments_from_model,
     marker_positions_from_joint_q,
     solve_marker_sequence,
+    write_native_motion_artifact,
 )
 
 
@@ -25,9 +30,13 @@ class Example:
     """Recover a synthetic native gait motion through public Newton IK."""
 
     def __init__(self, viewer, args):
+        if args.c3d:
+            self._init_real(viewer, args)
+            return
         if not args.synthetic:
-            raise ValueError("native_motion_fit currently requires --synthetic")
+            raise ValueError("native_motion_fit requires --synthetic or --c3d")
         self.viewer = viewer
+        self.real_motion = False
         self.sim_time = 0.0
         self.frame_dt = 1.0 / 60.0
         subject = (
@@ -111,6 +120,96 @@ class Example:
             f"solver cost {max(frame.solver_cost for frame in self.frames):.3e}"
         )
 
+    def _init_real(self, viewer, args):
+        """Load, fit, and publish a real C3D trial."""
+        if not args.motion_output:
+            raise ValueError("real C3D fitting requires --motion-output")
+        self.viewer = viewer
+        self.sim_time = 0.0
+        self.frame_dt = 1.0 / 100.0
+        subject = (
+            Path(args.subject).expanduser().resolve()
+            if args.subject
+            else Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "assets" / "s001_calibrated"
+        )
+        subject_xml = subject / "model" / "subject.xml"
+        if not subject_xml.is_file():
+            raise FileNotFoundError(f"subject MJCF is missing: {subject_xml}")
+        newton.use_coord_layout_targets = True
+        builder = newton.ModelBuilder()
+        builder.add_mjcf(str(subject_xml), floating=True, parse_sites=True, enable_self_collisions=True)
+        self.model = builder.finalize(device=args.device)
+        self.state = self.model.state()
+        self.attachments = marker_attachments_from_model(self.model)
+        source = read_c3d_markers(args.c3d, up_axis=args.c3d_up_axis, forward_axis=args.c3d_forward_axis)
+        mapped = map_c3d_markers_to_native(source, self.attachments)
+        model_manifest_path = subject / "model" / "manifest.json"
+        if args.registration:
+            registration = np.asarray(json.loads(Path(args.registration).read_text(encoding="utf-8")), dtype=np.float64)
+            registration_mode = "explicit_matrix"
+        else:
+            registration = np.eye(4, dtype=np.float64)
+            if model_manifest_path.is_file():
+                model_manifest = json.loads(model_manifest_path.read_text(encoding="utf-8"))
+                registration[:3, 3] = np.asarray(
+                    model_manifest.get("ground", {}).get("global_offset_m", (0.0, 0.0, 0.0)), dtype=np.float64
+                )
+            registration_mode = "saved_subject_ground_offset"
+        self.motion = fit_c3d_marker_motion(
+            self.model,
+            self.attachments,
+            mapped,
+            self.model.joint_q.numpy(),
+            registration=registration,
+            iterations=args.iterations,
+            start_frame=args.start_frame,
+            end_frame=args.end_frame,
+            stride=args.stride,
+            max_frames=args.max_frames if args.max_frames > 0 else None,
+        )
+        calibration_path = subject / "model" / "segment_calibration.json"
+        self.motion_output = write_native_motion_artifact(
+            self.motion,
+            args.motion_output,
+            model_path=subject_xml,
+            calibration_path=calibration_path if calibration_path.is_file() else None,
+            settings={
+                "iterations": args.iterations,
+                "start_frame": args.start_frame,
+                "end_frame": args.end_frame,
+                "stride": args.stride,
+                "max_frames": args.max_frames,
+                "registration_mode": registration_mode,
+            },
+        )
+        self.real_motion = True
+        self.visible_indices = np.flatnonzero(np.all(self.motion.valid, axis=0))
+        self.frame_index = 0
+        self.target_points = wp.array(
+            self.motion.targets[0, self.visible_indices].astype(np.float32), dtype=wp.vec3, device=self.model.device
+        )
+        self.predicted_points = wp.array(
+            self.motion.predictions[0, self.visible_indices].astype(np.float32), dtype=wp.vec3, device=self.model.device
+        )
+        self.radii = wp.full(len(self.visible_indices), 0.012, dtype=wp.float32, device=self.model.device)
+        self.target_colors = wp.full(
+            len(self.visible_indices), wp.vec3(0.95, 0.15, 0.10), dtype=wp.vec3, device=self.model.device
+        )
+        self.predicted_colors = wp.full(
+            len(self.visible_indices), wp.vec3(0.10, 0.75, 0.98), dtype=wp.vec3, device=self.model.device
+        )
+        self.viewer.set_model(self.model)
+        self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
+        print(
+            f"Real native IK: {len(self.visible_indices)}/{len(self.attachments)} always-valid markers, "
+            f"{len(self.motion.times)} frames -> {self.motion_output}"
+        )
+        print(
+            f"Frame RMS median/p95/max: {np.median(self.motion.frame_rms) * 1000.0:.2f}/"
+            f"{np.percentile(self.motion.frame_rms, 95) * 1000.0:.2f}/"
+            f"{np.max(self.motion.frame_rms) * 1000.0:.2f} mm"
+        )
+
     def _make_target_coordinates(self, frame_count: int) -> np.ndarray:
         """Generate bounded free-root, torso, hip, knee, and ankle poses."""
         if frame_count <= 0:
@@ -139,7 +238,17 @@ class Example:
         return np.asarray(coordinates, dtype=np.float32)
 
     def step(self):
-        """Advance the displayed synthetic solved frame."""
+        """Advance the displayed solved frame."""
+        if self.real_motion:
+            self.model.joint_q.assign(self.motion.joint_q[self.frame_index])
+            self.target_points.assign(self.motion.targets[self.frame_index, self.visible_indices].astype(np.float32))
+            self.predicted_points.assign(
+                self.motion.predictions[self.frame_index, self.visible_indices].astype(np.float32)
+            )
+            self.sim_time = float(self.motion.times[self.frame_index])
+            self.frame_index = (self.frame_index + 1) % len(self.motion.times)
+            newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state)
+            return
         frame = self.frames[self.frame_index]
         self.model.joint_q.assign(frame.joint_q)
         self.target_points.assign(frame.target_markers.astype(np.float32))
@@ -150,6 +259,20 @@ class Example:
 
     def test_final(self):
         """Verify finite warm-started IK and material marker improvement."""
+        if self.real_motion:
+            if (
+                not np.all(np.isfinite(self.motion.joint_q))
+                or not np.all(np.isfinite(self.motion.joint_qd))
+                or not np.all(np.isfinite(self.motion.frame_rms))
+                or not np.all(np.isfinite(self.motion.predictions))
+                or not self.motion_output.is_dir()
+            ):
+                raise ValueError("real native IK produced a nonfinite result or missing artifact")
+            if np.max(self.motion.joint_limit_violation) > 1.0e-4:
+                print(
+                    f"Warning: maximum real-trial joint-limit violation {np.max(self.motion.joint_limit_violation):.4f}"
+                )
+            return
         if not self.frames:
             raise ValueError("synthetic IK produced no frames")
         rms = np.asarray([frame.marker_rms for frame in self.frames])
@@ -193,7 +316,16 @@ def create_parser():
     """Create the synthetic native marker-fit command line."""
     parser = newton.examples.create_parser()
     parser.add_argument("--synthetic", action="store_true", help="Run the synthetic native marker IK gate")
+    parser.add_argument("--c3d", help="Fit a real dynamic C3D trial")
     parser.add_argument("--subject", help="Subject bundle containing the native marker sites")
+    parser.add_argument("--motion-output", help="Output directory for the fitted native motion artifact")
+    parser.add_argument("--registration", help="Optional JSON 4x4 C3D-to-model registration matrix")
+    parser.add_argument("--c3d-up-axis", default="+Z", help="Lab axis that points upward")
+    parser.add_argument("--c3d-forward-axis", default="-Y", help="Lab axis that points subject-forward")
+    parser.add_argument("--start-frame", type=int, default=0, help="First C3D frame index")
+    parser.add_argument("--end-frame", type=int, default=None, help="Exclusive C3D frame index")
+    parser.add_argument("--stride", type=int, default=1, help="C3D frame stride")
+    parser.add_argument("--max-frames", type=int, default=300, help="Maximum fitted frames; zero means all")
     parser.add_argument("--frames", type=int, default=12, help="Synthetic marker frames")
     parser.add_argument("--iterations", type=int, default=80, help="LM iterations per synthetic frame")
     parser.add_argument("--noise-mm", type=float, default=0.0, help="Deterministic marker noise [mm]")

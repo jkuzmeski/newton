@@ -381,3 +381,28 @@ until its example and automated checks both pass.
   example reports marker RMS/max error and public solver cost.
 - Remaining limitation: real C3D fitting, short-gap interpolation, visibility
   mask solver caching, and full dynamic diagnostics remain Phase 3 work.
+
+### Phase 3
+
+**Status:** in progress on `jkuzmeski/mocap-native-ik`.
+
+- Implementation: real C3D names are joined to native marker sites in
+  `projects/gait_c3d/native_motion_fit.py`; `LHLX`/`RHLX` provide hallux
+  targets, and `V.Sacral`/`Top.Head` are built only from valid source-marker
+  groups. A saved subject ground offset is applied as an explicit registration
+  unless a 4x4 matrix is supplied.
+- Artifact: `write_native_motion_artifact()` publishes sealed `motion.npz`
+  data with coordinates, finite-difference velocities, target/predicted
+  markers, validity, per-frame/per-marker/per-body residuals, solver costs,
+  limit diagnostics, source hashes, and registration metadata.
+- Example: `native_motion_fit --c3d <trial> --motion-output <directory>` fits
+  the trial in time order and overlays measured and predicted markers. It
+  supports frame ranges, stride, and a safety `--max-frames` limit.
+- Validation: the real `Trial 101.v3d.c3d` was fit for a four-frame smoke run
+  with 35/35 valid native markers and approximately 7.2 mm frame RMS. Name
+  mapping, virtual markers, artifact publication, and finite-difference velocity
+  tests pass.
+- Remaining work: resolve the observed real-trial knee-limit diagnostic before
+  accepting a full trial, add the documented treadmill/stationary registration
+  metadata, implement short-gap interpolation and visibility-mask solver
+  caching, then run and archive the complete Trial 101 fit.

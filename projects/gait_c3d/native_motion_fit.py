@@ -5,13 +5,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import warp as wp
 
 import newton
 import newton.ik as ik
+
+from .c3d_adapter import C3DMarkerTrajectory
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,3 +261,415 @@ def joint_limit_violation(model: newton.Model, joint_q: np.ndarray) -> float:
 def math_is_finite_positive(value: float) -> bool:
     """Return whether a scalar is finite and strictly positive."""
     return bool(np.isfinite(value) and value > 0.0)
+
+
+_REAL_MARKER_SOURCES = {
+    "Sternum": "STRN",
+    "R.Acromium": "RSHO",
+    "L.Acromium": "LSHO",
+    "R.ASIS": "RASI",
+    "L.ASIS": "LASI",
+    "R.Thigh.Upper": "RTH2",
+    "R.Thigh.Front": "RTH3",
+    "R.Thigh.Rear": "RTH4",
+    "R.Knee.Lat": "RKNE",
+    "R.Knee.Med": "RMKNE",
+    "R.Shank.Upper": "RTIB2",
+    "R.Shank.Front": "RTIB3",
+    "R.Shank.Rear": "RTIB4",
+    "R.Ankle.Lat": "RANK",
+    "R.Ankle.Med": "RMANK",
+    "R.Heel": "RHEE",
+    "R.Toe.Lat": "RMTH5",
+    "R.Toe.Med": "RMTH1",
+    "R.Toe.Tip": "RHLX",
+    "L.Thigh.Upper": "LTH2",
+    "L.Thigh.Front": "LTH3",
+    "L.Thigh.Rear": "LTH4",
+    "L.Knee.Lat": "LKNE",
+    "L.Knee.Med": "LMKNE",
+    "L.Shank.Upper": "LTIB2",
+    "L.Shank.Front": "LTIB3",
+    "L.Shank.Rear": "LTIB4",
+    "L.Ankle.Lat": "LANK",
+    "L.Ankle.Med": "LMANK",
+    "L.Heel": "LHEE",
+    "L.Toe.Lat": "LMTH5",
+    "L.Toe.Med": "LMTH1",
+    "L.Toe.Tip": "LHLX",
+}
+_REAL_MARKER_VIRTUAL = {"V.Sacral": ("LPSI", "RPSI"), "Top.Head": ("LFHD", "RFHD", "LBHD", "RBHD")}
+
+
+@dataclass(frozen=True, slots=True)
+class NativeC3DMarkers:
+    """C3D marker targets reordered to native MJCF site order."""
+
+    times: np.ndarray
+    """Frame times [s]."""
+
+    positions: np.ndarray
+    """Newton-frame marker positions [m], shape [frame, marker, 3]."""
+
+    valid: np.ndarray
+    """Marker validity mask, shape [frame, marker]."""
+
+    marker_names: tuple[str, ...]
+    """Native marker labels in column order."""
+
+    source_file: str
+    """Source C3D basename."""
+
+    source_sha256: str
+    """Source C3D SHA-256."""
+
+
+@dataclass(frozen=True, slots=True)
+class NativeMotionArtifact:
+    """Fitted native motion arrays and frame diagnostics."""
+
+    times: np.ndarray
+    """Frame times [s]."""
+
+    joint_q: np.ndarray
+    """Fitted native coordinates [m or rad], shape [frame, coordinate]."""
+
+    joint_qd: np.ndarray
+    """Finite-difference native velocities [m/s or rad/s]."""
+
+    targets: np.ndarray
+    """Target marker positions [m]."""
+
+    predictions: np.ndarray
+    """Predicted marker positions [m]."""
+
+    valid: np.ndarray
+    """Observed marker validity mask."""
+
+    frame_rms: np.ndarray
+    """Per-frame observed-marker RMS [m]."""
+
+    frame_max: np.ndarray
+    """Per-frame observed-marker maximum error [m]."""
+
+    marker_rms: np.ndarray
+    """Per-marker RMS over valid observations [m]."""
+
+    marker_max: np.ndarray
+    """Per-marker maximum over valid observations [m]."""
+
+    body_names: tuple[str, ...]
+    """Native body labels represented by the marker set."""
+
+    body_rms: np.ndarray
+    """Per-frame, per-body marker RMS [m]."""
+
+    solver_cost: np.ndarray
+    """Public IK weighted solver costs by frame."""
+
+    joint_limit_violation: np.ndarray
+    """Maximum bounded joint-limit violation by frame [m or rad]."""
+
+    marker_names: tuple[str, ...]
+    """Marker labels in output column order."""
+
+    source_file: str
+    """Source C3D basename."""
+
+    source_sha256: str
+    """Source C3D SHA-256."""
+
+    registration: np.ndarray
+    """4x4 row-vector registration from C3D Newton frame to model frame."""
+
+
+def map_c3d_markers_to_native(
+    markers: C3DMarkerTrajectory,
+    attachments: tuple[NativeMarkerAttachment, ...],
+) -> NativeC3DMarkers:
+    """Join C3D labels to native sites and create declared virtual markers."""
+    source_index = {name: index for index, name in enumerate(markers.marker_names)}
+    output = np.zeros((len(markers.times), len(attachments), 3), dtype=np.float32)
+    valid = np.zeros((len(markers.times), len(attachments)), dtype=bool)
+    names = tuple(attachment.name for attachment in attachments)
+    if len(set(names)) != len(names):
+        raise ValueError("native marker attachments must have unique names")
+    for column, name in enumerate(names):
+        sources = _REAL_MARKER_VIRTUAL.get(name)
+        if sources is None:
+            source = _REAL_MARKER_SOURCES.get(name)
+            if source is None:
+                raise ValueError(f"no C3D source mapping for native marker {name!r}")
+            sources = (source,)
+        missing = [source for source in sources if source not in source_index]
+        if missing:
+            raise ValueError(f"C3D is missing sources for native marker {name!r}: {missing}")
+        source_columns = [source_index[source] for source in sources]
+        source_valid = markers.valid[:, source_columns]
+        valid[:, column] = np.all(source_valid, axis=1)
+        output[:, column] = np.mean(markers.positions[:, source_columns], axis=1, dtype=np.float32)
+        output[~valid[:, column], column] = 0.0
+    return NativeC3DMarkers(markers.times.copy(), output, valid, names, markers.source_file, markers.source_sha256)
+
+
+def apply_marker_registration(markers: NativeC3DMarkers, registration: np.ndarray) -> NativeC3DMarkers:
+    """Apply a finite row-vector 4x4 registration to marker targets."""
+    registration = np.asarray(registration, dtype=np.float64)
+    if registration.shape != (4, 4) or not np.all(np.isfinite(registration)):
+        raise ValueError("registration must be a finite 4x4 matrix")
+    rotation = registration[:3, :3]
+    if not np.allclose(rotation @ rotation.T, np.eye(3), atol=1.0e-7) or not np.isclose(
+        np.linalg.det(rotation), 1.0, atol=1.0e-7
+    ):
+        raise ValueError("registration rotation must be proper and orthonormal")
+    positions = markers.positions.astype(np.float64) @ rotation.T + registration[:3, 3]
+    positions[~markers.valid] = 0.0
+    return NativeC3DMarkers(
+        markers.times.copy(),
+        positions.astype(np.float32),
+        markers.valid.copy(),
+        markers.marker_names,
+        markers.source_file,
+        markers.source_sha256,
+    )
+
+
+def finite_difference_joint_qd(model: newton.Model, joint_q: np.ndarray, times: np.ndarray) -> np.ndarray:
+    """Compute finite-difference velocities in Newton joint-DOF layout."""
+    joint_q = np.asarray(joint_q, dtype=np.float64)
+    times = np.asarray(times, dtype=np.float64)
+    if joint_q.ndim != 2 or joint_q.shape[1] != model.joint_coord_count or len(times) != len(joint_q):
+        raise ValueError("joint_q/times have incompatible shapes")
+    if len(times) < 2 or not np.all(np.diff(times) > 0.0):
+        raise ValueError("motion times must increase and contain at least two frames")
+    qd = np.zeros((len(times), model.joint_dof_count), dtype=np.float64)
+    q_start = model.joint_q_start.numpy()
+    qd_start = model.joint_qd_start.numpy()
+    joint_types = model.joint_type.numpy()
+    joint_parent = model.joint_parent.numpy()
+    for joint in range(model.joint_count):
+        q0, q1 = int(q_start[joint]), int(q_start[joint + 1])
+        d0, d1 = int(qd_start[joint]), int(qd_start[joint + 1])
+        if joint_parent[joint] == -1 and joint_types[joint] == newton.JointType.FREE and q1 - q0 == 7 and d1 - d0 == 6:
+            q = joint_q[:, q0 : q0 + 7].copy()
+            for frame in range(1, len(q)):
+                if np.dot(q[frame - 1, 3:], q[frame, 3:]) < 0.0:
+                    q[frame, 3:] *= -1.0
+            qd[:, d0 : d0 + 3] = np.gradient(q[:, :3], times, axis=0, edge_order=1)
+            qdot = np.gradient(q[:, 3:], times, axis=0, edge_order=1)
+            # 2 * conjugate(q) * qdot gives angular velocity in the local frame.
+            xyz = q[:, :3] * 0.0
+            for frame in range(len(q)):
+                x, y, z, w = q[frame, 3:]
+                dx, dy, dz, dw = qdot[frame]
+                xyz[frame] = 2.0 * np.asarray(
+                    (
+                        w * dx - x * dw - y * dz + z * dy,
+                        w * dy - x * dz + y * dw - z * dx,
+                        w * dz + x * dy - y * dx - z * dw,
+                    )
+                )
+            qd[:, d0 + 3 : d0 + 6] = xyz
+            continue
+        for offset in range(d1 - d0):
+            coordinate = q0 + offset
+            qd[:, d0 + offset] = np.gradient(joint_q[:, coordinate], times, edge_order=1)
+    return qd.astype(np.float32)
+
+
+def marker_residuals_by_body(
+    model: newton.Model,
+    attachments: tuple[NativeMarkerAttachment, ...],
+    residuals: np.ndarray,
+) -> dict[str, float]:
+    """Aggregate marker RMS by native body label."""
+    residuals = np.asarray(residuals, dtype=np.float64)
+    if residuals.shape != (len(attachments),):
+        raise ValueError("residuals has an incompatible shape")
+    output = {}
+    body_labels = model.body_label
+    for body in sorted({attachment.body for attachment in attachments}):
+        values = residuals[[attachment.body == body for attachment in attachments]]
+        output[body_labels[body].rsplit("/", 1)[-1]] = float(np.sqrt(np.mean(values * values))) if len(values) else 0.0
+    return output
+
+
+def fit_c3d_marker_motion(
+    model: newton.Model,
+    attachments: tuple[NativeMarkerAttachment, ...],
+    markers: NativeC3DMarkers,
+    seed: np.ndarray,
+    *,
+    registration: np.ndarray | None = None,
+    iterations: int = 40,
+    start_frame: int = 0,
+    end_frame: int | None = None,
+    max_frames: int | None = None,
+    stride: int = 1,
+) -> NativeMotionArtifact:
+    """Fit valid real-C3D marker observations and publish finite diagnostics."""
+    if stride <= 0:
+        raise ValueError("stride must be positive")
+    if start_frame < 0 or (end_frame is not None and end_frame <= start_frame):
+        raise ValueError("motion frame range is invalid")
+    if registration is None:
+        registration = np.eye(4, dtype=np.float64)
+    registered = apply_marker_registration(markers, registration)
+    frame_indices = np.arange(
+        start_frame, len(registered.times) if end_frame is None else end_frame, stride, dtype=np.int32
+    )
+    if max_frames is not None and max_frames > 0:
+        frame_indices = frame_indices[:max_frames]
+    if len(frame_indices) < 2:
+        raise ValueError("real motion fit needs at least two selected frames")
+    selected_positions = registered.positions[frame_indices]
+    selected_valid = registered.valid[frame_indices]
+    always_valid = np.all(selected_valid, axis=0)
+    if int(np.sum(always_valid)) < 6:
+        raise ValueError("real motion fit needs at least six markers valid in every selected frame")
+    visible = np.flatnonzero(always_valid)
+    visible_attachments = tuple(attachments[index] for index in visible)
+    frames = solve_marker_sequence(
+        model, visible_attachments, selected_positions[:, visible], seed, iterations=iterations
+    )
+    joint_q = np.asarray([frame.joint_q for frame in frames], dtype=np.float32)
+    predictions = np.asarray(
+        [marker_positions_from_joint_q(model, attachments, coordinates) for coordinates in joint_q], dtype=np.float32
+    )
+    targets = registered.positions[frame_indices].astype(np.float32)
+    valid = registered.valid[frame_indices].copy()
+    distances = np.linalg.norm(predictions.astype(np.float64) - targets.astype(np.float64), axis=-1)
+    residuals = np.where(valid, distances, 0.0)
+    counts = valid.sum(axis=1)
+    frame_rms = np.sqrt(np.divide(np.sum(residuals**2, axis=1), counts, out=np.zeros(len(counts)), where=counts > 0))
+    frame_max = np.max(residuals, axis=1)
+    marker_counts = valid.sum(axis=0)
+    marker_rms = np.sqrt(
+        np.divide(
+            np.sum(residuals**2, axis=0), marker_counts, out=np.zeros(len(marker_counts)), where=marker_counts > 0
+        )
+    )
+    marker_max = np.max(residuals, axis=0)
+    body_indices = tuple(sorted({attachment.body for attachment in attachments}))
+    body_names = tuple(model.body_label[index].rsplit("/", 1)[-1] for index in body_indices)
+    body_rms = np.zeros((len(frame_indices), len(body_indices)), dtype=np.float32)
+    for body_column, body in enumerate(body_indices):
+        marker_mask = np.asarray([attachment.body == body for attachment in attachments], dtype=bool)
+        body_valid = valid[:, marker_mask]
+        body_residuals = residuals[:, marker_mask]
+        body_count = body_valid.sum(axis=1)
+        body_rms[:, body_column] = np.sqrt(
+            np.divide(
+                np.sum(body_residuals**2, axis=1),
+                body_count,
+                out=np.zeros(len(body_count)),
+                where=body_count > 0,
+            )
+        )
+    joint_qd = finite_difference_joint_qd(model, joint_q, registered.times[frame_indices])
+    return NativeMotionArtifact(
+        registered.times[frame_indices],
+        joint_q,
+        joint_qd,
+        targets,
+        predictions,
+        valid,
+        frame_rms.astype(np.float32),
+        frame_max.astype(np.float32),
+        marker_rms.astype(np.float32),
+        marker_max.astype(np.float32),
+        body_names,
+        body_rms,
+        np.asarray([frame.solver_cost for frame in frames], dtype=np.float32),
+        np.asarray([frame.joint_limit_violation for frame in frames], dtype=np.float32),
+        markers.marker_names,
+        markers.source_file,
+        markers.source_sha256,
+        registration.copy(),
+    )
+
+
+def write_native_motion_artifact(
+    motion: NativeMotionArtifact,
+    output_dir: str | os.PathLike,
+    *,
+    model_path: str | os.PathLike | None = None,
+    calibration_path: str | os.PathLike | None = None,
+    settings: dict | None = None,
+) -> Path:
+    """Atomically publish a sealed native fitted-motion NPZ artifact."""
+    root = Path(output_dir).expanduser().resolve()
+    if root.exists():
+        raise FileExistsError(root)
+    root.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f".{root.name}.", dir=root.parent) as temporary:
+        staged = Path(temporary)
+        payload = staged / "motion.npz"
+        np.savez_compressed(
+            payload,
+            times=motion.times,
+            joint_q=motion.joint_q,
+            joint_qd=motion.joint_qd,
+            targets=motion.targets,
+            predictions=motion.predictions,
+            valid=motion.valid,
+            frame_rms=motion.frame_rms,
+            frame_max=motion.frame_max,
+            marker_rms=motion.marker_rms,
+            marker_max=motion.marker_max,
+            body_rms=motion.body_rms,
+            solver_cost=motion.solver_cost,
+            joint_limit_violation=motion.joint_limit_violation,
+            registration=motion.registration,
+        )
+        manifest = {
+            "schema_version": "gait_native_motion_artifact_1",
+            "coordinate_system": {
+                "frame": "Newton world",
+                "length_unit": "m",
+                "up_axis": "Z",
+                "forward_axis": "X",
+                "left_axis": "Y",
+            },
+            "source": {"file": motion.source_file, "sha256": motion.source_sha256},
+            "markers": {
+                "names": list(motion.marker_names),
+                "valid_count": int(motion.valid.sum()),
+                "sample_count": int(motion.valid.size),
+            },
+            "bodies": {"names": list(motion.body_names), "residuals": "body_rms"},
+            "frames": {
+                "count": int(len(motion.times)),
+                "start_s": float(motion.times[0]),
+                "end_s": float(motion.times[-1]),
+            },
+            "registration": motion.registration.tolist(),
+            "model": _artifact_file_metadata(model_path),
+            "calibration": _artifact_file_metadata(calibration_path),
+            "settings": settings or {},
+            "payload": {"file": "motion.npz", "sha256": hashlib.sha256(payload.read_bytes()).hexdigest()},
+        }
+        manifest["seal"] = {
+            "algorithm": "sha256",
+            "content_sha256": hashlib.sha256(_canonical_motion_json(manifest)).hexdigest(),
+        }
+        (staged / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
+        )
+        os.rename(staged, root)
+    return root
+
+
+def _artifact_file_metadata(path: str | os.PathLike | None) -> dict | None:
+    """Return a safe file/hash record for optional motion provenance."""
+    if path is None:
+        return None
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(resolved)
+    return {"file": resolved.name, "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest()}
+
+
+def _canonical_motion_json(value: dict) -> bytes:
+    """Serialize a motion manifest deterministically."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()

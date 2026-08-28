@@ -264,6 +264,26 @@ uv run --extra dev -m newton.examples native_motion_fit \
 The example reports unweighted marker RMS/max error, public solver cost, and
 checks free-root quaternion normalization and native joint limits.
 
+## Real C3D native motion fit
+
+Fit a dynamic trial by name-joining its markers to the saved native sites. The
+saved calibrated subject ground offset is applied as an explicit registration.
+The default safety limit fits 300 frames; use `--max-frames 0` for the full
+trial, or use `--stride` while validating a long capture:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
+  --c3d "/path/to/Trial 101.v3d.c3d" \
+  --subject projects/gait_c3d/assets/s001_calibrated \
+  --motion-output /tmp/trial_101_native_motion \
+  --max-frames 300
+```
+
+The output directory contains a sealed `motion.npz` artifact and manifest with
+native coordinates, finite-difference velocities, target/predicted markers,
+validity, per-marker/per-body residuals, solver costs, limit diagnostics, and
+registration metadata.
+
 ## Reusable progress example
 
 Run the tracked S001 per-segment calibrated subject by omitting `--subject`.
