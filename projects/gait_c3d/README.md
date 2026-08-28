@@ -247,6 +247,23 @@ endpoints; `LTOE`/`RTOE` are not used as the toe-tip definition. Its four foot c
 spheres are generated from the calibrated foot mesh frame and their surfaces
 are placed on `z=0`.
 
+## Synthetic native marker IK
+
+The Phase 2 synthetic gate uses imported marker sites and only the public
+`newton.ik` API. It generates a known free-root native motion, solves it with
+analytic Levenberg--Marquardt, warm-starts each frame, and overlays target and
+predicted markers.
+
+```bash
+uv run --extra dev -m newton.examples native_motion_fit \
+  --synthetic \
+  --noise-mm 1.0 \
+  --occlude-every 4
+```
+
+The example reports unweighted marker RMS/max error, public solver cost, and
+checks free-root quaternion normalization and native joint limits.
+
 ## Reusable progress example
 
 Run the tracked S001 per-segment calibrated subject by omitting `--subject`.

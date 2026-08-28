@@ -802,6 +802,14 @@ add_example_test(
     use_viewer=True,
 )
 
+add_example_test(
+    TestOpenSimExamples,
+    name="opensim.example_native_motion_fit",
+    devices=test_devices,
+    test_options={"synthetic": True, "num-frames": 1, "frames": 8, "iterations": 60},
+    use_viewer=True,
+)
+
 
 class TestMuJoCoExamples(unittest.TestCase):
     pass

@@ -364,3 +364,17 @@ until its example and automated checks both pass.
   dynamic markers or solve native generalized coordinates. The source C3D/VTP
   inputs used to produce S001 are not bundled, but the neutral base geometry,
   placement, and static calibration are tracked for reproducible model builds.
+
+### Phase 2
+
+- Implementation: `projects/gait_c3d/native_motion_fit.py` binds imported MJCF
+  sites to public `newton.ik.IKObjectivePosition` objectives and solves with
+  analytic LM, one seed, and temporal warm starts. Invalid marker handling
+  begins with an explicit visible-marker subset.
+- Example: `newton/examples/opensim/example_native_motion_fit.py` provides the
+  reusable `native_motion_fit --synthetic` target/prediction overlay.
+- Validation: clean, 1 mm noisy, deterministic occlusion, free-root
+  quaternion, joint-limit, and warm-start continuity tests pass on CPU. The
+  example reports marker RMS/max error and public solver cost.
+- Remaining limitation: real C3D fitting, short-gap interpolation, visibility
+  mask solver caching, and full dynamic diagnostics remain Phase 3 work.
