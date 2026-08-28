@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 import newton
-from newton.examples.opensim.example_opensim_subject import create_parser
+from newton.examples.opensim.example_opensim_subject import _resolve_subject_artifact, create_parser
 from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
 
@@ -50,6 +50,25 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         np.testing.assert_allclose(model.joint_target_ke.numpy()[6:], 100.0)
         np.testing.assert_allclose(model.joint_target_kd.numpy()[6:], 20.0)
 
+    def test_resolves_only_declared_in_bundle_artifacts(self):
+        """Resolve declared artifacts and reject path escape or missing files."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "model" / "marker_layout.json"
+            artifact.parent.mkdir()
+            artifact.write_text("{}", encoding="utf-8")
+            manifest = {"artifacts": {"marker_layout": "model/marker_layout.json"}}
+            self.assertEqual(_resolve_subject_artifact(root, manifest, "marker_layout"), artifact)
+            self.assertIsNone(_resolve_subject_artifact(root, manifest, "absent"))
+            with self.assertRaisesRegex(ValueError, "safe relative path"):
+                _resolve_subject_artifact(root, {"artifacts": {"marker_layout": "../outside"}}, "marker_layout")
+            with self.assertRaisesRegex(FileNotFoundError, "is missing"):
+                _resolve_subject_artifact(
+                    root,
+                    {"artifacts": {"marker_layout": "model/missing.json"}},
+                    "marker_layout",
+                )
+
     def test_cli_exposes_concise_subject_options(self):
         """Expose concise subject options while accepting legacy names."""
         parser = create_parser()
@@ -62,6 +81,8 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             "--geometry",
             "--substeps",
             "--show-collision",
+            "--show-markers",
+            "--marker-demo",
         ):
             self.assertIn(option, help_text)
         for option in (

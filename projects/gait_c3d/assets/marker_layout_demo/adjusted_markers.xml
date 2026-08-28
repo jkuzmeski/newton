@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<OpenSimDocument Version="40600">
+  <MarkerSet name="native_marker_demo">
+    <objects>
+      <Marker name="Sternum">
+        <socket_parent_frame>/bodyset/torso</socket_parent_frame>
+        <location>0.14 0.0 0.1</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="R.ASIS">
+        <socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+        <location>0.08 -0.08 0.0</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="L.ASIS">
+        <socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+        <location>0.08 0.08 0.0</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="V.Sacral">
+        <socket_parent_frame>/bodyset/pelvis</socket_parent_frame>
+        <location>-0.1 0.0 0.0</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="R.Knee.Lat">
+        <socket_parent_frame>/bodyset/femur_r</socket_parent_frame>
+        <location>0.0 -0.06 -0.15</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="L.Knee.Lat">
+        <socket_parent_frame>/bodyset/femur_l</socket_parent_frame>
+        <location>0.0 0.06 -0.15</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="R.Ankle.Lat">
+        <socket_parent_frame>/bodyset/tibia_r</socket_parent_frame>
+        <location>0.0 -0.045 -0.15</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="L.Ankle.Lat">
+        <socket_parent_frame>/bodyset/tibia_l</socket_parent_frame>
+        <location>0.0 0.045 -0.15</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="R.Heel">
+        <socket_parent_frame>/bodyset/calcn_r</socket_parent_frame>
+        <location>-0.1 -0.03 0.0</location>
+        <fixed>true</fixed>
+      </Marker>
+      <Marker name="L.Heel">
+        <socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>
+        <location>-0.1 0.03 0.0</location>
+        <fixed>true</fixed>
+      </Marker>
+    </objects>
+  </MarkerSet>
+</OpenSimDocument>

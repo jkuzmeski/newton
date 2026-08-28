@@ -508,7 +508,7 @@ def _write_obj(path: Path, vertices: np.ndarray, triangles: np.ndarray) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _target_body_transforms(config: SimpleGaitConfig) -> dict[str, np.ndarray]:
+def simple_gait_body_transforms(config: SimpleGaitConfig) -> dict[str, np.ndarray]:
     """Return neutral simple-model body transforms in Newton world coordinates."""
     transforms = {}
 
@@ -542,7 +542,7 @@ def joint_centers_from_official_transforms(
     if isinstance(source_body_transforms, (str, os.PathLike)):
         source_body_transforms = json.loads(Path(source_body_transforms).read_text())
     source_transforms = {name: np.asarray(value, dtype=np.float64) for name, value in source_body_transforms.items()}
-    target_transforms = _target_body_transforms(config)
+    target_transforms = simple_gait_body_transforms(config)
     output = {}
     for side, source_side in (("left", "l"), ("right", "r")):
         for joint, source_body, target_body in (
@@ -584,7 +584,7 @@ def subject_inertials_from_scaled_gait2354(
         "foot_left": ("talus_l", "calcn_l", "toes_l"),
         "foot_right": ("talus_r", "calcn_r", "toes_r"),
     }
-    target_transforms = _target_body_transforms(config)
+    target_transforms = simple_gait_body_transforms(config)
     output = {}
     for target, sources in groups.items():
         parts = []
@@ -679,7 +679,7 @@ def _compile_scaled_vtp_visuals(
     meshes: list[SubjectVisualMesh] = []
     compiled_geometry: list[tuple[Path, str, np.ndarray, np.ndarray, dict]] = []
     exact_transforms = source_body_transforms is not None
-    target_transforms = _target_body_transforms(config)
+    target_transforms = simple_gait_body_transforms(config)
     source_transforms = source_body_transforms or {}
     for name, transform in source_transforms.items():
         array = np.asarray(transform, dtype=np.float64)

@@ -26,6 +26,7 @@ import warp as wp
 import newton
 import newton.examples
 from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
+from projects.gait_c3d.marker_layout import compile_subject_marker_layout, load_subject_marker_layout
 from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
 from projects.gait_c3d.subject_scaling import (
@@ -43,6 +44,24 @@ from projects.gait_c3d.vtp_adapter import (
 _SUBJECT_BUNDLE_SCHEMA = "gait_subject_bundle_1"
 
 
+def _resolve_subject_artifact(subject_dir: Path, manifest: dict, name: str, *, required: bool = False) -> Path | None:
+    """Resolve one declared bundle artifact without allowing path escape."""
+    artifacts = manifest.get("artifacts")
+    artifact = artifacts.get(name) if isinstance(artifacts, dict) else None
+    if artifact is None and not required:
+        return None
+    if not isinstance(artifact, str) or not artifact or Path(artifact).is_absolute() or ".." in Path(artifact).parts:
+        raise ValueError(f"subject bundle artifact {name!r} must be a safe relative path")
+    path = (subject_dir / artifact).resolve()
+    try:
+        path.relative_to(subject_dir.resolve())
+    except ValueError as error:
+        raise ValueError(f"subject bundle artifact {name!r} escapes the bundle") from error
+    if not path.exists():
+        raise FileNotFoundError(f"subject bundle artifact {name!r} is missing: {path}")
+    return path
+
+
 def _read_subject_bundle(subject_dir: Path) -> tuple[Path, dict]:
     """Read one compiled subject bundle and return its MJCF path and metadata."""
     manifest_path = subject_dir / "subject.json"
@@ -53,16 +72,9 @@ def _read_subject_bundle(subject_dir: Path) -> tuple[Path, dict]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("schema_version") != _SUBJECT_BUNDLE_SCHEMA:
         raise ValueError(f"unsupported subject bundle schema in {manifest_path}")
-    model_file = manifest.get("artifacts", {}).get("model")
-    if not isinstance(model_file, str) or Path(model_file).is_absolute() or ".." in Path(model_file).parts:
-        raise ValueError("subject bundle model path must be relative")
-    model_path = (subject_dir / model_file).resolve()
-    try:
-        model_path.relative_to(subject_dir.resolve())
-    except ValueError as error:
-        raise ValueError("subject bundle model path escapes the bundle") from error
-    if not model_path.is_file():
-        raise FileNotFoundError(f"subject bundle model is missing: {model_path}")
+    model_path = _resolve_subject_artifact(subject_dir, manifest, "model", required=True)
+    if model_path is None or not model_path.is_file():
+        raise FileNotFoundError(f"subject bundle model is not a file: {model_path}")
     return model_path, manifest
 
 
@@ -81,6 +93,8 @@ def _write_subject_bundle_manifest(
             artifacts[name] = name
     if (subject_dir / "model" / "manifest.json").is_file():
         artifacts["model_manifest"] = "model/manifest.json"
+    if (subject_dir / "model" / "marker_layout.json").is_file():
+        artifacts["marker_layout"] = "model/marker_layout.json"
     manifest = {
         "schema_version": _SUBJECT_BUNDLE_SCHEMA,
         "subject": {
@@ -118,10 +132,12 @@ class Example:
         newton.use_coord_layout_targets = True
         self.free_root = args.free_root
         self.show_self_collision = args.show_self_collision
+        self.show_markers = args.show_markers
         builder = newton.ModelBuilder()
         builder.add_mjcf(
             str(self.subject_xml),
             floating=True if self.free_root else False,
+            parse_sites=True,
             enable_self_collisions=True,
             force_show_colliders=self.show_self_collision,
         )
@@ -130,6 +146,28 @@ class Example:
         self.state_1 = self.model.state()
         self.control = self.model.control()
         newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state_0)
+        self.neutral_body_q = self.state_0.body_q.numpy().copy()
+        shape_flags = self.model.shape_flags.numpy()
+        self.marker_site_indices = tuple(
+            index
+            for index, label in enumerate(self.model.shape_label)
+            if shape_flags[index] & newton.ShapeFlags.SITE and label.rsplit("/", 1)[-1].startswith("marker_")
+        )
+        self.marker_points = None
+        self.marker_radii = None
+        self.marker_colors = None
+        if self.marker_site_indices:
+            marker_count = len(self.marker_site_indices)
+            self.marker_points = wp.zeros(marker_count, dtype=wp.vec3, device=self.model.device)
+            self.marker_radii = wp.full(marker_count, 0.012, dtype=wp.float32, device=self.model.device)
+            self.marker_colors = wp.full(
+                marker_count, wp.vec3(0.15, 0.95, 0.25), dtype=wp.vec3, device=self.model.device
+            )
+            self._update_marker_points()
+        elif self.show_markers:
+            raise ValueError(
+                "--show-markers requires compiled marker sites; rebuild the subject with --marker-demo or source inputs"
+            )
         self.pipeline = newton.CollisionPipeline(self.model)
         self.contacts = self.pipeline.contacts()
         self.solver = newton.solvers.SolverFeatherstone(self.model, angular_damping=0.01)
@@ -160,7 +198,9 @@ class Example:
             if use_project_subject_dir
             else Path(tempfile.mkdtemp(prefix="newton-opensim-subject-"))
         )
-        compile_requested = any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
+        compile_requested = args.marker_demo or any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
+        if args.marker_demo and any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir)):
+            raise ValueError("--marker-demo cannot be combined with subject source inputs")
         if (
             (args.subject_dir or use_project_subject_dir)
             and self.subject_dir.is_dir()
@@ -176,8 +216,12 @@ class Example:
             self.marker_placement = None
             self.marker_artifact = None
             self.device_markers = None
-            marker_dir = self.subject_dir / "markers"
-            if (marker_dir / "manifest.json").is_file():
+            marker_layout_path = _resolve_subject_artifact(self.subject_dir, bundle_manifest, "marker_layout")
+            self.marker_layout = (
+                load_subject_marker_layout(marker_layout_path) if marker_layout_path is not None else None
+            )
+            marker_dir = _resolve_subject_artifact(self.subject_dir, bundle_manifest, "markers")
+            if marker_dir is not None and (marker_dir / "manifest.json").is_file():
                 self.marker_artifact = marker_dir
                 self.device_markers = load_marker_artifact(marker_dir).to_warp(args.device)
             self._init_runtime(args)
@@ -218,6 +262,7 @@ class Example:
 
         scaled_osim = args.scaled_osim
         source_body_transforms = None
+        source_ground_offset_z = 0.0
         inertial_data = None
         joint_centers = None
         self.marker_placement = None
@@ -297,9 +342,10 @@ class Example:
             contact_layout = visuals.contact_layout
             print(f"VTP: {len(visual_meshes)} scaled visual meshes -> {visuals.root}")
             if contact_layout is not None:
+                source_ground_offset_z = contact_layout.root_height_offset_z
                 config = replace(
                     config,
-                    pelvis_height=config.pelvis_height + contact_layout.root_height_offset_z,
+                    pelvis_height=config.pelvis_height + source_ground_offset_z,
                 )
                 if source_body_transforms is not None:
                     joint_centers = joint_centers_from_official_transforms(
@@ -311,6 +357,32 @@ class Example:
                     f"Contact: radius {contact_layout.radius:.4f} m, root height offset "
                     f"{contact_layout.root_height_offset_z:.4f} m"
                 )
+
+        self.marker_layout = None
+        if self.marker_placement is not None and source_body_transforms is not None:
+            marker_set_path = self.marker_placement.marker_set_path
+            marker_source_transforms = source_body_transforms
+        elif args.marker_demo:
+            reference = SimpleGaitConfig()
+            if not np.isclose(config.pelvis_height, reference.pelvis_height) or not np.isclose(
+                config.hip_half_width, reference.hip_half_width
+            ):
+                raise ValueError("--marker-demo requires the default subject height and hip width")
+            demo_root = Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "assets" / "marker_layout_demo"
+            marker_set_path = demo_root / "adjusted_markers.xml"
+            marker_source_transforms = demo_root / "body_transforms.json"
+        else:
+            marker_set_path = None
+            marker_source_transforms = None
+        if marker_set_path is not None:
+            self.marker_layout = compile_subject_marker_layout(
+                marker_set_path,
+                marker_source_transforms,
+                config,
+                self.model_dir / "marker_layout.json",
+                source_ground_offset_z=source_ground_offset_z,
+            )
+            print(f"Markers: {len(self.marker_layout.markers)} native MJCF sites -> {self.marker_layout.path}")
 
         self.visual_mesh_count = len(visual_meshes)
         self.inertial_data = inertial_data
@@ -325,6 +397,7 @@ class Example:
             contact_radius=contact_layout.radius if contact_layout is not None else None,
             inertial_data=inertial_data,
             joint_centers=joint_centers,
+            marker_sites=self.marker_layout.marker_sites if self.marker_layout is not None else (),
         )
         _write_subject_bundle_manifest(
             self.subject_dir,
@@ -333,6 +406,21 @@ class Example:
             visual_mesh_count=len(visual_meshes),
         )
         self._init_runtime(args)
+
+    def _update_marker_points(self):
+        """Update the viewer overlay from imported body-local MJCF sites."""
+        if self.marker_points is None:
+            return
+        body_q = self.state_0.body_q.numpy()
+        shape_body = self.model.shape_body.numpy()
+        shape_transform = self.model.shape_transform.numpy()
+        points = np.empty((len(self.marker_site_indices), 3), dtype=np.float32)
+        for output_index, shape_index in enumerate(self.marker_site_indices):
+            body_transform = wp.transform(*body_q[shape_body[shape_index]])
+            site_transform = wp.transform(*shape_transform[shape_index])
+            position = wp.transform_get_translation(body_transform * site_transform)
+            points[output_index] = (position[0], position[1], position[2])
+        self.marker_points.assign(points)
 
     def simulate(self):
         """Advance one display frame through native Newton APIs."""
@@ -453,12 +541,46 @@ class Example:
                 raise ValueError("C3D marker artifact or Warp upload is missing")
             if self.device_markers.positions.shape[0] == 0:
                 raise ValueError("C3D Warp marker array is empty")
+        if self.marker_layout is not None:
+            site_by_name = {
+                self.model.shape_label[index].rsplit("/", 1)[-1]: index for index in self.marker_site_indices
+            }
+            if set(site_by_name) != {marker.site_name for marker in self.marker_layout.markers}:
+                raise ValueError("subject marker layout does not match the imported MJCF sites")
+            body_by_name = {label.rsplit("/", 1)[-1]: index for index, label in enumerate(self.model.body_label)}
+            for body_name, expected_transform in self.marker_layout.target_body_transforms.items():
+                body = body_by_name.get(body_name)
+                if body is None:
+                    raise ValueError(f"subject marker layout target body is missing: {body_name!r}")
+                body_q = self.neutral_body_q[body]
+                actual_rotation = np.asarray(wp.quat_to_matrix(wp.quat(*body_q[3:]))).reshape(3, 3)
+                if not np.allclose(body_q[:3], expected_transform[:3, 3], atol=1.0e-6) or not np.allclose(
+                    actual_rotation, expected_transform[:3, :3], atol=1.0e-6
+                ):
+                    raise ValueError(f"neutral target transform changed for marker body {body_name!r}")
+            shape_body = self.model.shape_body.numpy()
+            shape_transform = self.model.shape_transform.numpy()
+            for marker in self.marker_layout.markers:
+                site = site_by_name[marker.site_name]
+                body_name = self.model.body_label[shape_body[site]].rsplit("/", 1)[-1]
+                if body_name != marker.body or not np.allclose(shape_transform[site, :3], marker.position, atol=1.0e-7):
+                    raise ValueError(f"imported MJCF site changed for marker {marker.name!r}")
+            if self.show_markers and self.marker_points is None:
+                raise ValueError("subject marker overlay was not initialized")
 
     def render(self):
         """Render current body and contact state."""
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
         self.viewer.log_contacts(self.contacts, self.state_0)
+        if self.show_markers and self.marker_points is not None:
+            self._update_marker_points()
+            self.viewer.log_points(
+                "subject/neutral_marker_sites",
+                self.marker_points,
+                self.marker_radii,
+                self.marker_colors,
+            )
         self.viewer.end_frame()
 
 
@@ -499,6 +621,16 @@ def create_parser():
         dest="show_self_collision",
         action="store_true",
         help="Show the orange self-collision proxies (hidden by default)",
+    )
+    parser.add_argument(
+        "--show-markers",
+        action="store_true",
+        help="Show compiled neutral motion-capture marker sites",
+    )
+    parser.add_argument(
+        "--marker-demo",
+        action="store_true",
+        help="Build the tracked compact neutral-marker demonstration subject",
     )
     parser.add_argument(
         "--show-self-collision",

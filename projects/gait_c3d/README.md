@@ -2,7 +2,9 @@
 
 This project-local model is the first articulated Newton runtime scaffold for
 gait solver and contact experiments. It deliberately favors a small, stable
-joint set over one-to-one OpenSim mechanics.
+joint set over one-to-one OpenSim mechanics. The staged motion-fitting work and
+its example-based completion gates are defined in
+[`NATIVE_MOTION_RETARGETING_PLAN.md`](NATIVE_MOTION_RETARGETING_PLAN.md).
 
 ## Topology
 
@@ -141,6 +143,42 @@ uv run --with ezc3d python -m your_subject_compiler
 The saved NPZ/Warp runtime path uses only NumPy and Warp. TRC, MOT, and STO
 remain optional reference exports for OpenSim interoperability.
 
+## Neutral marker layout
+
+The offline subject compiler converts the accepted marker placement into
+`model/marker_layout.json`. The sealed layout records each marker's source body,
+target native body, body-local position, MJCF site name, source hashes, frame
+rotation, and the same vertical registration used for visuals, joint centers,
+inertias, and contacts. OpenSim supplies the offline reference placement; the
+saved runtime model does not import or execute OpenSim code.
+
+The subject MJCF contains one hidden, non-colliding `<site>` for every converted
+marker. Newton imports these sites with `ModelBuilder.add_mjcf(parse_sites=True)`,
+so later motion fitting can construct public `newton.ik.IKObjectivePosition`
+objectives without a custom forward-kinematics or marker kernel. The canonical
+S001 bundle contains 35 marker sites on the pelvis, torso, bilateral femurs,
+tibias, and merged feet.
+
+Run the tracked compact Phase 1 demonstration from a clean checkout. It builds
+a persistent project-local demo subject, imports its ten marker sites, and
+shows them as green points:
+
+```bash
+uv run --extra dev -m newton.examples opensim_subject \
+  --subject projects/gait_c3d/subjects/marker-demo \
+  --overwrite \
+  --marker-demo \
+  --show-markers \
+  --paused
+```
+
+The compact fixture represents the output shape of offline OpenSim marker
+placement but does not execute OpenSim. Build or rebuild S001 with the canonical
+compiler command below to inspect its 35 subject-specific sites with the same
+`--show-markers` option. The points come from imported MJCF sites and move with
+their native bodies. `marker_layout.json` remains the sealed provenance and
+name-mapping artifact used by later motion-retargeting phases.
+
 ## Reusable progress example
 
 Run the current native subject path with generated fallback geometry. Interactive
@@ -159,8 +197,9 @@ uv run --extra dev -m newton.examples opensim_subject --show-collision
 
 Each compiled subject folder is self-contained. `subject.json` stores the
 subject mass, height, hip width, and artifact locations; the model folder stores
-MJCF, inertials, collision proxies, and compiled VTP visuals; marker and offline
-OpenSim artifacts stay under the same subject root. Reopen the subject without
+MJCF, inertials, collision proxies, compiled VTP visuals, and the sealed neutral
+marker layout; marker trajectories and offline OpenSim reference artifacts stay
+under the same subject root. Reopen the subject without
 any source paths:
 
 ```bash

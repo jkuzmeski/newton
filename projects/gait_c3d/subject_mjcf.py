@@ -48,6 +48,23 @@ class SubjectInertial:
     """Inertia about COM as Ixx, Iyy, Izz, Ixy, Ixz, Iyz [kg·m²]."""
 
 
+@dataclass(frozen=True, slots=True)
+class SubjectMarkerSite:
+    """One motion-capture marker attached to a native subject body."""
+
+    name: str
+    """Motion-capture marker name."""
+
+    body: str
+    """Target native body label."""
+
+    position: tuple[float, float, float]
+    """Marker position in the target body frame [m]."""
+
+    site_name: str
+    """Stable MJCF site name."""
+
+
 def _values(*items: float) -> str:
     return " ".join(f"{item:.9g}" for item in items)
 
@@ -284,6 +301,7 @@ def subject_mjcf_xml(
     contact_radius: float | None = None,
     inertial_data: dict[str, SubjectInertial] | None = None,
     joint_centers: dict[str, tuple[float, float, float]] | None = None,
+    marker_sites: Sequence[SubjectMarkerSite] = (),
 ) -> str:
     """Create MJCF for one scaled simple-joint subject.
 
@@ -300,6 +318,7 @@ def subject_mjcf_xml(
             these values replace the scaled nominal fallback values and drive
             the body COMs, principal axes, and equivalent box extents.
         joint_centers: Optional official neutral joint centers in target child frames.
+        marker_sites: Neutral motion-capture marker sites attached to target bodies.
 
     Returns:
         An MJCF XML document. It can be passed directly to
@@ -322,6 +341,34 @@ def subject_mjcf_xml(
     expected_centers = {"hip_left", "hip_right", "knee_left", "knee_right", "ankle_left", "ankle_right"}
     if centers and set(centers) != expected_centers:
         raise ValueError(f"joint_centers must contain exactly {sorted(expected_centers)}")
+    expected_bodies = {
+        "pelvis",
+        "torso",
+        "femur_left",
+        "femur_right",
+        "tibia_left",
+        "tibia_right",
+        "foot_left",
+        "foot_right",
+    }
+    marker_names: set[str] = set()
+    marker_site_names: set[str] = set()
+    for marker in marker_sites:
+        if not marker.name or marker.name in marker_names:
+            raise ValueError(f"empty or duplicate marker name: {marker.name!r}")
+        if marker.body not in expected_bodies:
+            raise ValueError(f"marker {marker.name!r} references unknown body {marker.body!r}")
+        if (
+            not marker.site_name
+            or marker.site_name in marker_site_names
+            or "/" in marker.site_name
+            or any(character.isspace() for character in marker.site_name)
+        ):
+            raise ValueError(f"invalid or duplicate marker site name: {marker.site_name!r}")
+        if len(marker.position) != 3 or not np.all(np.isfinite(marker.position)):
+            raise ValueError(f"marker {marker.name!r} position must contain three finite values")
+        marker_names.add(marker.name)
+        marker_site_names.add(marker.site_name)
     nominal_bodies = {
         "pelvis": (config.pelvis_mass, config.pelvis_dimensions),
         "torso": (config.torso_mass, config.torso_dimensions),
@@ -634,6 +681,17 @@ def subject_mjcf_xml(
                 rgba="0.18 0.32 0.58 0.35",
             )
 
+    for marker in marker_sites:
+        ET.SubElement(
+            body_elements[marker.body],
+            "site",
+            name=marker.site_name,
+            type="sphere",
+            size="0.008",
+            pos=_values(*marker.position),
+            rgba="0.15 0.95 0.25 1",
+        )
+
     for mesh in visual_meshes:
         body = body_elements.get(mesh.body)
         if body is None:
@@ -687,6 +745,7 @@ def write_subject_mjcf(
     contact_radius: float | None = None,
     inertial_data: dict[str, SubjectInertial] | None = None,
     joint_centers: dict[str, tuple[float, float, float]] | None = None,
+    marker_sites: Sequence[SubjectMarkerSite] = (),
 ) -> Path:
     """Write a scaled subject MJCF that Newton can load in one builder call."""
     path = Path(output_path).resolve()
@@ -701,6 +760,7 @@ def write_subject_mjcf(
             contact_radius=contact_radius,
             inertial_data=inertial_data,
             joint_centers=joint_centers,
+            marker_sites=marker_sites,
         ),
         encoding="utf-8",
     )
