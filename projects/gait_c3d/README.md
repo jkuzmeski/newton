@@ -35,8 +35,10 @@ active ground and foot self-contact proxies. A later source adapter will convert
 scaled OpenSim VTP display meshes into a sealed neutral vertex/index bundle. The
 same native builder will attach those meshes as non-colliding visuals without
 parsing VTP or `.osim` files at runtime.
-The model has 8 bodies, 8 joints, 17 generalized coordinates, and 16 velocity
-DOFs. The six free-pelvis controls start and remain uncommanded.
+The baseline simple model has 8 bodies, 8 joints, 17 generalized coordinates,
+and 16 velocity DOFs. The six free-pelvis controls start and remain uncommanded.
+Static-calibrated subject bundles add three bounded rotational torso axes while
+keeping the same eight-body chain.
 
 This is an engineering approximation. It is not OpenSim parity, predictive gait,
 or an FD-1 result. The next milestone adds bounded non-root torque control and
@@ -247,9 +249,10 @@ are placed on `z=0`.
 
 ## Reusable progress example
 
-Run the current native subject path with generated fallback geometry. Interactive
-runs without `--subject` store the reusable bundle at
-`projects/gait_c3d/subjects/example_subject`.
+Run the tracked S001 per-segment calibrated subject by omitting `--subject`.
+The default bundle is `projects/gait_c3d/assets/s001_calibrated` and includes
+its saved calibration, actual bone meshes, calibrated torso endpoints, and flat
+foot contacts.
 
 ```bash
 uv run --extra dev -m newton.examples opensim_subject

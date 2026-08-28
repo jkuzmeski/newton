@@ -1,0 +1,25 @@
+{
+  "artifacts": {
+    "calibration": "model/segment_calibration.json",
+    "model": "model/subject.xml",
+    "model_manifest": "model/manifest.json"
+  },
+  "base_marker_set": "S001",
+  "calibration": {
+    "file": "model/segment_calibration.json",
+    "sha256": "909c34544f36914b201534bd96b7624b765aaebfc6f12f55381cd0466b34aeec"
+  },
+  "schema_version": "gait_subject_bundle_1",
+  "sources": {
+    "base_marker_set": "S001",
+    "base_subject": "s001_base",
+    "static_calibration": "Cal 101.v3d.c3d"
+  },
+  "subject": {
+    "height_m": 1.695898298375747,
+    "hip_width_m": 0.1522631755804666,
+    "mass_kg": 81.9312118,
+    "name": "S001_calibrated",
+    "visual_mesh_count": 19
+  }
+}

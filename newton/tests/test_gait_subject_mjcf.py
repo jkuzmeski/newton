@@ -150,6 +150,8 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             index for index, label in enumerate(model.shape_label) if label.rsplit("/", 1)[-1].startswith("contact_")
         ]
         self.assertEqual(len(contact_indices), 8)
+        self.assertEqual(model.joint_coord_count, 13)
+        self.assertTrue(any(label.rsplit("/", 1)[-1].startswith("torso_flexion") for label in model.joint_label))
         expected_torso_origin = calibration.marker_positions["VSAC"] + ground_offset
         np.testing.assert_allclose(body_q[body_names["torso"], :3], expected_torso_origin, atol=2.0e-6)
         for site_name, source_name in (

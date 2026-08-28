@@ -2,7 +2,7 @@
 
 This tracked neutral bundle is the canonical **S001** marker-placement reference for the Newton-native gait subject. It contains the 35-marker layout produced from the accepted offline OpenSim placement, the compiled Newton MJCF, and the 19 subject-specific non-colliding OBJ bone visuals.
 
-The source placement and geometry were produced offline from the S001 gait2354 ScaleTool conversion. The source OpenSim/C3D files remain external; `model/manifest.json` records source and output hashes for the checked-in neutral assets. Runtime fitting does not import OpenSim. The static calibrated writer keeps the torso hard-linked to the pelvis, but uses a distal-sacrum/superior-head torso frame with C7, T10, sternum, clavicle, and acromion markers.
+The source placement and geometry were produced offline from the S001 gait2354 ScaleTool conversion. The source OpenSim/C3D files remain external; `model/manifest.json` records source and output hashes for the checked-in neutral assets. Runtime fitting does not import OpenSim. The static calibrated writer uses a distal-sacrum/superior-head torso frame with C7, T10, sternum, clavicle, and acromion markers and adds three bounded rotational torso axes.
 
 The base-bundle scaler remains available for simple uniform rescaling. The
 static-calibration writer uses this bundle as a mesh and mass template, then

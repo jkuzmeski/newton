@@ -286,6 +286,9 @@ until its example and automated checks both pass.
 - Actual-geometry visualization: `opensim_subject --subject
   projects/gait_c3d/assets/s001_base --show-markers --paused` overlays imported
   marker sites on the S001 bone meshes.
+- Default subject: omitting `--subject` opens the tracked
+  `projects/gait_c3d/assets/s001_calibrated` bundle with per-segment static
+  calibration and three bounded rotational torso axes.
 - Base scaling: `scale_subject_mjcf_from_base()` and
   `scale_subject_marker_layout_from_base()` derive a self-contained target
   bundle from S001. Explicit hip-width overrides update both femur frames and
@@ -353,9 +356,9 @@ until its example and automated checks both pass.
   ```
 
 - Remaining limitations: the static calibration path requires the offline
-  `ezc3d` dependency and retains a fixed torso-to-pelvis topology. Its neutral
-  torso frame now uses distal sacrum/superior head endpoints with C7, T10,
-  sternum, clavicle, and acromion markers, but it has no dynamic torso DOF;
+  `ezc3d` dependency. It now includes three bounded rotational torso axes at
+  the calibrated sacrum frame, but those axes are not yet fitted to dynamic
+  torso motion or validated by residual-driven topology comparisons;
   mass scaling is uniform, segment geometry is per-side, and anisotropic
   segment inertias still use a mean-square scale approximation. It does not fit
   dynamic markers or solve native generalized coordinates. The source C3D/VTP

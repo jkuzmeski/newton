@@ -1,0 +1,160 @@
+{
+  "base_marker_set": "S001",
+  "coordinate_system": {
+    "forward_axis": "X",
+    "frame": "Newton world/body-local",
+    "left_axis": "Y",
+    "length_unit": "m",
+    "position_convention": "row_vectors",
+    "up_axis": "Z"
+  },
+  "ground": {
+    "flat_foot": true,
+    "global_offset_m": [
+      0.0,
+      0.0,
+      -0.05448857641918439
+    ],
+    "height_m": 0.0,
+    "normal_world": [
+      0.0,
+      0.0,
+      1.0
+    ]
+  },
+  "mass_scale": 1.0,
+  "meshes": [
+    {
+      "file": "Geometry/visual_00_pelvis_sacrum_ec82986d.obj",
+      "sha256": "0cf7c40ce488693141024a9c828cf1200e293423c4475b7ed7c10e270225fe11"
+    },
+    {
+      "file": "Geometry/visual_01_pelvis_pelvis_302c8103.obj",
+      "sha256": "54e2c3a984dd998a0bd3ea71bef2ce205944042f8418763ee800d3940a03640b"
+    },
+    {
+      "file": "Geometry/visual_02_pelvis_l_pelvis_221ff377.obj",
+      "sha256": "c4f73e06353de4666c33a4b670c7625164c15b994a65ee7de6708832c881d202"
+    },
+    {
+      "file": "Geometry/visual_15_torso_hat_spine_e5497b48.obj",
+      "sha256": "f65efd27af839dbfe8c5b0d7c70ba513764d45c16d80347c25c864cf6ab634dd"
+    },
+    {
+      "file": "Geometry/visual_16_torso_hat_jaw_ccce7bf1.obj",
+      "sha256": "6a62b2a48efc4b861e6c0f8791ff785241a00f3a87d1f3fe2e04a22fa9e78361"
+    },
+    {
+      "file": "Geometry/visual_17_torso_hat_skull_4c29f62d.obj",
+      "sha256": "a4c098b63f641f7200f5480cbfa7eb6b64780912f6204bbdfb1f092e26a238de"
+    },
+    {
+      "file": "Geometry/visual_18_torso_hat_ribs_c455e842.obj",
+      "sha256": "94f149c8346a66663ad3cab2c8aa642d265ecbb4eeb68527ce70cbaa8880cfc2"
+    },
+    {
+      "file": "Geometry/visual_09_femur_left_l_femur_3a5df196.obj",
+      "sha256": "f0e396b032a3ec0a8aa3ddd619c01199412154543e2719fbb4a20bf240043b55"
+    },
+    {
+      "file": "Geometry/visual_10_tibia_left_l_tibia_5528711a.obj",
+      "sha256": "4d4abef965aba1bbc5906bcd7d81f6767fb376b4deeb8a7ada7de3451255d183"
+    },
+    {
+      "file": "Geometry/visual_11_tibia_left_l_fibula_21cdc2c3.obj",
+      "sha256": "d63c98e6dfcaf45e86f7b5a93011bba9358c0d7f5d2b07c2d78dac82aa5354a0"
+    },
+    {
+      "file": "Geometry/visual_12_foot_left_l_talus_fd829c17.obj",
+      "sha256": "770501ff68992527440eca5e3108824d578ab2fbf6da5b8d8a3e70cb111cff16"
+    },
+    {
+      "file": "Geometry/visual_13_foot_left_l_foot_3fe52ebe.obj",
+      "sha256": "c9edbcf559c1a1b483d9fc35ad0a7acf47e1f8c63a9b58add08ddde08522ba30"
+    },
+    {
+      "file": "Geometry/visual_14_foot_left_l_bofoot_73bbc705.obj",
+      "sha256": "45e16ebd35ecdae575d9cf77dbcfc39c0f7125f1d0144c1115f150874a62a619"
+    },
+    {
+      "file": "Geometry/visual_03_femur_right_femur_r_2bf9d3ed.obj",
+      "sha256": "60cad61486fc3db634a9e308323d3cf001f7ea8427b3ec8e9f4e807028899a7e"
+    },
+    {
+      "file": "Geometry/visual_04_tibia_right_r_tibia_2958b9c9.obj",
+      "sha256": "e490c02288f8ed8229b90d8982658d0ff2eff2cbb28a81e457628087b8b2b006"
+    },
+    {
+      "file": "Geometry/visual_05_tibia_right_fibula_640f87b7.obj",
+      "sha256": "b4608a257976070d099eaf3e0330d036268507283453e18db919872ac51b36ec"
+    },
+    {
+      "file": "Geometry/visual_06_foot_right_talus_9a24dff8.obj",
+      "sha256": "3bf840e156e551d185659641e06d58be168327f77124398721865522c1c043cf"
+    },
+    {
+      "file": "Geometry/visual_07_foot_right_foot_7a876838.obj",
+      "sha256": "3c0b62fbecfc49cba073310e52fd03944a96e8f28c2df5f09eed764b4539a666"
+    },
+    {
+      "file": "Geometry/visual_08_foot_right_bofoot_9f7184c1.obj",
+      "sha256": "ff69eccee9ea00d40221bce6286334e9bda3181c3ff7152b2b7fe77adf154853"
+    }
+  ],
+  "schema_version": "gait_segment_calibration_to_mjcf_1",
+  "seal": {
+    "algorithm": "sha256",
+    "content_sha256": "8fc208ac1bb8ddd52f9ea746d33e850e02cb39d3f4b29571a0e4b33eac323abb"
+  },
+  "segment_scales": {
+    "foot_left": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "foot_right": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "pelvis": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "shank_left": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "shank_right": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "thigh_left": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "thigh_right": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "torso": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "source_calibration": {
+    "file": "segment_calibration.json",
+    "sha256": "909c34544f36914b201534bd96b7624b765aaebfc6f12f55381cd0466b34aeec"
+  },
+  "source_model": {
+    "file": "subject.xml",
+    "sha256": "6c39f0c0b5379b5cf6f4b231ba482f1355bd64b7d22b9db8c97ed34dde3e78d0"
+  },
+  "source_subject": "s001_base"
+}

@@ -1,0 +1,186 @@
+<mujoco model="S001_calibrated">
+  <compiler angle="radian" autolimits="true" />
+  <option gravity="0 0 -9.80665" timestep="0.001" />
+  <default>
+    <default class="visual">
+      <geom contype="0" conaffinity="0" group="2" rgba="0.72 0.72 0.78 1" />
+    </default>
+    <default class="collision">
+      <geom friction="0.8 0.005 0.0001" solref="-100000 -1000" rgba="0.25 0.45 0.85 1" />
+    </default>
+    <default class="self_collision">
+      <geom friction="0.8 0.005 0.0001" solref="-25000 -250" rgba="0.95 0.45 0.18 0.35" />
+    </default>
+  </default>
+  <asset>
+    <mesh name="visual_00_pelvis_sacrum_ec82986d" file="Geometry/visual_00_pelvis_sacrum_ec82986d.obj" />
+    <mesh name="visual_01_pelvis_pelvis_302c8103" file="Geometry/visual_01_pelvis_pelvis_302c8103.obj" />
+    <mesh name="visual_02_pelvis_l_pelvis_221ff377" file="Geometry/visual_02_pelvis_l_pelvis_221ff377.obj" />
+    <mesh name="visual_03_femur_right_femur_r_2bf9d3ed" file="Geometry/visual_03_femur_right_femur_r_2bf9d3ed.obj" />
+    <mesh name="visual_04_tibia_right_r_tibia_2958b9c9" file="Geometry/visual_04_tibia_right_r_tibia_2958b9c9.obj" />
+    <mesh name="visual_05_tibia_right_fibula_640f87b7" file="Geometry/visual_05_tibia_right_fibula_640f87b7.obj" />
+    <mesh name="visual_06_foot_right_talus_9a24dff8" file="Geometry/visual_06_foot_right_talus_9a24dff8.obj" />
+    <mesh name="visual_07_foot_right_foot_7a876838" file="Geometry/visual_07_foot_right_foot_7a876838.obj" />
+    <mesh name="visual_08_foot_right_bofoot_9f7184c1" file="Geometry/visual_08_foot_right_bofoot_9f7184c1.obj" />
+    <mesh name="visual_09_femur_left_l_femur_3a5df196" file="Geometry/visual_09_femur_left_l_femur_3a5df196.obj" />
+    <mesh name="visual_10_tibia_left_l_tibia_5528711a" file="Geometry/visual_10_tibia_left_l_tibia_5528711a.obj" />
+    <mesh name="visual_11_tibia_left_l_fibula_21cdc2c3" file="Geometry/visual_11_tibia_left_l_fibula_21cdc2c3.obj" />
+    <mesh name="visual_12_foot_left_l_talus_fd829c17" file="Geometry/visual_12_foot_left_l_talus_fd829c17.obj" />
+    <mesh name="visual_13_foot_left_l_foot_3fe52ebe" file="Geometry/visual_13_foot_left_l_foot_3fe52ebe.obj" />
+    <mesh name="visual_14_foot_left_l_bofoot_73bbc705" file="Geometry/visual_14_foot_left_l_bofoot_73bbc705.obj" />
+    <mesh name="visual_15_torso_hat_spine_e5497b48" file="Geometry/visual_15_torso_hat_spine_e5497b48.obj" />
+    <mesh name="visual_16_torso_hat_jaw_ccce7bf1" file="Geometry/visual_16_torso_hat_jaw_ccce7bf1.obj" />
+    <mesh name="visual_17_torso_hat_skull_4c29f62d" file="Geometry/visual_17_torso_hat_skull_4c29f62d.obj" />
+    <mesh name="visual_18_torso_hat_ribs_c455e842" file="Geometry/visual_18_torso_hat_ribs_c455e842.obj" />
+  </asset>
+  <worldbody>
+    <geom class="collision" name="ground" type="plane" size="5 5 0.1" rgba="0.85 0.85 0.85 1" />
+    <geom class="visual" name="visual_ground" type="plane" size="5 5 0.1" pos="0 0 -0.002" rgba="0.78 0.78 0.78 1" />
+    <body name="pelvis" pos="0.343696219 0.0126143876 1.00527525" quat="0.986699237 0.00512095094 0.161215144 0.0202007036">
+      <freejoint name="pelvis_free" />
+      <inertial mass="12.8372117" pos="-0.0575005044 -0.00624432335 -0.069467274" fullinertia="0.0931505463 0.0524652246 0.0789242944 0 0 0" />
+      <geom class="self_collision" name="collision_pelvis" type="box" pos="-0.0575005044 -0.00624432335 -0.069467274" quat="0.5 0.5 0.5 0.5" size="0.118220646 0.0882765688 0.0668441471" />
+      <body name="torso" pos="-0.197107876 0.00064702007 -6.45106716e-18" quat="0.981435559 0.00747297683 -0.186740688 -0.0430849701">
+        <inertial mass="37.3187129" pos="0.0355025572 -0.0100664123 0.340097507" fullinertia="1.46719052 1.4243053 0.751756748 0 0 0" />
+        <geom class="self_collision" name="collision_torso" type="box" pos="0.0355025572 -0.0100664123 0.340097507" quat="0.707106781 0 -0.707106781 0" size="0.293266672 0.178717899 0.168797523" />
+        <site name="marker_Sternum" type="sphere" size="0.006" pos="0.23981105 0.0121477459 0.204221968" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_R.Acromium" type="sphere" size="0.006" pos="0.124045882 -0.167664419 0.458616209" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_L.Acromium" type="sphere" size="0.006" pos="0.124045882 0.190656196 0.459601783" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_Top.Head" type="sphere" size="0.006" pos="0.159197542 0.0239879485 0.655787567" rgba="0.15 0.95 0.25 1" />
+        <geom class="visual" name="visual_15_torso_hat_spine_e5497b48" type="mesh" mesh="visual_15_torso_hat_spine_e5497b48" pos="0 0 0" />
+        <geom class="visual" name="visual_16_torso_hat_jaw_ccce7bf1" type="mesh" mesh="visual_16_torso_hat_jaw_ccce7bf1" pos="0 0 0" />
+        <geom class="visual" name="visual_17_torso_hat_skull_4c29f62d" type="mesh" mesh="visual_17_torso_hat_skull_4c29f62d" pos="0 0 0" />
+        <geom class="visual" name="visual_18_torso_hat_ribs_c455e842" type="mesh" mesh="visual_18_torso_hat_ribs_c455e842" pos="0 0 0" />
+      <joint name="torso_flexion" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="-0.698131701 0.698131701" damping="0.5" armature="0.01" /><joint name="torso_lateral" type="hinge" pos="0 0 0" axis="1 0 0" limited="true" range="-0.523598776 0.523598776" damping="0.5" armature="0.01" /><joint name="torso_rotation" type="hinge" pos="0 0 0" axis="0 0 1" limited="true" range="-0.523598776 0.523598776" damping="0.5" armature="0.01" /></body>
+      <body name="femur_left" pos="-0.0443475011 0.0840268443 -0.0700223702" quat="0.985921201 0.0280565509 -0.164806647 -0.00331438356">
+        <inertial mass="10.1387485" pos="0 0 -0.193183366" fullinertia="0.188477255 0.198752538 0.049406616 0 0 0" />
+        <joint name="hip_flexion_left" type="hinge" pos="0 0 0" axis="0 -1 0" limited="true" range="-0.523598776 2.0943951" damping="0.5" armature="0.01" />
+        <joint name="hip_adduction_left" type="hinge" pos="0 0 0" axis="1 0 0" limited="true" range="-0.436332313 0.785398163" damping="0.5" armature="0.01" />
+        <joint name="hip_rotation_left" type="hinge" pos="0 0 0" axis="0 0 -1" limited="true" range="-0.785398163 0.785398163" damping="0.3" armature="0.01" />
+        <geom class="self_collision" name="collision_femur_left" type="capsule" size="0.063110668" fromto="0 0 -0.035 0 0 -0.463343785" />
+        <body name="tibia_left" pos="-4.36448821e-19 -1.2399472e-17 -0.498343785" quat="0.985224675 -0.00582086655 0.0844238885 0.148899509">
+          <inertial mass="4.04126368" pos="0 0 -0.175141401" fullinertia="0.048345482 0.0490168595 0.00489210211 0 0 0" />
+          <joint name="knee_left" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="0 2.61799388" damping="0.3" armature="0.01" />
+          <geom class="self_collision" name="collision_tibia_left" type="capsule" size="0.046558136" fromto="0 0 -0.035 0 0 -0.372706556" />
+          <body name="foot_left" pos="-3.41569468e-18 -2.01292435e-18 -0.407706556" quat="0.989635607 -0.031150748 -0.0746482118 -0.118653445">
+            <inertial mass="1.70763146" pos="0.046439363 0.00587096121 -0.020295508" fullinertia="0.00264064573 0.00716329796 0.00681252163 0.000249589237 0.000555215648 -5.06296655e-05" />
+            <joint name="ankle_left" type="hinge" pos="0 0 0" axis="0 -1 0" limited="true" range="-0.872664626 0.523598776" damping="0.2" armature="0.005" />
+            <geom class="collision" name="contact_left_0" type="sphere" size="0.0204739234" pos="-0.0395747246 -0.0051506885 -0.0344706619" />
+            <geom class="visual" name="visual_foot_left_0" type="sphere" size="0.0204739234" pos="-0.0395747246 -0.0051506885 -0.0344706619" rgba="0.18 0.32 0.58 0.35" />
+            <geom class="collision" name="contact_left_1" type="sphere" size="0.0204739234" pos="-0.0395747246 0.0357971583 -0.0344706619" />
+            <geom class="visual" name="visual_foot_left_1" type="sphere" size="0.0204739234" pos="-0.0395747246 0.0357971583 -0.0344706619" rgba="0.18 0.32 0.58 0.35" />
+            <geom class="collision" name="contact_left_2" type="sphere" size="0.0204739234" pos="0.149550193 -0.0051506885 -0.0344706619" />
+            <geom class="visual" name="visual_foot_left_2" type="sphere" size="0.0204739234" pos="0.149550193 -0.0051506885 -0.0344706619" rgba="0.18 0.32 0.58 0.35" />
+            <geom class="collision" name="contact_left_3" type="sphere" size="0.0204739234" pos="0.149550193 0.0357971583 -0.0344706619" />
+            <geom class="visual" name="visual_foot_left_3" type="sphere" size="0.0204739234" pos="0.149550193 0.0357971583 -0.0344706619" rgba="0.18 0.32 0.58 0.35" />
+            <site name="marker_L.Heel" type="sphere" size="0.006" pos="-0.0888622246 0.0128117283 -0.0161759535" rgba="0.15 0.95 0.25 1" />
+            <site name="marker_L.Toe.Lat" type="sphere" size="0.006" pos="0.106791232 0.0923151935 -0.0735885628" rgba="0.15 0.95 0.25 1" />
+            <site name="marker_L.Toe.Med" type="sphere" size="0.006" pos="0.14544382 -0.0179365623 -0.0646505904" rgba="0.15 0.95 0.25 1" />
+            <site name="marker_L.Toe.Tip" type="sphere" size="0.006" pos="0.204827808 0.0128117283 -0.0558617234" rgba="0.15 0.95 0.25 1" />
+            <geom class="visual" name="visual_12_foot_left_l_talus_fd829c17" type="mesh" mesh="visual_12_foot_left_l_talus_fd829c17" pos="0 0 0" />
+            <geom class="visual" name="visual_13_foot_left_l_foot_3fe52ebe" type="mesh" mesh="visual_13_foot_left_l_foot_3fe52ebe" pos="0 0 0" />
+            <geom class="visual" name="visual_14_foot_left_l_bofoot_73bbc705" type="mesh" mesh="visual_14_foot_left_l_bofoot_73bbc705" pos="0 0 0" />
+          </body>
+          <site name="marker_L.Shank.Upper" type="sphere" size="0.006" pos="-0.0087405388 0.0819118799 -0.155333132" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_L.Shank.Front" type="sphere" size="0.006" pos="0.0356035708 0.0627958116 -0.163087397" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_L.Shank.Rear" type="sphere" size="0.006" pos="-0.00757280499 0.0687433292 -0.230980948" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_L.Ankle.Lat" type="sphere" size="0.006" pos="-2.07906759e-17 0.0463433494 -0.412173546" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_L.Ankle.Med" type="sphere" size="0.006" pos="-2.15876549e-17 -0.0463433494 -0.403239566" rgba="0.15 0.95 0.25 1" />
+          <geom class="visual" name="visual_10_tibia_left_l_tibia_5528711a" type="mesh" mesh="visual_10_tibia_left_l_tibia_5528711a" pos="0 0 0" />
+          <geom class="visual" name="visual_11_tibia_left_l_fibula_21cdc2c3" type="mesh" mesh="visual_11_tibia_left_l_fibula_21cdc2c3" pos="0 0 0" />
+        </body>
+        <site name="marker_L.Thigh.Upper" type="sphere" size="0.006" pos="-0.0254958388 0.0744896357 -0.261509103" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_L.Thigh.Front" type="sphere" size="0.006" pos="-0.0251054361 0.0657288231 -0.337740118" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_L.Thigh.Rear" type="sphere" size="0.006" pos="0.0166628641 0.0762965338 -0.327919193" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_L.Knee.Lat" type="sphere" size="0.006" pos="-2.44877162e-19 0.0630796669 -0.496365896" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_L.Knee.Med" type="sphere" size="0.006" pos="3.33104421e-19 -0.0630796669 -0.500321675" rgba="0.15 0.95 0.25 1" />
+        <geom class="visual" name="visual_09_femur_left_l_femur_3a5df196" type="mesh" mesh="visual_09_femur_left_l_femur_3a5df196" pos="0 0 0" />
+      </body>
+      <body name="femur_right" pos="-0.0443475011 -0.0840268443 -0.0700223702" quat="0.981900639 -0.0427314188 -0.166915046 -0.0786417732">
+        <inertial mass="10.1387485" pos="0 0 -0.193183366" fullinertia="0.188477255 0.198752538 0.049406616 0 0 0" />
+        <joint name="hip_flexion_right" type="hinge" pos="0 0 0" axis="0 -1 0" limited="true" range="-0.523598776 2.0943951" damping="0.5" armature="0.01" />
+        <joint name="hip_adduction_right" type="hinge" pos="0 0 0" axis="-1 0 0" limited="true" range="-0.436332313 0.785398163" damping="0.5" armature="0.01" />
+        <joint name="hip_rotation_right" type="hinge" pos="0 0 0" axis="0 0 1" limited="true" range="-0.785398163 0.785398163" damping="0.3" armature="0.01" />
+        <geom class="self_collision" name="collision_femur_right" type="capsule" size="0.0629596304" fromto="0 0 -0.035 0 0 -0.448604821" />
+        <body name="tibia_right" pos="-5.04127646e-19 1.96289625e-18 -0.483604821" quat="0.991735918 0.0051325894 0.0938506264 -0.0873245946">
+          <inertial mass="4.04126368" pos="0 0 -0.175141401" fullinertia="0.048345482 0.0490168595 0.00489210211 0 0 0" />
+          <joint name="knee_right" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="0 2.61799388" damping="0.3" armature="0.01" />
+          <geom class="self_collision" name="collision_tibia_right" type="capsule" size="0.0451264789" fromto="0 0 -0.035 0 0 -0.387068539" />
+          <body name="foot_right" pos="1.14213488e-17 -7.53787454e-18 -0.422068539" quat="0.988876066 0.0374921398 -0.0816058887 0.118570417">
+            <inertial mass="1.70763146" pos="0.046439692 -0.0058612445 -0.0202978797" fullinertia="0.00264075108 0.00716320678 0.00681251045 -0.000250342946 0.000555281756 5.07815352e-05" />
+            <joint name="ankle_right" type="hinge" pos="0 0 0" axis="0 -1 0" limited="true" range="-0.872664626 0.523598776" damping="0.2" armature="0.005" />
+            <geom class="collision" name="contact_right_0" type="sphere" size="0.0204692973" pos="-0.0395799837 -0.0357770438 -0.0343965572" />
+            <geom class="visual" name="visual_foot_right_0" type="sphere" size="0.0204692973" pos="-0.0395799837 -0.0357770438 -0.0343965572" rgba="0.18 0.32 0.58 0.35" />
+            <geom class="collision" name="contact_right_1" type="sphere" size="0.0204692973" pos="-0.0395799837 0.00516155073 -0.0343965572" />
+            <geom class="visual" name="visual_foot_right_1" type="sphere" size="0.0204692973" pos="-0.0395799837 0.00516155073 -0.0343965572" rgba="0.18 0.32 0.58 0.35" />
+            <geom class="collision" name="contact_right_2" type="sphere" size="0.0204692973" pos="0.149552882 -0.0357770438 -0.0343965572" />
+            <geom class="visual" name="visual_foot_right_2" type="sphere" size="0.0204692973" pos="0.149552882 -0.0357770438 -0.0343965572" rgba="0.18 0.32 0.58 0.35" />
+            <geom class="collision" name="contact_right_3" type="sphere" size="0.0204692973" pos="0.149552882 0.00516155073 -0.0343965572" />
+            <geom class="visual" name="visual_foot_right_3" type="sphere" size="0.0204692973" pos="0.149552882 0.00516155073 -0.0343965572" rgba="0.18 0.32 0.58 0.35" />
+            <site name="marker_R.Heel" type="sphere" size="0.006" pos="-0.0867979322 -0.00718984372 -0.0223530831" rgba="0.15 0.95 0.25 1" />
+            <site name="marker_R.Toe.Lat" type="sphere" size="0.006" pos="0.105899742 -0.09505044 -0.0746842013" rgba="0.15 0.95 0.25 1" />
+            <site name="marker_R.Toe.Med" type="sphere" size="0.006" pos="0.148534182 0.0145901355 -0.0627078825" rgba="0.15 0.95 0.25 1" />
+            <site name="marker_R.Toe.Tip" type="sphere" size="0.006" pos="0.204399139 -0.00718984372 -0.0553617255" rgba="0.15 0.95 0.25 1" />
+            <geom class="visual" name="visual_06_foot_right_talus_9a24dff8" type="mesh" mesh="visual_06_foot_right_talus_9a24dff8" pos="0 0 0" />
+            <geom class="visual" name="visual_07_foot_right_foot_7a876838" type="mesh" mesh="visual_07_foot_right_foot_7a876838" pos="0 0 0" />
+            <geom class="visual" name="visual_08_foot_right_bofoot_9f7184c1" type="mesh" mesh="visual_08_foot_right_bofoot_9f7184c1" pos="0 0 0" />
+          </body>
+          <site name="marker_R.Shank.Upper" type="sphere" size="0.006" pos="-0.0102193658 -0.0854144781 -0.172153991" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_R.Shank.Front" type="sphere" size="0.006" pos="0.0306202912 -0.0647604421 -0.181075011" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_R.Shank.Rear" type="sphere" size="0.006" pos="-0.0128099443 -0.0707637513 -0.246638692" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_R.Ankle.Lat" type="sphere" size="0.006" pos="2.23811477e-17 -0.0449364802 -0.426205186" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_R.Ankle.Med" type="sphere" size="0.006" pos="2.28050827e-17 0.0449364802 -0.417931892" rgba="0.15 0.95 0.25 1" />
+          <geom class="visual" name="visual_04_tibia_right_r_tibia_2958b9c9" type="mesh" mesh="visual_04_tibia_right_r_tibia_2958b9c9" pos="0 0 0" />
+          <geom class="visual" name="visual_05_tibia_right_fibula_640f87b7" type="mesh" mesh="visual_05_tibia_right_fibula_640f87b7" pos="0 0 0" />
+        </body>
+        <site name="marker_R.Thigh.Upper" type="sphere" size="0.006" pos="-0.00915951781 -0.0851229801 -0.258027376" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_R.Thigh.Front" type="sphere" size="0.006" pos="-0.00919416353 -0.0735773891 -0.334530684" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_R.Thigh.Rear" type="sphere" size="0.006" pos="0.0363136779 -0.0749389996 -0.32302337" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_R.Knee.Lat" type="sphere" size="0.006" pos="-2.95259726e-17 -0.062800904 -0.47913699" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_R.Knee.Med" type="sphere" size="0.006" pos="-2.90459411e-17 0.062800904 -0.488072652" rgba="0.15 0.95 0.25 1" />
+        <geom class="visual" name="visual_03_femur_right_femur_r_2bf9d3ed" type="mesh" mesh="visual_03_femur_right_femur_r_2bf9d3ed" pos="0 0 0" />
+      </body>
+      <site name="marker_R.ASIS" type="sphere" size="0.006" pos="0.006 -0.11670395 9.49777516e-18" rgba="0.15 0.95 0.25 1" />
+      <site name="marker_L.ASIS" type="sphere" size="0.006" pos="0.006 0.11670395 9.05078202e-18" rgba="0.15 0.95 0.25 1" />
+      <site name="marker_V.Sacral" type="sphere" size="0.006" pos="-0.197107876 0.00064702007 -6.45106716e-18" rgba="0.15 0.95 0.25 1" />
+      <geom class="visual" name="visual_00_pelvis_sacrum_ec82986d" type="mesh" mesh="visual_00_pelvis_sacrum_ec82986d" pos="0 0 0" />
+      <geom class="visual" name="visual_01_pelvis_pelvis_302c8103" type="mesh" mesh="visual_01_pelvis_pelvis_302c8103" pos="0 0 0" />
+      <geom class="visual" name="visual_02_pelvis_l_pelvis_221ff377" type="mesh" mesh="visual_02_pelvis_l_pelvis_221ff377" pos="0 0 0" />
+      <geom class="visual" name="geometry_abdomen_connector" type="box" pos="-0.106496245 -0.00113293617 0.163606447" size="0.06 0.055 0.0617744091" rgba="0.68 0.48 0.30 1" />
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="hip_flexion_left_position" joint="hip_flexion_left" kp="100" ctrllimited="true" ctrlrange="-0.523598776 2.0943951" />
+    <velocity name="hip_flexion_left_velocity" joint="hip_flexion_left" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="hip_adduction_left_position" joint="hip_adduction_left" kp="100" ctrllimited="true" ctrlrange="-0.436332313 0.785398163" />
+    <velocity name="hip_adduction_left_velocity" joint="hip_adduction_left" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="hip_rotation_left_position" joint="hip_rotation_left" kp="100" ctrllimited="true" ctrlrange="-0.785398163 0.785398163" />
+    <velocity name="hip_rotation_left_velocity" joint="hip_rotation_left" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="knee_left_position" joint="knee_left" kp="100" ctrllimited="true" ctrlrange="0 2.61799388" />
+    <velocity name="knee_left_velocity" joint="knee_left" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="ankle_left_position" joint="ankle_left" kp="100" ctrllimited="true" ctrlrange="-0.872664626 0.523598776" />
+    <velocity name="ankle_left_velocity" joint="ankle_left" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="hip_flexion_right_position" joint="hip_flexion_right" kp="100" ctrllimited="true" ctrlrange="-0.523598776 2.0943951" />
+    <velocity name="hip_flexion_right_velocity" joint="hip_flexion_right" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="hip_adduction_right_position" joint="hip_adduction_right" kp="100" ctrllimited="true" ctrlrange="-0.436332313 0.785398163" />
+    <velocity name="hip_adduction_right_velocity" joint="hip_adduction_right" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="hip_rotation_right_position" joint="hip_rotation_right" kp="100" ctrllimited="true" ctrlrange="-0.785398163 0.785398163" />
+    <velocity name="hip_rotation_right_velocity" joint="hip_rotation_right" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="knee_right_position" joint="knee_right" kp="100" ctrllimited="true" ctrlrange="0 2.61799388" />
+    <velocity name="knee_right_velocity" joint="knee_right" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+    <position name="ankle_right_position" joint="ankle_right" kp="100" ctrllimited="true" ctrlrange="-0.872664626 0.523598776" />
+    <velocity name="ankle_right_velocity" joint="ankle_right" kv="20" ctrllimited="true" ctrlrange="-20 20" />
+  <position name="torso_flexion_position" joint="torso_flexion" kp="100" ctrllimited="true" ctrlrange="-0.698131701 0.698131701" /><position name="torso_lateral_position" joint="torso_lateral" kp="100" ctrllimited="true" ctrlrange="-0.523598776 0.523598776" /><position name="torso_rotation_position" joint="torso_rotation" kp="100" ctrllimited="true" ctrlrange="-0.523598776 0.523598776" /></actuator>
+  <contact>
+    <exclude body1="pelvis" body2="torso" />
+    <exclude body1="pelvis" body2="femur_left" />
+    <exclude body1="femur_left" body2="tibia_left" />
+    <exclude body1="tibia_left" body2="foot_left" />
+    <exclude body1="pelvis" body2="femur_right" />
+    <exclude body1="femur_right" body2="tibia_right" />
+    <exclude body1="tibia_right" body2="foot_right" />
+  </contact>
+  <keyframe>
+    <key name="neutral" qpos="0 0 1.07187232 1 0 0 0 0 0 0 0 0 0 0 0 0 0" />
+  </keyframe>
+</mujoco>

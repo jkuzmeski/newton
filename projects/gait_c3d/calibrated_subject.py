@@ -202,6 +202,45 @@ def _pelvis_basis(calibration: SegmentCalibration) -> np.ndarray:
     return np.column_stack((coda[:, 1], -coda[:, 0], coda[:, 2]))
 
 
+def _add_torso_joints(root: ET.Element, torso: ET.Element) -> None:
+    """Add bounded rotational torso axes at the calibrated distal endpoint."""
+    existing = {joint.get("name") for joint in torso.findall("joint")}
+    if existing & {"torso_flexion", "torso_lateral", "torso_rotation"}:
+        return
+    degrees = math.pi / 180.0
+    specifications = (
+        ("torso_flexion", (0.0, 1.0, 0.0), (-40.0 * degrees, 40.0 * degrees)),
+        ("torso_lateral", (1.0, 0.0, 0.0), (-30.0 * degrees, 30.0 * degrees)),
+        ("torso_rotation", (0.0, 0.0, 1.0), (-30.0 * degrees, 30.0 * degrees)),
+    )
+    for name, axis, limits in specifications:
+        ET.SubElement(
+            torso,
+            "joint",
+            name=name,
+            type="hinge",
+            pos="0 0 0",
+            axis=_fmt(axis),
+            limited="true",
+            range=_fmt(limits),
+            damping="0.5",
+            armature="0.01",
+        )
+    actuator = next((element for element in root if element.tag.rsplit("}", 1)[-1] == "actuator"), None)
+    if actuator is None:
+        actuator = ET.SubElement(root, "actuator")
+    for name, _, limits in specifications:
+        ET.SubElement(
+            actuator,
+            "position",
+            name=f"{name}_position",
+            joint=name,
+            kp="100",
+            ctrllimited="true",
+            ctrlrange=_fmt(limits),
+        )
+
+
 def _fit_row_rigid(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Fit a proper row-vector rigid map ``target = source @ rotation + translation``."""
     source = np.asarray(source, dtype=np.float64)
@@ -337,7 +376,12 @@ def write_calibrated_subject_mjcf(
                 dtype=np.float64,
             )
     root = ET.parse(base_xml).getroot()
+    if not model_name or any(character.isspace() for character in model_name):
+        raise ValueError("model_name must be nonempty and contain no whitespace")
+    root.set("model", model_name)
     bodies = {body.get("name", ""): body for body in root.iter("body") if body.get("name")}
+    if "torso" in bodies:
+        _add_torso_joints(root, bodies["torso"])
     base_pelvis_markers = _base_pelvis_marker_positions(base_root)
     base_pelvis_marker_origin = 0.5 * (base_pelvis_markers["L.ASIS"] + base_pelvis_markers["R.ASIS"])
     base_pelvis_source = (

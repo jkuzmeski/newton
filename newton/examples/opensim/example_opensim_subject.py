@@ -162,6 +162,9 @@ class Example:
             force_show_colliders=self.show_self_collision,
         )
         self.model = builder.finalize(device=args.device)
+        self.torso_dof_count = (
+            3 if any(label.rsplit("/", 1)[-1].startswith("torso_flexion") for label in self.model.joint_label) else 0
+        )
         self.state_0 = self.model.state()
         self.state_1 = self.model.state()
         self.control = self.model.control()
@@ -221,7 +224,7 @@ class Example:
         self.calibration = None
         self.calibration_points = None
         default_subject_dir = (
-            Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "example_subject"
+            Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "assets" / "s001_calibrated"
         )
         default_base_output_dir = (
             Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "subjects" / "S001_scaled"
@@ -666,7 +669,7 @@ class Example:
         """Verify model structure, root policy, artifacts, and finite state."""
         if not self.subject_xml.is_file():
             raise ValueError("subject MJCF was not published")
-        expected_dofs = 16 if self.free_root else 10
+        expected_dofs = (16 if self.free_root else 10) + self.torso_dof_count
         if self.model.body_count != 8 or self.model.joint_dof_count != expected_dofs:
             raise ValueError("subject model has an unexpected topology")
         shape_types = self.model.shape_type.numpy()
