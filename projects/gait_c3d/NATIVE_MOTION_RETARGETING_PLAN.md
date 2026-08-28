@@ -278,8 +278,7 @@ until its example and automated checks both pass.
   `scale_subject_marker_layout_from_base()` derive a self-contained target
   bundle from S001. Explicit hip-width overrides update both femur frames and
   marker-layout body transforms.
-- Branch commit: `ecbab23b` plus the base-geometry/scaling implementation in
-  the working tree.
+- Branch commit: `ab7eeda9` (`Add S001 base marker geometry`).
 - Implementation: `projects/gait_c3d/marker_layout.py`, marker sites in
   `projects/gait_c3d/subject_mjcf.py`, and the `--show-markers` overlay in
   `opensim_subject`.
