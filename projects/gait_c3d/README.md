@@ -237,7 +237,9 @@ uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
 ```
 
 The saved bundle contains `calibration/segment_calibration.json`, marker data,
-actual S001-derived meshes, and `model/subject.xml`. Its four foot contact
+actual S001-derived meshes, and `model/subject.xml`. In this marker set,
+`LHLX`/`RHLX` are the hallux (big-toe) markers used for the left/right toe
+endpoints; `LTOE`/`RTOE` are not used as the toe-tip definition. Its four foot contact
 spheres are generated from the calibrated foot mesh frame and their surfaces
 are placed on `z=0`.
 

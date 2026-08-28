@@ -129,6 +129,15 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             shape_body = model.shape_body.numpy()
             shape_transform = model.shape_transform.numpy()
             body_names = {label.rsplit("/", 1)[-1]: index for index, label in enumerate(model.body_label)}
+            site_by_name = {
+                label.rsplit("/", 1)[-1]: index
+                for index, label in enumerate(model.shape_label)
+                if label.rsplit("/", 1)[-1].startswith("marker_")
+            }
+            ground_offset = np.asarray(
+                json.loads((output.parent / "manifest.json").read_text(encoding="utf-8"))["ground"]["global_offset_m"],
+                dtype=np.float64,
+            )
 
         def rotate(point_quaternion, point):
             """Rotate one point by an xyzw quaternion."""
@@ -141,6 +150,16 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             index for index, label in enumerate(model.shape_label) if label.rsplit("/", 1)[-1].startswith("contact_")
         ]
         self.assertEqual(len(contact_indices), 8)
+        for site_name, source_name in (
+            ("marker_L.ASIS", "LASI"),
+            ("marker_R.ASIS", "RASI"),
+            ("marker_V.Sacral", "VSAC"),
+        ):
+            site = site_by_name[site_name]
+            body = shape_body[site]
+            world = body_q[body, :3] + rotate(body_q[body], shape_transform[site, :3])
+            np.testing.assert_allclose(world, calibration.marker_positions[source_name] + ground_offset, atol=2.0e-6)
+        self.assertGreater(np.linalg.norm(body_q[body_names["pelvis"], 3:6]), 0.01)
         for body in foot_bodies:
             up = rotate(body_q[body], np.asarray((0.0, 0.0, 1.0)))
             np.testing.assert_allclose(up, (0.0, 0.0, 1.0), atol=1.0e-6)

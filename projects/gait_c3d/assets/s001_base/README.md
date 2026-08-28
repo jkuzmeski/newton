@@ -12,3 +12,7 @@ The bundle also includes `model/segment_calibration.json`, generated from the
 S001 static calibration C3D over 0.5--1.0 s with a 6 mm marker radius. It
 contains the CODA/Bell--Brand hip centers, per-side endpoint frames, medial/
 lateral widths, and the flat-foot calibration policy.
+
+The calibration uses `LHLX` and `RHLX` as the hallux (big-toe) endpoints.
+The personalized writer rebases the pelvis meshes to the calibrated CODA pelvis
+origin before scaling.

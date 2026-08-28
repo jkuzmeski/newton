@@ -51,11 +51,11 @@ _CANONICAL_TO_SOURCE = {
     "L.Heel": "LHEE",
     "L.Toe.Lat": "LMTH5",
     "L.Toe.Med": "LMTH1",
-    "L.Toe.Tip": "LTOE",
+    "L.Toe.Tip": "LHLX",
     "R.Heel": "RHEE",
     "R.Toe.Lat": "RMTH5",
     "R.Toe.Med": "RMTH1",
-    "R.Toe.Tip": "RTOE",
+    "R.Toe.Tip": "RHLX",
 }
 
 
@@ -172,6 +172,55 @@ def _pelvis_basis(calibration: SegmentCalibration) -> np.ndarray:
     return np.column_stack((coda[:, 1], -coda[:, 0], coda[:, 2]))
 
 
+def _base_pelvis_reference(base_root: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return the base pelvis body and marker frames in native coordinates."""
+    layout = json.loads((base_root / "model" / "marker_layout.json").read_text(encoding="utf-8"))
+    target = layout["target"]["neutral_body_transforms"]
+    pelvis_transform = np.asarray(target["pelvis"], dtype=np.float64)
+    marker_entries = {entry["name"]: entry for entry in layout["markers"]}
+
+    def marker_world(name: str) -> np.ndarray:
+        entry = marker_entries[name]
+        local = np.asarray(entry["position_m"], dtype=np.float64)
+        return local @ pelvis_transform[:3, :3].T + pelvis_transform[:3, 3]
+
+    left = marker_world("L.ASIS")
+    right = marker_world("R.ASIS")
+    sacrum = marker_world("V.Sacral")
+    origin = 0.5 * (left + right)
+    right_axis = right - left
+    right_axis /= np.linalg.norm(right_axis)
+    anterior = origin - sacrum
+    anterior -= np.dot(anterior, right_axis) * right_axis
+    anterior /= np.linalg.norm(anterior)
+    up = np.cross(right_axis, anterior)
+    up /= np.linalg.norm(up)
+    if up[2] < 0.0:
+        up = -up
+        anterior = -anterior
+    return (
+        pelvis_transform[:3, 3],
+        pelvis_transform[:3, :3],
+        origin,
+        np.column_stack((right_axis, anterior, up)),
+    )
+
+
+def _map_pelvis_point_to_target(
+    point: np.ndarray,
+    *,
+    base_origin: np.ndarray,
+    base_axes: np.ndarray,
+    target_scale: np.ndarray,
+    base_body_origin: np.ndarray,
+    base_body_rotation: np.ndarray,
+) -> np.ndarray:
+    """Map a base pelvis-local point into the target forward/left/up frame."""
+    point_world = base_body_rotation @ np.asarray(point, dtype=np.float64) + base_body_origin
+    coda = base_axes.T @ (point_world - base_origin)
+    return np.asarray((coda[1], -coda[0], coda[2]), dtype=np.float64) * target_scale
+
+
 @dataclass(frozen=True, slots=True)
 class CalibratedSubjectMJCF:
     """Saved native MJCF produced from a static marker calibration."""
@@ -278,6 +327,9 @@ def write_calibrated_subject_mjcf(
             )
     root = ET.parse(base_xml).getroot()
     bodies = {body.get("name", ""): body for body in root.iter("body") if body.get("name")}
+    base_pelvis_body_origin, base_pelvis_body_rotation, base_pelvis_origin, base_pelvis_axes = _base_pelvis_reference(
+        base_root
+    )
     body_world = {
         "pelvis": (target_pelvis_origin, target_pelvis_rotation),
     }
@@ -340,7 +392,23 @@ def write_calibrated_subject_mjcf(
             geom_pos = np.asarray([float(value) for value in (geom.get("pos") or "0 0 0").split()], dtype=np.float64)
             if geom_pos.shape != (3,):
                 raise ValueError(f"mesh geometry position is invalid: {mesh_name}")
-            transformed = (vertices + geom_pos - proximal) * scale[segment_key]
+            if body_name == "pelvis":
+                transformed = np.asarray(
+                    [
+                        _map_pelvis_point_to_target(
+                            vertex + geom_pos,
+                            base_origin=base_pelvis_origin,
+                            base_axes=base_pelvis_axes,
+                            target_scale=scale[segment_key],
+                            base_body_origin=base_pelvis_body_origin,
+                            base_body_rotation=base_pelvis_body_rotation,
+                        )
+                        for vertex in vertices
+                    ],
+                    dtype=np.float64,
+                )
+            else:
+                transformed = (vertices + geom_pos - proximal) * scale[segment_key]
             records.append((geom, source, transformed))
             if body_name.startswith("foot_"):
                 body_mesh_min_z[body_name] = min(
@@ -426,7 +494,18 @@ def write_calibrated_subject_mjcf(
                 )
                 if position.shape != (3,):
                     raise ValueError(f"invalid inertial position on {body_name}")
-                inertial.set("pos", _fmt((position - proximal) * body_scale))
+                if body_name == "pelvis":
+                    inertial_position = _map_pelvis_point_to_target(
+                        position,
+                        base_origin=base_pelvis_origin,
+                        base_axes=base_pelvis_axes,
+                        target_scale=body_scale,
+                        base_body_origin=base_pelvis_body_origin,
+                        base_body_rotation=base_pelvis_body_rotation,
+                    )
+                else:
+                    inertial_position = (position - proximal) * body_scale
+                inertial.set("pos", _fmt(inertial_position))
                 inertial.set("mass", f"{float(inertial.get('mass', 'nan')) * mass_scale:.9g}")
                 inertia_scale = mass_scale * float(np.mean(body_scale**2))
                 values = np.asarray(
@@ -451,7 +530,18 @@ def write_calibrated_subject_mjcf(
                             values = np.asarray(
                                 [float(value) for value in geom.get(attribute).split()], dtype=np.float64
                             )
-                            geom.set(attribute, _fmt(values * body_scale[: values.size]))
+                            if body_name == "pelvis" and attribute == "pos":
+                                values = _map_pelvis_point_to_target(
+                                    values,
+                                    base_origin=base_pelvis_origin,
+                                    base_axes=base_pelvis_axes,
+                                    target_scale=body_scale,
+                                    base_body_origin=base_pelvis_body_origin,
+                                    base_body_rotation=base_pelvis_body_rotation,
+                                )
+                            else:
+                                values = values * body_scale[: values.size]
+                            geom.set(attribute, _fmt(values))
             if body_name.startswith("foot_"):
                 side = body_name.removeprefix("foot_")
                 records = [

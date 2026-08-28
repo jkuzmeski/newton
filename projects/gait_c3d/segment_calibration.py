@@ -32,9 +32,9 @@ _REQUIRED_MARKERS = (
     "RANK",
     "RMANK",
     "LHEE",
-    "LTOE",
+    "LHLX",
     "RHEE",
-    "RTOE",
+    "RHLX",
     "LMTH1",
     "LMTH5",
     "RMTH1",
@@ -381,7 +381,7 @@ def build_static_segment_calibration(
             marker_names=(f"{prefix}ANK", f"{prefix}MANK"),
         )
         heel = marker_positions[f"{prefix}HEE"]
-        toe = marker_positions[f"{prefix}TOE"]
+        toe = marker_positions[f"{prefix}HLX"]
         foot_basis = _foot_basis(heel, toe, foot_lateral_vector, name=f"{side} foot")
         segments[f"thigh_{side}"] = thigh
         segments[f"shank_{side}"] = shank

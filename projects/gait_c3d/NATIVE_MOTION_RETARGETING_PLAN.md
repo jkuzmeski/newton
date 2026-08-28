@@ -136,10 +136,13 @@ so the saved model is self-describing.
   separate mass factor to inertial values.
 - The S001 static calibration publishes a sealed Visual3D-style segment
   artifact with CODA/Bell--Brand hip centers, medial/lateral knee and ankle
-  centers, per-side lengths and widths, and a horizontal flat-foot frame.
+  centers, per-side lengths and widths, and a horizontal flat-foot frame. The
+  S001 foot endpoint uses `LHLX`/`RHLX` as hallux markers rather than `LTOE`/
+  `RTOE`.
 - A calibrated subject compiler saves the static calibration, personalized
   MJCF, per-segment mesh geometry, collision proxies, and flat-ground contacts
-  as a reusable subject bundle.
+  as a reusable subject bundle. The pelvis mesh is rebased into the calibrated
+  CODA origin so it does not shift the lower-body chain.
 
 ## Phase 2 — synthetic native marker IK
 
