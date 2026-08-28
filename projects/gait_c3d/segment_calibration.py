@@ -40,19 +40,103 @@ _REQUIRED_MARKERS = (
     "RMTH1",
     "RMTH5",
 )
-_ALL_MARKER_SOURCES = tuple(dict.fromkeys(
-    (*_REQUIRED_MARKERS, "STRN", "RSHO", "LSHO", "LFHD", "RFHD", "LBHD", "RBHD", "C7", "CLAV", "RBAK", "LUPA", "LELB", "LFRM", "LWRA", "LWRB", "LFIN", "RUPA", "RELB", "RFRM", "RWRA", "RWRB", "RFIN", "LIC", "RIC", "LPSI", "RPSI", "LTHI", "RTHI", "LTH2", "LTH3", "LTH4", "RTH2", "RTH3", "RTH4", "LTIB2", "LTIB3", "LTIB4", "RTIB2", "RTIB3", "RTIB4", "LHLX", "LHEE2", "LHEE3", "LMTH1", "LMTH5", "RHLX", "RHEE2", "RHEE3", "RMTH1", "RMTH5", "FLeft", "FRight", "ORight", "BLeft", "BRight", "T10"
-)))
+_ALL_MARKER_SOURCES = tuple(
+    dict.fromkeys(
+        (
+            *_REQUIRED_MARKERS,
+            "STRN",
+            "RSHO",
+            "LSHO",
+            "LFHD",
+            "RFHD",
+            "LBHD",
+            "RBHD",
+            "C7",
+            "CLAV",
+            "RBAK",
+            "LUPA",
+            "LELB",
+            "LFRM",
+            "LWRA",
+            "LWRB",
+            "LFIN",
+            "RUPA",
+            "RELB",
+            "RFRM",
+            "RWRA",
+            "RWRB",
+            "RFIN",
+            "LIC",
+            "RIC",
+            "LPSI",
+            "RPSI",
+            "LTHI",
+            "RTHI",
+            "LTH2",
+            "LTH3",
+            "LTH4",
+            "RTH2",
+            "RTH3",
+            "RTH4",
+            "LTIB2",
+            "LTIB3",
+            "LTIB4",
+            "RTIB2",
+            "RTIB3",
+            "RTIB4",
+            "LHLX",
+            "LHEE2",
+            "LHEE3",
+            "LMTH1",
+            "LMTH5",
+            "RHLX",
+            "RHEE2",
+            "RHEE3",
+            "RMTH1",
+            "RMTH5",
+            "FLeft",
+            "FRight",
+            "ORight",
+            "BLeft",
+            "BRight",
+            "T10",
+        )
+    )
+)
 _CANONICAL_SOURCES = {
-    "L.ASIS": "LASI", "R.ASIS": "RASI", "L.Knee.Lat": "LKNE", "L.Knee.Med": "LMKNE",
-    "R.Knee.Lat": "RKNE", "R.Knee.Med": "RMKNE", "L.Ankle.Lat": "LANK", "L.Ankle.Med": "LMANK",
-    "R.Ankle.Lat": "RANK", "R.Ankle.Med": "RMANK", "L.Heel": "LHEE", "R.Heel": "RHEE",
-    "L.Toe.Tip": "LTOE", "R.Toe.Tip": "RTOE", "L.Toe.Med": "LMTH1", "L.Toe.Lat": "LMTH5",
-    "R.Toe.Med": "RMTH1", "R.Toe.Lat": "RMTH5", "L.Thigh.Upper": "LTH2", "L.Thigh.Front": "LTH3",
-    "L.Thigh.Rear": "LTH4", "R.Thigh.Upper": "RTH2", "R.Thigh.Front": "RTH3", "R.Thigh.Rear": "RTH4",
-    "L.Shank.Upper": "LTIB2", "L.Shank.Front": "LTIB3", "L.Shank.Rear": "LTIB4",
-    "R.Shank.Upper": "RTIB2", "R.Shank.Front": "RTIB3", "R.Shank.Rear": "RTIB4",
-    "Sternum": "STRN", "L.Acromium": "LSHO", "R.Acromium": "RSHO",
+    "L.ASIS": "LASI",
+    "R.ASIS": "RASI",
+    "L.Knee.Lat": "LKNE",
+    "L.Knee.Med": "LMKNE",
+    "R.Knee.Lat": "RKNE",
+    "R.Knee.Med": "RMKNE",
+    "L.Ankle.Lat": "LANK",
+    "L.Ankle.Med": "LMANK",
+    "R.Ankle.Lat": "RANK",
+    "R.Ankle.Med": "RMANK",
+    "L.Heel": "LHEE",
+    "R.Heel": "RHEE",
+    "L.Toe.Tip": "LTOE",
+    "R.Toe.Tip": "RTOE",
+    "L.Toe.Med": "LMTH1",
+    "L.Toe.Lat": "LMTH5",
+    "R.Toe.Med": "RMTH1",
+    "R.Toe.Lat": "RMTH5",
+    "L.Thigh.Upper": "LTH2",
+    "L.Thigh.Front": "LTH3",
+    "L.Thigh.Rear": "LTH4",
+    "R.Thigh.Upper": "RTH2",
+    "R.Thigh.Front": "RTH3",
+    "R.Thigh.Rear": "RTH4",
+    "L.Shank.Upper": "LTIB2",
+    "L.Shank.Front": "LTIB3",
+    "L.Shank.Rear": "LTIB4",
+    "R.Shank.Upper": "RTIB2",
+    "R.Shank.Front": "RTIB3",
+    "R.Shank.Rear": "RTIB4",
+    "Sternum": "STRN",
+    "L.Acromium": "LSHO",
+    "R.Acromium": "RSHO",
 }
 
 
@@ -241,9 +325,18 @@ def build_static_segment_calibration(
     pelvis_origin = 0.5 * (anatomical_lasi + anatomical_rasi)
     pelvis_basis = _basis(anatomical_rasi - anatomical_lasi, pelvis_origin - sacrum, name="pelvis")
     asis_distance = float(np.linalg.norm(anatomical_rasi - anatomical_lasi))
-    hip_offset = 0.36 * asis_distance * pelvis_basis[:, 0] - 0.19 * asis_distance * pelvis_basis[:, 1] - 0.30 * asis_distance * pelvis_basis[:, 2]
+    hip_offset = (
+        0.36 * asis_distance * pelvis_basis[:, 0]
+        - 0.19 * asis_distance * pelvis_basis[:, 1]
+        - 0.30 * asis_distance * pelvis_basis[:, 2]
+    )
     right_hip = pelvis_origin + hip_offset
-    left_hip = pelvis_origin - 0.36 * asis_distance * pelvis_basis[:, 0] - 0.19 * asis_distance * pelvis_basis[:, 1] - 0.30 * asis_distance * pelvis_basis[:, 2]
+    left_hip = (
+        pelvis_origin
+        - 0.36 * asis_distance * pelvis_basis[:, 0]
+        - 0.19 * asis_distance * pelvis_basis[:, 1]
+        - 0.30 * asis_distance * pelvis_basis[:, 2]
+    )
     pelvis = {
         "origin_m": _as_list(pelvis_origin),
         "basis_right_anterior_up": pelvis_basis.tolist(),
@@ -307,7 +400,13 @@ def build_static_segment_calibration(
         }
     manifest = {
         "schema_version": _SCHEMA,
-        "coordinate_system": {"frame": "Newton world", "length_unit": "m", "up_axis": "Z", "forward_axis": "X", "left_axis": "Y"},
+        "coordinate_system": {
+            "frame": "Newton world",
+            "length_unit": "m",
+            "up_axis": "Z",
+            "forward_axis": "X",
+            "left_axis": "Y",
+        },
         "source": {
             "file": markers.source_file,
             "sha256": markers.source_sha256,
@@ -354,13 +453,28 @@ def load_static_segment_calibration(path: str | os.PathLike) -> SegmentCalibrati
     time_range = calibration.get("time_range_s")
     if not isinstance(radius, (int, float)) or not math.isfinite(radius) or radius < 0.0:
         raise ValueError("segment calibration marker radius is invalid")
-    if not isinstance(time_range, list) or len(time_range) != 2 or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in time_range):
+    if (
+        not isinstance(time_range, list)
+        or len(time_range) != 2
+        or not all(isinstance(value, (int, float)) and math.isfinite(value) for value in time_range)
+    ):
         raise ValueError("segment calibration time range is invalid")
-    marker_positions = {name: np.asarray(value, dtype=np.float64) for name, value in manifest.get("markers", {}).items()}
-    if not set(_REQUIRED_MARKERS).issubset(marker_positions) or any(value.shape != (3,) or not np.all(np.isfinite(value)) for value in marker_positions.values()):
+    marker_positions = {
+        name: np.asarray(value, dtype=np.float64) for name, value in manifest.get("markers", {}).items()
+    }
+    if not set(_REQUIRED_MARKERS).issubset(marker_positions) or any(
+        value.shape != (3,) or not np.all(np.isfinite(value)) for value in marker_positions.values()
+    ):
         raise ValueError("segment calibration markers are incomplete or invalid")
     segments = manifest.get("segments")
-    if not isinstance(segments, dict) or set(segments) != {"thigh_left", "thigh_right", "shank_left", "shank_right", "foot_left", "foot_right"}:
+    if not isinstance(segments, dict) or set(segments) != {
+        "thigh_left",
+        "thigh_right",
+        "shank_left",
+        "shank_right",
+        "foot_left",
+        "foot_right",
+    }:
         raise ValueError("segment calibration segments are incomplete")
     for name, segment in segments.items():
         if not isinstance(segment, dict):

@@ -21,17 +21,41 @@ from .segment_calibration import SegmentCalibration, load_static_segment_calibra
 
 _SCHEMA = "gait_segment_calibration_to_mjcf_1"
 _CANONICAL_TO_SOURCE = {
-    "L.ASIS": "LASI", "R.ASIS": "RASI", "V.Sacral": "VSAC", "Top.Head": "TOPHEAD",
-    "Sternum": "STRN", "L.Acromium": "LSHO", "R.Acromium": "RSHO",
-    "L.Thigh.Upper": "LTH2", "L.Thigh.Front": "LTH3", "L.Thigh.Rear": "LTH4",
-    "L.Knee.Lat": "LKNE", "L.Knee.Med": "LMKNE", "R.Thigh.Upper": "RTH2",
-    "R.Thigh.Front": "RTH3", "R.Thigh.Rear": "RTH4", "R.Knee.Lat": "RKNE",
-    "R.Knee.Med": "RMKNE", "L.Shank.Upper": "LTIB2", "L.Shank.Front": "LTIB3",
-    "L.Shank.Rear": "LTIB4", "L.Ankle.Lat": "LANK", "L.Ankle.Med": "LMANK",
-    "R.Shank.Upper": "RTIB2", "R.Shank.Front": "RTIB3", "R.Shank.Rear": "RTIB4",
-    "R.Ankle.Lat": "RANK", "R.Ankle.Med": "RMANK", "L.Heel": "LHEE",
-    "L.Toe.Lat": "LMTH5", "L.Toe.Med": "LMTH1", "L.Toe.Tip": "LTOE",
-    "R.Heel": "RHEE", "R.Toe.Lat": "RMTH5", "R.Toe.Med": "RMTH1", "R.Toe.Tip": "RTOE",
+    "L.ASIS": "LASI",
+    "R.ASIS": "RASI",
+    "V.Sacral": "VSAC",
+    "Top.Head": "TOPHEAD",
+    "Sternum": "STRN",
+    "L.Acromium": "LSHO",
+    "R.Acromium": "RSHO",
+    "L.Thigh.Upper": "LTH2",
+    "L.Thigh.Front": "LTH3",
+    "L.Thigh.Rear": "LTH4",
+    "L.Knee.Lat": "LKNE",
+    "L.Knee.Med": "LMKNE",
+    "R.Thigh.Upper": "RTH2",
+    "R.Thigh.Front": "RTH3",
+    "R.Thigh.Rear": "RTH4",
+    "R.Knee.Lat": "RKNE",
+    "R.Knee.Med": "RMKNE",
+    "L.Shank.Upper": "LTIB2",
+    "L.Shank.Front": "LTIB3",
+    "L.Shank.Rear": "LTIB4",
+    "L.Ankle.Lat": "LANK",
+    "L.Ankle.Med": "LMANK",
+    "R.Shank.Upper": "RTIB2",
+    "R.Shank.Front": "RTIB3",
+    "R.Shank.Rear": "RTIB4",
+    "R.Ankle.Lat": "RANK",
+    "R.Ankle.Med": "RMANK",
+    "L.Heel": "LHEE",
+    "L.Toe.Lat": "LMTH5",
+    "L.Toe.Med": "LMTH1",
+    "L.Toe.Tip": "LTOE",
+    "R.Heel": "RHEE",
+    "R.Toe.Lat": "RMTH5",
+    "R.Toe.Med": "RMTH1",
+    "R.Toe.Tip": "RTOE",
 }
 
 
@@ -51,7 +75,11 @@ def _fmt(values: np.ndarray | list[float] | tuple[float, ...]) -> str:
 def _quat_wxyz(rotation: np.ndarray) -> tuple[float, float, float, float]:
     """Convert a proper rotation matrix to an MJCF wxyz quaternion."""
     rotation = np.asarray(rotation, dtype=np.float64)
-    if rotation.shape != (3, 3) or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1.0e-8) or not math.isclose(float(np.linalg.det(rotation)), 1.0, abs_tol=1.0e-8):
+    if (
+        rotation.shape != (3, 3)
+        or not np.allclose(rotation.T @ rotation, np.eye(3), atol=1.0e-8)
+        or not math.isclose(float(np.linalg.det(rotation)), 1.0, abs_tol=1.0e-8)
+    ):
         raise ValueError("body rotation must be proper and orthonormal")
     trace = float(np.trace(rotation))
     if trace > 0.0:
@@ -107,13 +135,14 @@ def _write_obj(source: Path, destination: Path, vertices: np.ndarray, offset: np
     """Copy an OBJ with transformed vertex positions."""
     output = []
     vertex_index = 0
-    for line in source.read_text(encoding="utf-8").splitlines():
-        fields = line.split()
+    for source_line in source.read_text(encoding="utf-8").splitlines():
+        fields = source_line.split()
+        output_line = source_line
         if fields and fields[0] == "v":
             value = vertices[vertex_index] + offset
             vertex_index += 1
-            line = "v " + _fmt(value)
-        output.append(line)
+            output_line = "v " + _fmt(value)
+        output.append(output_line)
     if vertex_index != len(vertices):
         raise ValueError(f"OBJ vertex count changed while reading: {source}")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -209,7 +238,6 @@ def write_calibrated_subject_mjcf(
     if (output.parent / "Geometry").exists() or (output.parent / "manifest.json").exists():
         raise FileExistsError(f"calibrated output directory is not empty: {output.parent}")
 
-    model_manifest = json.loads(base_model_manifest_path.read_text(encoding="utf-8"))
     bundle_manifest = json.loads(base_bundle_path.read_text(encoding="utf-8"))
     base_mass = float(bundle_manifest["subject"]["mass_kg"])
     if not math.isfinite(base_mass) or base_mass <= 0.0:
@@ -238,22 +266,22 @@ def write_calibrated_subject_mjcf(
                 raise ValueError(f"invalid dimensions for {segment_name}")
             scale[segment_name] = np.asarray(
                 (
-                    target_length / reference_length if segment_name.startswith("foot_") else target_width / reference_width,
+                    target_length / reference_length
+                    if segment_name.startswith("foot_")
+                    else target_width / reference_width,
                     target_width / reference_width,
-                    target_width / reference_width if segment_name.startswith("foot_") else target_length / reference_length,
+                    target_width / reference_width
+                    if segment_name.startswith("foot_")
+                    else target_length / reference_length,
                 ),
                 dtype=np.float64,
             )
     root = ET.parse(base_xml).getroot()
-    bodies = {
-        body.get("name", ""): body
-        for body in root.iter("body")
-        if body.get("name")
-    }
+    bodies = {body.get("name", ""): body for body in root.iter("body") if body.get("name")}
     body_world = {
         "pelvis": (target_pelvis_origin, target_pelvis_rotation),
     }
-    for side, prefix in (("left", "L"), ("right", "R")):
+    for side, _prefix in (("left", "L"), ("right", "R")):
         body_world[f"femur_{side}"] = (
             np.asarray(target_calibration.pelvis["hip_centers_m"][side], dtype=np.float64),
             _segment_basis(target_calibration, f"thigh_{side}"),
@@ -315,11 +343,15 @@ def write_calibrated_subject_mjcf(
             transformed = (vertices + geom_pos - proximal) * scale[segment_key]
             records.append((geom, source, transformed))
             if body_name.startswith("foot_"):
-                body_mesh_min_z[body_name] = min(body_mesh_min_z.get(body_name, math.inf), float(np.min(transformed[:, 2])))
+                body_mesh_min_z[body_name] = min(
+                    body_mesh_min_z.get(body_name, math.inf), float(np.min(transformed[:, 2]))
+                )
         body_mesh_vertices[body_name] = records
     foot_origins = {side: body_world[f"foot_{side}"][0][2] for side in ("left", "right")}
     foot_world_min = min(foot_origins[side] + body_mesh_min_z[f"foot_{side}"] for side in ("left", "right"))
-    foot_offsets = {side: foot_world_min - foot_origins[side] - body_mesh_min_z[f"foot_{side}"] for side in ("left", "right")}
+    foot_offsets = {
+        side: foot_world_min - foot_origins[side] - body_mesh_min_z[f"foot_{side}"] for side in ("left", "right")
+    }
     global_offset = np.asarray((0.0, 0.0, -foot_world_min), dtype=np.float64)
     target_world = {name: (origin + global_offset, rotation) for name, (origin, rotation) in body_world.items()}
     staged = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
@@ -339,8 +371,14 @@ def write_calibrated_subject_mjcf(
                 geom.set("pos", "0 0 0")
         # Author parent-relative body frames, inertials, primitives, joints, sites, and contacts.
         parent_by_body = {
-            "pelvis": None, "torso": "pelvis", "femur_left": "pelvis", "tibia_left": "femur_left", "foot_left": "tibia_left",
-            "femur_right": "pelvis", "tibia_right": "femur_right", "foot_right": "tibia_right",
+            "pelvis": None,
+            "torso": "pelvis",
+            "femur_left": "pelvis",
+            "tibia_left": "femur_left",
+            "foot_left": "tibia_left",
+            "femur_right": "pelvis",
+            "tibia_right": "femur_right",
+            "foot_right": "tibia_right",
         }
         for body_name, body in bodies.items():
             if body_name not in target_world:
@@ -368,20 +406,32 @@ def write_calibrated_subject_mjcf(
                     joint.set("pos", "0 0 0")
             else:
                 proximal = np.zeros(3)
-            segment_key = "pelvis" if body_name in {"pelvis", "torso"} else (
-                f"thigh_{body_name.removeprefix('femur_')}" if body_name.startswith("femur_") else
-                f"shank_{body_name.removeprefix('tibia_')}" if body_name.startswith("tibia_") else
-                f"foot_{body_name.removeprefix('foot_')}" if body_name.startswith("foot_") else "pelvis"
+            segment_key = (
+                "pelvis"
+                if body_name in {"pelvis", "torso"}
+                else (
+                    f"thigh_{body_name.removeprefix('femur_')}"
+                    if body_name.startswith("femur_")
+                    else f"shank_{body_name.removeprefix('tibia_')}"
+                    if body_name.startswith("tibia_")
+                    else f"foot_{body_name.removeprefix('foot_')}"
+                    if body_name.startswith("foot_")
+                    else "pelvis"
+                )
             )
             body_scale = scale[segment_key]
             for inertial in body.findall("inertial"):
-                position = np.asarray([float(value) for value in (inertial.get("pos") or "0 0 0").split()], dtype=np.float64)
+                position = np.asarray(
+                    [float(value) for value in (inertial.get("pos") or "0 0 0").split()], dtype=np.float64
+                )
                 if position.shape != (3,):
                     raise ValueError(f"invalid inertial position on {body_name}")
                 inertial.set("pos", _fmt((position - proximal) * body_scale))
                 inertial.set("mass", f"{float(inertial.get('mass', 'nan')) * mass_scale:.9g}")
                 inertia_scale = mass_scale * float(np.mean(body_scale**2))
-                values = np.asarray([float(value) for value in (inertial.get("fullinertia") or "").split()], dtype=np.float64)
+                values = np.asarray(
+                    [float(value) for value in (inertial.get("fullinertia") or "").split()], dtype=np.float64
+                )
                 if values.shape != (6,):
                     raise ValueError(f"invalid inertial tensor on {body_name}")
                 inertial.set("fullinertia", _fmt(values * inertia_scale))
@@ -398,11 +448,16 @@ def write_calibrated_subject_mjcf(
                 elif geom.get("mesh") is None:
                     for attribute in ("pos", "size"):
                         if attribute in geom.attrib:
-                            values = np.asarray([float(value) for value in geom.get(attribute).split()], dtype=np.float64)
+                            values = np.asarray(
+                                [float(value) for value in geom.get(attribute).split()], dtype=np.float64
+                            )
                             geom.set(attribute, _fmt(values * body_scale[: values.size]))
             if body_name.startswith("foot_"):
                 side = body_name.removeprefix("foot_")
-                records = [vertices + np.asarray((0.0, 0.0, foot_offsets[side])) for _, _, vertices in body_mesh_vertices[body_name]]
+                records = [
+                    vertices + np.asarray((0.0, 0.0, foot_offsets[side]))
+                    for _, _, vertices in body_mesh_vertices[body_name]
+                ]
                 all_vertices = np.concatenate(records, axis=0)
                 minimum, maximum = np.min(all_vertices, axis=0), np.max(all_vertices, axis=0)
                 radius = min(
@@ -435,18 +490,41 @@ def write_calibrated_subject_mjcf(
         staged_xml.write_text(ET.tostring(root, encoding="unicode") + "\n", encoding="utf-8")
         output_manifest = {
             "schema_version": _SCHEMA,
-            "coordinate_system": {"frame": "Newton world/body-local", "position_convention": "row_vectors", "length_unit": "m", "forward_axis": "X", "left_axis": "Y", "up_axis": "Z"},
+            "coordinate_system": {
+                "frame": "Newton world/body-local",
+                "position_convention": "row_vectors",
+                "length_unit": "m",
+                "forward_axis": "X",
+                "left_axis": "Y",
+                "up_axis": "Z",
+            },
             "base_marker_set": bundle_manifest.get("base_marker_set", "S001"),
             "source_subject": base_root.name,
             "source_model": {"file": base_xml.name, "sha256": hashlib.sha256(base_xml.read_bytes()).hexdigest()},
-            "source_calibration": {"file": target_calibration.path.name, "sha256": hashlib.sha256(target_calibration.path.read_bytes()).hexdigest()},
+            "source_calibration": {
+                "file": target_calibration.path.name,
+                "sha256": hashlib.sha256(target_calibration.path.read_bytes()).hexdigest(),
+            },
             "mass_scale": mass_scale,
             "segment_scales": {name: values.tolist() for name, values in scale.items()},
-            "ground": {"normal_world": [0.0, 0.0, 1.0], "height_m": 0.0, "flat_foot": True, "global_offset_m": global_offset.tolist()},
-            "meshes": [{"file": path.relative_to(staged).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path, _ in output_meshes],
+            "ground": {
+                "normal_world": [0.0, 0.0, 1.0],
+                "height_m": 0.0,
+                "flat_foot": True,
+                "global_offset_m": global_offset.tolist(),
+            },
+            "meshes": [
+                {"file": path.relative_to(staged).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+                for path, _ in output_meshes
+            ],
         }
-        output_manifest["seal"] = {"algorithm": "sha256", "content_sha256": hashlib.sha256(_canonical_json(output_manifest)).hexdigest()}
-        (staged / "manifest.json").write_text(json.dumps(output_manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        output_manifest["seal"] = {
+            "algorithm": "sha256",
+            "content_sha256": hashlib.sha256(_canonical_json(output_manifest)).hexdigest(),
+        }
+        (staged / "manifest.json").write_text(
+            json.dumps(output_manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
+        )
         shutil.copytree(staged_geometry, output.parent / "Geometry")
         os.replace(staged_xml, output)
         os.replace(staged / "manifest.json", output.parent / "manifest.json")

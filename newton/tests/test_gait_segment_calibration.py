@@ -73,7 +73,9 @@ class TestStaticSegmentCalibration(unittest.TestCase):
             (0.0, 0.72 * 0.24, 0.0),
             atol=1.0e-6,
         )
-        self.assertAlmostEqual(calibration.segments["thigh_left"]["length_m"], calibration.segments["thigh_right"]["length_m"])
+        self.assertAlmostEqual(
+            calibration.segments["thigh_left"]["length_m"], calibration.segments["thigh_right"]["length_m"]
+        )
         self.assertAlmostEqual(calibration.segments["thigh_left"]["width_m"], 0.12, places=6)
         self.assertAlmostEqual(calibration.segments["shank_left"]["width_m"], 0.09, places=6)
         self.assertTrue(calibration.segments["foot_left"]["flat_ground"])
@@ -95,9 +97,7 @@ class TestStaticSegmentCalibration(unittest.TestCase):
                 json.dumps(manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
             ).hexdigest()
         self.assertEqual(seal, {"algorithm": "sha256", "content_sha256": expected})
-        np.testing.assert_allclose(
-            loaded.marker_positions["LASI"], calibration.marker_positions["LASI"], atol=1.0e-12
-        )
+        np.testing.assert_allclose(loaded.marker_positions["LASI"], calibration.marker_positions["LASI"], atol=1.0e-12)
 
     def test_rejects_tampered_calibration(self):
         """Reject calibration payloads whose values no longer match their seal."""
