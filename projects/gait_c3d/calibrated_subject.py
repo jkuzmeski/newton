@@ -74,6 +74,11 @@ def _fmt(values: np.ndarray | list[float] | tuple[float, ...]) -> str:
     return " ".join(f"{float(value):.9g}" for value in values)
 
 
+def _vector(element: ET.Element, name: str, default: str = "") -> np.ndarray:
+    """Parse one numeric XML attribute."""
+    return np.asarray([float(value) for value in element.get(name, default).split()], dtype=np.float64)
+
+
 def _quat_wxyz(rotation: np.ndarray) -> tuple[float, float, float, float]:
     """Convert a proper rotation matrix to an MJCF wxyz quaternion."""
     rotation = np.asarray(rotation, dtype=np.float64)
@@ -134,7 +139,7 @@ def _rotation_wxyz(quaternion: np.ndarray) -> np.ndarray:
 
 def _element_rotation(element: ET.Element) -> np.ndarray:
     """Return an MJCF element rotation, defaulting to identity."""
-    values = np.asarray([float(value) for value in element.get("quat", "1 0 0 0").split()], dtype=np.float64)
+    values = _vector(element, "quat", "1 0 0 0")
     if values.shape != (4,) or not np.all(np.isfinite(values)):
         raise ValueError(f"invalid quaternion on {element.get('name', element.tag)!r}")
     norm = float(np.linalg.norm(values))
@@ -146,7 +151,7 @@ def _element_rotation(element: ET.Element) -> np.ndarray:
 def _source_segment_length(body: ET.Element, child: ET.Element, proximal_prefix: str, distal_prefix: str) -> float:
     """Measure one source articulation span between its actual joint centers."""
     proximal = _source_joint_position(body, proximal_prefix)
-    child_position = np.asarray([float(value) for value in child.get("pos", "0 0 0").split()], dtype=np.float64)
+    child_position = _vector(child, "pos", "0 0 0")
     distal = child_position + _element_rotation(child) @ _source_joint_position(child, distal_prefix)
     length = float(np.linalg.norm(distal - proximal))
     if not math.isfinite(length) or length <= 0.0:
@@ -186,22 +191,14 @@ def _transform_fullinertia(values: np.ndarray, column_linear: np.ndarray, mass_s
     second_moment = 0.5 * np.trace(inertia) * np.eye(3) - inertia
     transformed_moment = column_linear @ second_moment @ column_linear.T
     transformed = mass_scale * (np.trace(transformed_moment) * np.eye(3) - transformed_moment)
-    return np.asarray(
-        (
-            transformed[0, 0],
-            transformed[1, 1],
-            transformed[2, 2],
-            transformed[0, 1],
-            transformed[0, 2],
-            transformed[1, 2],
-        )
-    )
+    rows, columns = (0, 1, 2, 0, 0, 1), (0, 1, 2, 1, 2, 2)
+    return transformed[rows, columns]
 
 
 def _transform_box(geom: ET.Element, transform) -> None:
     """Transform an oriented box through a point map and save its body-frame bounds."""
-    position = np.asarray([float(value) for value in geom.get("pos", "0 0 0").split()], dtype=np.float64)
-    size = np.asarray([float(value) for value in geom.get("size", "").split()], dtype=np.float64)
+    position = _vector(geom, "pos", "0 0 0")
+    size = _vector(geom, "size")
     if position.shape != (3,) or size.shape != (3,):
         raise ValueError(f"invalid box geometry on {geom.get('name')!r}")
     signs = np.asarray([(x, y, z) for x in (-1.0, 1.0) for y in (-1.0, 1.0) for z in (-1.0, 1.0)], dtype=np.float64)
@@ -258,7 +255,7 @@ def _source_joint_position(body: ET.Element, joint_prefix: str) -> np.ndarray:
     """Find a source proximal joint offset in a body."""
     for joint in body.findall("joint"):
         if (joint.get("name") or "").startswith(joint_prefix):
-            values = np.asarray([float(value) for value in (joint.get("pos") or "").split()], dtype=np.float64)
+            values = _vector(joint, "pos")
             if values.shape == (3,) and np.all(np.isfinite(values)):
                 return values
     return np.zeros(3, dtype=np.float64)
@@ -271,26 +268,6 @@ def _segment_basis(calibration: SegmentCalibration, name: str) -> np.ndarray:
     return np.asarray(segment[key], dtype=np.float64)
 
 
-def _base_torso_distal_local(base_root: Path) -> np.ndarray:
-    """Return the S001 sacrum marker in the base torso body frame."""
-    layout = json.loads((base_root / "model" / "marker_layout.json").read_text(encoding="utf-8"))
-    marker = next(entry for entry in layout["markers"] if entry["name"] == "V.Sacral")
-    pelvis = next(
-        body
-        for body in ET.parse(base_root / "model" / "subject.xml").getroot().iter("body")
-        if body.get("name") == "pelvis"
-    )
-    torso = next(
-        body
-        for body in ET.parse(base_root / "model" / "subject.xml").getroot().iter("body")
-        if body.get("name") == "torso"
-    )
-    pelvis_position = np.asarray([float(value) for value in pelvis.get("pos", "0 0 0").split()], dtype=np.float64)
-    torso_position = np.asarray([float(value) for value in torso.get("pos", "0 0 0").split()], dtype=np.float64)
-    marker_position = np.asarray(marker["position_m"], dtype=np.float64)
-    return pelvis_position + marker_position - (pelvis_position + torso_position)
-
-
 def _base_pelvis_marker_positions(base_root: Path) -> dict[str, np.ndarray]:
     """Load base ASIS/sacrum positions in the base pelvis body frame."""
     layout = json.loads((base_root / "model" / "marker_layout.json").read_text(encoding="utf-8"))
@@ -299,6 +276,11 @@ def _base_pelvis_marker_positions(base_root: Path) -> dict[str, np.ndarray]:
         for entry in layout["markers"]
         if entry["name"] in {"L.ASIS", "R.ASIS", "V.Sacral"}
     }
+
+
+def _load_calibration(value: SegmentCalibration | str | os.PathLike) -> SegmentCalibration:
+    """Load a calibration path, or return an already loaded calibration."""
+    return value if isinstance(value, SegmentCalibration) else load_static_segment_calibration(value)
 
 
 def _pelvis_basis(calibration: SegmentCalibration) -> np.ndarray:
@@ -412,16 +394,10 @@ def write_calibrated_subject_mjcf(
     for path in (base_xml, base_model_manifest_path, base_bundle_path):
         if not path.is_file():
             raise FileNotFoundError(f"base subject artifact is missing: {path}")
-    if isinstance(calibration, SegmentCalibration):
-        target_calibration = calibration
-    else:
-        target_calibration = load_static_segment_calibration(calibration)
-    if base_calibration is None:
-        base_calibration = base_calibration_path
-    if isinstance(base_calibration, SegmentCalibration):
-        reference_calibration = base_calibration
-    else:
-        reference_calibration = load_static_segment_calibration(base_calibration)
+    target_calibration = _load_calibration(calibration)
+    reference_calibration = _load_calibration(
+        base_calibration if base_calibration is not None else base_calibration_path
+    )
     if not math.isfinite(body_mass) or body_mass <= 0.0:
         raise ValueError("body_mass must be finite and positive")
     output = Path(output_path).expanduser().resolve()
@@ -446,55 +422,40 @@ def write_calibrated_subject_mjcf(
     target_asis = float(target_calibration.pelvis["asis_distance_m"])
     if reference_asis <= 0.0 or target_asis <= 0.0:
         raise ValueError("ASIS distance must be positive")
-    scale = {
-        "pelvis": np.full(3, target_asis / reference_asis),
-    }
+    scale = {"pelvis": np.full(3, target_asis / reference_asis)}
     if "torso" in target_calibration.segments and "torso" in reference_calibration.segments:
-        target_torso = target_calibration.segments["torso"]
-        reference_torso = reference_calibration.segments["torso"]
         scale["torso"] = np.asarray(
-            (
-                float(target_torso["depth_m"]) / float(reference_torso["depth_m"]),
-                float(target_torso["width_m"]) / float(reference_torso["width_m"]),
-                float(target_torso["length_m"]) / float(reference_torso["length_m"]),
-            ),
-            dtype=np.float64,
+            [
+                float(target_calibration.segments["torso"][name]) / float(reference_calibration.segments["torso"][name])
+                for name in ("depth_m", "width_m", "length_m")
+            ]
         )
     for side in ("left", "right"):
-        for segment_name in (f"thigh_{side}", f"shank_{side}", f"foot_{side}"):
-            target_segment = target_calibration.segments[segment_name]
-            reference_segment = reference_calibration.segments[segment_name]
-            target_length = float(target_segment["length_m"])
-            reference_length = float(reference_segment["length_m"])
-            target_width = float(target_segment["width_m"])
-            reference_width = float(reference_segment["width_m"])
-            if min(target_length, reference_length, target_width, reference_width) <= 0.0:
-                raise ValueError(f"invalid dimensions for {segment_name}")
-            if segment_name.startswith("thigh_"):
-                source_length = _source_segment_length(
-                    bodies[f"femur_{side}"], bodies[f"tibia_{side}"], "hip_flexion", "knee"
-                )
-            elif segment_name.startswith("shank_"):
-                source_length = _source_segment_length(bodies[f"tibia_{side}"], bodies[f"foot_{side}"], "knee", "ankle")
-            else:
-                source_length = reference_length
-            scale[segment_name] = np.asarray(
-                (
-                    target_length / source_length
-                    if segment_name.startswith("foot_")
-                    else target_width / reference_width,
-                    target_width / reference_width,
-                    target_width / reference_width
-                    if segment_name.startswith("foot_")
-                    else target_length / source_length,
-                ),
-                dtype=np.float64,
+        for segment, body, child, joints in (
+            ("thigh", "femur", "tibia", ("hip_flexion", "knee")),
+            ("shank", "tibia", "foot", ("knee", "ankle")),
+            ("foot", "foot", None, ()),
+        ):
+            name = f"{segment}_{side}"
+            target, reference = target_calibration.segments[name], reference_calibration.segments[name]
+            values = tuple(float(record[key]) for record in (target, reference) for key in ("length_m", "width_m"))
+            if min(values) <= 0.0:
+                raise ValueError(f"invalid dimensions for {name}")
+            target_length, target_width, reference_length, reference_width = values
+            source_length = (
+                reference_length
+                if child is None
+                else _source_segment_length(bodies[f"{body}_{side}"], bodies[f"{child}_{side}"], *joints)
+            )
+            length_scale, width_scale = target_length / source_length, target_width / reference_width
+            scale[name] = np.asarray(
+                (length_scale, width_scale, width_scale)
+                if segment == "foot"
+                else (width_scale, width_scale, length_scale)
             )
     if not model_name or any(character.isspace() for character in model_name):
         raise ValueError("model_name must be nonempty and contain no whitespace")
     root.set("model", model_name)
-    if "torso" in bodies:
-        _add_torso_joints(root, bodies["torso"])
     base_pelvis_markers = _base_pelvis_marker_positions(base_root)
     base_pelvis_marker_origin = 0.5 * (base_pelvis_markers["L.ASIS"] + base_pelvis_markers["R.ASIS"])
     base_pelvis_source = (
@@ -506,44 +467,61 @@ def write_calibrated_subject_mjcf(
     )
     pelvis_map_rotation, pelvis_map_translation = _fit_row_rigid(base_pelvis_source, target_pelvis_source)
 
-    body_world = {
-        "pelvis": (target_pelvis_origin, target_pelvis_rotation),
-    }
-    for side, _prefix in (("left", "L"), ("right", "R")):
-        body_world[f"femur_{side}"] = (
-            np.asarray(target_calibration.pelvis["hip_centers_m"][side], dtype=np.float64),
-            _segment_basis(target_calibration, f"thigh_{side}"),
-        )
-        body_world[f"tibia_{side}"] = (
-            np.asarray(target_calibration.segments[f"shank_{side}"]["proximal_m"], dtype=np.float64),
-            _segment_basis(target_calibration, f"shank_{side}"),
-        )
-        body_world[f"foot_{side}"] = (
-            np.asarray(target_calibration.segments[f"foot_{side}"]["proximal_m"], dtype=np.float64),
-            _segment_basis(target_calibration, f"foot_{side}"),
-        )
-    torso_offset = np.asarray((0.0, 0.0, 0.38004881829313497), dtype=np.float64)
+    body_scaling = {"pelvis": ("pelvis", np.zeros(3))}
+    if "torso" in bodies:
+        _add_torso_joints(root, bodies["torso"])
+        torso_segment = "torso" if "torso" in scale else "pelvis"
+        pelvis_position = _vector(bodies["pelvis"], "pos", "0 0 0")
+        torso_position = _vector(bodies["torso"], "pos", "0 0 0")
+        torso_proximal = pelvis_position + base_pelvis_markers["V.Sacral"] - (pelvis_position + torso_position)
+        body_scaling["torso"] = (torso_segment, torso_proximal if torso_segment == "torso" else np.zeros(3))
+    for side in ("left", "right"):
+        for body, segment, joint in (
+            ("femur", "thigh", "hip_flexion"),
+            ("tibia", "shank", "knee"),
+            ("foot", "foot", "ankle"),
+        ):
+            name = f"{body}_{side}"
+            body_scaling[name] = (f"{segment}_{side}", _source_joint_position(bodies[name], joint))
+
+    body_world = {"pelvis": (target_pelvis_origin, target_pelvis_rotation)}
+    for side in ("left", "right"):
+        for body, segment in (("femur", "thigh"), ("tibia", "shank"), ("foot", "foot")):
+            name = f"{body}_{side}"
+            origin = (
+                target_calibration.pelvis["hip_centers_m"][side]
+                if body == "femur"
+                else target_calibration.segments[f"{segment}_{side}"]["proximal_m"]
+            )
+            body_world[name] = (
+                np.asarray(origin, dtype=np.float64),
+                _segment_basis(target_calibration, f"{segment}_{side}"),
+            )
     if "torso" in bodies:
         if "torso" in target_calibration.segments:
-            torso_record = target_calibration.segments["torso"]
-            torso_origin = np.asarray(torso_record["distal_m"], dtype=np.float64)
-            torso_rotation = np.asarray(torso_record["basis_forward_left_longitudinal"], dtype=np.float64)
+            record = target_calibration.segments["torso"]
+            body_world["torso"] = (
+                np.asarray(record["distal_m"], dtype=np.float64),
+                np.asarray(record["basis_forward_left_longitudinal"], dtype=np.float64),
+            )
         else:
-            torso_rotation = target_pelvis_rotation
-            torso_origin = target_pelvis_origin + target_pelvis_rotation @ torso_offset
-        body_world["torso"] = (torso_origin, torso_rotation)
+            offset = target_pelvis_rotation @ np.asarray((0.0, 0.0, 0.38004881829313497))
+            body_world["torso"] = (target_pelvis_origin + offset, target_pelvis_rotation)
 
-    source_hips = []
-    target_hips = []
-    for side in ("left", "right"):
-        femur = bodies[f"femur_{side}"]
-        femur_position = np.asarray([float(value) for value in femur.get("pos", "0 0 0").split()], dtype=np.float64)
-        source_hip = femur_position + _element_rotation(femur) @ _source_joint_position(femur, "hip_flexion")
-        source_hips.append(source_hip)
-        target_hip = np.asarray(target_calibration.pelvis["hip_centers_m"][side], dtype=np.float64)
-        target_hips.append((target_hip - target_pelvis_origin) @ target_pelvis_rotation)
-    source_hips = np.asarray(source_hips)
-    target_hips = np.asarray(target_hips)
+    source_hips = np.asarray(
+        [
+            _vector(bodies[name], "pos", "0 0 0") + _element_rotation(bodies[name]) @ body_scaling[name][1]
+            for name in ("femur_left", "femur_right")
+        ]
+    )
+    target_hips = np.asarray(
+        [
+            (np.asarray(target_calibration.pelvis["hip_centers_m"][side]) - target_pelvis_origin)
+            @ target_pelvis_rotation
+            for side in ("left", "right")
+        ]
+    )
+
     mapped_hips = (
         ((source_hips - base_pelvis_marker_origin) * scale["pelvis"]) @ pelvis_map_rotation + pelvis_map_translation
     ) @ target_pelvis_rotation
@@ -557,35 +535,27 @@ def write_calibrated_subject_mjcf(
     pelvis_hip_translation = target_hips.mean(axis=0) - mapped_hips.mean(axis=0) @ pelvis_hip_linear
     pelvis_row_linear = np.diag(scale["pelvis"]) @ pelvis_map_rotation @ target_pelvis_rotation @ pelvis_hip_linear
 
-    def transform_pelvis(points: np.ndarray) -> np.ndarray:
-        """Map source pelvis points through marker and acetabular controls."""
-        source = (points - base_pelvis_marker_origin) * scale["pelvis"]
-        marker_mapped = (source @ pelvis_map_rotation + pelvis_map_translation) @ target_pelvis_rotation
-        return marker_mapped @ pelvis_hip_linear + pelvis_hip_translation
+    torso_mesh_min_z = 0.0
+    torso_mesh_z_scale = 1.0
+
+    def transform_points(body_name: str, points: np.ndarray) -> np.ndarray:
+        """Map source points into a calibrated body frame."""
+        if body_name == "pelvis":
+            source = (points - base_pelvis_marker_origin) * scale["pelvis"]
+            marker_mapped = (source @ pelvis_map_rotation + pelvis_map_translation) @ target_pelvis_rotation
+            return marker_mapped @ pelvis_hip_linear + pelvis_hip_translation
+        segment, proximal = body_scaling[body_name]
+        transformed = (points - proximal) * scale[segment]
+        if body_name == "torso" and segment == "torso":
+            transformed[:, 2] = (transformed[:, 2] - torso_mesh_min_z) * torso_mesh_z_scale
+        return transformed
 
     # Transform mesh vertices into calibrated body frames before computing the common floor.
     mesh_file = {mesh.get("name"): mesh.get("file") for mesh in root.iter("mesh") if mesh.get("name")}
     body_mesh_vertices: dict[str, list[tuple[ET.Element, Path, np.ndarray]]] = {}
     body_mesh_min_z: dict[str, float] = {}
     for body_name, body in bodies.items():
-        if body_name not in body_world:
-            continue
-        if body_name == "pelvis":
-            segment_key = "pelvis"
-            proximal = np.zeros(3)
-        elif body_name == "torso":
-            segment_key = "torso" if "torso" in scale else "pelvis"
-            proximal = _base_torso_distal_local(base_root) if segment_key == "torso" else np.zeros(3)
-        elif body_name.startswith("femur_"):
-            segment_key = f"thigh_{body_name.removeprefix('femur_')}"
-            proximal = _source_joint_position(body, "hip_flexion")
-        elif body_name.startswith("tibia_"):
-            segment_key = f"shank_{body_name.removeprefix('tibia_')}"
-            proximal = _source_joint_position(body, "knee")
-        elif body_name.startswith("foot_"):
-            segment_key = f"foot_{body_name.removeprefix('foot_')}"
-            proximal = _source_joint_position(body, "ankle")
-        else:
+        if body_name not in body_scaling:
             continue
         records = []
         for geom in body.findall("geom"):
@@ -602,22 +572,16 @@ def write_calibrated_subject_mjcf(
                 raise ValueError(f"base mesh escapes subject bundle: {relative}") from error
             if not source.is_file():
                 raise FileNotFoundError(source)
-            vertices = _read_obj(source)
-            geom_pos = np.asarray([float(value) for value in (geom.get("pos") or "0 0 0").split()], dtype=np.float64)
+            geom_pos = np.asarray([float(value) for value in (geom.get("pos") or "0 0 0").split()])
             if geom_pos.shape != (3,):
                 raise ValueError(f"mesh geometry position is invalid: {mesh_name}")
-            if body_name == "pelvis":
-                transformed = transform_pelvis(vertices + geom_pos)
-            else:
-                transformed = (vertices + geom_pos - proximal) * scale[segment_key]
+            transformed = transform_points(body_name, _read_obj(source) + geom_pos)
             records.append((geom, source, transformed))
             if body_name.startswith("foot_"):
                 body_mesh_min_z[body_name] = min(
                     body_mesh_min_z.get(body_name, math.inf), float(np.min(transformed[:, 2]))
                 )
         body_mesh_vertices[body_name] = records
-    torso_mesh_min_z = 0.0
-    torso_mesh_z_scale = 1.0
     if "torso" in scale and body_mesh_vertices.get("torso"):
         torso_values = np.concatenate([vertices for _, _, vertices in body_mesh_vertices["torso"]], axis=0)
         torso_mesh_min_z = float(np.min(torso_values[:, 2]))
@@ -642,8 +606,10 @@ def write_calibrated_subject_mjcf(
     }
     global_offset = np.asarray((0.0, 0.0, -foot_world_min), dtype=np.float64)
     target_world = {name: (origin + global_offset, rotation) for name, (origin, rotation) in body_world.items()}
-    staged = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
-    try:
+    with tempfile.TemporaryDirectory(
+        prefix=f".{output.name}.", dir=output.parent, ignore_cleanup_errors=True
+    ) as temporary:
+        staged = Path(temporary)
         staged_xml = staged / output.name
         staged_geometry = staged / "Geometry"
         output_meshes = []
@@ -652,22 +618,16 @@ def write_calibrated_subject_mjcf(
                 offset = np.zeros(3)
                 if body_name.startswith("foot_"):
                     offset[2] = foot_offsets[body_name.removeprefix("foot_")]
-                destination_relative = Path(mesh_file[geom.get("mesh")])
-                destination = staged / destination_relative
+                destination = staged / mesh_file[geom.get("mesh")]
                 _write_obj(source, destination, vertices, offset)
-                output_meshes.append((destination, geom))
+                output_meshes.append(destination)
                 geom.set("pos", "0 0 0")
+
         # Author parent-relative body frames, inertials, primitives, joints, sites, and contacts.
         parent_by_body = {
-            "pelvis": None,
-            "torso": "pelvis",
-            "femur_left": "pelvis",
-            "tibia_left": "femur_left",
-            "foot_left": "tibia_left",
-            "femur_right": "pelvis",
-            "tibia_right": "femur_right",
-            "foot_right": "tibia_right",
+            child.get("name"): parent.get("name") for parent in root.iter("body") for child in parent.findall("body")
         }
+        parent_by_body["pelvis"] = None
         for body_name, body in bodies.items():
             if body_name not in target_world:
                 continue
@@ -680,129 +640,82 @@ def write_calibrated_subject_mjcf(
                 parent_origin, parent_rotation = target_world[parent]
                 body.set("pos", _fmt(parent_rotation.T @ (origin - parent_origin)))
                 body.set("quat", _fmt(_quat_wxyz(parent_rotation.T @ rotation)))
-            if body_name.startswith("femur_"):
-                proximal = _source_joint_position(body, "hip_flexion")
-                for joint in body.findall("joint"):
-                    joint.set("pos", "0 0 0")
-            elif body_name.startswith("tibia_"):
-                proximal = _source_joint_position(body, "knee")
+
+            segment_key, _ = body_scaling[body_name]
+            if body_name.startswith(("femur_", "tibia_", "foot_")):
                 for joint in body.findall("joint"):
                     joint.set("pos", "0 0 0")
                     if (joint.get("name") or "").startswith("knee_"):
                         joint.set("range", _fmt((-0.5, 2.617993877991494)))
-            elif body_name.startswith("foot_"):
-                proximal = _source_joint_position(body, "ankle")
-                for joint in body.findall("joint"):
-                    joint.set("pos", "0 0 0")
-            elif body_name == "torso" and "torso" in scale:
-                proximal = _base_torso_distal_local(base_root)
-            else:
-                proximal = np.zeros(3)
-            segment_key = (
-                "torso"
-                if body_name == "torso" and "torso" in scale
-                else "pelvis"
-                if body_name == "pelvis" or body_name == "torso"
-                else (
-                    f"thigh_{body_name.removeprefix('femur_')}"
-                    if body_name.startswith("femur_")
-                    else f"shank_{body_name.removeprefix('tibia_')}"
-                    if body_name.startswith("tibia_")
-                    else f"foot_{body_name.removeprefix('foot_')}"
-                    if body_name.startswith("foot_")
-                    else "pelvis"
-                )
-            )
             body_scale = scale[segment_key]
             if body_name == "pelvis":
-                point_transform = transform_pelvis
                 column_linear = pelvis_row_linear.T
-            elif body_name == "torso" and segment_key == "torso":
-
-                def point_transform(
-                    points: np.ndarray, proximal: np.ndarray = proximal, body_scale: np.ndarray = body_scale
-                ) -> np.ndarray:
-                    """Map torso points between its posterior and superior visual bounds."""
-                    transformed = (points - proximal) * body_scale
-                    transformed[:, 2] = (transformed[:, 2] - torso_mesh_min_z) * torso_mesh_z_scale
-                    return transformed
-
-                torso_inertia_scale = body_scale.copy()
-                torso_inertia_scale[2] *= torso_mesh_z_scale
-                column_linear = np.diag(torso_inertia_scale)
             else:
-
-                def point_transform(
-                    points: np.ndarray, proximal: np.ndarray = proximal, body_scale: np.ndarray = body_scale
-                ) -> np.ndarray:
-                    """Scale source points about the segment proximal joint."""
-                    return (points - proximal) * body_scale
-
-                column_linear = np.diag(body_scale)
+                inertia_scale = body_scale.copy()
+                if body_name == "torso" and segment_key == "torso":
+                    inertia_scale[2] *= torso_mesh_z_scale
+                column_linear = np.diag(inertia_scale)
             for inertial in body.findall("inertial"):
-                position = np.asarray(
-                    [float(value) for value in (inertial.get("pos") or "0 0 0").split()], dtype=np.float64
-                )
+                position = np.asarray([float(value) for value in (inertial.get("pos") or "0 0 0").split()])
                 if position.shape != (3,):
                     raise ValueError(f"invalid inertial position on {body_name}")
-                inertial.set("pos", _fmt(point_transform(position[None, :])[0]))
+                inertial.set("pos", _fmt(transform_points(body_name, position[None, :])[0]))
                 inertial.set("mass", f"{float(inertial.get('mass', 'nan')) * mass_scale:.9g}")
-                values = np.asarray(
-                    [float(value) for value in (inertial.get("fullinertia") or "").split()], dtype=np.float64
-                )
+                values = _vector(inertial, "fullinertia")
                 if values.shape != (6,):
                     raise ValueError(f"invalid inertial tensor on {body_name}")
                 inertial.set("fullinertia", _fmt(_transform_fullinertia(values, column_linear, mass_scale)))
             for geom in body.findall("geom"):
                 name = geom.get("name", "")
-                if name.startswith("collision_femur_") or name.startswith("collision_tibia_"):
-                    length = float(target_calibration.segments[segment_key]["length_m"])
-                    radius = max(0.5 * float(target_calibration.segments[segment_key]["width_m"]), 0.005)
-                    reference_length = float(reference_calibration.segments[segment_key]["length_m"])
-                    clearance = min(0.035 * length / reference_length, 0.25 * length)
-                    proximal_center = clearance + radius
-                    distal_center = length - clearance - radius
+                if name.startswith(("collision_femur_", "collision_tibia_")):
+                    target = target_calibration.segments[segment_key]
+                    reference = reference_calibration.segments[segment_key]
+                    length = float(target["length_m"])
+                    radius = max(0.5 * float(target["width_m"]), 0.005)
+                    clearance = min(0.035 * length / float(reference["length_m"]), 0.25 * length)
+                    proximal_center, distal_center = clearance + radius, length - clearance - radius
                     if distal_center <= proximal_center:
                         raise ValueError(f"collision capsule is too short for {body_name}")
                     geom.set("size", f"{radius:.9g}")
-                    geom.set(
-                        "fromto",
-                        _fmt(np.asarray((0.0, 0.0, -proximal_center, 0.0, 0.0, -distal_center))),
-                    )
+                    geom.set("fromto", _fmt((0.0, 0.0, -proximal_center, 0.0, 0.0, -distal_center)))
                 elif body_name.startswith("foot_") and name.startswith(("contact_", "visual_foot_")):
                     pass
                 elif geom.get("mesh") is None and geom.get("type") == "box":
-                    _transform_box(geom, point_transform)
+                    _transform_box(geom, lambda points, name=body_name: transform_points(name, points))
                 elif geom.get("mesh") is None:
                     if "pos" in geom.attrib:
-                        position = np.asarray([float(value) for value in geom.get("pos").split()], dtype=np.float64)
-                        geom.set("pos", _fmt(point_transform(position[None, :])[0]))
+                        position = _vector(geom, "pos")
+                        geom.set("pos", _fmt(transform_points(body_name, position[None, :])[0]))
                     if "size" in geom.attrib:
-                        values = np.asarray([float(value) for value in geom.get("size").split()], dtype=np.float64)
+                        values = _vector(geom, "size")
                         geom.set("size", _fmt(values * body_scale[: values.size]))
             if body_name.startswith("foot_"):
                 side = body_name.removeprefix("foot_")
-                records = [
-                    vertices + np.asarray((0.0, 0.0, foot_offsets[side]))
-                    for _, _, vertices in body_mesh_vertices[body_name]
-                ]
-                all_vertices = np.concatenate(records, axis=0)
+                all_vertices = np.concatenate(
+                    [
+                        vertices + np.asarray((0.0, 0.0, foot_offsets[side]))
+                        for _, _, vertices in body_mesh_vertices[body_name]
+                    ],
+                    axis=0,
+                )
                 minimum, maximum = np.min(all_vertices, axis=0), np.max(all_vertices, axis=0)
-                radius = min(
-                    0.5 * float(target_calibration.segments[f"foot_{side}"]["width_m"]),
-                    0.25 * float(maximum[0] - minimum[0]),
-                    0.25 * float(maximum[1] - minimum[1]),
+                radius = max(
+                    0.005,
+                    min(
+                        0.5 * float(target_calibration.segments[f"foot_{side}"]["width_m"]),
+                        0.25 * float(maximum[0] - minimum[0]),
+                        0.25 * float(maximum[1] - minimum[1]),
+                        0.5 * float(reference_calibration.segments[f"foot_{side}"]["width_m"]),
+                    ),
                 )
-                radius = max(0.005, min(radius, 0.5 * float(reference_calibration.segments[f"foot_{side}"]["width_m"])))
-                centers = (
-                    (minimum[0] + radius, minimum[1] + radius, minimum[2] + radius),
-                    (minimum[0] + radius, maximum[1] - radius, minimum[2] + radius),
-                    (maximum[0] - radius, minimum[1] + radius, minimum[2] + radius),
-                    (maximum[0] - radius, maximum[1] - radius, minimum[2] + radius),
-                )
+                centers = [
+                    (x, y, minimum[2] + radius)
+                    for x in (minimum[0] + radius, maximum[0] - radius)
+                    for y in (minimum[1] + radius, maximum[1] - radius)
+                ]
                 for geom in body.findall("geom"):
                     name = geom.get("name", "")
-                    if name.startswith("contact_") or name.startswith("visual_foot_"):
+                    if name.startswith(("contact_", "visual_foot_")):
                         index = int(name.rsplit("_", 1)[-1])
                         geom.set("pos", _fmt(centers[index]))
                         geom.set("size", f"{radius:.9g}")
@@ -814,13 +727,12 @@ def write_calibrated_subject_mjcf(
                 site_world = target_markers[source_name] + global_offset
                 site.set("pos", _fmt(rotation.T @ (site_world - origin)))
                 site.set("size", f"{target_calibration.marker_radius:.9g}")
-        # Keep the named keyframe aligned with the calibrated root pose.
+
         pelvis_origin, pelvis_rotation = target_world["pelvis"]
         neutral = next(key for key in root.iter("key") if key.get("name") == "neutral")
         neutral.set(
             "qpos", _fmt((*pelvis_origin, *_quat_wxyz(pelvis_rotation), *([0.0] * len(list(root.iter("joint"))))))
         )
-        # The ground plane remains at z=0; the foot body frames and meshes now share that plane.
         staged_xml.write_text(ET.tostring(root, encoding="unicode") + "\n", encoding="utf-8")
         output_manifest = {
             "schema_version": _SCHEMA,
@@ -849,7 +761,7 @@ def write_calibrated_subject_mjcf(
             },
             "meshes": [
                 {"file": path.relative_to(staged).as_posix(), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
-                for path, _ in output_meshes
+                for path in output_meshes
             ],
         }
         output_manifest["seal"] = {
@@ -862,6 +774,4 @@ def write_calibrated_subject_mjcf(
         shutil.copytree(staged_geometry, output.parent / "Geometry")
         os.replace(staged_xml, output)
         os.replace(staged / "manifest.json", output.parent / "manifest.json")
-    finally:
-        shutil.rmtree(staged, ignore_errors=True)
     return CalibratedSubjectMJCF(output, target_calibration, base_root, mass_scale)
