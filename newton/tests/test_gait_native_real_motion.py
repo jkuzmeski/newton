@@ -13,6 +13,7 @@ import numpy as np
 import newton
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
 from projects.gait_c3d.native_motion_fit import (
+    NativeC3DMarkers,
     fit_c3d_marker_motion,
     map_c3d_markers_to_native,
     marker_attachments_from_model,
@@ -158,6 +159,26 @@ class TestNativeRealMotion(unittest.TestCase):
             self.assertTrue((output / "motion.npz").is_file())
             self.assertEqual(manifest["schema_version"], "gait_native_motion_artifact_1")
         self.assertEqual(manifest["frames"]["count"], 2)
+
+    def test_fit_preserves_predictions_for_occluded_markers(self):
+        """Keep full marker predictions while fitting only visible markers."""
+        q0 = self.model.joint_q.numpy().copy()
+        target = np.asarray([marker_positions_from_joint_q(self.model, self.attachments, q0)] * 3)
+        valid = np.ones((3, len(self.attachments)), dtype=bool)
+        valid[:, ::4] = False
+        target[~valid] = 0.0
+        mapped = NativeC3DMarkers(
+            np.asarray((0.0, 0.01, 0.02)),
+            target,
+            valid,
+            tuple(attachment.name for attachment in self.attachments),
+            "trial.c3d",
+            "2" * 64,
+        )
+        motion = fit_c3d_marker_motion(self.model, self.attachments, mapped, q0, iterations=10, batch_size=2)
+        self.assertEqual(motion.predictions.shape, target.shape)
+        self.assertTrue(np.all(np.isfinite(motion.predictions)))
+        self.assertGreater(float(np.linalg.norm(motion.predictions[:, ~valid[0]])), 0.0)
 
 
 if __name__ == "__main__":

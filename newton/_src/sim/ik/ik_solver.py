@@ -193,6 +193,14 @@ def _set_seed(
     seed_state[0] = value
 
 
+@wp.kernel
+def _set_problem_index(
+    problem_idx: wp.array[wp.int32],
+    value: int,
+):
+    problem_idx[0] = value
+
+
 class IKSolver:
     """High-level inverse-kinematics front end with optional multi-seed sampling.
 
@@ -289,23 +297,35 @@ class IKSolver:
         self._rng_seed = np.uint32(rng_seed)
 
         self.joint_q_expanded = wp.zeros((self.n_expanded, self.n_coords), dtype=wp.float32, device=self.device)
-        self.best_indices = wp.zeros(self.n_problems, dtype=wp.int32, device=self.device)
-        self._seed_state = wp.array(np.array([self._rng_seed], dtype=np.uint32), dtype=wp.uint32, device=self.device)
-        self._seed_tmp = wp.zeros(1, dtype=wp.uint32, device=self.device)
+        self.best_indices = wp.zeros(self.n_problems, dtype=wp.int32, device=self.device) if self.n_seeds > 1 else None
+        stochastic_sampler = sampler in (IKSampler.GAUSS, IKSampler.UNIFORM)
+        self._seed_state = (
+            wp.array(np.array([self._rng_seed], dtype=np.uint32), dtype=wp.uint32, device=self.device)
+            if stochastic_sampler
+            else None
+        )
+        self._seed_tmp = wp.zeros(1, dtype=wp.uint32, device=self.device) if stochastic_sampler else None
 
         base_idx_np = np.repeat(np.arange(self.n_problems, dtype=np.int32), self.n_seeds)
         self.problem_idx_expanded = wp.array(base_idx_np, dtype=wp.int32, device=self.device)
 
-        lower_np = model.joint_limit_lower.numpy()[: self.n_coords].astype(np.float32)
-        upper_np = model.joint_limit_upper.numpy()[: self.n_coords].astype(np.float32)
-        span_np = upper_np - lower_np
-        bounded_mask_np = (np.isfinite(lower_np) & np.isfinite(upper_np) & (np.abs(span_np) < 1.0e5)).astype(np.int32)
-        lower_np = np.where(bounded_mask_np, lower_np, 0.0).astype(np.float32)
-        upper_np = np.where(bounded_mask_np, upper_np, 0.0).astype(np.float32)
+        if sampler in (IKSampler.GAUSS, IKSampler.UNIFORM, IKSampler.ROBERTS):
+            lower_np = model.joint_limit_lower.numpy()[: self.n_coords].astype(np.float32)
+            upper_np = model.joint_limit_upper.numpy()[: self.n_coords].astype(np.float32)
+            span_np = upper_np - lower_np
+            bounded_mask_np = (np.isfinite(lower_np) & np.isfinite(upper_np) & (np.abs(span_np) < 1.0e5)).astype(
+                np.int32
+            )
+            lower_np = np.where(bounded_mask_np, lower_np, 0.0).astype(np.float32)
+            upper_np = np.where(bounded_mask_np, upper_np, 0.0).astype(np.float32)
 
-        self.joint_lower = wp.array(lower_np, dtype=wp.float32, device=self.device)
-        self.joint_upper = wp.array(upper_np, dtype=wp.float32, device=self.device)
-        self.joint_bounded = wp.array(bounded_mask_np, dtype=wp.int32, device=self.device)
+            self.joint_lower = wp.array(lower_np, dtype=wp.float32, device=self.device)
+            self.joint_upper = wp.array(upper_np, dtype=wp.float32, device=self.device)
+            self.joint_bounded = wp.array(bounded_mask_np, dtype=wp.int32, device=self.device)
+        else:
+            self.joint_lower = None
+            self.joint_upper = None
+            self.joint_bounded = None
 
         if sampler is IKSampler.ROBERTS:
             roberts_basis = self._compute_roberts_basis(self.n_coords)
@@ -380,7 +400,11 @@ class IKSolver:
         else:
             raise RuntimeError(f"Unsupported optimizer: {self.optimizer_type}")
 
-        self._impl.compute_costs(self.joint_q_expanded)
+        # LM updates ``self.costs`` for the accepted current state on every
+        # iteration. Avoid recomputing FK/residuals after the solve; LBFGS and
+        # zero-iteration calls still need the explicit final evaluation.
+        if self.optimizer_type is IKOptimizer.LBFGS or iterations <= 0:
+            self._impl.compute_costs(self.joint_q_expanded)
 
         if self.n_seeds == 1:
             if joint_q_out.ptr != self.joint_q_expanded.ptr:
@@ -402,16 +426,46 @@ class IKSolver:
             device=self.device,
         )
 
+    def set_problem_index(self, problem_idx: int, *, problem_count: int | None = None) -> None:
+        """Select a device-resident objective-data row for a one-problem solve.
+
+        This updates the row mapping in a Warp kernel. It is intended for
+        sequential GPU pipelines that retain warm starts while advancing
+        through a device-resident target sequence. The selected row must exist
+        in every objective buffer used by the solver. Pass ``problem_count``
+        when that bound is known to validate it before launching a kernel.
+
+        Args:
+            problem_idx: Index into per-problem objective arrays.
+            problem_count: Optional number of rows in those objective arrays.
+
+        Raises:
+            ValueError: If the solver has more than one base problem, sampling
+                uses more than one seed, or the index is out of bounds.
+        """
+        if self.n_problems != 1 or self.n_seeds != 1:
+            raise ValueError("set_problem_index requires n_problems == n_seeds == 1")
+        if problem_idx < 0 or (problem_count is not None and problem_idx >= problem_count):
+            raise ValueError("problem_idx is outside problem_count")
+        wp.launch(
+            _set_problem_index,
+            dim=1,
+            inputs=[self.problem_idx_expanded, problem_idx],
+            device=self.device,
+        )
+
     def reset(self) -> None:
         """Reset optimizer state, selected seeds, and the sampler RNG."""
         self._impl.reset()
-        self.best_indices.zero_()
-        wp.launch(
-            _set_seed,
-            dim=1,
-            inputs=[self._seed_state, int(self._rng_seed)],
-            device=self.device,
-        )
+        if self.best_indices is not None:
+            self.best_indices.zero_()
+        if self._seed_state is not None:
+            wp.launch(
+                _set_seed,
+                dim=1,
+                inputs=[self._seed_state, int(self._rng_seed)],
+                device=self.device,
+            )
 
     @property
     def joint_q(self) -> wp.array2d[wp.float32]:
@@ -427,14 +481,6 @@ class IKSolver:
         return getattr(self._impl, name)
 
     def _sample(self, joint_q_in: wp.array2d[wp.float32]) -> None:
-        wp.launch(
-            _pull_seed,
-            dim=1,
-            inputs=[self._seed_state],
-            outputs=[self._seed_tmp],
-            device=self.device,
-        )
-
         if self.sampler is IKSampler.NONE:
             wp.launch(
                 _sample_none_kernel,
@@ -446,6 +492,13 @@ class IKSolver:
             return
 
         if self.sampler is IKSampler.GAUSS:
+            wp.launch(
+                _pull_seed,
+                dim=1,
+                inputs=[self._seed_state],
+                outputs=[self._seed_tmp],
+                device=self.device,
+            )
             wp.launch(
                 _sample_gauss_kernel,
                 dim=self.n_expanded,
@@ -465,6 +518,13 @@ class IKSolver:
             return
 
         if self.sampler is IKSampler.UNIFORM:
+            wp.launch(
+                _pull_seed,
+                dim=1,
+                inputs=[self._seed_state],
+                outputs=[self._seed_tmp],
+                device=self.device,
+            )
             wp.launch(
                 _sample_uniform_kernel,
                 dim=self.n_expanded,

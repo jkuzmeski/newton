@@ -6,7 +6,13 @@
 from .ik_common import IKJacobianType
 from .ik_lbfgs_optimizer import IKOptimizerLBFGS
 from .ik_lm_optimizer import IKOptimizerLM
-from .ik_objectives import IKObjective, IKObjectiveJointLimit, IKObjectivePosition, IKObjectiveRotation
+from .ik_objectives import (
+    IKObjective,
+    IKObjectiveJointLimit,
+    IKObjectivePosition,
+    IKObjectivePositionBatch,
+    IKObjectiveRotation,
+)
 from .ik_solver import IKOptimizer, IKSampler, IKSolver
 
 __all__ = [
@@ -14,6 +20,7 @@ __all__ = [
     "IKObjective",
     "IKObjectiveJointLimit",
     "IKObjectivePosition",
+    "IKObjectivePositionBatch",
     "IKObjectiveRotation",
     "IKOptimizer",
     "IKOptimizerLBFGS",

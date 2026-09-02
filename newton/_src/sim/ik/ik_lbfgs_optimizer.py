@@ -1554,7 +1554,8 @@ class IKOptimizerLBFGS:
                 fk_accum,
                 dim=[n_batch, model.joint_count],
                 inputs=[
-                    model.joint_parent,
+                    model.joint_ancestor,
+                    model.joint_child,
                     X_local,
                 ],
                 outputs=[

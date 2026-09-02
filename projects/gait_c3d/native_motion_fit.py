@@ -21,6 +21,146 @@ import newton.ik as ik
 from .c3d_adapter import C3DMarkerTrajectory
 
 
+@wp.kernel
+def _normalize_free_root_quaternion(
+    joint_q: wp.array2d[wp.float32],
+    quaternion_start: int,
+    valid: wp.array[wp.int32],
+):
+    """Normalize a free-root quaternion in-place without a device round trip."""
+    row = wp.tid()
+    if quaternion_start < 0:
+        valid[row] = 1
+        return
+    x = joint_q[row, quaternion_start + 0]
+    y = joint_q[row, quaternion_start + 1]
+    z = joint_q[row, quaternion_start + 2]
+    w = joint_q[row, quaternion_start + 3]
+    norm = wp.sqrt(x * x + y * y + z * z + w * w)
+    if wp.isfinite(norm) and norm > 0.0:
+        joint_q[row, quaternion_start + 0] = x / norm
+        joint_q[row, quaternion_start + 1] = y / norm
+        joint_q[row, quaternion_start + 2] = z / norm
+        joint_q[row, quaternion_start + 3] = w / norm
+        valid[row] = 1
+    else:
+        valid[row] = 0
+
+
+@wp.kernel
+def _broadcast_seed(
+    seed: wp.array2d[wp.float32],
+    joint_q: wp.array2d[wp.float32],
+):
+    row, coordinate = wp.tid()
+    joint_q[row, coordinate] = seed[0, coordinate]
+
+
+@wp.kernel
+def _predict_markers(
+    body_q: wp.array[wp.transform],
+    link_indices: wp.array[wp.int32],
+    link_offsets: wp.array[wp.vec3],
+    frame_idx: int,
+    # outputs
+    predictions: wp.array2d[wp.vec3],
+):
+    marker_idx = wp.tid()
+    predictions[frame_idx, marker_idx] = wp.transform_point(body_q[link_indices[marker_idx]], link_offsets[marker_idx])
+
+
+@wp.kernel
+def _predict_markers_batched(
+    body_q: wp.array2d[wp.transform],
+    link_indices: wp.array[wp.int32],
+    link_offsets: wp.array[wp.vec3],
+    frame_start: int,
+    valid_count: int,
+    # outputs
+    predictions: wp.array2d[wp.vec3],
+):
+    row, marker_idx = wp.tid()
+    if row >= valid_count:
+        return
+    predictions[frame_start + row, marker_idx] = wp.transform_point(
+        body_q[row, link_indices[marker_idx]], link_offsets[marker_idx]
+    )
+
+
+@wp.kernel
+def _store_solution(
+    joint_q: wp.array2d[wp.float32],
+    costs: wp.array[wp.float32],
+    frame_idx: int,
+    joint_q_start: wp.array[wp.int32],
+    joint_qd_start: wp.array[wp.int32],
+    joint_limit_lower: wp.array[wp.float32],
+    joint_limit_upper: wp.array[wp.float32],
+    joint_count: int,
+    # outputs
+    solutions: wp.array2d[wp.float32],
+    solution_costs: wp.array[wp.float32],
+    limit_violations: wp.array[wp.float32],
+):
+    coordinate = wp.tid()
+    solutions[frame_idx, coordinate] = joint_q[0, coordinate]
+    if coordinate == 0:
+        maximum = float(0.0)
+        for joint in range(joint_count):
+            q_start = joint_q_start[joint]
+            dof_start = joint_qd_start[joint]
+            dof_end = joint_qd_start[joint + 1]
+            for offset in range(dof_end - dof_start):
+                q_idx = q_start + offset
+                dof_idx = dof_start + offset
+                lower = joint_limit_lower[dof_idx]
+                upper = joint_limit_upper[dof_idx]
+                if wp.isfinite(lower) and wp.isfinite(upper) and upper - lower < 1.0e5:
+                    q = joint_q[0, q_idx]
+                    maximum = wp.max(maximum, wp.max(lower - q, q - upper))
+        solution_costs[frame_idx] = costs[0]
+        limit_violations[frame_idx] = wp.max(maximum, 0.0)
+
+
+@wp.kernel
+def _store_batch_solutions(
+    joint_q: wp.array2d[wp.float32],
+    costs: wp.array[wp.float32],
+    frame_start: int,
+    valid_count: int,
+    joint_q_start: wp.array[wp.int32],
+    joint_qd_start: wp.array[wp.int32],
+    joint_limit_lower: wp.array[wp.float32],
+    joint_limit_upper: wp.array[wp.float32],
+    joint_count: int,
+    # outputs
+    solutions: wp.array2d[wp.float32],
+    solution_costs: wp.array[wp.float32],
+    limit_violations: wp.array[wp.float32],
+):
+    row, coordinate = wp.tid()
+    if row >= valid_count:
+        return
+    frame_idx = frame_start + row
+    solutions[frame_idx, coordinate] = joint_q[row, coordinate]
+    if coordinate == 0:
+        maximum = float(0.0)
+        for joint in range(joint_count):
+            q_start = joint_q_start[joint]
+            dof_start = joint_qd_start[joint]
+            dof_end = joint_qd_start[joint + 1]
+            for offset in range(dof_end - dof_start):
+                q_idx = q_start + offset
+                dof_idx = dof_start + offset
+                lower = joint_limit_lower[dof_idx]
+                upper = joint_limit_upper[dof_idx]
+                if wp.isfinite(lower) and wp.isfinite(upper) and upper - lower < 1.0e5:
+                    q = joint_q[row, q_idx]
+                    maximum = wp.max(maximum, wp.max(lower - q, q - upper))
+        solution_costs[frame_idx] = costs[row]
+        limit_violations[frame_idx] = wp.max(maximum, 0.0)
+
+
 @dataclass(frozen=True, slots=True)
 class NativeMarkerAttachment:
     """A marker point attached to one native body."""
@@ -43,10 +183,10 @@ class NativeIKFrame:
     """Solved generalized coordinates [m or rad]."""
 
     predicted_markers: np.ndarray
-    """Predicted marker positions [m]."""
+    """Predicted marker positions [m] in output-attachment order."""
 
     target_markers: np.ndarray
-    """Target marker positions [m]."""
+    """Target marker positions [m] in fitted-attachment order."""
 
     marker_rms: float
     """Root-mean-square marker error [m]."""
@@ -147,8 +287,16 @@ def solve_marker_sequence(
     iterations: int = 80,
     joint_limit_weight: float = 0.1,
     lambda_initial: float = 0.001,
+    batch_size: int = 1,
+    prediction_attachments: tuple[NativeMarkerAttachment, ...] | None = None,
 ) -> tuple[NativeIKFrame, ...]:
-    """Solve a marker sequence with public Newton LM and warm starts.
+    """Solve a marker sequence with public Newton LM on the model device.
+
+    Target data, solved coordinates, forward kinematics, marker predictions,
+    and solver diagnostics stay on the model device until the complete
+    sequence has finished. Apart from one-time static model metadata needed to
+    identify a free-root quaternion, the only host transfers in the solve are
+    the final result copies.
 
     Args:
         model: Finalized native model.
@@ -158,6 +306,13 @@ def solve_marker_sequence(
         iterations: LM iterations per frame.
         joint_limit_weight: Weight of the public joint-limit objective.
         lambda_initial: Initial LM damping value.
+        batch_size: Number of frames solved concurrently. ``1`` preserves
+            sequential warm starts. Larger values solve GPU batches; each row
+            in a chunk starts from the previous chunk's final solution (or
+            ``seed`` for the first chunk).
+        prediction_attachments: Optional marker attachments to predict after
+            solving. Use this to request full-marker predictions while fitting
+            only a visible subset.
 
     Returns:
         Solved frames in input order.
@@ -172,56 +327,207 @@ def solve_marker_sequence(
         raise ValueError("seed has an incompatible or nonfinite shape")
     if iterations <= 0:
         raise ValueError("iterations must be positive")
-    target_arrays = [wp.zeros(1, dtype=wp.vec3, device=model.device) for _ in attachments]
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    frame_count = target_sequence.shape[0]
+    if frame_count == 0:
+        return ()
+    if prediction_attachments is None:
+        prediction_attachments = attachments
+    used_prediction_indices = set()
+    target_prediction_indices = []
+    for target_attachment in attachments:
+        for prediction_index, prediction_attachment in enumerate(prediction_attachments):
+            if prediction_index not in used_prediction_indices and prediction_attachment == target_attachment:
+                target_prediction_indices.append(prediction_index)
+                used_prediction_indices.add(prediction_index)
+                break
+        else:
+            raise ValueError("prediction_attachments must include every fitted attachment")
+    quaternion_slice = free_root_quaternion_slice(model)
+    quaternion_start = -1 if quaternion_slice is None else quaternion_slice.start
     with wp.ScopedDevice(model.device):
-        objectives = [
-            ik.IKObjectivePosition(
-                attachment.body,
-                wp.vec3(*attachment.local_position),
-                target_array,
-                weight=1.0,
+        target_positions = wp.array(target_sequence.astype(np.float32), dtype=wp.vec3, device=model.device)
+        link_indices = wp.array(
+            np.asarray([attachment.body for attachment in attachments], dtype=np.int32),
+            dtype=wp.int32,
+            device=model.device,
+        )
+        link_offsets = wp.array(
+            np.asarray([attachment.local_position for attachment in attachments], dtype=np.float32),
+            dtype=wp.vec3,
+            device=model.device,
+        )
+        prediction_link_indices = wp.array(
+            np.asarray([attachment.body for attachment in prediction_attachments], dtype=np.int32),
+            dtype=wp.int32,
+            device=model.device,
+        )
+        prediction_link_offsets = wp.array(
+            np.asarray([attachment.local_position for attachment in prediction_attachments], dtype=np.float32),
+            dtype=wp.vec3,
+            device=model.device,
+        )
+        seed_device = wp.array(seed.reshape(1, -1), dtype=wp.float32, device=model.device)
+        joint_qd = wp.zeros(model.joint_dof_count, dtype=wp.float32, device=model.device)
+        solutions = wp.zeros((frame_count, model.joint_coord_count), dtype=wp.float32, device=model.device)
+        predictions = wp.zeros((frame_count, len(prediction_attachments)), dtype=wp.vec3, device=model.device)
+        costs = wp.zeros(frame_count, dtype=wp.float32, device=model.device)
+        limit_violations = wp.zeros(frame_count, dtype=wp.float32, device=model.device)
+        quaternion_valid = wp.zeros(frame_count, dtype=wp.int32, device=model.device)
+
+        def make_solver(targets: wp.array2d[wp.vec3], n_problems: int) -> ik.IKSolver:
+            marker_objective = ik.IKObjectivePositionBatch(link_indices, link_offsets, targets)
+            joint_limits = ik.IKObjectiveJointLimit(
+                model.joint_limit_lower,
+                model.joint_limit_upper,
+                weight=joint_limit_weight,
             )
-            for attachment, target_array in zip(attachments, target_arrays, strict=True)
-        ]
-        joint_limits = ik.IKObjectiveJointLimit(
-            model.joint_limit_lower,
-            model.joint_limit_upper,
-            weight=joint_limit_weight,
-        )
-        solver = ik.IKSolver(
-            model,
-            1,
-            [*objectives, joint_limits],
-            lambda_initial=lambda_initial,
-            jacobian_mode=ik.IKJacobianType.ANALYTIC,
-        )
-        joint_q = wp.array(seed.reshape(1, -1), dtype=wp.float32, device=model.device)
-        frames = []
-        for target_frame in target_sequence:
-            for objective, target in zip(objectives, target_frame, strict=True):
-                objective.set_target_position(0, wp.vec3(*target))
-            solver.step(joint_q, joint_q, iterations=iterations, step_size=1.0)
-            solved = joint_q.numpy()[0].copy()
-            quaternion_slice = free_root_quaternion_slice(model)
-            if quaternion_slice is not None:
-                quaternion = solved[quaternion_slice]
-                norm = float(np.linalg.norm(quaternion))
-                if not math_is_finite_positive(norm):
-                    raise ValueError("IK produced a nonfinite free-root quaternion")
-                solved[quaternion_slice] = quaternion / norm
-                joint_q.assign(solved.reshape(1, -1))
-            frame = marker_ik_frame(model, attachments, solved, target_frame)
-            frames.append(
-                NativeIKFrame(
-                    frame.joint_q,
-                    frame.predicted_markers,
-                    frame.target_markers,
-                    frame.marker_rms,
-                    frame.marker_max,
-                    float(solver.costs.numpy()[0]),
-                    joint_limit_violation(model, solved),
+            return ik.IKSolver(
+                model,
+                n_problems,
+                [marker_objective, joint_limits],
+                lambda_initial=lambda_initial,
+                jacobian_mode=ik.IKJacobianType.ANALYTIC,
+            )
+
+        if batch_size == 1:
+            # Keep the exact temporal warm-start behavior for callers that
+            # request it. All frame targets and all result buffers still stay
+            # on the device throughout this loop.
+            solver = make_solver(target_positions, 1)
+            state = model.state()
+            joint_q = wp.zeros((1, model.joint_coord_count), dtype=wp.float32, device=model.device)
+            wp.copy(joint_q, seed_device)
+            for frame_idx in range(frame_count):
+                solver.set_problem_index(frame_idx, problem_count=frame_count)
+                solver.step(joint_q, joint_q, iterations=iterations, step_size=1.0)
+                wp.launch(
+                    _normalize_free_root_quaternion,
+                    dim=1,
+                    inputs=[joint_q, quaternion_start],
+                    outputs=[quaternion_valid[frame_idx : frame_idx + 1]],
+                    device=model.device,
                 )
+                wp.launch(
+                    _store_solution,
+                    dim=model.joint_coord_count,
+                    inputs=[
+                        joint_q,
+                        solver.costs,
+                        frame_idx,
+                        model.joint_q_start,
+                        model.joint_qd_start,
+                        model.joint_limit_lower,
+                        model.joint_limit_upper,
+                        model.joint_count,
+                    ],
+                    outputs=[solutions, costs, limit_violations],
+                    device=model.device,
+                )
+                newton.eval_fk(model, joint_q[0], joint_qd, state)
+                wp.launch(
+                    _predict_markers,
+                    dim=len(prediction_attachments),
+                    inputs=[state.body_q, prediction_link_indices, prediction_link_offsets, frame_idx],
+                    outputs=[predictions],
+                    device=model.device,
+                )
+        else:
+            # Larger batches trade strict frame-to-frame warm starts for much
+            # higher GPU occupancy. This is the fast path for long mocap
+            # sequences. Rows in a chunk start from a shared predictor, and
+            # the last solved row seeds the next chunk.
+            # Keep one fixed-size solver and pad only the final chunk so model
+            # metadata and objective buffers are initialized once.
+            solver_batch = min(batch_size, frame_count)
+            target_batch = wp.zeros((solver_batch, len(attachments)), dtype=wp.vec3, device=model.device)
+            solver = make_solver(target_batch, solver_batch)
+            chunk_seed = wp.array(seed.reshape(1, -1), dtype=wp.float32, device=model.device)
+            joint_q = wp.zeros((solver_batch, model.joint_coord_count), dtype=wp.float32, device=model.device)
+            joint_qd_batch = wp.zeros((solver_batch, model.joint_dof_count), dtype=wp.float32, device=model.device)
+            body_q_batch = wp.zeros((solver_batch, model.body_count), dtype=wp.transform, device=model.device)
+            body_qd_batch = wp.zeros((solver_batch, model.body_count), dtype=wp.spatial_vector, device=model.device)
+            batch_quaternion_valid = wp.zeros(solver_batch, dtype=wp.int32, device=model.device)
+            for frame_start in range(0, frame_count, solver_batch):
+                n_batch = min(solver_batch, frame_count - frame_start)
+                wp.copy(target_batch[:n_batch], target_positions[frame_start : frame_start + n_batch])
+                wp.launch(
+                    _broadcast_seed,
+                    dim=[solver_batch, model.joint_coord_count],
+                    inputs=[chunk_seed],
+                    outputs=[joint_q],
+                    device=model.device,
+                )
+                solver.step(joint_q, joint_q, iterations=iterations, step_size=1.0)
+                wp.launch(
+                    _normalize_free_root_quaternion,
+                    dim=solver_batch,
+                    inputs=[joint_q, quaternion_start],
+                    outputs=[batch_quaternion_valid],
+                    device=model.device,
+                )
+                wp.copy(quaternion_valid[frame_start : frame_start + n_batch], batch_quaternion_valid[:n_batch])
+                wp.copy(chunk_seed, joint_q[n_batch - 1 : n_batch])
+                wp.launch(
+                    _store_batch_solutions,
+                    dim=[solver_batch, model.joint_coord_count],
+                    inputs=[
+                        joint_q,
+                        solver.costs,
+                        frame_start,
+                        n_batch,
+                        model.joint_q_start,
+                        model.joint_qd_start,
+                        model.joint_limit_lower,
+                        model.joint_limit_upper,
+                        model.joint_count,
+                    ],
+                    outputs=[solutions, costs, limit_violations],
+                    device=model.device,
+                )
+                newton.eval_fk_batched(model, joint_q, joint_qd_batch, body_q_batch, body_qd_batch)
+                wp.launch(
+                    _predict_markers_batched,
+                    dim=[solver_batch, len(prediction_attachments)],
+                    inputs=[
+                        body_q_batch,
+                        prediction_link_indices,
+                        prediction_link_offsets,
+                        frame_start,
+                        n_batch,
+                    ],
+                    outputs=[predictions],
+                    device=model.device,
+                )
+
+        valid_quaternions = quaternion_valid.numpy().astype(bool)
+        if not np.all(valid_quaternions):
+            raise ValueError("IK produced a nonfinite free-root quaternion")
+        solved_coordinates = solutions.numpy()
+        predicted_markers = predictions.numpy()
+        solver_costs = costs.numpy()
+        solved_limit_violations = limit_violations.numpy()
+
+    frames = []
+    for frame_idx, target_frame in enumerate(target_sequence):
+        predicted = predicted_markers[frame_idx].astype(np.float64)
+        target = target_frame.copy()
+        fitted_predictions = predicted[target_prediction_indices]
+        errors = fitted_predictions - target
+        distances = np.linalg.norm(errors, axis=1)
+        frames.append(
+            NativeIKFrame(
+                solved_coordinates[frame_idx].copy(),
+                predicted,
+                target,
+                float(np.sqrt(np.mean(np.sum(errors * errors, axis=1)))),
+                float(np.max(distances)),
+                float(solver_costs[frame_idx]),
+                float(solved_limit_violations[frame_idx]),
             )
+        )
     return tuple(frames)
 
 
@@ -503,6 +809,7 @@ def fit_c3d_marker_motion(
     registration: np.ndarray | None = None,
     iterations: int = 40,
     joint_limit_weight: float = 0.1,
+    batch_size: int = 8,
     start_frame: int = 0,
     end_frame: int | None = None,
     max_frames: int | None = None,
@@ -518,6 +825,8 @@ def fit_c3d_marker_motion(
         registration: Row-vector 4x4 C3D-to-model transform.
         iterations: LM iterations per selected frame.
         joint_limit_weight: Weight of the public joint-limit objective.
+        batch_size: Number of frames solved concurrently. Larger values use
+            more GPU parallelism; use ``1`` to retain frame warm starts.
         start_frame: First frame index to fit.
         end_frame: Exclusive frame index, or ``None`` for the end.
         max_frames: Maximum selected frames, or ``None`` for no limit.
@@ -528,6 +837,8 @@ def fit_c3d_marker_motion(
     """
     if stride <= 0:
         raise ValueError("stride must be positive")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
     if start_frame < 0 or (end_frame is not None and end_frame <= start_frame):
         raise ValueError("motion frame range is invalid")
     if registration is None:
@@ -554,11 +865,13 @@ def fit_c3d_marker_motion(
         seed,
         iterations=iterations,
         joint_limit_weight=joint_limit_weight,
+        batch_size=batch_size,
+        prediction_attachments=attachments,
     )
     joint_q = np.asarray([frame.joint_q for frame in frames], dtype=np.float32)
-    predictions = np.asarray(
-        [marker_positions_from_joint_q(model, attachments, coordinates) for coordinates in joint_q], dtype=np.float32
-    )
+    # solve_marker_sequence computes predictions for all attachments on the
+    # model device, even though optimization uses only the visible subset.
+    predictions = np.asarray([frame.predicted_markers for frame in frames], dtype=np.float32)
     targets = registered.positions[frame_indices].astype(np.float32)
     valid = registered.valid[frame_indices].copy()
     distances = np.linalg.norm(predictions.astype(np.float64) - targets.astype(np.float64), axis=-1)

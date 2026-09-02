@@ -19,6 +19,7 @@ Public inverse-kinematics API for defining objectives and solving IK problems.
    IKObjective
    IKObjectiveJointLimit
    IKObjectivePosition
+   IKObjectivePositionBatch
    IKObjectiveRotation
    IKOptimizer
    IKOptimizerLBFGS

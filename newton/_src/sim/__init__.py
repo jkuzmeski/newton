@@ -15,6 +15,7 @@ from .enums import (
     ModelFlags,
     StateFlags,
 )
+from .ik.ik_common import eval_fk_batched
 from .inverse_dynamics import eval_inverse_dynamics_passive
 from .model import Model
 from .state import State
@@ -33,6 +34,7 @@ __all__ = [
     "State",
     "StateFlags",
     "eval_fk",
+    "eval_fk_batched",
     "eval_ik",
     "eval_inverse_dynamics_force",
     "eval_inverse_dynamics_passive",

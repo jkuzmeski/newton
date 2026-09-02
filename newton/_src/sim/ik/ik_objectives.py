@@ -217,6 +217,66 @@ def _update_position_targets(
 
 
 @wp.kernel
+def _pos_batch_residuals(
+    body_q: wp.array2d[wp.transform],  # (n_batch, n_bodies)
+    target_positions: wp.array2d[wp.vec3],  # (n_problems, n_markers)
+    link_indices: wp.array[wp.int32],  # (n_markers)
+    link_offsets: wp.array[wp.vec3],  # (n_markers)
+    start_idx: int,
+    weight: float,
+    problem_idx_map: wp.array[wp.int32],
+    # outputs
+    residuals: wp.array2d[wp.float32],  # (n_batch, n_residuals)
+):
+    row, marker_idx = wp.tid()
+    base = problem_idx_map[row]
+    body_tf = body_q[row, link_indices[marker_idx]]
+    marker_pos = wp.transform_point(body_tf, link_offsets[marker_idx])
+    error = target_positions[base, marker_idx] - marker_pos
+    residual_idx = start_idx + 3 * marker_idx
+    residuals[row, residual_idx + 0] = weight * error[0]
+    residuals[row, residual_idx + 1] = weight * error[1]
+    residuals[row, residual_idx + 2] = weight * error[2]
+
+
+@wp.kernel
+def _pos_batch_jac_analytic(
+    link_indices: wp.array[wp.int32],  # (n_markers)
+    link_offsets: wp.array[wp.vec3],  # (n_markers)
+    affects_dof: wp.array2d[wp.uint8],  # (n_markers, n_dofs)
+    body_q: wp.array2d[wp.transform],  # (n_batch, n_bodies)
+    joint_S_s: wp.array2d[wp.spatial_vector],  # (n_batch, n_dofs)
+    start_idx: int,
+    n_dofs: int,
+    weight: float,
+    # output
+    jacobian: wp.array3d[wp.float32],  # (n_batch, n_residuals, n_dofs)
+):
+    row, marker_idx = wp.tid()
+    body_tf = body_q[row, link_indices[marker_idx]]
+    rot_w = wp.quat(body_tf[3], body_tf[4], body_tf[5], body_tf[6])
+    pos_w = wp.vec3(body_tf[0], body_tf[1], body_tf[2])
+    marker_pos_world = pos_w + wp.quat_rotate(rot_w, link_offsets[marker_idx])
+    residual_idx = start_idx + 3 * marker_idx
+
+    # The endpoint transform is shared by every ancestor DoF of this marker.
+    # Compute it once per marker instead of once per marker/DoF thread.
+    for dof_idx in range(n_dofs):
+        if affects_dof[marker_idx, dof_idx] == 0:
+            jacobian[row, residual_idx + 0, dof_idx] = 0.0
+            jacobian[row, residual_idx + 1, dof_idx] = 0.0
+            jacobian[row, residual_idx + 2, dof_idx] = 0.0
+            continue
+        S = joint_S_s[row, dof_idx]
+        v_orig = wp.vec3(S[0], S[1], S[2])
+        omega = wp.vec3(S[3], S[4], S[5])
+        v_marker = v_orig + wp.cross(omega, marker_pos_world)
+        jacobian[row, residual_idx + 0, dof_idx] = -weight * v_marker[0]
+        jacobian[row, residual_idx + 1, dof_idx] = -weight * v_marker[1]
+        jacobian[row, residual_idx + 2, dof_idx] = -weight * v_marker[2]
+
+
+@wp.kernel
 def _pos_jac_analytic(
     link_index: int,
     link_offset: wp.vec3,
@@ -488,6 +548,168 @@ class IKObjectivePosition(IKObjective):
                 joint_S_s,
                 start_idx,
                 n_dofs,
+                self.weight,
+            ],
+            outputs=[jacobian],
+            device=self.device,
+        )
+
+
+class IKObjectivePositionBatch(IKObjective):
+    """Match multiple link points with one fused position objective.
+
+    This objective is useful for marker-based IK. It evaluates all marker
+    residuals and their analytic Jacobian in one Warp launch per evaluation,
+    avoiding one launch per marker.
+
+    Args:
+        link_indices: Body indices for each constrained point, shape
+            [marker_count].
+        link_offsets: Point offsets in each link frame [m], shape
+            [marker_count].
+        target_positions: Target positions [m], shape
+            [problem_count, marker_count].
+        weight: Scalar multiplier applied to all residual and Jacobian rows.
+    """
+
+    def __init__(
+        self,
+        link_indices: wp.array[wp.int32],
+        link_offsets: wp.array[wp.vec3],
+        target_positions: wp.array2d[wp.vec3],
+        weight: float = 1.0,
+    ) -> None:
+        super().__init__()
+        if link_indices.dtype != wp.int32 or link_offsets.dtype != wp.vec3 or target_positions.dtype != wp.vec3:
+            raise ValueError("position objective arrays have incompatible dtypes")
+        if link_indices.ndim != 1 or link_offsets.ndim != 1:
+            raise ValueError("link_indices and link_offsets must be one-dimensional")
+        if link_indices.shape[0] == 0:
+            raise ValueError("position objective requires at least one point")
+        if link_indices.shape[0] != link_offsets.shape[0]:
+            raise ValueError("link_indices and link_offsets must have matching lengths")
+        if target_positions.ndim != 2 or target_positions.shape[1] != link_indices.shape[0]:
+            raise ValueError("target_positions must have shape [problem_count, marker_count]")
+        if link_indices.device != target_positions.device or link_offsets.device != target_positions.device:
+            raise ValueError("position objective arrays must share a device")
+
+        self.link_indices = link_indices
+        self.link_offsets = link_offsets
+        self.target_positions = target_positions
+        self.marker_count = link_indices.shape[0]
+        self.weight = weight
+        self.affects_dof = None
+
+    def init_buffers(self, model: Model, jacobian_mode: IKJacobianType) -> None:
+        """Initialize the marker-to-DoF influence mask for analytic Jacobians.
+
+        Args:
+            model: Shared articulation model.
+            jacobian_mode: Jacobian backend selected for this objective.
+        """
+        self._require_batch_layout()
+        if jacobian_mode != IKJacobianType.ANALYTIC:
+            raise ValueError("IKObjectivePositionBatch requires analytic Jacobians")
+        if self.device != model.device:
+            raise ValueError("position objective arrays must be on the model device")
+
+        joint_qd_start = model.joint_qd_start.numpy()
+        joint_child = model.joint_child.numpy()
+        joint_parent = model.joint_parent.numpy()
+        link_indices = self.link_indices.numpy()
+        if np.any(link_indices < 0) or np.any(link_indices >= model.body_count):
+            raise ValueError("link_indices contain an invalid body index")
+        dof_to_joint = np.empty(model.joint_dof_count, dtype=np.int32)
+        for joint in range(model.joint_count):
+            dof_to_joint[joint_qd_start[joint] : joint_qd_start[joint + 1]] = joint
+
+        body_to_joint = np.full(model.body_count, -1, dtype=np.int32)
+        for joint, child in enumerate(joint_child):
+            if child != -1:
+                body_to_joint[child] = joint
+
+        affects_dof = np.zeros((self.marker_count, model.joint_dof_count), dtype=np.uint8)
+        for marker, marker_body in enumerate(link_indices):
+            ancestors = np.zeros(model.joint_count, dtype=bool)
+            body = marker_body
+            while body != -1:
+                joint = body_to_joint[body]
+                if joint == -1:
+                    break
+                ancestors[joint] = True
+                body = joint_parent[joint]
+            affects_dof[marker] = ancestors[dof_to_joint]
+        self.affects_dof = wp.array(affects_dof, dtype=wp.uint8, device=self.device)
+
+    def residual_dim(self) -> int:
+        """Return three residual rows per constrained point."""
+        return 3 * self.marker_count
+
+    def supports_analytic(self) -> bool:
+        """Return ``True`` because this objective has a fused analytic Jacobian."""
+        return True
+
+    def set_target_positions(self, new_positions: wp.array2d[wp.vec3]) -> None:
+        """Replace all marker targets without copying through the host.
+
+        Args:
+            new_positions: Target positions [m], shape
+                [problem_count, marker_count], on the objective device.
+        """
+        self._require_batch_layout()
+        if new_positions.shape != self.target_positions.shape:
+            raise ValueError(f"Expected {self.target_positions.shape} target positions, got {new_positions.shape}")
+        if new_positions.device != self.device:
+            raise ValueError("new_positions must be on the objective device")
+        wp.copy(self.target_positions, new_positions)
+
+    def compute_residuals(
+        self,
+        body_q: wp.array2d[wp.transform],
+        joint_q: wp.array2d[wp.float32],
+        model: Model,
+        residuals: wp.array2d[wp.float32],
+        start_idx: int,
+        problem_idx: wp.array[wp.int32],
+    ) -> None:
+        """Write all point-position residuals with one Warp kernel launch."""
+        wp.launch(
+            _pos_batch_residuals,
+            dim=[body_q.shape[0], self.marker_count],
+            inputs=[
+                body_q,
+                self.target_positions,
+                self.link_indices,
+                self.link_offsets,
+                start_idx,
+                self.weight,
+                problem_idx,
+            ],
+            outputs=[residuals],
+            device=self.device,
+        )
+
+    def compute_jacobian_analytic(
+        self,
+        body_q: wp.array2d[wp.transform],
+        joint_q: wp.array2d[wp.float32],
+        model: Model,
+        jacobian: wp.array3d[wp.float32],
+        joint_S_s: wp.array2d[wp.spatial_vector],
+        start_idx: int,
+    ) -> None:
+        """Write all point-position Jacobian rows with one Warp kernel launch."""
+        wp.launch(
+            _pos_batch_jac_analytic,
+            dim=[body_q.shape[0], self.marker_count],
+            inputs=[
+                self.link_indices,
+                self.link_offsets,
+                self.affects_dof,
+                body_q,
+                joint_S_s,
+                start_idx,
+                model.joint_dof_count,
                 self.weight,
             ],
             outputs=[jacobian],

@@ -145,6 +145,19 @@ def _build_model_for_joint(jt: int, device):
     return model
 
 
+def _build_out_of_order_model(device):
+    """Build a branched chain whose joint indices differ from body indices."""
+    builder = newton.ModelBuilder()
+    root = builder.add_link(mass=0.1, label="root")
+    middle = builder.add_link(mass=0.1, label="middle")
+    tip = builder.add_link(mass=0.1, label="tip")
+    root_joint = builder.add_joint_fixed(parent=-1, child=root)
+    tip_joint = builder.add_joint_revolute(parent=root, child=tip, axis=[0.0, 0.0, 1.0])
+    middle_joint = builder.add_joint_revolute(parent=root, child=middle, axis=[0.0, 0.0, 1.0])
+    builder.add_articulation([root_joint, tip_joint, middle_joint])
+    return builder.finalize(device=device, requires_grad=True)
+
+
 def _randomize_joint_q(model: newton.Model, seed: int = 0) -> None:
     """In-place randomization of the model's joint coordinates.
 
@@ -225,6 +238,51 @@ def test_fk_two_pass_parity(test, device):
         _fk_parity_for_joint(test, device, jt)
 
 
+def test_fk_two_pass_handles_joint_body_permutations(test, device):
+    """Accumulate FK through joint ancestors when joint and body indices differ."""
+    with wp.ScopedDevice(device):
+        model = _build_out_of_order_model(device)
+        joint_q = wp.array([[0.2, -0.1]], dtype=wp.float32, device=device)
+        joint_qd = wp.zeros((1, model.joint_dof_count), dtype=wp.float32, device=device)
+        state_ref = model.state()
+        newton.eval_fk(model, joint_q[0], joint_qd[0], state_ref)
+
+        ik_solver = ik.IKSolver(
+            model,
+            1,
+            objectives=[_NoopObjective()],
+            jacobian_mode=ik.IKJacobianType.AUTODIFF,
+        )
+        ik_solver._fk_two_pass(model, joint_q, ik_solver.body_q, ik_solver.X_local, ik_solver.n_problems)
+        assert_np_equal(state_ref.body_q.numpy(), ik_solver.body_q.numpy(), tol=1e-6)
+
+
+def test_public_eval_fk_batched(test, device):
+    """Evaluate batched FK and reject output arrays with incompatible shapes."""
+    with wp.ScopedDevice(device):
+        model = _build_model_for_joint(JointType.REVOLUTE, device)
+        joint_q = wp.array([[0.1], [-0.2]], dtype=wp.float32, device=device)
+        joint_qd = wp.array([[0.3], [-0.4]], dtype=wp.float32, device=device)
+        body_q = wp.zeros((2, model.body_count), dtype=wp.transform, device=device)
+        body_qd = wp.zeros((2, model.body_count), dtype=wp.spatial_vector, device=device)
+        newton.eval_fk_batched(model, joint_q, joint_qd, body_q, body_qd)
+
+        for row in range(2):
+            state = model.state()
+            newton.eval_fk(model, joint_q[row], joint_qd[row], state)
+            assert_np_equal(state.body_q.numpy(), body_q.numpy()[row], tol=1e-6)
+            assert_np_equal(state.body_qd.numpy(), body_qd.numpy()[row], tol=1e-6)
+
+        bad_body_q = wp.zeros((1, model.body_count), dtype=wp.transform, device=device)
+        with test.assertRaises(ValueError):
+            newton.eval_fk_batched(model, joint_q, joint_qd, bad_body_q, body_qd)
+
+        other_device = "cuda:0" if str(device) == "cpu" else "cpu"
+        bad_joint_q = wp.zeros(joint_q.shape, dtype=wp.float32, device=other_device)
+        with test.assertRaises(ValueError):
+            newton.eval_fk_batched(model, bad_joint_q, joint_qd, body_q, body_qd)
+
+
 # -----------------------------------------------------------------------------
 # Register tests
 # -----------------------------------------------------------------------------
@@ -237,6 +295,13 @@ class TestIKFKKernels(unittest.TestCase):
 
 
 add_function_test(TestIKFKKernels, "test_fk_two_pass_parity", test_fk_two_pass_parity, devices)
+add_function_test(
+    TestIKFKKernels,
+    "test_fk_two_pass_handles_joint_body_permutations",
+    test_fk_two_pass_handles_joint_body_permutations,
+    devices,
+)
+add_function_test(TestIKFKKernels, "test_public_eval_fk_batched", test_public_eval_fk_batched, devices)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2, failfast=True)
