@@ -614,6 +614,25 @@ def write_calibrated_subject_mjcf(
                     body_mesh_min_z.get(body_name, math.inf), float(np.min(transformed[:, 2]))
                 )
         body_mesh_vertices[body_name] = records
+    torso_mesh_min_z = 0.0
+    torso_mesh_z_scale = 1.0
+    if "torso" in scale and body_mesh_vertices.get("torso"):
+        torso_values = np.concatenate([vertices for _, _, vertices in body_mesh_vertices["torso"]], axis=0)
+        torso_mesh_min_z = float(np.min(torso_values[:, 2]))
+        torso_mesh_max_z = float(np.max(torso_values[:, 2]))
+        torso_origin, torso_rotation = body_world["torso"]
+        target_top_head_local = (target_markers["TOPHEAD"] - torso_origin) @ torso_rotation
+        target_top_head_z = float(target_top_head_local[2])
+        if (
+            not math.isfinite(torso_mesh_max_z)
+            or torso_mesh_max_z <= torso_mesh_min_z
+            or not math.isfinite(target_top_head_z)
+            or target_top_head_z <= 0.0
+        ):
+            raise ValueError("torso mesh and Top.Head must define a positive longitudinal extent")
+        torso_mesh_z_scale = target_top_head_z / (torso_mesh_max_z - torso_mesh_min_z)
+        for _, _, vertices in body_mesh_vertices["torso"]:
+            vertices[:, 2] = (vertices[:, 2] - torso_mesh_min_z) * torso_mesh_z_scale
     foot_origins = {side: body_world[f"foot_{side}"][0][2] for side in ("left", "right")}
     foot_world_min = min(foot_origins[side] + body_mesh_min_z[f"foot_{side}"] for side in ("left", "right"))
     foot_offsets = {
@@ -696,6 +715,19 @@ def write_calibrated_subject_mjcf(
             if body_name == "pelvis":
                 point_transform = transform_pelvis
                 column_linear = pelvis_row_linear.T
+            elif body_name == "torso" and segment_key == "torso":
+
+                def point_transform(
+                    points: np.ndarray, proximal: np.ndarray = proximal, body_scale: np.ndarray = body_scale
+                ) -> np.ndarray:
+                    """Map torso points between its posterior and superior visual bounds."""
+                    transformed = (points - proximal) * body_scale
+                    transformed[:, 2] = (transformed[:, 2] - torso_mesh_min_z) * torso_mesh_z_scale
+                    return transformed
+
+                torso_inertia_scale = body_scale.copy()
+                torso_inertia_scale[2] *= torso_mesh_z_scale
+                column_linear = np.diag(torso_inertia_scale)
             else:
 
                 def point_transform(

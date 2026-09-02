@@ -38,19 +38,19 @@
     },
     {
       "file": "Geometry/visual_15_torso_hat_spine_e5497b48.obj",
-      "sha256": "fef69ccc893d31737d284a5549e4c432fc8d509174bfbbe597c77c6728efca10"
+      "sha256": "ed42d5374694b33390277f63076016c507a4c8b37612491c3397e8ac105a2118"
     },
     {
       "file": "Geometry/visual_16_torso_hat_jaw_ccce7bf1.obj",
-      "sha256": "b9bd8dfa18048a371dc2d95caf74baf42e10a95a0b1e7116bab876be720f84a3"
+      "sha256": "3885f6c2278b031074f092ba8772e4f6d14debbc815f3ebc55bfd440f7d27a55"
     },
     {
       "file": "Geometry/visual_17_torso_hat_skull_4c29f62d.obj",
-      "sha256": "68792df15a3a81e7c6347f9de71ee66812115e467223460d99fcbc96f51c2e9c"
+      "sha256": "5df3f796a5e4d59ba6bac8a9b2ef5e046f618001321e24d556f4791c2618384b"
     },
     {
       "file": "Geometry/visual_18_torso_hat_ribs_c455e842.obj",
-      "sha256": "f3b18b13d861b388f19e4a1ea771f48c3018969b6c15105debcee3c16a5a8835"
+      "sha256": "34fed090d155e53c96ef5feca38d25762ce63b3bca2e4b3936f7e2580c0d6363"
     },
     {
       "file": "Geometry/visual_09_femur_left_l_femur_3a5df196.obj",
@@ -104,7 +104,7 @@
   "schema_version": "gait_segment_calibration_to_mjcf_1",
   "seal": {
     "algorithm": "sha256",
-    "content_sha256": "29c1f0df843538e1efdda98d441589a932e7b9a066ed1072bae58852cf2200ba"
+    "content_sha256": "a2dece1de987c75de7744f65424d940110fb91fc1e4f1adb191cba9688feac39"
   },
   "segment_scales": {
     "foot_left": [

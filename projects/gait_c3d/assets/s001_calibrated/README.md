@@ -3,8 +3,9 @@
 This is the tracked default static-calibration realization of the S001 base
 subject. It uses raw bilateral PSIS orientation, CODA/Bell--Brand hip
 regression, source-joint-normalized segment geometry, hallux toe endpoints, a
-posterior-pelvis-to-head torso calibration, three bounded
-rotational torso axes, native marker-supported knee limits, and flat-foot
+posterior-pelvis-to-head torso calibration whose visual reaches the saved
+`Top.Head` height, three bounded rotational torso axes, native marker-supported
+knee limits, and flat-foot
 contacts. The source `s001_base` template remains separate so future subjects
 can be rebuilt from the same base.
 

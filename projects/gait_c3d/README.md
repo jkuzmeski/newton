@@ -244,10 +244,12 @@ uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
 ```
 
 The saved bundle contains `calibration/segment_calibration.json`, marker data,
-actual S001-derived meshes, and `model/subject.xml`. Visuals are scaled from the
-source MJCF joint spans and remain anchored to the source hip, knee, posterior
-pelvis, and torso landmarks. Collision capsules reserve clearance at their
-outer surfaces, and transformed box proxies follow the same geometry map. In
+actual S001-derived meshes, and `model/subject.xml`. Leg visuals are scaled
+from the source MJCF joint spans and remain anchored to the source hip and knee
+centers. The torso visual spans from the posterior pelvis origin to the saved
+`Top.Head` height, and its collision box and inertia use the same map. Collision
+capsules reserve clearance at their outer surfaces, and transformed box proxies
+follow the same geometry map. In
 this marker set,
 `LHLX`/`RHLX` are the hallux (big-toe) markers used for the left/right toe
 endpoints; `LTOE`/`RTOE` are not used as the toe-tip definition. Its four foot contact

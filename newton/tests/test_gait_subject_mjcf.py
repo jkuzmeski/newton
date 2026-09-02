@@ -264,23 +264,55 @@ class TestGaitSubjectMJCF(unittest.TestCase):
                     self.assertAlmostEqual(float(np.min(endpoints[:, 2]) - radius), -(length - 0.035), places=7)
             self.assertLess(minimum_vertex_distance(body_vertices["pelvis"], body_vertices["torso"]), 0.01)
 
+            target_torso = next(body for body in root.iter("body") if body.get("name") == "torso")
+            target_torso_vertices = np.concatenate(
+                [
+                    obj_vertices(output.parent / mesh_files[geom.get("mesh")]) + values(geom.get("pos"))
+                    for geom in target_torso.findall("geom")
+                    if geom.get("mesh") is not None
+                ],
+                axis=0,
+            )
+            target_top_head = next(
+                site for site in target_torso.findall("site") if site.get("name") == "marker_Top.Head"
+            )
+            top_head_position = values(target_top_head.get("pos"))
+            self.assertAlmostEqual(float(np.min(target_torso_vertices[:, 2])), 0.0, places=7)
+            self.assertAlmostEqual(float(np.max(target_torso_vertices[:, 2])), float(top_head_position[2]), places=7)
+            self.assertLess(minimum_vertex_distance(target_torso_vertices, top_head_position[None, :]), 0.05)
+
             source_root = ET.parse(base / "model" / "subject.xml").getroot()
+            source_mesh_files = {mesh.get("name"): mesh.get("file") for mesh in source_root.iter("mesh")}
             source_torso = next(body for body in source_root.iter("body") if body.get("name") == "torso")
             layout = json.loads((base / "model" / "marker_layout.json").read_text(encoding="utf-8"))
             source_vsac = np.asarray(
                 next(marker["position_m"] for marker in layout["markers"] if marker["name"] == "V.Sacral")
             )
             source_distal = source_vsac - values(source_torso.get("pos"))
+            source_torso_vertices = np.concatenate(
+                [
+                    obj_vertices(base / "model" / source_mesh_files[geom.get("mesh")])
+                    + values(geom.get("pos"))
+                    - source_distal
+                    for geom in source_torso.findall("geom")
+                    if geom.get("mesh") is not None
+                ],
+                axis=0,
+            )
+            source_minimum = float(np.min(source_torso_vertices[:, 2]))
+            source_extent = float(np.max(source_torso_vertices[:, 2]) - source_minimum)
+            torso_z_scale = float(top_head_position[2]) / source_extent
             source_collision = next(
                 geom for geom in source_torso.findall("geom") if geom.get("name") == "collision_torso"
             )
-            target_torso = next(body for body in root.iter("body") if body.get("name") == "torso")
+            expected_collision_position = values(source_collision.get("pos")) - source_distal
+            expected_collision_position[2] = (expected_collision_position[2] - source_minimum) * torso_z_scale
             target_collision = next(
                 geom for geom in target_torso.findall("geom") if geom.get("name") == "collision_torso"
             )
             np.testing.assert_allclose(
                 values(target_collision.get("pos")),
-                values(source_collision.get("pos")) - source_distal,
+                expected_collision_position,
                 atol=1.0e-7,
             )
 
