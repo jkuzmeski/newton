@@ -1,0 +1,1 @@
+Collapse each bilateral thigh and shank tracking cluster to one arithmetic centroid marker before native gait IK. Add direct saved-motion replay and a safe overwrite option for rerunning fitted trials. Consumers of the gait subject marker layout must replace the former ``*.Upper``, ``*.Front``, and ``*.Rear`` tracking-site names with the corresponding ``*.Centroid`` name.

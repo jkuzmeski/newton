@@ -1,0 +1,1 @@
+Fix calibrated gait pelvis, torso, limb visual, inertia, and collision-proxy scaling so adjacent anatomical segments remain aligned, and keep the neutral MJCF keyframe consistent with the calibrated root pose and coordinate count.

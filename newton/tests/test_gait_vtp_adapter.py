@@ -317,7 +317,7 @@ class TestGaitVTPAdapter(unittest.TestCase):
         self.assertAlmostEqual(shape_scale[femur_proxy, 0], min(half_extents[transverse]), places=6)
         self.assertAlmostEqual(
             shape_scale[femur_proxy, 1],
-            half_extents[long_axis] - config.self_collision_joint_clearance,
+            half_extents[long_axis] - config.self_collision_joint_clearance - min(half_extents[transverse]),
             places=6,
         )
         joint_xform_child = model.joint_X_c.numpy()
@@ -382,14 +382,10 @@ class TestGaitVTPAdapter(unittest.TestCase):
         np.testing.assert_allclose(femur_record["source"]["target_proximal_newton"], (0.0, 0.0, 0.225))
         self.assertEqual(model.body_count, 8)
         self.assertEqual(model.joint_dof_count, 16)
-        self.assertEqual(model.shape_count, 31)
-        connector = next(
-            index for index, label in enumerate(model.shape_label) if label.endswith("/geometry_abdomen_connector")
-        )
+        self.assertEqual(model.shape_count, 30)
+        self.assertFalse(any(label.endswith("/geometry_abdomen_connector") for label in model.shape_label))
         shape_types = model.shape_type.numpy()
         shape_flags = model.shape_flags.numpy()
-        self.assertEqual(shape_types[connector], newton.GeoType.BOX)
-        self.assertFalse(shape_flags[connector] & newton.ShapeFlags.COLLIDE_SHAPES)
         mesh_indices = np.flatnonzero(shape_types == newton.GeoType.MESH)
         self.assertEqual(len(mesh_indices), 6)
         for shape in mesh_indices:

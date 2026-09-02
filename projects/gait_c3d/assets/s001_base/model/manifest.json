@@ -1485,16 +1485,16 @@
   ],
   "native_marker_layout": {
     "file": "marker_layout.json",
-    "sha256": "9d3b1d89ff9e84b9ea1148537ac9111348bbe8c7cc13652f4f4acb4c13a450e6"
+    "sha256": "07ce6316833fcca18d6f4d5a21d6fd89260a65b65e3d6a6d696e914e5e57d74d"
   },
   "native_subject": {
     "file": "subject.xml",
-    "sha256": "6c39f0c0b5379b5cf6f4b231ba482f1355bd64b7d22b9db8c97ed34dde3e78d0"
+    "sha256": "6bd8f127889fc9f32c4c2ca61c8563d66cc59204d0a4ce7731e6f023de3bbd87"
   },
   "schema_version": "gait_c3d_scaled_vtp_visuals_1",
   "segment_calibration": {
     "file": "segment_calibration.json",
-    "sha256": "5a69a882826689c57875c45da376f924310cb2ba877de509ebefd06c8af233fc"
+    "sha256": "ae2b3af115a9778d63dc0b0fdf3447f2704d3e7c607a186f88ac660a8e06bdc2"
   },
   "simple_model_config": {
     "contact_radius": 0.024563156709816878,

@@ -7,7 +7,7 @@
   "base_marker_set": "S001",
   "calibration": {
     "file": "model/segment_calibration.json",
-    "sha256": "5a69a882826689c57875c45da376f924310cb2ba877de509ebefd06c8af233fc"
+    "sha256": "ae2b3af115a9778d63dc0b0fdf3447f2704d3e7c607a186f88ac660a8e06bdc2"
   },
   "schema_version": "gait_subject_bundle_1",
   "sources": {

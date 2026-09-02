@@ -102,6 +102,39 @@ class TestSubjectMarkerLayout(unittest.TestCase):
             np.testing.assert_allclose(marker.position, position, atol=1.0e-12)
             self.assertEqual(marker.site_name, f"marker_{marker.name}")
 
+    def test_collapses_complete_tracking_clusters_to_centroids(self):
+        """Collapse complete thigh and shank source groups to one site each."""
+        config = SimpleGaitConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker_path, transforms_path, expected = _write_synthetic_sources(root, config, 0.02)
+            cluster_values = (
+                ("L.Thigh.Upper", "femur_l", (0.01, 0.02, 0.03)),
+                ("L.Thigh.Front", "femur_l", (0.02, 0.03, 0.04)),
+                ("L.Thigh.Rear", "femur_l", (0.03, 0.04, 0.05)),
+            )
+            extra = "".join(
+                f'<Marker name="{name}"><socket_parent_frame>/bodyset/{body}</socket_parent_frame>'
+                f"<location>{values[0]} {values[1]} {values[2]}</location></Marker>"
+                for name, body, values in cluster_values
+            )
+            marker_path.write_text(
+                marker_path.read_text().replace("</objects>", extra + "</objects>"), encoding="utf-8"
+            )
+            layout = compile_subject_marker_layout(
+                marker_path,
+                transforms_path,
+                config,
+                root / "marker_layout.json",
+                source_ground_offset_z=0.02,
+            )
+
+        self.assertEqual(len(layout.markers), len(expected) + 1)
+        names = [marker.name for marker in layout.markers]
+        self.assertNotIn("L.Thigh.Upper", names)
+        centroid = next(marker for marker in layout.markers if marker.name == "L.Thigh.Centroid")
+        np.testing.assert_allclose(centroid.position, np.mean([values for _, _, values in cluster_values], axis=0))
+
     def test_scales_marker_layout_from_base(self):
         """Scale S001-style marker positions and neutral frames together."""
         config = SimpleGaitConfig()

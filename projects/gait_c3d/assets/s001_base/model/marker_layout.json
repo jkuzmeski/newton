@@ -19,7 +19,29 @@
       ]
     ],
     "position_convention": "row_vectors",
-    "source_ground_offset_z_m": 0.03831109549021945
+    "source_ground_offset_z_m": 0.03831109549021945,
+    "tracking_cluster_centroids": {
+      "L.Shank.Centroid": [
+        "L.Shank.Upper",
+        "L.Shank.Front",
+        "L.Shank.Rear"
+      ],
+      "L.Thigh.Centroid": [
+        "L.Thigh.Upper",
+        "L.Thigh.Front",
+        "L.Thigh.Rear"
+      ],
+      "R.Shank.Centroid": [
+        "R.Shank.Upper",
+        "R.Shank.Front",
+        "R.Shank.Rear"
+      ],
+      "R.Thigh.Centroid": [
+        "R.Thigh.Upper",
+        "R.Thigh.Front",
+        "R.Thigh.Rear"
+      ]
+    }
   },
   "coordinate_system": {
     "forward_axis": "X",
@@ -108,35 +130,13 @@
     },
     {
       "body": "femur_right",
-      "name": "R.Thigh.Upper",
+      "name": "R.Thigh.Centroid",
       "position_m": [
-        -0.07092369986479001,
-        -0.09282306997581682,
-        -0.08326235337385401
+        -0.05632569679277816,
+        -0.08514625736643343,
+        -0.1305325117044672
       ],
-      "site_name": "marker_R.Thigh.Upper",
-      "source_body": "femur_r"
-    },
-    {
-      "body": "femur_right",
-      "name": "R.Thigh.Front",
-      "position_m": [
-        -0.07182503195992733,
-        -0.08142885319787121,
-        -0.15978254912130396
-      ],
-      "site_name": "marker_R.Thigh.Front",
-      "source_body": "femur_r"
-    },
-    {
-      "body": "femur_right",
-      "name": "R.Thigh.Rear",
-      "position_m": [
-        -0.026228358553617145,
-        -0.08118684892561223,
-        -0.14855263261824359
-      ],
-      "site_name": "marker_R.Thigh.Rear",
+      "site_name": "marker_R.Thigh.Centroid",
       "source_body": "femur_r"
     },
     {
@@ -163,35 +163,13 @@
     },
     {
       "body": "tibia_right",
-      "name": "R.Shank.Upper",
+      "name": "R.Shank.Centroid",
       "position_m": [
-        -0.09037554791235458,
-        -0.08785982494349465,
-        -0.055585743869509985
+        -0.07543119310823804,
+        -0.07746994640558391,
+        -0.08283807552518459
       ],
-      "site_name": "marker_R.Shank.Upper",
-      "source_body": "tibia_r"
-    },
-    {
-      "body": "tibia_right",
-      "name": "R.Shank.Front",
-      "position_m": [
-        -0.046861398811954086,
-        -0.07291800570011472,
-        -0.06315263907303792
-      ],
-      "site_name": "marker_R.Shank.Front",
-      "source_body": "tibia_r"
-    },
-    {
-      "body": "tibia_right",
-      "name": "R.Shank.Rear",
-      "position_m": [
-        -0.08905663260040544,
-        -0.07163200857314236,
-        -0.12977584363300587
-      ],
-      "site_name": "marker_R.Shank.Rear",
+      "site_name": "marker_R.Shank.Centroid",
       "source_body": "tibia_r"
     },
     {
@@ -262,35 +240,13 @@
     },
     {
       "body": "femur_left",
-      "name": "L.Thigh.Upper",
+      "name": "L.Thigh.Centroid",
       "position_m": [
-        -0.07785153709104724,
-        0.09076011121903707,
-        -0.08607234325351265
+        -0.06489663209486846,
+        0.08627527827966136,
+        -0.13381379119761094
       ],
-      "site_name": "marker_L.Thigh.Upper",
-      "source_body": "femur_l"
-    },
-    {
-      "body": "femur_left",
-      "name": "L.Thigh.Front",
-      "position_m": [
-        -0.07982823217603145,
-        0.08087153445366152,
-        -0.16213963209156212
-      ],
-      "site_name": "marker_L.Thigh.Front",
-      "source_body": "femur_l"
-    },
-    {
-      "body": "femur_left",
-      "name": "L.Thigh.Rear",
-      "position_m": [
-        -0.03701012701752669,
-        0.08719418916628549,
-        -0.15322939824775805
-      ],
-      "site_name": "marker_L.Thigh.Rear",
+      "site_name": "marker_L.Thigh.Centroid",
       "source_body": "femur_l"
     },
     {
@@ -317,35 +273,13 @@
     },
     {
       "body": "tibia_left",
-      "name": "L.Shank.Upper",
+      "name": "L.Shank.Centroid",
       "position_m": [
-        -0.08924000504915375,
-        0.08391855777688378,
-        -0.052275018514701344
+        -0.07172051210360357,
+        0.07530788921281453,
+        -0.07943658744895944
       ],
-      "site_name": "marker_L.Shank.Upper",
-      "source_body": "tibia_l"
-    },
-    {
-      "body": "tibia_left",
-      "name": "L.Shank.Front",
-      "position_m": [
-        -0.04191852826389966,
-        0.07335520767238368,
-        -0.05868089984414809
-      ],
-      "site_name": "marker_L.Shank.Front",
-      "source_body": "tibia_l"
-    },
-    {
-      "body": "tibia_left",
-      "name": "L.Shank.Rear",
-      "position_m": [
-        -0.08400300299775731,
-        0.06864990218917613,
-        -0.1273538439880289
-      ],
-      "site_name": "marker_L.Shank.Rear",
+      "site_name": "marker_L.Shank.Centroid",
       "source_body": "tibia_l"
     },
     {
@@ -418,7 +352,7 @@
   "schema_version": "gait_subject_marker_layout_1",
   "seal": {
     "algorithm": "sha256",
-    "content_sha256": "01c302059db8f93c2ac8f209b33950224e1da346f1713a8c00eb6b3687217d5b"
+    "content_sha256": "9319e6f70df48ab7e50a6e1f743be53296135ecee24e2a261621421c5009a512"
   },
   "source": {
     "body_transforms_file": "body_transforms.json",

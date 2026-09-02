@@ -104,7 +104,7 @@
   "schema_version": "gait_segment_calibration_to_mjcf_1",
   "seal": {
     "algorithm": "sha256",
-    "content_sha256": "a2dece1de987c75de7744f65424d940110fb91fc1e4f1adb191cba9688feac39"
+    "content_sha256": "b133d85bcb19fd80576e97e055bae70cfc1ce3f5149363fb09e9fe91a4cda529"
   },
   "segment_scales": {
     "foot_left": [
@@ -150,11 +150,11 @@
   },
   "source_calibration": {
     "file": "segment_calibration.json",
-    "sha256": "5a69a882826689c57875c45da376f924310cb2ba877de509ebefd06c8af233fc"
+    "sha256": "ae2b3af115a9778d63dc0b0fdf3447f2704d3e7c607a186f88ac660a8e06bdc2"
   },
   "source_model": {
     "file": "subject.xml",
-    "sha256": "6c39f0c0b5379b5cf6f4b231ba482f1355bd64b7d22b9db8c97ed34dde3e78d0"
+    "sha256": "6bd8f127889fc9f32c4c2ca61c8563d66cc59204d0a4ce7731e6f023de3bbd87"
   },
   "source_subject": "s001_base"
 }

@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .marker_clusters import TRACKING_CLUSTER_MARKERS
 from .native_model import SimpleGaitConfig
 from .subject_mjcf import SubjectMarkerSite
 from .vtp_adapter import simple_gait_body_transforms
@@ -170,6 +171,44 @@ def _parse_source_markers(path: Path) -> list[tuple[str, str, np.ndarray]]:
     return markers
 
 
+def _collapse_tracking_clusters(
+    markers: list[tuple[str, str, np.ndarray]],
+) -> list[tuple[str, str, np.ndarray]]:
+    """Replace complete thigh and shank marker groups with centroids."""
+    by_name = {name: (source_body, position) for name, source_body, position in markers}
+    cluster_members = {member for members in TRACKING_CLUSTER_MARKERS.values() for member in members}
+    for centroid, members in TRACKING_CLUSTER_MARKERS.items():
+        present = [member for member in members if member in by_name]
+        if present and len(present) != len(members):
+            missing = [member for member in members if member not in by_name]
+            raise ValueError(f"tracking cluster {centroid!r} is incomplete; missing {missing}")
+        if centroid in by_name and present:
+            raise ValueError(f"tracking cluster {centroid!r} has both source and centroid markers")
+        if present:
+            bodies = {by_name[member][0] for member in members}
+            if len(bodies) != 1:
+                raise ValueError(f"tracking cluster {centroid!r} spans multiple source bodies")
+
+    collapsed = []
+    emitted: set[str] = set()
+    for name, source_body, source_local in markers:
+        if name in cluster_members:
+            cluster = next(
+                (centroid for centroid, members in TRACKING_CLUSTER_MARKERS.items() if name in members),
+                None,
+            )
+            if cluster is None or cluster in emitted:
+                continue
+            members = TRACKING_CLUSTER_MARKERS[cluster]
+            cluster_source_body = by_name[members[0]][0]
+            cluster_source_local = np.mean([by_name[member][1] for member in members], axis=0, dtype=np.float64)
+            collapsed.append((cluster, cluster_source_body, cluster_source_local))
+            emitted.add(cluster)
+        else:
+            collapsed.append((name, source_body, source_local))
+    return collapsed
+
+
 def compile_subject_marker_layout(
     marker_set_path: str | os.PathLike,
     source_body_transforms: str | os.PathLike | dict[str, np.ndarray],
@@ -199,6 +238,7 @@ def compile_subject_marker_layout(
         name: _validate_transform(name, value) for name, value in simple_gait_body_transforms(config).items()
     }
 
+    source_markers = _collapse_tracking_clusters(source_markers)
     entries = []
     site_names: set[str] = set()
     for name, source_body, source_local in source_markers:
@@ -251,6 +291,9 @@ def compile_subject_marker_layout(
             "opensim_to_newton": _OPENSIM_TO_NEWTON.tolist(),
             "source_ground_offset_z_m": float(source_ground_offset_z),
             "position_convention": "row_vectors",
+            "tracking_cluster_centroids": {
+                centroid: list(members) for centroid, members in TRACKING_CLUSTER_MARKERS.items()
+            },
         },
         "markers": [
             {
@@ -389,6 +432,11 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
     if (
         conversion.get("opensim_to_newton") != _OPENSIM_TO_NEWTON.tolist()
         or conversion.get("position_convention") != "row_vectors"
+        or (
+            conversion.get("tracking_cluster_centroids") is not None
+            and conversion.get("tracking_cluster_centroids")
+            != {centroid: list(members) for centroid, members in TRACKING_CLUSTER_MARKERS.items()}
+        )
     ):
         raise ValueError("subject marker layout conversion metadata is invalid")
     offset = conversion.get("source_ground_offset_z_m")

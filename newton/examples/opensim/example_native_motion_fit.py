@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Synthetic native marker IK example."""
+"""Native marker IK and saved-motion replay example."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from projects.gait_c3d.c3d_adapter import read_c3d_markers
 from projects.gait_c3d.native_motion_fit import (
     fit_c3d_marker_motion,
     free_root_quaternion_slice,
+    load_native_motion_artifact,
     map_c3d_markers_to_native,
     marker_attachments_from_model,
     marker_positions_from_joint_q,
@@ -39,14 +40,19 @@ def _default_motion_output(subject: Path, c3d_path: str | Path) -> Path:
 
 
 class Example:
-    """Recover a synthetic native gait motion through public Newton IK."""
+    """Solve native gait markers or replay a saved native motion."""
 
     def __init__(self, viewer, args):
+        if args.motion and (args.c3d or args.synthetic):
+            raise ValueError("--motion cannot be combined with --c3d or --synthetic")
+        if args.motion:
+            self._init_motion(viewer, args)
+            return
         if args.c3d:
             self._init_real(viewer, args)
             return
         if not args.synthetic:
-            raise ValueError("native_motion_fit requires --synthetic or --c3d")
+            raise ValueError("native_motion_fit requires --synthetic, --c3d, or --motion")
         self.viewer = viewer
         self.real_motion = False
         self.sim_time = 0.0
@@ -132,6 +138,69 @@ class Example:
             f"solver cost {max(frame.solver_cost for frame in self.frames):.3e}"
         )
 
+    def _init_motion(self, viewer, args):
+        """Load a saved native motion artifact for exact kinematic replay."""
+        motion_path = Path(args.motion).expanduser().resolve()
+        motion = load_native_motion_artifact(motion_path)
+        subject = (
+            Path(args.subject).expanduser().resolve()
+            if args.subject
+            else Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "assets" / "s001_calibrated"
+        )
+        subject_xml = subject / "model" / "subject.xml"
+        if not subject_xml.is_file():
+            raise FileNotFoundError(f"subject MJCF is missing: {subject_xml}")
+        newton.use_coord_layout_targets = True
+        builder = newton.ModelBuilder()
+        builder.add_mjcf(str(subject_xml), floating=True, parse_sites=True, enable_self_collisions=True)
+        self.model = builder.finalize(device=args.device)
+        if self.model.joint_coord_count != motion.joint_q.shape[1]:
+            raise ValueError("motion coordinates do not match the selected subject model")
+        if self.model.joint_dof_count != motion.joint_qd.shape[1]:
+            raise ValueError("motion velocities do not match the selected subject model")
+        self.viewer = viewer
+        self.real_motion = True
+        self.sim_time = 0.0
+        self.frame_dt = 1.0 / 100.0
+        self.state = self.model.state()
+        self.attachments = marker_attachments_from_model(self.model)
+        if tuple(attachment.name for attachment in self.attachments) != motion.marker_names:
+            raise ValueError("motion markers do not match the selected subject model")
+        self.motion = motion
+        self.motion_output = motion_path if motion_path.is_dir() else motion_path.parent
+        self.visible_indices = np.flatnonzero(np.all(self.motion.valid, axis=0))
+        if len(self.visible_indices) == 0:
+            raise ValueError("motion artifact contains no marker that is valid in every frame")
+        self.frame_index = 0
+        self.target_points = wp.array(
+            self.motion.targets[0, self.visible_indices].astype(np.float32),
+            dtype=wp.vec3,
+            device=self.model.device,
+        )
+        self.predicted_points = wp.array(
+            self.motion.predictions[0, self.visible_indices].astype(np.float32),
+            dtype=wp.vec3,
+            device=self.model.device,
+        )
+        self.radii = wp.full(len(self.visible_indices), 0.012, dtype=wp.float32, device=self.model.device)
+        self.target_colors = wp.full(
+            len(self.visible_indices), wp.vec3(0.95, 0.15, 0.10), dtype=wp.vec3, device=self.model.device
+        )
+        self.predicted_colors = wp.full(
+            len(self.visible_indices), wp.vec3(0.10, 0.75, 0.98), dtype=wp.vec3, device=self.model.device
+        )
+        self.viewer.set_model(self.model)
+        self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
+        print(
+            f"Loaded native motion: {len(self.visible_indices)}/{len(self.attachments)} always-valid markers, "
+            f"{len(self.motion.times)} frames from {motion_path}"
+        )
+        print(
+            f"Frame RMS median/p95/max: {np.median(self.motion.frame_rms) * 1000.0:.2f}/"
+            f"{np.percentile(self.motion.frame_rms, 95) * 1000.0:.2f}/"
+            f"{np.max(self.motion.frame_rms) * 1000.0:.2f} mm"
+        )
+
     def _init_real(self, viewer, args):
         """Load, fit, and publish a real C3D trial."""
         self.viewer = viewer
@@ -189,6 +258,7 @@ class Example:
             motion_output,
             model_path=subject_xml,
             calibration_path=calibration_path if calibration_path.is_file() else None,
+            overwrite=args.overwrite,
             settings={
                 "iterations": args.iterations,
                 "start_frame": args.start_frame,
@@ -257,6 +327,7 @@ class Example:
         """Advance the displayed solved frame."""
         if self.real_motion:
             self.model.joint_q.assign(self.motion.joint_q[self.frame_index])
+            self.model.joint_qd.assign(self.motion.joint_qd[self.frame_index])
             self.target_points.assign(self.motion.targets[self.frame_index, self.visible_indices].astype(np.float32))
             self.predicted_points.assign(
                 self.motion.predictions[self.frame_index, self.visible_indices].astype(np.float32)
@@ -323,8 +394,9 @@ class Example:
         """Render target and predicted marker overlays."""
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state)
-        self.viewer.log_points("synthetic/target_markers", self.target_points, self.radii, self.target_colors)
-        self.viewer.log_points("synthetic/predicted_markers", self.predicted_points, self.radii, self.predicted_colors)
+        prefix = "motion" if self.real_motion else "synthetic"
+        self.viewer.log_points(f"{prefix}/target_markers", self.target_points, self.radii, self.target_colors)
+        self.viewer.log_points(f"{prefix}/predicted_markers", self.predicted_points, self.radii, self.predicted_colors)
         self.viewer.end_frame()
 
 
@@ -333,6 +405,8 @@ def create_parser():
     parser = newton.examples.create_parser()
     parser.add_argument("--synthetic", action="store_true", help="Run the synthetic native marker IK gate")
     parser.add_argument("--c3d", help="Fit a real dynamic C3D trial")
+    parser.add_argument("--motion", help="Load a saved native motion artifact directory instead of solving")
+    parser.add_argument("--overwrite", action="store_true", help="Replace an existing verified fitted-motion artifact")
     parser.add_argument("--subject", help="Subject bundle containing the native marker sites")
     parser.add_argument(
         "--motion-output",

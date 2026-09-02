@@ -158,7 +158,7 @@ The subject MJCF contains one hidden, non-colliding `<site>` for every converted
 marker. Newton imports these sites with `ModelBuilder.add_mjcf(parse_sites=True)`,
 so later motion fitting can construct public `newton.ik.IKObjectivePosition`
 objectives without a custom forward-kinematics or marker kernel. The canonical
-S001 bundle contains 35 marker sites on the pelvis, torso, bilateral femurs,
+S001 bundle contains 27 native marker sites on the pelvis, torso, bilateral femurs,
 tibias, and merged feet.
 
 Run the tracked compact Phase 1 demonstration from a clean checkout. It builds
@@ -176,7 +176,7 @@ uv run --extra dev -m newton.examples opensim_subject \
 
 The compact fixture represents the output shape of offline OpenSim marker
 placement but does not execute OpenSim. Build or rebuild S001 with the canonical
-compiler command below to inspect its 35 subject-specific sites with the same
+compiler command below to inspect its 27 native centroid-collapsed sites with the same
 `--show-markers` option. The points come from imported MJCF sites and move with
 their native bodies. `marker_layout.json` remains the sealed provenance and
 name-mapping artifact used by later motion-retargeting phases.
@@ -184,7 +184,9 @@ name-mapping artifact used by later motion-retargeting phases.
 ## S001 base marker placement and geometry
 
 `assets/s001_base` is the tracked canonical **S001** base subject. It contains
-35 placed markers, the final neutral MJCF, and the 19 actual S001 bone meshes.
+27 native marker sites. The four three-marker thigh/shank tracking clusters
+are collapsed to centroids. The bundle also contains the final neutral MJCF and
+19 actual S001 bone meshes.
 This is the Phase 1 visual gate: the green marker points are imported MJCF
 sites and the gray meshes are the corresponding non-colliding bone visuals.
 No OpenSim runtime is needed to open the bundle.
@@ -276,7 +278,11 @@ checks free-root quaternion normalization and native joint limits.
 ## Real C3D native motion fit
 
 Fit a dynamic trial by name-joining its markers to the saved native sites. The
-saved calibrated subject ground offset is applied as an explicit registration.
+three-marker thigh and shank tracking clusters are averaged into one
+`*.Centroid` target per segment before IK. A centroid is valid only when all
+three source markers are valid. The raw C3D marker artifact remains unchanged.
+The saved calibrated subject ground offset is applied as an explicit
+registration.
 The default safety limit fits 300 frames; use `--max-frames 0` for the full
 trial, or use `--stride` while validating a long capture:
 
@@ -284,7 +290,17 @@ trial, or use `--stride` while validating a long capture:
 uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
   --c3d "/path/to/Trial 101.v3d.c3d" \
   --subject projects/gait_c3d/assets/s001_calibrated \
-  --max-frames 300
+  --max-frames 300 \
+  --motion-output /tmp/trial_101_native_motion
+```
+
+Set `--max-frames 0` for a full solve, and add `--overwrite` only to replace a
+verified artifact. Replay the saved output without decoding or solving again:
+
+```bash
+uv run --extra dev -m newton.examples native_motion_fit \
+  --motion /tmp/trial_101_native_motion \
+  --subject projects/gait_c3d/assets/s001_calibrated
 ```
 
 By default, the sealed motion is stored under the subject bundle at
@@ -292,8 +308,8 @@ By default, the sealed motion is stored under the subject bundle at
 that subject-local location. The output directory contains a sealed
 `motion.npz` artifact and manifest with
 native coordinates, finite-difference velocities, target/predicted markers,
-validity, per-marker/per-body residuals, solver costs, limit diagnostics, and
-registration metadata.
+validity, per-marker/per-body residuals, solver costs, limit diagnostics,
+registration metadata, and the cluster source mapping.
 
 ## Reusable progress example
 

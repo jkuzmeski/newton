@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from .c3d_adapter import C3DMarkerTrajectory
+from .marker_clusters import TRACKING_CLUSTER_C3D_SOURCES
 
 _SCHEMA = "gait_static_segment_calibration_1"
 _REQUIRED_MARKERS = (
@@ -262,6 +263,19 @@ def _static_marker_positions(
         if not np.all(np.isfinite(value)):
             raise ValueError(f"static calibration marker {name!r} is nonfinite")
         output[name] = value
+    for centroid, sources in TRACKING_CLUSTER_C3D_SOURCES.items():
+        present = [source for source in sources if source in index]
+        if present and len(present) != len(sources):
+            missing = [source for source in sources if source not in index]
+            raise ValueError(f"static calibration tracking cluster {centroid!r} is incomplete; missing {missing}")
+        if present:
+            source_columns = [index[source] for source in sources]
+            cluster_valid = frame_mask & np.all(markers.valid[:, source_columns], axis=1)
+            if not np.any(cluster_valid):
+                raise ValueError(f"static calibration has no valid samples for tracking cluster {centroid!r}")
+            output[centroid] = np.mean(
+                markers.positions[cluster_valid][:, source_columns], axis=(0, 1), dtype=np.float64
+            )
     if "LPSI" in output and "RPSI" in output:
         output["VSAC"] = 0.5 * (output["LPSI"] + output["RPSI"])
     if all(name in output for name in ("LFHD", "RFHD", "LBHD", "RBHD")):
@@ -453,6 +467,9 @@ def build_static_segment_calibration(
             "time_range_s": list(selected_range),
             "marker_radius_m": float(marker_radius),
             "marker_names": list(marker_positions),
+            "tracking_cluster_centroids": {
+                centroid: list(sources) for centroid, sources in TRACKING_CLUSTER_C3D_SOURCES.items()
+            },
         },
         "base_marker_set": "S001" if markers.source_file.startswith("Cal 101") else None,
         "pelvis": pelvis,
@@ -498,6 +515,15 @@ def load_static_segment_calibration(path: str | os.PathLike) -> SegmentCalibrati
     marker_positions = {
         name: np.asarray(value, dtype=np.float64) for name, value in manifest.get("markers", {}).items()
     }
+    for centroid, sources in TRACKING_CLUSTER_C3D_SOURCES.items():
+        present = [source for source in sources if source in marker_positions]
+        if present and len(present) != len(sources):
+            missing = [source for source in sources if source not in marker_positions]
+            raise ValueError(f"static calibration tracking cluster {centroid!r} is incomplete; missing {missing}")
+        if centroid not in marker_positions and present:
+            marker_positions[centroid] = np.mean(
+                [marker_positions[source] for source in sources], axis=0, dtype=np.float64
+            )
     if not set(_REQUIRED_MARKERS).issubset(marker_positions) or any(
         value.shape != (3,) or not np.all(np.isfinite(value)) for value in marker_positions.values()
     ):

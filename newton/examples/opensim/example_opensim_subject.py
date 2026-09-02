@@ -703,13 +703,8 @@ class Example:
         if len(visual_ground) != 1 or shape_types[visual_ground[0]] != newton.GeoType.PLANE:
             raise ValueError("subject viewer must contain one visible ground plane")
         if self.visual_mesh_count:
-            connector = [
-                index
-                for index, label in enumerate(self.model.shape_label)
-                if label.endswith("/geometry_abdomen_connector")
-            ]
-            if len(connector) != 1 or shape_types[connector[0]] != newton.GeoType.BOX:
-                raise ValueError("scaled visual model must contain an abdomen connector")
+            if any(label.endswith("/geometry_abdomen_connector") for label in self.model.shape_label):
+                raise ValueError("scaled visual model must not contain an abdomen connector")
         if self.inertial_data is not None:
             body_mass = self.model.body_mass.numpy()
             body_com = self.model.body_com.numpy()

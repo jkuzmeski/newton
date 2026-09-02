@@ -45,6 +45,18 @@ class TestStaticSegmentCalibration(unittest.TestCase):
             "LMTH5": (0.10, 0.16, 0.04),
             "RMTH1": (0.10, -0.08, 0.04),
             "RMTH5": (0.10, -0.16, 0.04),
+            "LTH2": (-0.08, 0.10, 0.70),
+            "LTH3": (-0.07, 0.11, 0.65),
+            "LTH4": (-0.06, 0.12, 0.68),
+            "RTH2": (-0.08, -0.10, 0.70),
+            "RTH3": (-0.07, -0.11, 0.65),
+            "RTH4": (-0.06, -0.12, 0.68),
+            "LTIB2": (-0.03, 0.10, 0.35),
+            "LTIB3": (-0.02, 0.11, 0.30),
+            "LTIB4": (-0.01, 0.12, 0.33),
+            "RTIB2": (-0.03, -0.10, 0.35),
+            "RTIB3": (-0.02, -0.11, 0.30),
+            "RTIB4": (-0.01, -0.12, 0.33),
         }
         names = tuple(values)
         positions = np.asarray([[values[name] for name in names]], dtype=np.float32)
@@ -79,6 +91,10 @@ class TestStaticSegmentCalibration(unittest.TestCase):
         self.assertAlmostEqual(calibration.segments["thigh_left"]["width_m"], 0.12, places=6)
         self.assertAlmostEqual(calibration.segments["shank_left"]["width_m"], 0.09, places=6)
         self.assertTrue(calibration.segments["foot_left"]["flat_ground"])
+        np.testing.assert_allclose(
+            calibration.marker_positions["L.Thigh.Centroid"],
+            np.mean([calibration.marker_positions[name] for name in ("LTH2", "LTH3", "LTH4")], axis=0),
+        )
         np.testing.assert_allclose(
             np.asarray(calibration.segments["foot_left"]["basis_forward_left_up"])[:, 2],
             (0.0, 0.0, 1.0),

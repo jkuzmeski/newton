@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .marker_clusters import TRACKING_CLUSTER_C3D_SOURCES
 from .segment_calibration import SegmentCalibration, load_static_segment_calibration
 
 _SCHEMA = "gait_segment_calibration_to_mjcf_1"
@@ -56,6 +57,7 @@ _CANONICAL_TO_SOURCE = {
     "R.Toe.Lat": "RMTH5",
     "R.Toe.Med": "RMTH1",
     "R.Toe.Tip": "RHLX",
+    **{name: name for name in TRACKING_CLUSTER_C3D_SOURCES},
 }
 
 
@@ -812,6 +814,12 @@ def write_calibrated_subject_mjcf(
                 site_world = target_markers[source_name] + global_offset
                 site.set("pos", _fmt(rotation.T @ (site_world - origin)))
                 site.set("size", f"{target_calibration.marker_radius:.9g}")
+        # Keep the named keyframe aligned with the calibrated root pose.
+        pelvis_origin, pelvis_rotation = target_world["pelvis"]
+        neutral = next(key for key in root.iter("key") if key.get("name") == "neutral")
+        neutral.set(
+            "qpos", _fmt((*pelvis_origin, *_quat_wxyz(pelvis_rotation), *([0.0] * len(list(root.iter("joint"))))))
+        )
         # The ground plane remains at z=0; the foot body frames and meshes now share that plane.
         staged_xml.write_text(ET.tostring(root, encoding="unicode") + "\n", encoding="utf-8")
         output_manifest = {

@@ -81,17 +81,13 @@
             <geom class="visual" name="visual_13_foot_left_l_foot_3fe52ebe" type="mesh" mesh="visual_13_foot_left_l_foot_3fe52ebe" pos="0 0 0" />
             <geom class="visual" name="visual_14_foot_left_l_bofoot_73bbc705" type="mesh" mesh="visual_14_foot_left_l_bofoot_73bbc705" pos="0 0 0" />
           </body>
-          <site name="marker_L.Shank.Upper" type="sphere" size="0.008" pos="-0.089240005 0.0839185578 -0.0522750185" rgba="0.15 0.95 0.25 1" />
-          <site name="marker_L.Shank.Front" type="sphere" size="0.008" pos="-0.0419185283 0.0733552077 -0.0586808998" rgba="0.15 0.95 0.25 1" />
-          <site name="marker_L.Shank.Rear" type="sphere" size="0.008" pos="-0.084003003 0.0686499022 -0.127353844" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_L.Shank.Centroid" type="sphere" size="0.008" pos="-0.0717205121 0.07530788923 -0.07943658743" rgba="0.15 0.95 0.25 1" />
           <site name="marker_L.Ankle.Lat" type="sphere" size="0.008" pos="-0.0685067835 0.041953596 -0.307456639" rgba="0.15 0.95 0.25 1" />
           <site name="marker_L.Ankle.Med" type="sphere" size="0.008" pos="-0.0510852117 -0.0486733562 -0.295064097" rgba="0.15 0.95 0.25 1" />
           <geom class="visual" name="visual_10_tibia_left_l_tibia_5528711a" type="mesh" mesh="visual_10_tibia_left_l_tibia_5528711a" pos="0 0 -0.015" />
           <geom class="visual" name="visual_11_tibia_left_l_fibula_21cdc2c3" type="mesh" mesh="visual_11_tibia_left_l_fibula_21cdc2c3" pos="0 0 -0.015" />
         </body>
-        <site name="marker_L.Thigh.Upper" type="sphere" size="0.008" pos="-0.0778515371 0.0907601112 -0.0860723433" rgba="0.15 0.95 0.25 1" />
-        <site name="marker_L.Thigh.Front" type="sphere" size="0.008" pos="-0.0798282322 0.0808715345 -0.162139632" rgba="0.15 0.95 0.25 1" />
-        <site name="marker_L.Thigh.Rear" type="sphere" size="0.008" pos="-0.037010127 0.0871941892 -0.153229398" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_L.Thigh.Centroid" type="sphere" size="0.008" pos="-0.0648966321 0.0862752783 -0.1338137911" rgba="0.15 0.95 0.25 1" />
         <site name="marker_L.Knee.Lat" type="sphere" size="0.008" pos="-0.0581684968 0.0732696782 -0.321113539" rgba="0.15 0.95 0.25 1" />
         <site name="marker_L.Knee.Med" type="sphere" size="0.008" pos="-0.0712966662 -0.0522536246 -0.322948004" rgba="0.15 0.95 0.25 1" />
         <geom class="visual" name="visual_09_femur_left_l_femur_3a5df196" type="mesh" mesh="visual_09_femur_left_l_femur_3a5df196" pos="0 0 0" />
@@ -125,17 +121,13 @@
             <geom class="visual" name="visual_07_foot_right_foot_7a876838" type="mesh" mesh="visual_07_foot_right_foot_7a876838" pos="0 0 0" />
             <geom class="visual" name="visual_08_foot_right_bofoot_9f7184c1" type="mesh" mesh="visual_08_foot_right_bofoot_9f7184c1" pos="0 0 0" />
           </body>
-          <site name="marker_R.Shank.Upper" type="sphere" size="0.008" pos="-0.0903755479 -0.0878598249 -0.0555857439" rgba="0.15 0.95 0.25 1" />
-          <site name="marker_R.Shank.Front" type="sphere" size="0.008" pos="-0.0468613988 -0.0729180057 -0.0631526391" rgba="0.15 0.95 0.25 1" />
-          <site name="marker_R.Shank.Rear" type="sphere" size="0.008" pos="-0.0890566326 -0.0716320086 -0.129775844" rgba="0.15 0.95 0.25 1" />
+          <site name="marker_R.Shank.Centroid" type="sphere" size="0.008" pos="-0.0754311931 -0.0774699464 -0.08283807567" rgba="0.15 0.95 0.25 1" />
           <site name="marker_R.Ankle.Lat" type="sphere" size="0.008" pos="-0.0683227953 -0.0445541988 -0.308416155" rgba="0.15 0.95 0.25 1" />
           <site name="marker_R.Ankle.Med" type="sphere" size="0.008" pos="-0.056089944 0.0442812974 -0.298207883" rgba="0.15 0.95 0.25 1" />
           <geom class="visual" name="visual_04_tibia_right_r_tibia_2958b9c9" type="mesh" mesh="visual_04_tibia_right_r_tibia_2958b9c9" pos="0 0 -0.015" />
           <geom class="visual" name="visual_05_tibia_right_fibula_640f87b7" type="mesh" mesh="visual_05_tibia_right_fibula_640f87b7" pos="0 0 -0.015" />
         </body>
-        <site name="marker_R.Thigh.Upper" type="sphere" size="0.008" pos="-0.0709236999 -0.09282307 -0.0832623534" rgba="0.15 0.95 0.25 1" />
-        <site name="marker_R.Thigh.Front" type="sphere" size="0.008" pos="-0.071825032 -0.0814288532 -0.159782549" rgba="0.15 0.95 0.25 1" />
-        <site name="marker_R.Thigh.Rear" type="sphere" size="0.008" pos="-0.0262283586 -0.0811868489 -0.148552633" rgba="0.15 0.95 0.25 1" />
+        <site name="marker_R.Thigh.Centroid" type="sphere" size="0.008" pos="-0.05632569683 -0.08514625737 -0.1305325118" rgba="0.15 0.95 0.25 1" />
         <site name="marker_R.Knee.Lat" type="sphere" size="0.008" pos="-0.0638920165 -0.0706095176 -0.304460087" rgba="0.15 0.95 0.25 1" />
         <site name="marker_R.Knee.Med" type="sphere" size="0.008" pos="-0.0683124305 0.0548999531 -0.313602292" rgba="0.15 0.95 0.25 1" />
         <geom class="visual" name="visual_03_femur_right_femur_r_2bf9d3ed" type="mesh" mesh="visual_03_femur_right_femur_r_2bf9d3ed" pos="0 0 0" />
@@ -146,7 +138,6 @@
       <geom class="visual" name="visual_00_pelvis_sacrum_ec82986d" type="mesh" mesh="visual_00_pelvis_sacrum_ec82986d" pos="0 0 0" />
       <geom class="visual" name="visual_01_pelvis_pelvis_302c8103" type="mesh" mesh="visual_01_pelvis_pelvis_302c8103" pos="0 0 0" />
       <geom class="visual" name="visual_02_pelvis_l_pelvis_221ff377" type="mesh" mesh="visual_02_pelvis_l_pelvis_221ff377" pos="0 0 0" />
-      <geom class="visual" name="geometry_abdomen_connector" type="box" pos="0 0 0.125774409" size="0.06 0.055 0.0617744091" rgba="0.68 0.48 0.30 1" />
     </body>
   </worldbody>
   <actuator>

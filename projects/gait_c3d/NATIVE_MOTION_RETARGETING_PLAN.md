@@ -126,7 +126,7 @@ so the saved model is self-describing.
 - The reusable `opensim_subject --marker-demo --show-markers` example displays
   imported neutral marker sites from a clean checkout without an OpenSim
   runtime dependency.
-- The tracked S001 base bundle displays the 35 placed markers on the actual
+- The tracked S001 base bundle displays 27 native marker sites on the actual
   19-mesh neutral bone geometry without an OpenSim runtime.
 - A static calibration C3D builds a saved personalized MJCF from the S001
   segment templates, with per-side thigh/shank/foot scales and all contacts
@@ -283,8 +283,8 @@ until its example and automated checks both pass.
 
 - Branch: `jkuzmeski/mocap-native-ik`.
 - Base marker set: tracked `projects/gait_c3d/assets/s001_base`, identified as
-  `S001`; it contains the final neutral MJCF, 35 placed markers, and 19 actual
-  subject-specific bone meshes. The source OpenSim/C3D inputs remain external.
+  `S001`; it contains the final neutral MJCF, 27 centroid-collapsed marker
+  sites, and 19 actual subject-specific bone meshes. The source OpenSim/C3D inputs remain external.
 - Actual-geometry visualization: `opensim_subject --subject
   projects/gait_c3d/assets/s001_base --show-markers --paused` overlays imported
   marker sites on the S001 bone meshes.
@@ -310,14 +310,15 @@ until its example and automated checks both pass.
   `Geometry/*.obj` meshes, and sealed base/scaled manifests.
 - Clean-checkout example: the tracked compact OpenSim-output-style fixture builds
   ten sealed marker sites without executing OpenSim.
-- Canonical S001 result: 35 sealed marker sites; one-call Newton import produces
-  8 bodies, 10 fixed-root inspection DOFs, and 79 shapes/sites. Imported neutral
+- Canonical S001 result: 27 sealed native marker sites. The four three-marker
+  thigh/shank tracking clusters are represented by centroids. One-call Newton import produces
+  8 bodies, 10 fixed-root inspection DOFs, and 70 shapes/sites. Imported neutral
   site world positions reproduce the converted reference positions within
   0.10 micrometers maximum error.
 - Focused validation: the gait suite passes with one optional dependency skip
   when `ezc3d` is unavailable; calibration tests verify CODA landmarks,
   per-side dimensions, sealed provenance, and tamper rejection; base scaling
-  tests verify 35 imported sites, 19 visible non-colliding meshes, scaled
+  tests verify 27 imported sites, 19 visible non-colliding meshes, scaled
   inertias, marker frames, explicit hip width, calibrated body frames, and flat
   foot contacts; the base example is runnable without OpenSim.
 - Reusable commands:
@@ -384,28 +385,27 @@ until its example and automated checks both pass.
 
 ### Phase 3
 
-**Status:** in progress on `jkuzmeski/mocap-native-ik`.
+**Status:** complete on `jkuzmeski/mocap-native-ik`.
 
 - Implementation: real C3D names are joined to native marker sites in
-  `projects/gait_c3d/native_motion_fit.py`; `LHLX`/`RHLX` provide hallux
-  targets, and `V.Sacral`/`Top.Head` are built only from valid source-marker
-  groups. A saved subject ground offset is applied as an explicit registration
+  `projects/gait_c3d/native_motion_fit.py`; the three-marker thigh and shank
+  tracking clusters are reduced to one arithmetic `*.Centroid` target per
+  segment, while `LHLX`/`RHLX` provide hallux targets and `V.Sacral`/`Top.Head`
+  are built only from valid source-marker groups. A saved subject ground offset
+  is applied as an explicit registration
   unless a 4x4 matrix is supplied.
 - Artifact: `write_native_motion_artifact()` publishes sealed `motion.npz`
   data with coordinates, finite-difference velocities, target/predicted
   markers, validity, per-frame/per-marker/per-body residuals, solver costs,
-  limit diagnostics, source hashes, and registration metadata.
+  limit diagnostics, source hashes, registration metadata, and the explicit
+  thigh/shank centroid source mapping.
 - Example: `native_motion_fit --c3d <trial>` fits the trial in time order and
   stores it under the selected subject bundle's `motions/` directory while
   overlaying measured and predicted markers. `--motion-output <directory>`
   remains an explicit override. Frame ranges, stride, and a safety
   `--max-frames` limit are supported.
-- Validation: the real `Trial 101.v3d.c3d` was fit for a four-frame smoke run
-  with 35/35 valid native markers and approximately 7.2 mm frame RMS. Name
-  mapping, virtual markers, artifact publication, and finite-difference velocity
-  tests pass.
-- Remaining work: run and archive the complete Trial 101 fit, add the
-  documented treadmill/stationary registration metadata, implement short-gap
-  interpolation and visibility-mask solver caching, and review the native
-  marker-residual knee range. The knee range is now a native marker-fit policy;
-  OpenSim joint angles are not used as a reference.
+- Validation: the complete 17,844-frame `Trial 101.v3d.c3d` fit had zero
+  joint-limit violation and frame RMS median/p95/max of 18.07/27.82/32.57 mm.
+  The 13.97 MB result exceeds the repository file limit and is not checked in.
+- Remaining work: add treadmill registration metadata and short-gap handling,
+  then review the native marker-residual knee range.

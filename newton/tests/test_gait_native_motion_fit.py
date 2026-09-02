@@ -52,6 +52,18 @@ class TestNativeMotionFit(unittest.TestCase):
         target[18] = 0.15 + 0.04 * np.cos(phase)
         return target
 
+    def test_uses_one_site_per_tracking_cluster(self):
+        """Use one native attachment for each thigh and shank cluster."""
+        self.assertEqual(len(self.attachments), 27)
+        self.assertEqual(
+            {attachment.name for attachment in self.attachments}
+            & {"L.Thigh.Centroid", "R.Thigh.Centroid", "L.Shank.Centroid", "R.Shank.Centroid"},
+            {"L.Thigh.Centroid", "R.Thigh.Centroid", "L.Shank.Centroid", "R.Shank.Centroid"},
+        )
+        self.assertFalse(
+            any(attachment.name.endswith((".Upper", ".Front", ".Rear")) for attachment in self.attachments)
+        )
+
     def test_recovers_clean_target_with_public_ik(self):
         """Recover clean synthetic markers to submillimeter residuals."""
         target_q = self._target(0.6)

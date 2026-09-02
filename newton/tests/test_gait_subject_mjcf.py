@@ -69,7 +69,7 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 90.0, places=4)
         self.assertAlmostEqual(pelvis_position[2], scaled.config.pelvis_height, places=7)
         self.assertAlmostEqual(scaled.config.contact_radius, scaled.length_scale * 0.0245631567, places=7)
-        self.assertEqual(sum(1 for flags in model.shape_flags.numpy() if flags & newton.ShapeFlags.SITE), 35)
+        self.assertEqual(sum(1 for flags in model.shape_flags.numpy() if flags & newton.ShapeFlags.SITE), 27)
         np.testing.assert_allclose(scaled_vertex, scaled.length_scale * base_vertex, atol=1.0e-8)
 
     def test_scales_bilateral_geometry_from_static_segment_dimensions(self):
@@ -120,6 +120,17 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "model" / "subject.xml"
             write_calibrated_subject_mjcf(base, calibration, output, body_mass=81.9312118)
+            xml = ET.parse(output).getroot()
+            pelvis = next(body for body in xml.iter("body") if body.get("name") == "pelvis")
+            neutral = np.asarray([float(value) for value in next(xml.iter("key")).get("qpos").split()])
+            self.assertEqual(len(neutral), 20)
+            np.testing.assert_allclose(
+                neutral[:7],
+                [
+                    *[float(value) for value in pelvis.get("pos").split()],
+                    *[float(value) for value in pelvis.get("quat").split()],
+                ],
+            )
             builder = newton.ModelBuilder()
             builder.add_mjcf(str(output), floating=False, parse_sites=True, enable_self_collisions=True)
             model = builder.finalize(device="cpu")
