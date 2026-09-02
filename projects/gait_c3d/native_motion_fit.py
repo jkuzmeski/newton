@@ -325,14 +325,17 @@ def solve_marker_sequence(
     lambda_initial: float = 0.001,
     batch_size: int = 1,
     prediction_attachments: tuple[NativeMarkerAttachment, ...] | None = None,
+    use_cuda_graph: bool = True,
 ) -> tuple[NativeIKFrame, ...]:
     """Solve a marker sequence with public Newton LM on the model device.
 
     Target data, solved coordinates, forward kinematics, marker predictions,
     and solver diagnostics stay on the model device until the complete
-    sequence has finished. Apart from one-time static model metadata needed to
-    identify a free-root quaternion, the only host transfers in the solve are
-    the final result copies.
+    sequence has finished. CUDA solves capture the fixed LM iteration sequence
+    once and replay it as a graph to avoid per-iteration launch overhead. Apart
+    from one-time static model metadata needed to identify a free-root
+    quaternion, the only host transfers in the solve are the final result
+    copies.
 
     Args:
         model: Finalized native model.
@@ -343,12 +346,15 @@ def solve_marker_sequence(
         joint_limit_weight: Weight of the public joint-limit objective.
         lambda_initial: Initial LM damping value.
         batch_size: Number of frames solved concurrently. ``1`` preserves
-            sequential warm starts. Larger values solve GPU batches; each row
-            in a chunk starts from the previous chunk's final solution (or
-            ``seed`` for the first chunk).
+            sequential warm starts, and ``0`` solves the full sequence in one
+            batch. Other values solve fixed-size batches; each row in a chunk
+            starts from the previous chunk's final solution (or ``seed`` for
+            the first chunk).
         prediction_attachments: Optional marker attachments to predict after
             solving. Use this to request full-marker predictions while fitting
             only a visible subset.
+        use_cuda_graph: Capture and replay fixed-iteration solves on CUDA when
+            the sequence requires more than one batch.
 
     Returns:
         Solved frames in input order.
@@ -363,12 +369,14 @@ def solve_marker_sequence(
         raise ValueError("seed has an incompatible or nonfinite shape")
     if iterations <= 0:
         raise ValueError("iterations must be positive")
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
+    if batch_size < 0:
+        raise ValueError("batch_size must be nonnegative")
 
     frame_count = target_sequence.shape[0]
     if frame_count == 0:
         return ()
+    if batch_size == 0:
+        batch_size = frame_count
     if prediction_attachments is None:
         prediction_attachments = attachments
     used_prediction_indices = set()
@@ -428,6 +436,30 @@ def solve_marker_sequence(
                 jacobian_mode=ik.IKJacobianType.ANALYTIC,
             )
 
+        def capture_solver_step(
+            solver: ik.IKSolver,
+            joint_q: wp.array2d[wp.float32],
+        ) -> wp.Graph | None:
+            if not use_cuda_graph or not model.device.is_cuda:
+                return None
+            # CUDA capture cannot compile kernels, so prime only this solver's
+            # modules instead of forcing every imported Newton module to load.
+            solver.step(joint_q, joint_q, iterations=1, step_size=1.0)
+            wp.synchronize_device(model.device)
+            with wp.ScopedCapture(device=model.device) as capture:
+                solver.step(joint_q, joint_q, iterations=iterations, step_size=1.0)
+            return capture.graph
+
+        def solve_step(
+            solver: ik.IKSolver,
+            joint_q: wp.array2d[wp.float32],
+            graph: wp.Graph | None,
+        ) -> None:
+            if graph is None:
+                solver.step(joint_q, joint_q, iterations=iterations, step_size=1.0)
+            else:
+                wp.capture_launch(graph)
+
         if batch_size == 1:
             # Keep the exact temporal warm-start behavior for callers that
             # request it. All frame targets and all result buffers still stay
@@ -436,9 +468,12 @@ def solve_marker_sequence(
             state = model.state()
             joint_q = wp.zeros((1, model.joint_coord_count), dtype=wp.float32, device=model.device)
             wp.copy(joint_q, seed_device)
+            solve_graph = capture_solver_step(solver, joint_q) if frame_count > 1 else None
+            if solve_graph is not None:
+                wp.copy(joint_q, seed_device)
             for frame_idx in range(frame_count):
                 solver.set_problem_index(frame_idx, problem_count=frame_count)
-                solver.step(joint_q, joint_q, iterations=iterations, step_size=1.0)
+                solve_step(solver, joint_q, solve_graph)
                 wp.launch(
                     _normalize_free_root_quaternion,
                     dim=1,
@@ -486,6 +521,16 @@ def solve_marker_sequence(
             body_q_batch = wp.zeros((solver_batch, model.body_count), dtype=wp.transform, device=model.device)
             body_qd_batch = wp.zeros((solver_batch, model.body_count), dtype=wp.spatial_vector, device=model.device)
             batch_quaternion_valid = wp.zeros(solver_batch, dtype=wp.int32, device=model.device)
+            solve_graph = None
+            if frame_count > solver_batch:
+                wp.launch(
+                    _broadcast_seed,
+                    dim=[solver_batch, model.joint_coord_count],
+                    inputs=[chunk_seed],
+                    outputs=[joint_q],
+                    device=model.device,
+                )
+                solve_graph = capture_solver_step(solver, joint_q)
             for frame_start in range(0, frame_count, solver_batch):
                 n_batch = min(solver_batch, frame_count - frame_start)
                 wp.copy(target_batch[:n_batch], target_positions[frame_start : frame_start + n_batch])
@@ -496,7 +541,7 @@ def solve_marker_sequence(
                     outputs=[joint_q],
                     device=model.device,
                 )
-                solver.step(joint_q, joint_q, iterations=iterations, step_size=1.0)
+                solve_step(solver, joint_q, solve_graph)
                 wp.launch(
                     _normalize_free_root_quaternion,
                     dim=solver_batch,
@@ -845,7 +890,8 @@ def fit_c3d_marker_motion(
     registration: np.ndarray | None = None,
     iterations: int = 40,
     joint_limit_weight: float = 0.1,
-    batch_size: int = 8,
+    batch_size: int = 0,
+    use_cuda_graph: bool = True,
     start_frame: int = 0,
     end_frame: int | None = None,
     max_frames: int | None = None,
@@ -862,7 +908,10 @@ def fit_c3d_marker_motion(
         iterations: LM iterations per selected frame.
         joint_limit_weight: Weight of the public joint-limit objective.
         batch_size: Number of frames solved concurrently. Larger values use
-            more GPU parallelism; use ``1`` to retain frame warm starts.
+            more GPU parallelism; use ``1`` to retain frame warm starts or
+            ``0`` to solve all selected frames in one batch.
+        use_cuda_graph: Capture and replay fixed-iteration solves on CUDA when
+            the sequence requires more than one batch.
         start_frame: First frame index to fit.
         end_frame: Exclusive frame index, or ``None`` for the end.
         max_frames: Maximum selected frames, or ``None`` for no limit.
@@ -873,8 +922,8 @@ def fit_c3d_marker_motion(
     """
     if stride <= 0:
         raise ValueError("stride must be positive")
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
+    if batch_size < 0:
+        raise ValueError("batch_size must be nonnegative")
     if start_frame < 0 or (end_frame is not None and end_frame <= start_frame):
         raise ValueError("motion frame range is invalid")
     if registration is None:
@@ -901,6 +950,7 @@ def fit_c3d_marker_motion(
         joint_limit_weight=joint_limit_weight,
         batch_size=batch_size,
         prediction_attachments=attachments,
+        use_cuda_graph=use_cuda_graph,
     )
     joint_q = np.asarray([frame.joint_q for frame in frames], dtype=np.float32)
     # solve_marker_sequence computes predictions for all attachments on the

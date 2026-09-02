@@ -134,10 +134,11 @@ class TestNativeRealMotion(unittest.TestCase):
         self.assertTrue(np.all(mapped.valid))
 
     def test_parser_exposes_motion_load_and_overwrite_flags(self):
-        """Parse direct motion replay and full-solve overwrite options."""
-        args = create_parser().parse_args(["--motion", "/tmp/motion", "--overwrite"])
+        """Parse motion replay, overwrite, and solve-batch options."""
+        args = create_parser().parse_args(["--motion", "/tmp/motion", "--overwrite", "--batch-size", "64"])
         self.assertEqual(args.motion, "/tmp/motion")
         self.assertTrue(args.overwrite)
+        self.assertEqual(args.batch_size, 64)
 
     def test_default_motion_output_stays_inside_subject_bundle(self):
         """Derive a stable subject-local output path from the trial filename."""

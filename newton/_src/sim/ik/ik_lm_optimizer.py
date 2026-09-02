@@ -241,6 +241,7 @@ class IKOptimizerLM:
         """Allocate per-objective Warp streams and sync events."""
         self.objective_streams = []
         self.sync_events = []
+        self.objective_start_event = wp.Event(self.device) if self.device.is_cuda else None
 
         if self.device.is_cuda:
             for _ in range(len(self.objectives)):
@@ -256,11 +257,11 @@ class IKOptimizerLM:
         """Run <fn(obj, offset, *extra)> across objectives on parallel CUDA streams."""
         if self.device.is_cuda:
             main = wp.get_stream(self.device)
-            init_evt = main.record_event()
+            main.record_event(self.objective_start_event)
             for obj, offset, obj_stream, sync_event in zip(
                 self.objectives, self.residual_offsets, self.objective_streams, self.sync_events, strict=False
             ):
-                obj_stream.wait_event(init_evt)
+                obj_stream.wait_event(self.objective_start_event)
                 with wp.ScopedStream(obj_stream):
                     fn(obj, offset, *extra)
                 obj_stream.record_event(sync_event)
@@ -284,7 +285,8 @@ class IKOptimizerLM:
         self.residuals_proposed = wp.zeros(
             (self.n_batch, self.n_residuals), dtype=wp.float32, requires_grad=grad, device=device
         )
-        self.residuals_3d = wp.zeros((self.n_batch, self.n_residuals, 1), dtype=wp.float32, device=device)
+        # The tiled solver needs a trailing unit dimension, not a second buffer.
+        self.residuals_3d = self.residuals.reshape((self.n_batch, self.n_residuals, 1))
 
         self.jacobian = wp.zeros((self.n_batch, self.n_residuals, self.n_dofs), dtype=wp.float32, device=device)
         self.dq_dof = wp.zeros((self.n_batch, self.n_dofs), dtype=wp.float32, requires_grad=grad, device=device)
@@ -630,27 +632,23 @@ class IKOptimizerLM:
 
         ctx_curr = self._ctx_solver(joint_q)
 
+        # Accepted proposals carry their residuals and costs forward, so only
+        # the initial state needs a separate evaluation.
         if iteration == 0:
             if self.jacobian_mode in (IKJacobianType.AUTODIFF, IKJacobianType.MIXED):
                 self._residuals_autodiff(ctx_curr)
             else:
                 self._residuals_analytic(ctx_curr)
-
-        wp.launch(
-            compute_costs,
-            dim=self.n_batch,
-            inputs=[ctx_curr.residuals, self.n_residuals],
-            outputs=[self.costs],
-            device=self.device,
-        )
+            wp.launch(
+                compute_costs,
+                dim=self.n_batch,
+                inputs=[ctx_curr.residuals, self.n_residuals],
+                outputs=[self.costs],
+                device=self.device,
+            )
 
         self._jacobian_at(ctx_curr)
 
-        residuals_flat = ctx_curr.residuals.flatten()
-        residuals_3d_flat = self.residuals_3d.flatten()
-        wp.copy(residuals_3d_flat, residuals_flat)
-
-        self.dq_dof.zero_()
         self._solve_tiled(
             ctx_curr.jacobian_out, self.residuals_3d, self.lambda_values, self.dq_dof, self.pred_reduction
         )

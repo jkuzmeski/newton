@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from itertools import pairwise
 from pathlib import Path
 
@@ -104,14 +105,19 @@ class Example:
         neutral_visible = marker_positions_from_joint_q(self.model, self.visible_attachments, self.seed)
         neutral_errors = neutral_visible - visible_targets[0]
         self.neutral_rms = float(np.sqrt(np.mean(np.sum(neutral_errors * neutral_errors, axis=1))))
+        iterations = 80 if args.iterations is None else args.iterations
+        batch_size = 1 if args.batch_size is None else args.batch_size
+        solve_start = time.perf_counter()
         self.frames = solve_marker_sequence(
             self.model,
             self.visible_attachments,
             visible_targets,
             self.seed,
-            iterations=args.iterations,
+            iterations=iterations,
             joint_limit_weight=args.joint_limit_weight,
+            batch_size=batch_size,
         )
+        self.solve_seconds = time.perf_counter() - solve_start
         self.frame_index = 0
         self.target_points = wp.array(
             self.frames[0].target_markers.astype(np.float32), dtype=wp.vec3, device=self.model.device
@@ -132,6 +138,7 @@ class Example:
             f"Synthetic native IK: {len(self.visible_attachments)}/{len(self.attachments)} markers, "
             f"{len(self.frames)} frames, neutral RMS {self.neutral_rms * 1000.0:.2f} mm"
         )
+        print(f"Solved in {self.solve_seconds:.3f} s ({len(self.frames) / self.solve_seconds:.1f} frames/s)")
         print(
             f"Final marker RMS {max(frame.marker_rms for frame in self.frames) * 1000.0:.3f} mm, "
             f"max {max(frame.marker_max for frame in self.frames) * 1000.0:.3f} mm, "
@@ -239,19 +246,24 @@ class Example:
                     model_manifest.get("ground", {}).get("global_offset_m", (0.0, 0.0, 0.0)), dtype=np.float64
                 )
             registration_mode = "saved_subject_ground_offset"
+        iterations = 40 if args.iterations is None else args.iterations
+        batch_size = 0 if args.batch_size is None else args.batch_size
+        solve_start = time.perf_counter()
         self.motion = fit_c3d_marker_motion(
             self.model,
             self.attachments,
             mapped,
             self.model.joint_q.numpy(),
             registration=registration,
-            iterations=args.iterations,
+            iterations=iterations,
             joint_limit_weight=args.joint_limit_weight,
+            batch_size=batch_size,
             start_frame=args.start_frame,
             end_frame=args.end_frame,
             stride=args.stride,
             max_frames=args.max_frames if args.max_frames > 0 else None,
         )
+        self.solve_seconds = time.perf_counter() - solve_start
         calibration_path = subject / "model" / "segment_calibration.json"
         self.motion_output = write_native_motion_artifact(
             self.motion,
@@ -260,7 +272,8 @@ class Example:
             calibration_path=calibration_path if calibration_path.is_file() else None,
             overwrite=args.overwrite,
             settings={
-                "iterations": args.iterations,
+                "iterations": iterations,
+                "batch_size": batch_size,
                 "start_frame": args.start_frame,
                 "end_frame": args.end_frame,
                 "stride": args.stride,
@@ -290,6 +303,7 @@ class Example:
             f"Real native IK: {len(self.visible_indices)}/{len(self.attachments)} always-valid markers, "
             f"{len(self.motion.times)} frames -> {self.motion_output}"
         )
+        print(f"Solved in {self.solve_seconds:.3f} s ({len(self.motion.times) / self.solve_seconds:.1f} frames/s)")
         print(
             f"Frame RMS median/p95/max: {np.median(self.motion.frame_rms) * 1000.0:.2f}/"
             f"{np.percentile(self.motion.frame_rms, 95) * 1000.0:.2f}/"
@@ -420,7 +434,18 @@ def create_parser():
     parser.add_argument("--stride", type=int, default=1, help="C3D frame stride")
     parser.add_argument("--max-frames", type=int, default=300, help="Maximum fitted frames; zero means all")
     parser.add_argument("--frames", type=int, default=12, help="Synthetic marker frames")
-    parser.add_argument("--iterations", type=int, default=80, help="LM iterations per synthetic frame")
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=None,
+        help="LM iterations; default is 80 for synthetic IK and 40 for C3D",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help="Frames solved concurrently; default is sequential for synthetic IK and all-at-once for C3D",
+    )
     parser.add_argument("--noise-mm", type=float, default=0.0, help="Deterministic marker noise [mm]")
     parser.add_argument("--occlude-every", type=int, default=0, help="Hide every Nth marker, or zero for none")
     parser.add_argument("--seed", type=int, default=12345, help="Synthetic noise seed")
