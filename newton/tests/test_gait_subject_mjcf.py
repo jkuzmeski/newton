@@ -152,6 +152,10 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         self.assertEqual(len(contact_indices), 8)
         self.assertEqual(model.joint_coord_count, 13)
         self.assertTrue(any(label.rsplit("/", 1)[-1].startswith("torso_flexion") for label in model.joint_label))
+        for joint, label in enumerate(model.joint_label):
+            if label.rsplit("/", 1)[-1].startswith("knee_"):
+                dof = int(model.joint_qd_start.numpy()[joint])
+                self.assertLess(float(model.joint_limit_lower.numpy()[dof]), -0.49)
         expected_torso_origin = calibration.marker_positions["VSAC"] + ground_offset
         np.testing.assert_allclose(body_q[body_names["torso"], :3], expected_torso_origin, atol=2.0e-6)
         for site_name, source_name in (

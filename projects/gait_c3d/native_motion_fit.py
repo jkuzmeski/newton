@@ -502,12 +502,30 @@ def fit_c3d_marker_motion(
     *,
     registration: np.ndarray | None = None,
     iterations: int = 40,
+    joint_limit_weight: float = 0.1,
     start_frame: int = 0,
     end_frame: int | None = None,
     max_frames: int | None = None,
     stride: int = 1,
 ) -> NativeMotionArtifact:
-    """Fit valid real-C3D marker observations and publish finite diagnostics."""
+    """Fit valid real-C3D marker observations and publish finite diagnostics.
+
+    Args:
+        model: Finalized native model.
+        attachments: Native marker site bindings.
+        markers: C3D markers reordered into attachment order.
+        seed: Initial generalized coordinates [m or rad].
+        registration: Row-vector 4x4 C3D-to-model transform.
+        iterations: LM iterations per selected frame.
+        joint_limit_weight: Weight of the public joint-limit objective.
+        start_frame: First frame index to fit.
+        end_frame: Exclusive frame index, or ``None`` for the end.
+        max_frames: Maximum selected frames, or ``None`` for no limit.
+        stride: Frame step between selected frames.
+
+    Returns:
+        A finite fitted motion artifact in selected-frame order.
+    """
     if stride <= 0:
         raise ValueError("stride must be positive")
     if start_frame < 0 or (end_frame is not None and end_frame <= start_frame):
@@ -530,7 +548,12 @@ def fit_c3d_marker_motion(
     visible = np.flatnonzero(always_valid)
     visible_attachments = tuple(attachments[index] for index in visible)
     frames = solve_marker_sequence(
-        model, visible_attachments, selected_positions[:, visible], seed, iterations=iterations
+        model,
+        visible_attachments,
+        selected_positions[:, visible],
+        seed,
+        iterations=iterations,
+        joint_limit_weight=joint_limit_weight,
     )
     joint_q = np.asarray([frame.joint_q for frame in frames], dtype=np.float32)
     predictions = np.asarray(

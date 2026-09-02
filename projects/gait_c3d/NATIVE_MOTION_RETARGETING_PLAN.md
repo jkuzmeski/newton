@@ -402,7 +402,8 @@ until its example and automated checks both pass.
   with 35/35 valid native markers and approximately 7.2 mm frame RMS. Name
   mapping, virtual markers, artifact publication, and finite-difference velocity
   tests pass.
-- Remaining work: resolve the observed real-trial knee-limit diagnostic before
-  accepting a full trial, add the documented treadmill/stationary registration
-  metadata, implement short-gap interpolation and visibility-mask solver
-  caching, then run and archive the complete Trial 101 fit.
+- Remaining work: run and archive the complete Trial 101 fit, add the
+  documented treadmill/stationary registration metadata, implement short-gap
+  interpolation and visibility-mask solver caching, and review the native
+  marker-residual knee range. The knee range is now a native marker-fit policy;
+  OpenSim joint angles are not used as a reference.

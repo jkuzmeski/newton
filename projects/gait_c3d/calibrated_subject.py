@@ -539,6 +539,8 @@ def write_calibrated_subject_mjcf(
                 proximal = _source_joint_position(body, "knee")
                 for joint in body.findall("joint"):
                     joint.set("pos", "0 0 0")
+                    if (joint.get("name") or "").startswith("knee_"):
+                        joint.set("range", _fmt((-0.5, 2.617993877991494)))
             elif body_name.startswith("foot_"):
                 proximal = _source_joint_position(body, "ankle")
                 for joint in body.findall("joint"):

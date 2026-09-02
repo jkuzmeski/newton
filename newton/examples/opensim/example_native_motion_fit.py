@@ -162,6 +162,7 @@ class Example:
             self.model.joint_q.numpy(),
             registration=registration,
             iterations=args.iterations,
+            joint_limit_weight=args.joint_limit_weight,
             start_frame=args.start_frame,
             end_frame=args.end_frame,
             stride=args.stride,

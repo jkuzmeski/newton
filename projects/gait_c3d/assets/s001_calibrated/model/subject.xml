@@ -60,7 +60,7 @@
         <geom class="self_collision" name="collision_femur_left" type="capsule" size="0.063110668" fromto="0 0 -0.035 0 0 -0.463343785" />
         <body name="tibia_left" pos="-4.36448821e-19 -1.2399472e-17 -0.498343785" quat="0.985224675 -0.00582086655 0.0844238885 0.148899509">
           <inertial mass="4.04126368" pos="0 0 -0.175141401" fullinertia="0.048345482 0.0490168595 0.00489210211 0 0 0" />
-          <joint name="knee_left" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="0 2.61799388" damping="0.3" armature="0.01" />
+          <joint name="knee_left" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="-0.5 2.61799388" damping="0.3" armature="0.01" />
           <geom class="self_collision" name="collision_tibia_left" type="capsule" size="0.046558136" fromto="0 0 -0.035 0 0 -0.372706556" />
           <body name="foot_left" pos="-3.41569468e-18 -2.01292435e-18 -0.407706556" quat="0.989635607 -0.031150748 -0.0746482118 -0.118653445">
             <inertial mass="1.70763146" pos="0.046439363 0.00587096121 -0.020295508" fullinertia="0.00264064573 0.00716329796 0.00681252163 0.000249589237 0.000555215648 -5.06296655e-05" />
@@ -104,7 +104,7 @@
         <geom class="self_collision" name="collision_femur_right" type="capsule" size="0.0629596304" fromto="0 0 -0.035 0 0 -0.448604821" />
         <body name="tibia_right" pos="-5.04127646e-19 1.96289625e-18 -0.483604821" quat="0.991735918 0.0051325894 0.0938506264 -0.0873245946">
           <inertial mass="4.04126368" pos="0 0 -0.175141401" fullinertia="0.048345482 0.0490168595 0.00489210211 0 0 0" />
-          <joint name="knee_right" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="0 2.61799388" damping="0.3" armature="0.01" />
+          <joint name="knee_right" type="hinge" pos="0 0 0" axis="0 1 0" limited="true" range="-0.5 2.61799388" damping="0.3" armature="0.01" />
           <geom class="self_collision" name="collision_tibia_right" type="capsule" size="0.0451264789" fromto="0 0 -0.035 0 0 -0.387068539" />
           <body name="foot_right" pos="1.14213488e-17 -7.53787454e-18 -0.422068539" quat="0.988876066 0.0374921398 -0.0816058887 0.118570417">
             <inertial mass="1.70763146" pos="0.046439692 -0.0058612445 -0.0202978797" fullinertia="0.00264075108 0.00716320678 0.00681251045 -0.000250342946 0.000555281756 5.07815352e-05" />
