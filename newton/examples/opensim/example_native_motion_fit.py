@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 from itertools import pairwise
 from pathlib import Path
 
@@ -24,6 +25,17 @@ from projects.gait_c3d.native_motion_fit import (
     solve_marker_sequence,
     write_native_motion_artifact,
 )
+
+
+def _default_motion_output(subject: Path, c3d_path: str | Path) -> Path:
+    """Return the subject-local output path for one dynamic trial."""
+    trial_name = Path(c3d_path).stem
+    if trial_name.lower().endswith(".v3d"):
+        trial_name = trial_name[:-4]
+    trial_slug = re.sub(r"[^a-zA-Z0-9]+", "_", trial_name).strip("_").lower()
+    if not trial_slug:
+        raise ValueError("C3D filename must contain an alphanumeric trial name")
+    return subject / "motions" / f"{trial_slug}_native_motion"
 
 
 class Example:
@@ -122,8 +134,6 @@ class Example:
 
     def _init_real(self, viewer, args):
         """Load, fit, and publish a real C3D trial."""
-        if not args.motion_output:
-            raise ValueError("real C3D fitting requires --motion-output")
         self.viewer = viewer
         self.sim_time = 0.0
         self.frame_dt = 1.0 / 100.0
@@ -135,6 +145,11 @@ class Example:
         subject_xml = subject / "model" / "subject.xml"
         if not subject_xml.is_file():
             raise FileNotFoundError(f"subject MJCF is missing: {subject_xml}")
+        motion_output = (
+            Path(args.motion_output).expanduser().resolve()
+            if args.motion_output
+            else _default_motion_output(subject, args.c3d)
+        )
         newton.use_coord_layout_targets = True
         builder = newton.ModelBuilder()
         builder.add_mjcf(str(subject_xml), floating=True, parse_sites=True, enable_self_collisions=True)
@@ -171,7 +186,7 @@ class Example:
         calibration_path = subject / "model" / "segment_calibration.json"
         self.motion_output = write_native_motion_artifact(
             self.motion,
-            args.motion_output,
+            motion_output,
             model_path=subject_xml,
             calibration_path=calibration_path if calibration_path.is_file() else None,
             settings={
@@ -319,7 +334,10 @@ def create_parser():
     parser.add_argument("--synthetic", action="store_true", help="Run the synthetic native marker IK gate")
     parser.add_argument("--c3d", help="Fit a real dynamic C3D trial")
     parser.add_argument("--subject", help="Subject bundle containing the native marker sites")
-    parser.add_argument("--motion-output", help="Output directory for the fitted native motion artifact")
+    parser.add_argument(
+        "--motion-output",
+        help="Override the default subject-local fitted-motion output directory",
+    )
     parser.add_argument("--registration", help="Optional JSON 4x4 C3D-to-model registration matrix")
     parser.add_argument("--c3d-up-axis", default="+Z", help="Lab axis that points upward")
     parser.add_argument("--c3d-forward-axis", default="-Y", help="Lab axis that points subject-forward")

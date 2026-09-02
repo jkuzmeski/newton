@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 import newton
+from newton.examples.opensim.example_native_motion_fit import _default_motion_output
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
 from projects.gait_c3d.native_motion_fit import (
     NativeC3DMarkers,
@@ -104,6 +105,12 @@ class TestNativeRealMotion(unittest.TestCase):
         np.testing.assert_allclose(mapped.positions[0, 0], positions[0, 0])
         np.testing.assert_allclose(mapped.positions[0, 2], 0.5 * (positions[0, 2] + positions[0, 3]))
         np.testing.assert_allclose(mapped.positions[0, 3], positions[0, 4:].mean(axis=0))
+
+    def test_default_motion_output_stays_inside_subject_bundle(self):
+        """Derive a stable subject-local output path from the trial filename."""
+        subject = Path("/subjects/S001_calibrated")
+        output = _default_motion_output(subject, "/incoming/Trial 101.v3d.c3d")
+        self.assertEqual(output, subject / "motions" / "trial_101_native_motion")
 
     def test_fits_named_c3d_targets_and_publishes_artifact(self):
         """Fit finite name-joined targets and write a sealed motion artifact."""

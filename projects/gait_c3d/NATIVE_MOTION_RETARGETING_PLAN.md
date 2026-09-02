@@ -395,9 +395,11 @@ until its example and automated checks both pass.
   data with coordinates, finite-difference velocities, target/predicted
   markers, validity, per-frame/per-marker/per-body residuals, solver costs,
   limit diagnostics, source hashes, and registration metadata.
-- Example: `native_motion_fit --c3d <trial> --motion-output <directory>` fits
-  the trial in time order and overlays measured and predicted markers. It
-  supports frame ranges, stride, and a safety `--max-frames` limit.
+- Example: `native_motion_fit --c3d <trial>` fits the trial in time order and
+  stores it under the selected subject bundle's `motions/` directory while
+  overlaying measured and predicted markers. `--motion-output <directory>`
+  remains an explicit override. Frame ranges, stride, and a safety
+  `--max-frames` limit are supported.
 - Validation: the real `Trial 101.v3d.c3d` was fit for a four-frame smoke run
   with 35/35 valid native markers and approximately 7.2 mm frame RMS. Name
   mapping, virtual markers, artifact publication, and finite-difference velocity

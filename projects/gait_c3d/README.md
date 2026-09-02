@@ -275,11 +275,13 @@ trial, or use `--stride` while validating a long capture:
 uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
   --c3d "/path/to/Trial 101.v3d.c3d" \
   --subject projects/gait_c3d/assets/s001_calibrated \
-  --motion-output /tmp/trial_101_native_motion \
   --max-frames 300
 ```
 
-The output directory contains a sealed `motion.npz` artifact and manifest with
+By default, the sealed motion is stored under the subject bundle at
+`<subject>/motions/<trial>_native_motion/`. Pass `--motion-output` to override
+that subject-local location. The output directory contains a sealed
+`motion.npz` artifact and manifest with
 native coordinates, finite-difference velocities, target/predicted markers,
 validity, per-marker/per-body residuals, solver costs, limit diagnostics, and
 registration metadata.
