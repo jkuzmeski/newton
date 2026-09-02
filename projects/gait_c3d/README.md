@@ -220,11 +220,14 @@ updated together.
 
 Use a static calibration C3D to build a personalized model with Visual3D-style
 segment definitions. The compiler averages valid samples in the calibration
-window, builds a CODA pelvis, applies the Bell--Brand hip regression, finds
-knee and ankle centers from medial/lateral marker pairs, and builds a flat
-forward/left/up foot frame. The merged torso uses the distal sacrum and
-superior head as its endpoints, with C7, T10, sternum, clavicle, and acromion
-markers defining its frame. It saves the calibration next to the MJCF so the
+window, builds a CODA pelvis from both raw ASIS and PSIS marker pairs,
+applies the Bell--Brand hip regression, finds knee and ankle centers from
+medial/lateral marker pairs, and builds a flat forward/left/up foot frame. The
+PSIS midpoint remains available as the derived `VSAC` compatibility marker, but
+the bilateral PSIS slope now contributes to the pelvis frame. The merged torso
+uses that posterior midpoint and the superior head as its endpoints, with C7,
+T10, sternum, clavicle, and acromion markers defining its frame. It saves the
+calibration next to the MJCF so the
 model can be reopened without the C3D file. The definitions follow the
 [Visual3D CODA pelvis](https://wiki.has-motion.com/doku.php?id=visual3d:documentation:modeling:segments:coda_pelvis),
 [hip landmark](https://wiki.has-motion.com/doku.php?id=visual3d:documentation:modeling:segments:hip_joint_landmarks),
@@ -241,7 +244,11 @@ uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
 ```
 
 The saved bundle contains `calibration/segment_calibration.json`, marker data,
-actual S001-derived meshes, and `model/subject.xml`. In this marker set,
+actual S001-derived meshes, and `model/subject.xml`. Visuals are scaled from the
+source MJCF joint spans and remain anchored to the source hip, knee, posterior
+pelvis, and torso landmarks. Collision capsules reserve clearance at their
+outer surfaces, and transformed box proxies follow the same geometry map. In
+this marker set,
 `LHLX`/`RHLX` are the hallux (big-toe) markers used for the left/right toe
 endpoints; `LTOE`/`RTOE` are not used as the toe-tip definition. Its four foot contact
 spheres are generated from the calibrated foot mesh frame and their surfaces

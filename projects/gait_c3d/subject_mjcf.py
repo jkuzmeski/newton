@@ -217,8 +217,8 @@ def _inertia_box(
 
 def _capsule_fromto(proxy: _InertiaBox, clearance: float) -> tuple[str, float]:
     """Return body-frame capsule endpoints and radius from an inertia box."""
-    half_length = proxy.long_half_extent - clearance
-    if half_length <= proxy.capsule_radius:
+    half_length = proxy.long_half_extent - clearance - proxy.capsule_radius
+    if half_length <= 0.0:
         raise ValueError("self-collision clearance leaves no inertia-derived capsule body")
     center = np.asarray(proxy.center)
     axis = np.asarray(proxy.long_axis)
@@ -536,10 +536,12 @@ def subject_mjcf_xml(
             inertia_boxes[f"femur_{side}"],
             config.self_collision_joint_clearance,
         )
+        femur_visual_fromto, _ = _capsule_fromto(inertia_boxes[f"femur_{side}"], 0.0)
         tibia_fromto, tibia_radius = _capsule_fromto(
             inertia_boxes[f"tibia_{side}"],
             config.self_collision_joint_clearance,
         )
+        tibia_visual_fromto, _ = _capsule_fromto(inertia_boxes[f"tibia_{side}"], 0.0)
         femur = ET.SubElement(
             pelvis,
             "body",
@@ -582,7 +584,7 @@ def subject_mjcf_xml(
                 name=f"geometry_femur_{side}",
                 type="capsule",
                 size=f"{femur_radius:.9g}",
-                fromto=femur_fromto,
+                fromto=femur_visual_fromto,
                 attrib={"class": "visual"},
             )
         ET.SubElement(
@@ -627,7 +629,7 @@ def subject_mjcf_xml(
                 name=f"geometry_tibia_{side}",
                 type="capsule",
                 size=f"{tibia_radius:.9g}",
-                fromto=tibia_fromto,
+                fromto=tibia_visual_fromto,
                 attrib={"class": "visual"},
             )
         ET.SubElement(

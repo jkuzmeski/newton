@@ -178,6 +178,112 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             radius = float(model.shape_scale.numpy()[index, 0])
             self.assertAlmostEqual(center[2] - radius, 0.0, delta=1.0e-5)
 
+    def test_preserves_calibrated_visual_adjacency_and_proxy_clearance(self):
+        """Keep adjacent meshes close and capsule surfaces clear of joint centers."""
+        base = Path(__file__).parents[2] / "projects" / "gait_c3d" / "assets" / "s001_base"
+        calibration = load_static_segment_calibration(base / "model" / "segment_calibration.json")
+
+        def values(text, default="0 0 0"):
+            """Parse one MJCF vector."""
+            return np.asarray([float(value) for value in (text or default).split()], dtype=np.float64)
+
+        def rotation(quaternion):
+            """Convert an MJCF wxyz quaternion to a rotation matrix."""
+            w, x, y, z = quaternion
+            return np.asarray(
+                (
+                    (1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)),
+                    (2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)),
+                    (2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)),
+                )
+            )
+
+        def obj_vertices(path):
+            """Read OBJ vertices for adjacency checks."""
+            return np.asarray(
+                [
+                    [float(value) for value in line.split()[1:4]]
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.startswith("v ")
+                ]
+            )
+
+        def minimum_vertex_distance(first, second):
+            """Compute the minimum vertex distance without a new dependency."""
+            minimum = np.inf
+            for start in range(0, len(first), 128):
+                difference = first[start : start + 128, None, :] - second[None, :, :]
+                minimum = min(minimum, float(np.sqrt(np.min(np.sum(difference * difference, axis=2)))))
+            return minimum
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "model" / "subject.xml"
+            write_calibrated_subject_mjcf(base, calibration, output, body_mass=81.9312118)
+            root = ET.parse(output).getroot()
+            mesh_files = {mesh.get("name"): mesh.get("file") for mesh in root.iter("mesh")}
+            body_vertices = {}
+
+            def collect(body, parent_position, parent_rotation):
+                """Collect emitted mesh vertices in the neutral world frame."""
+                local_position = values(body.get("pos"))
+                local_rotation = rotation(values(body.get("quat"), "1 0 0 0"))
+                body_position = parent_position + parent_rotation @ local_position
+                body_rotation = parent_rotation @ local_rotation
+                records = []
+                for geom in body.findall("geom"):
+                    mesh_name = geom.get("mesh")
+                    if mesh_name is not None:
+                        vertices = obj_vertices(output.parent / mesh_files[mesh_name]) + values(geom.get("pos"))
+                        records.append(vertices @ body_rotation.T + body_position)
+                if records:
+                    body_vertices[body.get("name")] = np.concatenate(records, axis=0)
+                for child in body.findall("body"):
+                    collect(child, body_position, body_rotation)
+
+            worldbody = next(element for element in root if element.tag == "worldbody")
+            for body in worldbody.findall("body"):
+                collect(body, np.zeros(3), np.eye(3))
+
+            for side in ("left", "right"):
+                self.assertLess(
+                    minimum_vertex_distance(body_vertices[f"femur_{side}"], body_vertices[f"tibia_{side}"]),
+                    0.01,
+                )
+                for body_name, segment_name in (
+                    (f"femur_{side}", f"thigh_{side}"),
+                    (f"tibia_{side}", f"shank_{side}"),
+                ):
+                    body = next(element for element in root.iter("body") if element.get("name") == body_name)
+                    geom = next(
+                        element for element in body.findall("geom") if element.get("name", "").startswith("collision_")
+                    )
+                    endpoints = values(geom.get("fromto")).reshape(2, 3)
+                    radius = float(geom.get("size"))
+                    length = float(calibration.segments[segment_name]["length_m"])
+                    self.assertAlmostEqual(float(np.max(endpoints[:, 2]) + radius), -0.035, places=7)
+                    self.assertAlmostEqual(float(np.min(endpoints[:, 2]) - radius), -(length - 0.035), places=7)
+            self.assertLess(minimum_vertex_distance(body_vertices["pelvis"], body_vertices["torso"]), 0.01)
+
+            source_root = ET.parse(base / "model" / "subject.xml").getroot()
+            source_torso = next(body for body in source_root.iter("body") if body.get("name") == "torso")
+            layout = json.loads((base / "model" / "marker_layout.json").read_text(encoding="utf-8"))
+            source_vsac = np.asarray(
+                next(marker["position_m"] for marker in layout["markers"] if marker["name"] == "V.Sacral")
+            )
+            source_distal = source_vsac - values(source_torso.get("pos"))
+            source_collision = next(
+                geom for geom in source_torso.findall("geom") if geom.get("name") == "collision_torso"
+            )
+            target_torso = next(body for body in root.iter("body") if body.get("name") == "torso")
+            target_collision = next(
+                geom for geom in target_torso.findall("geom") if geom.get("name") == "collision_torso"
+            )
+            np.testing.assert_allclose(
+                values(target_collision.get("pos")),
+                values(source_collision.get("pos")) - source_distal,
+                atol=1.0e-7,
+            )
+
     def test_applies_explicit_base_hip_width_to_xml_and_marker_frames(self):
         """Keep explicit hip width consistent across MJCF and marker layout."""
         base = Path(__file__).parents[2] / "projects" / "gait_c3d" / "assets" / "s001_base"
@@ -331,13 +437,13 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         self.assertAlmostEqual(scales[shape_by_name["collision_femur_left"], 0], config.thigh_radius, places=6)
         self.assertAlmostEqual(
             scales[shape_by_name["collision_femur_left"], 1],
-            0.5 * (config.thigh_length - 2.0 * config.self_collision_joint_clearance),
+            0.5 * (config.thigh_length - 2.0 * (config.self_collision_joint_clearance + config.thigh_radius)),
             places=6,
         )
         self.assertAlmostEqual(scales[shape_by_name["collision_tibia_left"], 0], config.shank_radius, places=6)
         self.assertAlmostEqual(
             scales[shape_by_name["collision_tibia_left"], 1],
-            0.5 * (config.shank_length - 2.0 * config.self_collision_joint_clearance),
+            0.5 * (config.shank_length - 2.0 * (config.self_collision_joint_clearance + config.shank_radius)),
             places=6,
         )
         self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 100.0, places=4)
@@ -392,13 +498,19 @@ class TestGaitSubjectMJCF(unittest.TestCase):
         for label, flag in zip(visible_model.shape_label, visible_flags, strict=True):
             if label.rsplit("/", 1)[-1].startswith("collision_"):
                 self.assertTrue(flag & newton.ShapeFlags.VISIBLE)
-        expected_thigh_half_length = 0.5 * (config.thigh_length - 2.0 * config.self_collision_joint_clearance)
-        for name in ("geometry_femur_left", "collision_femur_left"):
-            self.assertAlmostEqual(
-                shape_scale[shape_by_name[name], 1],
-                expected_thigh_half_length,
-                places=6,
-            )
+        expected_collision_half_length = 0.5 * (
+            config.thigh_length - 2.0 * (config.self_collision_joint_clearance + config.thigh_radius)
+        )
+        self.assertAlmostEqual(
+            shape_scale[shape_by_name["collision_femur_left"], 1],
+            expected_collision_half_length,
+            places=6,
+        )
+        self.assertAlmostEqual(
+            shape_scale[shape_by_name["geometry_femur_left"], 1],
+            0.5 * config.thigh_length - config.thigh_radius,
+            places=6,
+        )
         filters = set(model.shape_collision_filter_pairs)
         self.assertIn(
             tuple(sorted((shape_by_name["collision_pelvis"], shape_by_name["collision_femur_left"]))),

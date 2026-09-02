@@ -26,43 +26,43 @@
   "meshes": [
     {
       "file": "Geometry/visual_00_pelvis_sacrum_ec82986d.obj",
-      "sha256": "0cf7c40ce488693141024a9c828cf1200e293423c4475b7ed7c10e270225fe11"
+      "sha256": "f22c573bba1adbcedbc3c5eb217d3882e86d09d9b1ef41c1988cf71039f8bbde"
     },
     {
       "file": "Geometry/visual_01_pelvis_pelvis_302c8103.obj",
-      "sha256": "54e2c3a984dd998a0bd3ea71bef2ce205944042f8418763ee800d3940a03640b"
+      "sha256": "aa1b5ac867f70519b09dd015d737269b231fafd8489ab91107ec901c9c1b055e"
     },
     {
       "file": "Geometry/visual_02_pelvis_l_pelvis_221ff377.obj",
-      "sha256": "c4f73e06353de4666c33a4b670c7625164c15b994a65ee7de6708832c881d202"
+      "sha256": "63d527e427f46425c76494deef2c63f5501d517b9787e1b0de4e672dd03a9ba9"
     },
     {
       "file": "Geometry/visual_15_torso_hat_spine_e5497b48.obj",
-      "sha256": "f65efd27af839dbfe8c5b0d7c70ba513764d45c16d80347c25c864cf6ab634dd"
+      "sha256": "fef69ccc893d31737d284a5549e4c432fc8d509174bfbbe597c77c6728efca10"
     },
     {
       "file": "Geometry/visual_16_torso_hat_jaw_ccce7bf1.obj",
-      "sha256": "6a62b2a48efc4b861e6c0f8791ff785241a00f3a87d1f3fe2e04a22fa9e78361"
+      "sha256": "b9bd8dfa18048a371dc2d95caf74baf42e10a95a0b1e7116bab876be720f84a3"
     },
     {
       "file": "Geometry/visual_17_torso_hat_skull_4c29f62d.obj",
-      "sha256": "a4c098b63f641f7200f5480cbfa7eb6b64780912f6204bbdfb1f092e26a238de"
+      "sha256": "68792df15a3a81e7c6347f9de71ee66812115e467223460d99fcbc96f51c2e9c"
     },
     {
       "file": "Geometry/visual_18_torso_hat_ribs_c455e842.obj",
-      "sha256": "94f149c8346a66663ad3cab2c8aa642d265ecbb4eeb68527ce70cbaa8880cfc2"
+      "sha256": "f3b18b13d861b388f19e4a1ea771f48c3018969b6c15105debcee3c16a5a8835"
     },
     {
       "file": "Geometry/visual_09_femur_left_l_femur_3a5df196.obj",
-      "sha256": "f0e396b032a3ec0a8aa3ddd619c01199412154543e2719fbb4a20bf240043b55"
+      "sha256": "ce7dd454b443f8dc07352e50e8f47ff0a5360d92605453336032a076adb46fdf"
     },
     {
       "file": "Geometry/visual_10_tibia_left_l_tibia_5528711a.obj",
-      "sha256": "4d4abef965aba1bbc5906bcd7d81f6767fb376b4deeb8a7ada7de3451255d183"
+      "sha256": "a963c2098c183c495d9b1df685bb2af8c004f1ffc9657afc9b33383595236804"
     },
     {
       "file": "Geometry/visual_11_tibia_left_l_fibula_21cdc2c3.obj",
-      "sha256": "d63c98e6dfcaf45e86f7b5a93011bba9358c0d7f5d2b07c2d78dac82aa5354a0"
+      "sha256": "14f8145569df47ae491942eb59088f73aa79285245d07d96a96bd9ce4557ef15"
     },
     {
       "file": "Geometry/visual_12_foot_left_l_talus_fd829c17.obj",
@@ -78,15 +78,15 @@
     },
     {
       "file": "Geometry/visual_03_femur_right_femur_r_2bf9d3ed.obj",
-      "sha256": "60cad61486fc3db634a9e308323d3cf001f7ea8427b3ec8e9f4e807028899a7e"
+      "sha256": "e36bf1aa121831f1e3bb0aa93d355bcb609bdb21168a1b120ec02bf1760fb93b"
     },
     {
       "file": "Geometry/visual_04_tibia_right_r_tibia_2958b9c9.obj",
-      "sha256": "e490c02288f8ed8229b90d8982658d0ff2eff2cbb28a81e457628087b8b2b006"
+      "sha256": "b62b226377165d6768232a493fac54ff7c07f7c3f35737d74dfbb11edf5517e7"
     },
     {
       "file": "Geometry/visual_05_tibia_right_fibula_640f87b7.obj",
-      "sha256": "b4608a257976070d099eaf3e0330d036268507283453e18db919872ac51b36ec"
+      "sha256": "2db89de4642dfd091251fc0f8d7e11e789a800a1862ee9ecc947345e34c61ece"
     },
     {
       "file": "Geometry/visual_06_foot_right_talus_9a24dff8.obj",
@@ -104,7 +104,7 @@
   "schema_version": "gait_segment_calibration_to_mjcf_1",
   "seal": {
     "algorithm": "sha256",
-    "content_sha256": "8fc208ac1bb8ddd52f9ea746d33e850e02cb39d3f4b29571a0e4b33eac323abb"
+    "content_sha256": "29c1f0df843538e1efdda98d441589a932e7b9a066ed1072bae58852cf2200ba"
   },
   "segment_scales": {
     "foot_left": [
@@ -125,22 +125,22 @@
     "shank_left": [
       1.0,
       1.0,
-      1.0
+      1.0107287450246432
     ],
     "shank_right": [
       1.0,
       1.0,
-      1.0
+      1.0463329526058398
     ],
     "thigh_left": [
       1.0,
       1.0,
-      1.0
+      1.1023048295847873
     ],
     "thigh_right": [
       1.0,
       1.0,
-      1.0
+      1.080634633688186
     ],
     "torso": [
       1.0,
@@ -150,7 +150,7 @@
   },
   "source_calibration": {
     "file": "segment_calibration.json",
-    "sha256": "909c34544f36914b201534bd96b7624b765aaebfc6f12f55381cd0466b34aeec"
+    "sha256": "5a69a882826689c57875c45da376f924310cb2ba877de509ebefd06c8af233fc"
   },
   "source_model": {
     "file": "subject.xml",

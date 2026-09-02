@@ -316,14 +316,18 @@ def build_static_segment_calibration(
     marker_positions, selected_range = _static_marker_positions(markers, time_range)
     lasi, rasi = marker_positions["LASI"], marker_positions["RASI"]
     lpsi, rpsi = marker_positions["LPSI"], marker_positions["RPSI"]
-    right_axis = _unit(rasi - lasi, name="ASIS right axis")
+    anterior_right = _unit(rasi - lasi, name="ASIS right axis")
+    posterior_right = _unit(rpsi - lpsi, name="PSIS right axis")
+    right_axis = _unit(anterior_right + posterior_right, name="combined pelvis right axis")
     sacrum = 0.5 * (lpsi + rpsi)
     preliminary_anterior = _project(0.5 * (lasi + rasi) - sacrum, right_axis)
     pelvis_basis = _basis(right_axis, preliminary_anterior, name="pelvis")
     anatomical_lasi = lasi - marker_radius * pelvis_basis[:, 1]
     anatomical_rasi = rasi - marker_radius * pelvis_basis[:, 1]
     pelvis_origin = 0.5 * (anatomical_lasi + anatomical_rasi)
-    pelvis_basis = _basis(anatomical_rasi - anatomical_lasi, pelvis_origin - sacrum, name="pelvis")
+    anterior_right = _unit(anatomical_rasi - anatomical_lasi, name="anatomical ASIS right axis")
+    right_axis = _unit(anterior_right + posterior_right, name="combined anatomical pelvis right axis")
+    pelvis_basis = _basis(right_axis, pelvis_origin - sacrum, name="pelvis")
     asis_distance = float(np.linalg.norm(anatomical_rasi - anatomical_lasi))
     hip_offset = (
         0.36 * asis_distance * pelvis_basis[:, 0]
@@ -342,7 +346,9 @@ def build_static_segment_calibration(
         "basis_right_anterior_up": pelvis_basis.tolist(),
         "asis_distance_m": asis_distance,
         "asis_markers": {"left": _as_list(anatomical_lasi), "right": _as_list(anatomical_rasi)},
+        "posterior_markers": {"left": _as_list(lpsi), "right": _as_list(rpsi)},
         "sacrum_m": _as_list(sacrum),
+        "frame_method": "coda_raw_asis_psis",
         "hip_centers_m": {"left": _as_list(left_hip), "right": _as_list(right_hip)},
         "hip_method": "coda_bell_brand",
     }

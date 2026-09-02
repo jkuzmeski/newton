@@ -85,6 +85,41 @@ class TestStaticSegmentCalibration(unittest.TestCase):
             atol=1.0e-12,
         )
 
+    def test_preserves_raw_psis_slope_in_pelvis_frame(self):
+        """Preserve the bilateral PSIS slope in the calibrated pelvis frame."""
+        markers = self._markers()
+        positions = markers.positions.copy()
+        positions[0, markers.marker_names.index("LPSI"), 2] += 0.02
+        positions[0, markers.marker_names.index("RPSI"), 2] -= 0.02
+        tilted = C3DMarkerTrajectory(
+            times=markers.times,
+            positions=positions,
+            valid=markers.valid,
+            marker_names=markers.marker_names,
+            rate=markers.rate,
+            first_frame=markers.first_frame,
+            lab_to_newton=markers.lab_to_newton,
+            source_file=markers.source_file,
+            source_sha256=markers.source_sha256,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            calibration = build_static_segment_calibration(
+                tilted, Path(directory) / "calibration.json", marker_radius=0.006
+            )
+        pelvis = calibration.pelvis
+        right_axis = np.asarray(pelvis["basis_right_anterior_up"])[:, 0]
+        self.assertGreater(abs(float(right_axis[2])), 0.01)
+        np.testing.assert_allclose(
+            pelvis["posterior_markers"]["left"],
+            calibration.marker_positions["LPSI"],
+            atol=1.0e-7,
+        )
+        np.testing.assert_allclose(
+            pelvis["posterior_markers"]["right"],
+            calibration.marker_positions["RPSI"],
+            atol=1.0e-7,
+        )
+
     def test_round_trips_sealed_calibration(self):
         """Seal and reload the static calibration without changing values."""
         with tempfile.TemporaryDirectory() as directory:

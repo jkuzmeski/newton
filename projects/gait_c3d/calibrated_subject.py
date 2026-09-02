@@ -114,6 +114,109 @@ def _quat_wxyz(rotation: np.ndarray) -> tuple[float, float, float, float]:
     return tuple(float(value) for value in quaternion)
 
 
+def _rotation_wxyz(quaternion: np.ndarray) -> np.ndarray:
+    """Convert an MJCF wxyz quaternion to a proper rotation matrix."""
+    w, x, y, z = np.asarray(quaternion, dtype=np.float64)
+    rotation = np.asarray(
+        (
+            (1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)),
+            (2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)),
+            (2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)),
+        ),
+        dtype=np.float64,
+    )
+    if not np.allclose(rotation.T @ rotation, np.eye(3), atol=1.0e-8):
+        raise ValueError("MJCF quaternion must define a proper rotation")
+    return rotation
+
+
+def _element_rotation(element: ET.Element) -> np.ndarray:
+    """Return an MJCF element rotation, defaulting to identity."""
+    values = np.asarray([float(value) for value in element.get("quat", "1 0 0 0").split()], dtype=np.float64)
+    if values.shape != (4,) or not np.all(np.isfinite(values)):
+        raise ValueError(f"invalid quaternion on {element.get('name', element.tag)!r}")
+    norm = float(np.linalg.norm(values))
+    if norm <= 0.0:
+        raise ValueError(f"zero quaternion on {element.get('name', element.tag)!r}")
+    return _rotation_wxyz(values / norm)
+
+
+def _source_segment_length(body: ET.Element, child: ET.Element, proximal_prefix: str, distal_prefix: str) -> float:
+    """Measure one source articulation span between its actual joint centers."""
+    proximal = _source_joint_position(body, proximal_prefix)
+    child_position = np.asarray([float(value) for value in child.get("pos", "0 0 0").split()], dtype=np.float64)
+    distal = child_position + _element_rotation(child) @ _source_joint_position(child, distal_prefix)
+    length = float(np.linalg.norm(distal - proximal))
+    if not math.isfinite(length) or length <= 0.0:
+        raise ValueError(f"source segment {body.get('name')!r} has no positive joint span")
+    return length
+
+
+def _row_direction_map(source: np.ndarray, target: np.ndarray) -> np.ndarray:
+    """Return a proper row-vector rotation that maps one direction to another."""
+    source = np.asarray(source, dtype=np.float64)
+    target = np.asarray(target, dtype=np.float64)
+    source /= np.linalg.norm(source)
+    target /= np.linalg.norm(target)
+    cross = np.cross(source, target)
+    sine = float(np.linalg.norm(cross))
+    cosine = float(np.clip(np.dot(source, target), -1.0, 1.0))
+    if sine < 1.0e-12:
+        if cosine > 0.0:
+            return np.eye(3)
+        axis = np.asarray((1.0, 0.0, 0.0))
+        if abs(float(source[0])) > 0.9:
+            axis = np.asarray((0.0, 1.0, 0.0))
+        axis = np.cross(source, axis)
+        axis /= np.linalg.norm(axis)
+        column_rotation = 2.0 * np.outer(axis, axis) - np.eye(3)
+        return column_rotation.T
+    axis = cross / sine
+    skew = np.asarray(((0.0, -axis[2], axis[1]), (axis[2], 0.0, -axis[0]), (-axis[1], axis[0], 0.0)))
+    column_rotation = np.eye(3) + sine * skew + (1.0 - cosine) * (skew @ skew)
+    return column_rotation.T
+
+
+def _transform_fullinertia(values: np.ndarray, column_linear: np.ndarray, mass_scale: float) -> np.ndarray:
+    """Transform a full inertia tensor under a linear coordinate map."""
+    ixx, iyy, izz, ixy, ixz, iyz = np.asarray(values, dtype=np.float64)
+    inertia = np.asarray(((ixx, ixy, ixz), (ixy, iyy, iyz), (ixz, iyz, izz)))
+    second_moment = 0.5 * np.trace(inertia) * np.eye(3) - inertia
+    transformed_moment = column_linear @ second_moment @ column_linear.T
+    transformed = mass_scale * (np.trace(transformed_moment) * np.eye(3) - transformed_moment)
+    return np.asarray(
+        (
+            transformed[0, 0],
+            transformed[1, 1],
+            transformed[2, 2],
+            transformed[0, 1],
+            transformed[0, 2],
+            transformed[1, 2],
+        )
+    )
+
+
+def _transform_box(geom: ET.Element, transform) -> None:
+    """Transform an oriented box through a point map and save its body-frame bounds."""
+    position = np.asarray([float(value) for value in geom.get("pos", "0 0 0").split()], dtype=np.float64)
+    size = np.asarray([float(value) for value in geom.get("size", "").split()], dtype=np.float64)
+    if position.shape != (3,) or size.shape != (3,):
+        raise ValueError(f"invalid box geometry on {geom.get('name')!r}")
+    signs = np.asarray([(x, y, z) for x in (-1.0, 1.0) for y in (-1.0, 1.0) for z in (-1.0, 1.0)], dtype=np.float64)
+    corners = signs * size @ _element_rotation(geom).T + position
+    transformed = transform(corners)
+    centered = transformed - transformed.mean(axis=0)
+    _, axes = np.linalg.eigh(centered.T @ centered)
+    axes = axes[:, ::-1]
+    if np.linalg.det(axes) < 0.0:
+        axes[:, -1] *= -1.0
+    projected = transformed @ axes
+    minimum, maximum = np.min(projected, axis=0), np.max(projected, axis=0)
+    geom.set("pos", _fmt((0.5 * (minimum + maximum)) @ axes.T))
+    geom.set("size", _fmt(0.5 * (maximum - minimum)))
+    geom.set("quat", _fmt(_quat_wxyz(axes)))
+
+
 def _read_obj(path: Path) -> np.ndarray:
     """Read OBJ vertex positions."""
     vertices = []
@@ -331,6 +434,8 @@ def write_calibrated_subject_mjcf(
     if not math.isfinite(base_mass) or base_mass <= 0.0:
         raise ValueError("base subject mass must be finite and positive")
     mass_scale = body_mass / base_mass
+    root = ET.parse(base_xml).getroot()
+    bodies = {body.get("name", ""): body for body in root.iter("body") if body.get("name")}
     target_markers = target_calibration.marker_positions
     target_pelvis_origin = np.asarray(target_calibration.pelvis["origin_m"], dtype=np.float64)
     target_pelvis_rotation = _pelvis_basis(target_calibration)
@@ -363,23 +468,29 @@ def write_calibrated_subject_mjcf(
             reference_width = float(reference_segment["width_m"])
             if min(target_length, reference_length, target_width, reference_width) <= 0.0:
                 raise ValueError(f"invalid dimensions for {segment_name}")
+            if segment_name.startswith("thigh_"):
+                source_length = _source_segment_length(
+                    bodies[f"femur_{side}"], bodies[f"tibia_{side}"], "hip_flexion", "knee"
+                )
+            elif segment_name.startswith("shank_"):
+                source_length = _source_segment_length(bodies[f"tibia_{side}"], bodies[f"foot_{side}"], "knee", "ankle")
+            else:
+                source_length = reference_length
             scale[segment_name] = np.asarray(
                 (
-                    target_length / reference_length
+                    target_length / source_length
                     if segment_name.startswith("foot_")
                     else target_width / reference_width,
                     target_width / reference_width,
                     target_width / reference_width
                     if segment_name.startswith("foot_")
-                    else target_length / reference_length,
+                    else target_length / source_length,
                 ),
                 dtype=np.float64,
             )
-    root = ET.parse(base_xml).getroot()
     if not model_name or any(character.isspace() for character in model_name):
         raise ValueError("model_name must be nonempty and contain no whitespace")
     root.set("model", model_name)
-    bodies = {body.get("name", ""): body for body in root.iter("body") if body.get("name")}
     if "torso" in bodies:
         _add_torso_joints(root, bodies["torso"])
     base_pelvis_markers = _base_pelvis_marker_positions(base_root)
@@ -419,6 +530,37 @@ def write_calibrated_subject_mjcf(
             torso_rotation = target_pelvis_rotation
             torso_origin = target_pelvis_origin + target_pelvis_rotation @ torso_offset
         body_world["torso"] = (torso_origin, torso_rotation)
+
+    source_hips = []
+    target_hips = []
+    for side in ("left", "right"):
+        femur = bodies[f"femur_{side}"]
+        femur_position = np.asarray([float(value) for value in femur.get("pos", "0 0 0").split()], dtype=np.float64)
+        source_hip = femur_position + _element_rotation(femur) @ _source_joint_position(femur, "hip_flexion")
+        source_hips.append(source_hip)
+        target_hip = np.asarray(target_calibration.pelvis["hip_centers_m"][side], dtype=np.float64)
+        target_hips.append((target_hip - target_pelvis_origin) @ target_pelvis_rotation)
+    source_hips = np.asarray(source_hips)
+    target_hips = np.asarray(target_hips)
+    mapped_hips = (
+        ((source_hips - base_pelvis_marker_origin) * scale["pelvis"]) @ pelvis_map_rotation + pelvis_map_translation
+    ) @ target_pelvis_rotation
+    mapped_vector = mapped_hips[0] - mapped_hips[1]
+    target_vector = target_hips[0] - target_hips[1]
+    hip_rotation = _row_direction_map(mapped_vector, target_vector)
+    target_direction = target_vector / np.linalg.norm(target_vector)
+    hip_width_scale = float(np.linalg.norm(target_vector) / np.linalg.norm(mapped_vector))
+    hip_scale = np.eye(3) + (hip_width_scale - 1.0) * np.outer(target_direction, target_direction)
+    pelvis_hip_linear = hip_rotation @ hip_scale
+    pelvis_hip_translation = target_hips.mean(axis=0) - mapped_hips.mean(axis=0) @ pelvis_hip_linear
+    pelvis_row_linear = np.diag(scale["pelvis"]) @ pelvis_map_rotation @ target_pelvis_rotation @ pelvis_hip_linear
+
+    def transform_pelvis(points: np.ndarray) -> np.ndarray:
+        """Map source pelvis points through marker and acetabular controls."""
+        source = (points - base_pelvis_marker_origin) * scale["pelvis"]
+        marker_mapped = (source @ pelvis_map_rotation + pelvis_map_translation) @ target_pelvis_rotation
+        return marker_mapped @ pelvis_hip_linear + pelvis_hip_translation
+
     # Transform mesh vertices into calibrated body frames before computing the common floor.
     mesh_file = {mesh.get("name"): mesh.get("file") for mesh in root.iter("mesh") if mesh.get("name")}
     body_mesh_vertices: dict[str, list[tuple[ET.Element, Path, np.ndarray]]] = {}
@@ -463,8 +605,7 @@ def write_calibrated_subject_mjcf(
             if geom_pos.shape != (3,):
                 raise ValueError(f"mesh geometry position is invalid: {mesh_name}")
             if body_name == "pelvis":
-                pelvis_source = (vertices + geom_pos - base_pelvis_marker_origin) * scale[segment_key]
-                transformed = (pelvis_source @ pelvis_map_rotation + pelvis_map_translation) @ target_pelvis_rotation
+                transformed = transform_pelvis(vertices + geom_pos)
             else:
                 transformed = (vertices + geom_pos - proximal) * scale[segment_key]
             records.append((geom, source, transformed))
@@ -473,19 +614,6 @@ def write_calibrated_subject_mjcf(
                     body_mesh_min_z.get(body_name, math.inf), float(np.min(transformed[:, 2]))
                 )
         body_mesh_vertices[body_name] = records
-    torso_mesh_min_z = 0.0
-    torso_mesh_z_scale = 1.0
-    if "torso" in scale and body_mesh_vertices.get("torso"):
-        torso_values = np.concatenate([vertices for _, _, vertices in body_mesh_vertices["torso"]], axis=0)
-        torso_mesh_min_z = float(np.min(torso_values[:, 2]))
-        torso_mesh_max_z = float(np.max(torso_values[:, 2]))
-        if not math.isfinite(torso_mesh_max_z) or torso_mesh_max_z <= torso_mesh_min_z:
-            raise ValueError("base torso mesh has no finite longitudinal extent")
-        torso_mesh_z_scale = float(target_calibration.segments["torso"]["length_m"]) / (
-            torso_mesh_max_z - torso_mesh_min_z
-        )
-        for _, _, vertices in body_mesh_vertices["torso"]:
-            vertices[:, 2] = (vertices[:, 2] - torso_mesh_min_z) * torso_mesh_z_scale
     foot_origins = {side: body_world[f"foot_{side}"][0][2] for side in ("left", "right")}
     foot_world_min = min(foot_origins[side] + body_mesh_min_z[f"foot_{side}"] for side in ("left", "right"))
     foot_offsets = {
@@ -565,57 +693,59 @@ def write_calibrated_subject_mjcf(
                 )
             )
             body_scale = scale[segment_key]
+            if body_name == "pelvis":
+                point_transform = transform_pelvis
+                column_linear = pelvis_row_linear.T
+            else:
+
+                def point_transform(
+                    points: np.ndarray, proximal: np.ndarray = proximal, body_scale: np.ndarray = body_scale
+                ) -> np.ndarray:
+                    """Scale source points about the segment proximal joint."""
+                    return (points - proximal) * body_scale
+
+                column_linear = np.diag(body_scale)
             for inertial in body.findall("inertial"):
                 position = np.asarray(
                     [float(value) for value in (inertial.get("pos") or "0 0 0").split()], dtype=np.float64
                 )
                 if position.shape != (3,):
                     raise ValueError(f"invalid inertial position on {body_name}")
-                if body_name == "pelvis":
-                    pelvis_source = (position - base_pelvis_marker_origin) * body_scale
-                    inertial_position = (
-                        pelvis_source @ pelvis_map_rotation + pelvis_map_translation
-                    ) @ target_pelvis_rotation
-                else:
-                    inertial_position = (position - proximal) * body_scale
-                    if body_name == "torso" and segment_key == "torso":
-                        inertial_position[2] = (inertial_position[2] - torso_mesh_min_z) * torso_mesh_z_scale
-                inertial.set("pos", _fmt(inertial_position))
+                inertial.set("pos", _fmt(point_transform(position[None, :])[0]))
                 inertial.set("mass", f"{float(inertial.get('mass', 'nan')) * mass_scale:.9g}")
-                inertia_scale = mass_scale * float(np.mean(body_scale**2))
                 values = np.asarray(
                     [float(value) for value in (inertial.get("fullinertia") or "").split()], dtype=np.float64
                 )
                 if values.shape != (6,):
                     raise ValueError(f"invalid inertial tensor on {body_name}")
-                inertial.set("fullinertia", _fmt(values * inertia_scale))
+                inertial.set("fullinertia", _fmt(_transform_fullinertia(values, column_linear, mass_scale)))
             for geom in body.findall("geom"):
                 name = geom.get("name", "")
                 if name.startswith("collision_femur_") or name.startswith("collision_tibia_"):
                     length = float(target_calibration.segments[segment_key]["length_m"])
-                    radius = 0.5 * float(target_calibration.segments[segment_key]["width_m"])
-                    clearance = min(0.035 * float(np.mean(body_scale)), 0.25 * length)
-                    geom.set("size", f"{max(radius, 0.005):.9g}")
-                    geom.set("fromto", _fmt(np.asarray((0.0, 0.0, -clearance, 0.0, 0.0, -(length - clearance)))))
+                    radius = max(0.5 * float(target_calibration.segments[segment_key]["width_m"]), 0.005)
+                    reference_length = float(reference_calibration.segments[segment_key]["length_m"])
+                    clearance = min(0.035 * length / reference_length, 0.25 * length)
+                    proximal_center = clearance + radius
+                    distal_center = length - clearance - radius
+                    if distal_center <= proximal_center:
+                        raise ValueError(f"collision capsule is too short for {body_name}")
+                    geom.set("size", f"{radius:.9g}")
+                    geom.set(
+                        "fromto",
+                        _fmt(np.asarray((0.0, 0.0, -proximal_center, 0.0, 0.0, -distal_center))),
+                    )
                 elif body_name.startswith("foot_") and name.startswith(("contact_", "visual_foot_")):
                     pass
+                elif geom.get("mesh") is None and geom.get("type") == "box":
+                    _transform_box(geom, point_transform)
                 elif geom.get("mesh") is None:
-                    for attribute in ("pos", "size"):
-                        if attribute in geom.attrib:
-                            values = np.asarray(
-                                [float(value) for value in geom.get(attribute).split()], dtype=np.float64
-                            )
-                            if body_name == "pelvis" and attribute == "pos":
-                                pelvis_source = (values - base_pelvis_marker_origin) * body_scale
-                                values = (
-                                    pelvis_source @ pelvis_map_rotation + pelvis_map_translation
-                                ) @ target_pelvis_rotation
-                            elif body_name == "torso" and attribute == "pos" and segment_key == "torso":
-                                values = (values - proximal) * body_scale
-                                values[2] = (values[2] - torso_mesh_min_z) * torso_mesh_z_scale
-                            else:
-                                values = values * body_scale[: values.size]
-                            geom.set(attribute, _fmt(values))
+                    if "pos" in geom.attrib:
+                        position = np.asarray([float(value) for value in geom.get("pos").split()], dtype=np.float64)
+                        geom.set("pos", _fmt(point_transform(position[None, :])[0]))
+                    if "size" in geom.attrib:
+                        values = np.asarray([float(value) for value in geom.get("size").split()], dtype=np.float64)
+                        geom.set("size", _fmt(values * body_scale[: values.size]))
             if body_name.startswith("foot_"):
                 side = body_name.removeprefix("foot_")
                 records = [
