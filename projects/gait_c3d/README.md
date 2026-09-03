@@ -412,8 +412,12 @@ observations. The raw C3D marker artifact remains unchanged. The saved
 calibrated subject ground offset is applied as an explicit registration. A
 non-cluster target with a missing source remains invalid; no zero position is
 treated as a measurement.
-The default safety limit fits 300 frames; use `--max-frames 0` for the full
-trial, or use `--stride` while validating a long capture:
+The example performs a small warmup before timing the selected solve. This
+moves first-time CUDA/JIT compilation out of the reported IK calculation rate.
+It reports preparation time, calculation time, and the complete example
+pipeline time separately. The default safety limit fits 300 frames; use
+`--max-frames 0` for the full trial, or use `--stride` while validating a long
+capture:
 
 ```bash
 uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \

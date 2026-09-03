@@ -68,6 +68,29 @@ def _strip_c3d_prefix(explicit_map: str | None, keep_prefix: bool, metadata: dic
     return True
 
 
+def _warmup_frame_count(
+    frame_count: int,
+    *,
+    start_frame: int,
+    end_frame: int | None,
+    stride: int,
+    max_frames: int,
+    batch_size: int,
+) -> int:
+    """Return the smallest prefix that primes the selected IK kernel path."""
+    if stride <= 0 or start_frame < 0:
+        return 0
+    stop = frame_count if end_frame is None else min(end_frame, frame_count)
+    available = max(0, (stop - start_frame + stride - 1) // stride)
+    if max_frames > 0:
+        available = min(available, max_frames)
+    if available < 2:
+        return 0
+    if batch_size <= 0 or batch_size >= available:
+        return 2
+    return min(available, max(2, batch_size + 1))
+
+
 class Example:
     """Solve native gait markers or replay a saved native motion."""
 
@@ -240,6 +263,7 @@ class Example:
 
     def _init_real(self, viewer, args):
         """Load, fit, and publish a real C3D trial."""
+        pipeline_start = time.perf_counter()
         self.viewer = viewer
         self.sim_time = 0.0
         self.frame_dt = 1.0 / 100.0
@@ -296,6 +320,31 @@ class Example:
             registration_mode = "saved_subject_ground_offset"
         iterations = 40 if args.iterations is None else args.iterations
         batch_size = 0 if args.batch_size is None else args.batch_size
+        warmup_frames = _warmup_frame_count(
+            len(source.times),
+            start_frame=args.start_frame,
+            end_frame=args.end_frame,
+            stride=args.stride,
+            max_frames=args.max_frames,
+            batch_size=batch_size,
+        )
+        warmup_start = time.perf_counter()
+        if warmup_frames:
+            fit_c3d_marker_motion(
+                self.model,
+                self.attachments,
+                mapped,
+                self.model.joint_q.numpy(),
+                registration=registration,
+                iterations=iterations,
+                joint_limit_weight=args.joint_limit_weight,
+                batch_size=batch_size,
+                start_frame=args.start_frame,
+                end_frame=args.end_frame,
+                stride=args.stride,
+                max_frames=warmup_frames,
+            )
+        self.warmup_seconds = time.perf_counter() - warmup_start
         solve_start = time.perf_counter()
         self.motion = fit_c3d_marker_motion(
             self.model,
@@ -348,11 +397,16 @@ class Example:
         )
         self.viewer.set_model(self.model)
         self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
+        self.pipeline_seconds = time.perf_counter() - pipeline_start
         print(
             f"Real native IK: {len(self.visible_indices)}/{len(self.attachments)} always-valid markers, "
             f"{len(self.motion.times)} frames -> {self.motion_output}"
         )
-        print(f"Solved in {self.solve_seconds:.3f} s ({len(self.motion.times) / self.solve_seconds:.1f} frames/s)")
+        print(f"IK preparation (including first-time CUDA compilation): {self.warmup_seconds:.3f} s")
+        print(
+            f"IK calculation: {self.solve_seconds:.3f} s ({len(self.motion.times) / self.solve_seconds:.1f} frames/s)"
+        )
+        print(f"Example pipeline (excluding Python/Warp startup): {self.pipeline_seconds:.3f} s")
         print(
             f"Frame RMS median/p95/max: {np.median(self.motion.frame_rms) * 1000.0:.2f}/"
             f"{np.percentile(self.motion.frame_rms, 95) * 1000.0:.2f}/"

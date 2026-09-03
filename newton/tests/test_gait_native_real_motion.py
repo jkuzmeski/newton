@@ -19,6 +19,7 @@ from newton.examples.opensim.example_native_motion_fit import (
     _default_motion_output,
     _resolve_subject_marker_map,
     _strip_c3d_prefix,
+    _warmup_frame_count,
     create_parser,
 )
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
@@ -200,6 +201,20 @@ class TestNativeRealMotion(unittest.TestCase):
         mapped = map_c3d_markers_to_native(trajectory, attachments)
         np.testing.assert_allclose(mapped.positions[0], positions[0].reshape(2, 3, 3).mean(axis=1))
         self.assertTrue(np.all(mapped.valid))
+
+    def test_warmup_frame_count_primes_the_selected_batch_path(self):
+        """Choose a small warmup that matches the selected CUDA batch path."""
+        common = {
+            "frame_count": 100,
+            "start_frame": 0,
+            "end_frame": None,
+            "stride": 1,
+            "max_frames": 0,
+        }
+        self.assertEqual(_warmup_frame_count(**common, batch_size=0), 2)
+        self.assertEqual(_warmup_frame_count(**common, batch_size=8), 9)
+        self.assertEqual(_warmup_frame_count(**common, batch_size=100), 2)
+        self.assertEqual(_warmup_frame_count(**{**common, "max_frames": 4}, batch_size=8), 2)
 
     def test_parser_exposes_motion_load_and_overwrite_flags(self):
         """Parse motion replay, overwrite, and solve-batch options."""
