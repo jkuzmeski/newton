@@ -294,6 +294,15 @@ uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
   --motion-output /tmp/trial_101_native_motion
 ```
 
+The C3D path defaults to 40 LM iterations and `--batch-size 0`, which solves
+all selected frames together for maximum GPU throughput. Set a positive batch
+size to cap device memory use; repeated
+CUDA batches replay the fixed LM iterations as a captured graph. Use
+`--batch-size 1` only when strict frame-to-frame warm starts are required. The
+example prints wall time and solved frames per second together with its marker
+error diagnostics. The C3D path keeps the complete result in contiguous arrays
+instead of constructing and restacking one Python frame object per sample.
+
 Set `--max-frames 0` for a full solve, and add `--overwrite` only to replace a
 verified artifact. Replay the saved output without decoding or solving again:
 

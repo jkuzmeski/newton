@@ -406,6 +406,16 @@ until its example and automated checks both pass.
   `--max-frames` limit are supported.
 - Validation: the complete 17,844-frame `Trial 101.v3d.c3d` fit had zero
   joint-limit violation and frame RMS median/p95/max of 18.07/27.82/32.57 mm.
-  The 13.97 MB result exceeds the repository file limit and is not checked in.
+  Full-sequence batching preserved those values at 80 LM iterations and solved
+  the trial in 1.82 s (9,816 frames/s) on an NVIDIA RTX A6000 with a warm Warp
+  cache. The production 40-iteration default completed with a seven-run median
+  of 0.398 s (44,842 frames/s) after vectorizing its host result packaging,
+  with median/p95/max RMS of 18.071/27.818/32.573 mm. On a 300-frame,
+  40-iteration sweep, full-sequence batching plus the LM
+  launch cleanup reached 3,469 frames/s versus 146 frames/s for the merged
+  batch-size-8 baseline. CUDA graph replay also raised the batch-size-8 path to
+  440 frames/s while preserving its marker metrics. These timings measure the
+  fit call after kernel compilation. The 13.97 MB result exceeds the repository
+  file limit and is not checked in.
 - Remaining work: add treadmill registration metadata and short-gap handling,
   then review the native marker-residual knee range.

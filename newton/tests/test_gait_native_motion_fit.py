@@ -90,8 +90,8 @@ class TestNativeMotionFit(unittest.TestCase):
         self.assertLess(frames[0].marker_rms, neutral_rms * 0.5)
         self.assertLess(joint_limit_violation(self.model, frames[0].joint_q), 1.0e-5)
 
-    def test_batched_sequence_stays_on_device_and_converges(self):
-        """Solve independent frames in one GPU-oriented batch with low residuals."""
+    def test_full_sequence_batch_stays_on_device_and_converges(self):
+        """Solve every frame in one GPU-oriented batch with low residuals."""
         target_coordinates = np.asarray(
             [self._target(phase) for phase in (0.2, 0.35, 0.5, 0.65, 0.8)], dtype=np.float32
         )
@@ -104,7 +104,7 @@ class TestNativeMotionFit(unittest.TestCase):
             targets,
             self.seed,
             iterations=60,
-            batch_size=4,
+            batch_size=0,
         )
         self.assertEqual(len(frames), len(targets))
         self.assertTrue(all(frame.marker_rms < 1.0e-4 for frame in frames))
