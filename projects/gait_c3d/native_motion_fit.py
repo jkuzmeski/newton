@@ -203,6 +203,19 @@ class NativeIKFrame:
     """Maximum bounded joint-limit violation [m or rad]."""
 
 
+@dataclass(frozen=True, slots=True)
+class _NativeIKSequenceArrays:
+    """Device-readback arrays for one solved marker sequence."""
+
+    joint_q: np.ndarray
+    predicted_markers: np.ndarray
+    target_markers: np.ndarray
+    marker_rms: np.ndarray
+    marker_max: np.ndarray
+    solver_cost: np.ndarray
+    joint_limit_violation: np.ndarray
+
+
 def marker_attachments_from_model(model: newton.Model) -> tuple[NativeMarkerAttachment, ...]:
     """Read marker attachments and collapse legacy tracking sites to centroids."""
     flags = model.shape_flags.numpy()
@@ -314,7 +327,7 @@ def marker_ik_frame(
     )
 
 
-def solve_marker_sequence(
+def _solve_marker_sequence_arrays(
     model: newton.Model,
     attachments: tuple[NativeMarkerAttachment, ...],
     target_sequence: np.ndarray,
@@ -326,8 +339,9 @@ def solve_marker_sequence(
     batch_size: int = 1,
     prediction_attachments: tuple[NativeMarkerAttachment, ...] | None = None,
     use_cuda_graph: bool = True,
-) -> tuple[NativeIKFrame, ...]:
-    """Solve a marker sequence with public Newton LM on the model device.
+    compute_marker_diagnostics: bool = True,
+) -> _NativeIKSequenceArrays:
+    """Solve a marker sequence into array-native host results.
 
     Target data, solved coordinates, forward kinematics, marker predictions,
     and solver diagnostics stay on the model device until the complete
@@ -355,9 +369,11 @@ def solve_marker_sequence(
             only a visible subset.
         use_cuda_graph: Capture and replay fixed-iteration solves on CUDA when
             the sequence requires more than one batch.
+        compute_marker_diagnostics: Compute per-frame fitted-marker RMS and
+            maximum errors for the public frame wrapper.
 
     Returns:
-        Solved frames in input order.
+        Array-native solved coordinates and diagnostics.
     """
     target_sequence = np.asarray(target_sequence, dtype=np.float64)
     if target_sequence.ndim != 3 or target_sequence.shape[1:] != (len(attachments), 3):
@@ -374,7 +390,15 @@ def solve_marker_sequence(
 
     frame_count = target_sequence.shape[0]
     if frame_count == 0:
-        return ()
+        return _NativeIKSequenceArrays(
+            np.empty((0, model.joint_coord_count), dtype=np.float32),
+            np.empty((0, len(prediction_attachments or attachments), 3), dtype=np.float32),
+            target_sequence.copy(),
+            np.empty(0, dtype=np.float64),
+            np.empty(0, dtype=np.float64),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+        )
     if batch_size == 0:
         batch_size = frame_count
     if prediction_attachments is None:
@@ -591,25 +615,85 @@ def solve_marker_sequence(
         solver_costs = costs.numpy()
         solved_limit_violations = limit_violations.numpy()
 
-    frames = []
-    for frame_idx, target_frame in enumerate(target_sequence):
-        predicted = predicted_markers[frame_idx].astype(np.float64)
-        target = target_frame.copy()
-        fitted_predictions = predicted[target_prediction_indices]
-        errors = fitted_predictions - target
-        distances = np.linalg.norm(errors, axis=1)
-        frames.append(
-            NativeIKFrame(
-                solved_coordinates[frame_idx].copy(),
-                predicted,
-                target,
-                float(np.sqrt(np.mean(np.sum(errors * errors, axis=1)))),
-                float(np.max(distances)),
-                float(solver_costs[frame_idx]),
-                float(solved_limit_violations[frame_idx]),
-            )
+    if compute_marker_diagnostics:
+        fitted_predictions = predicted_markers[:, target_prediction_indices].astype(np.float64)
+        errors = fitted_predictions - target_sequence
+        distances = np.linalg.norm(errors, axis=2)
+        marker_rms = np.sqrt(np.mean(np.sum(errors * errors, axis=2), axis=1))
+        marker_max = np.max(distances, axis=1)
+    else:
+        marker_rms = np.empty(0, dtype=np.float64)
+        marker_max = np.empty(0, dtype=np.float64)
+    return _NativeIKSequenceArrays(
+        solved_coordinates,
+        predicted_markers,
+        target_sequence,
+        marker_rms,
+        marker_max,
+        solver_costs,
+        solved_limit_violations,
+    )
+
+
+def solve_marker_sequence(
+    model: newton.Model,
+    attachments: tuple[NativeMarkerAttachment, ...],
+    target_sequence: np.ndarray,
+    seed: np.ndarray,
+    *,
+    iterations: int = 80,
+    joint_limit_weight: float = 0.1,
+    lambda_initial: float = 0.001,
+    batch_size: int = 1,
+    prediction_attachments: tuple[NativeMarkerAttachment, ...] | None = None,
+    use_cuda_graph: bool = True,
+) -> tuple[NativeIKFrame, ...]:
+    """Solve a marker sequence with public Newton LM on the model device.
+
+    Args:
+        model: Finalized native model.
+        attachments: Marker/body-local attachment definitions.
+        target_sequence: Target marker positions [m], shape [frame, marker, 3].
+        seed: Initial generalized coordinates [m or rad].
+        iterations: LM iterations per frame.
+        joint_limit_weight: Weight of the public joint-limit objective.
+        lambda_initial: Initial LM damping value.
+        batch_size: Number of frames solved concurrently. ``1`` preserves
+            sequential warm starts, and ``0`` solves the full sequence in one
+            batch.
+        prediction_attachments: Optional marker attachments to predict after
+            solving. Use this to request full-marker predictions while fitting
+            only a visible subset.
+        use_cuda_graph: Capture and replay fixed-iteration solves on CUDA when
+            the sequence requires more than one batch.
+
+    Returns:
+        Solved frames in input order.
+    """
+    arrays = _solve_marker_sequence_arrays(
+        model,
+        attachments,
+        target_sequence,
+        seed,
+        iterations=iterations,
+        joint_limit_weight=joint_limit_weight,
+        lambda_initial=lambda_initial,
+        batch_size=batch_size,
+        prediction_attachments=prediction_attachments,
+        use_cuda_graph=use_cuda_graph,
+    )
+    return tuple(
+        NativeIKFrame(
+            arrays.joint_q[frame_idx].copy(),
+            arrays.predicted_markers[frame_idx].astype(np.float64),
+            arrays.target_markers[frame_idx].copy(),
+            float(arrays.marker_rms[frame_idx]),
+            float(arrays.marker_max[frame_idx]),
+            float(arrays.solver_cost[frame_idx]),
+            float(arrays.joint_limit_violation[frame_idx]),
         )
-    return tuple(frames)
+        for frame_idx in range(len(arrays.joint_q))
+    )
 
 
 def free_root_quaternion_slice(model: newton.Model) -> slice | None:
@@ -941,7 +1025,7 @@ def fit_c3d_marker_motion(
     visible = np.flatnonzero(np.all(selected_valid, axis=0))
     if len(visible) < 6:
         raise ValueError("real motion fit needs at least six markers valid in every selected frame")
-    frames = solve_marker_sequence(
+    solved = _solve_marker_sequence_arrays(
         model,
         tuple(attachments[index] for index in visible),
         selected_positions[:, visible],
@@ -951,11 +1035,12 @@ def fit_c3d_marker_motion(
         batch_size=batch_size,
         prediction_attachments=attachments,
         use_cuda_graph=use_cuda_graph,
+        compute_marker_diagnostics=False,
     )
-    joint_q = np.asarray([frame.joint_q for frame in frames], dtype=np.float32)
-    # solve_marker_sequence computes predictions for all attachments on the
-    # model device, even though optimization uses only the visible subset.
-    predictions = np.asarray([frame.predicted_markers for frame in frames], dtype=np.float32)
+    joint_q = solved.joint_q
+    # The array-native solve predicts all attachments on the model device,
+    # even though optimization uses only the visible subset.
+    predictions = solved.predicted_markers
     targets = registered.positions[frame_indices].astype(np.float32)
     valid = registered.valid[frame_indices].copy()
     distances = np.linalg.norm(predictions.astype(np.float64) - targets.astype(np.float64), axis=-1)
@@ -1000,8 +1085,8 @@ def fit_c3d_marker_motion(
         marker_max.astype(np.float32),
         body_names,
         body_rms,
-        np.asarray([frame.solver_cost for frame in frames], dtype=np.float32),
-        np.asarray([frame.joint_limit_violation for frame in frames], dtype=np.float32),
+        solved.solver_cost,
+        solved.joint_limit_violation,
         markers.marker_names,
         markers.source_file,
         markers.source_sha256,
