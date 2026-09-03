@@ -127,7 +127,7 @@ validity mask, so device arrays never receive marker NaNs.
 from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
 
 root = c3d_to_marker_artifact(
-    "Cal 101.v3d.c3d",
+    "subjects/S001/Cal 101.v3d.c3d",
     "subjects/S001/static_markers",
     up_axis="+Z",
     forward_axis="-Y",
@@ -218,6 +218,133 @@ The target hip width defaults to the scaled S001 width. Pass `--hip-width` to
 apply an explicit width; the MJCF femur frames and marker-layout frames are
 updated together.
 
+## Adding another subject
+
+Keep each subject's raw acquisition files at the root of its local subject
+bundle. The layout is:
+
+```text
+projects/gait_c3d/subjects/S002/
+├── Cal 101.v3d.c3d       # static calibration
+├── Trial 101.v3d.c3d     # dynamic trial(s)
+├── markers/              # generated Newton-frame marker artifact
+├── model/                # generated native MJCF and marker layout
+└── subject.json          # generated bundle manifest
+```
+
+The current local S001 bundle follows this layout and contains both
+`subjects/S001/Cal 101.v3d.c3d` and `subjects/S001/Trial 101.v3d.c3d`. The
+separate `subjects/S014` files are not S001 data.
+
+The `subjects/` directory is intentionally ignored by Git because C3D files
+and compiled bundles are local data. Do not put raw acquisitions in
+`assets/`; that directory is for small, checked-in reference fixtures. Use the
+subject identifier in the directory name, such as `S002`, and keep all of that
+subject's calibration and trial C3Ds there.
+
+To compile a new subject from its static C3D and the gait2354 OpenSim template,
+put the two C3D files in `subjects/S002` and run:
+
+```bash
+uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_subject \
+  --subject projects/gait_c3d/subjects/S002 \
+  --subject-name S002 \
+  --overwrite \
+  --c3d "projects/gait_c3d/subjects/S002/Cal 101.v3d.c3d" \
+  --template /path/to/gait2354_subject01.osim \
+  --mass <body-mass-kg> \
+  --height <standing-height-m> \
+  --geometry /path/to/Geometry
+```
+
+This writes the native model, marker layout, compiled visuals, and decoded
+static marker artifact into `subjects/S002`. The OpenSim template and geometry
+are source inputs and can remain outside the subject bundle. If you want the
+per-segment calibrated native variant instead, use the S001 base as the mesh
+and mass template:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
+  --subject projects/gait_c3d/subjects/S002_calibrated \
+  --subject-name S002_calibrated \
+  --static-cal "projects/gait_c3d/subjects/S002/Cal 101.v3d.c3d" \
+  --base-subject projects/gait_c3d/assets/s001_base \
+  --mass <body-mass-kg> \
+  --height <standing-height-m> \
+  --overwrite
+```
+
+Fit a dynamic trial after compilation. The output defaults to a `motions/`
+folder inside the selected compiled subject:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
+  --c3d "projects/gait_c3d/subjects/S002/Trial 101.v3d.c3d" \
+  --subject projects/gait_c3d/subjects/S002 \
+  --max-frames 300
+```
+
+Use `S002_calibrated` in the last command when using the calibrated variant.
+Rebuilding with `--overwrite` preserves all `.c3d` files already inside the
+subject directory, so keeping the source data there is safe.
+
+## Visual marker-set mapping
+
+Use the interactive mapper when a lab uses different C3D labels for the same
+S001 anatomical marker protocol. This project example runs from a Newton source
+checkout because it uses the `projects/gait_c3d` adapters. It overlays the C3D
+points on the neutral MJCF, highlights the selected target and source in orange,
+and draws green lines for
+completed assignments:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples marker_mapper \
+  --subject projects/gait_c3d/assets/s001_calibrated \
+  --c3d "/path/to/static.c3d" \
+  --marker-map "/path/to/my_lab_marker_map.json" \
+  --paused
+```
+
+Choose an MJCF target role and its exact C3D source label in **Example
+Options**, then select **Save marker map**. A button can apply unique normalized
+name suggestions for review; suggestions are never saved without the user's
+explicit action. The editor also includes `C7`, `CLAV`, and `T10` torso
+calibration roles even though they are not MJCF sites. The JSON stores only
+label aliases, and omitted labels use the canonical S001 name. Final matching
+is exact and case-sensitive so the tool never guesses left/right or
+medial/lateral anatomy. The visual registration is display-only and is not
+written into the map; **Fit and lock display from current map** changes it only
+when explicitly selected.
+
+Pass the saved map once when building a subject:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
+  --static-cal "/path/to/static.c3d" \
+  --marker-map "/path/to/my_lab_marker_map.json" \
+  --subject /tmp/my_subject \
+  --mass 72 \
+  --overwrite
+```
+
+The builder copies the validated map into the subject bundle. Later dynamic
+motion fitting uses that bundled map automatically:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
+  --subject /tmp/my_subject \
+  --c3d "/path/to/walking.c3d"
+```
+
+Version 1 changes labels only. It covers the 39 sources used by the 27 MJCF
+marker targets plus the `C7`, `CLAV`, and `T10` torso calibration roles;
+unrelated C3D labels pass through unchanged. It keeps the current anatomical
+landmarks and fixed recipes for the sacrum, head, and three-marker thigh/shank
+centroids. A protocol with missing medial landmarks, direct centroid markers,
+or different physical placements needs a new calibration profile rather than
+an alias map.
+Use `--keep-c3d-prefix` when labels such as `Person01:LASI` must remain distinct.
+
 ## Static per-segment calibration
 
 Use a static calibration C3D to build a personalized model with Visual3D-style
@@ -278,17 +405,19 @@ checks free-root quaternion normalization and native joint limits.
 ## Real C3D native motion fit
 
 Fit a dynamic trial by name-joining its markers to the saved native sites. The
-three-marker thigh and shank tracking clusters are averaged into one
-`*.Centroid` target per segment before IK. A centroid is valid only when all
-three source markers are valid. The raw C3D marker artifact remains unchanged.
-The saved calibrated subject ground offset is applied as an explicit
-registration.
+thigh and shank tracking clusters are averaged into one `*.Centroid` target per
+segment before IK. Each centroid uses the available valid source markers on
+that frame, so a missing cluster marker does not discard the remaining cluster
+observations. The raw C3D marker artifact remains unchanged. The saved
+calibrated subject ground offset is applied as an explicit registration. A
+non-cluster target with a missing source remains invalid; no zero position is
+treated as a measurement.
 The default safety limit fits 300 frames; use `--max-frames 0` for the full
 trial, or use `--stride` while validating a long capture:
 
 ```bash
 uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
-  --c3d "/path/to/Trial 101.v3d.c3d" \
+  --c3d "projects/gait_c3d/subjects/S001/Trial 101.v3d.c3d" \
   --subject projects/gait_c3d/assets/s001_calibrated \
   --max-frames 300 \
   --motion-output /tmp/trial_101_native_motion
@@ -356,7 +485,7 @@ visuals:
 uv run --extra dev --with ezc3d --with opensim==4.6 -m newton.examples opensim_subject \
   --subject projects/gait_c3d/subjects/S001 \
   --overwrite \
-  --c3d "/home/jo31399/newton-data/gait/incoming/Cal 101.v3d.c3d" \
+  --c3d "projects/gait_c3d/subjects/S001/Cal 101.v3d.c3d" \
   --template /home/jo31399/newton-data/gait/reference/gait2354_subject01.osim \
   --mass 81.9312118 \
   --height 1.695898298375747 \

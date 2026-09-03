@@ -202,6 +202,14 @@ def _set_vec(elem: ET.Element, vals) -> None:
     elem.text = " " + " ".join(f"{v:.8f}" for v in vals) + " "
 
 
+def _scale_vec_element(element: ET.Element | None, factors) -> bool:
+    """Scale an XML vector if it has values."""
+    if element is None or not (element.text or "").split():
+        return False
+    _set_vec(element, [value * factor for value, factor in zip(_txt_vec(element), factors, strict=False)])
+    return True
+
+
 def _scale_inertia(inertia6: tuple[float, ...], s: Vec3, mass_scale: float) -> tuple[float, ...]:
     """Scale an inertia tensor by ``s`` (solid-ellipsoid second-moment method).
 
@@ -283,20 +291,10 @@ def _scale_spatial_transform_translations(joint: ET.Element, parent_scale: Vec3)
 def _scale_display_geometry_once(body: ET.Element, body_scale: Vec3) -> None:
     """Apply body scaling once across nested legacy display-scale levels."""
     for visible in body.findall("VisibleObject"):
-        visible_scale = visible.find("scale_factors")
-        if visible_scale is not None and (visible_scale.text or "").split():
-            _set_vec(
-                visible_scale,
-                [value * factor for value, factor in zip(_txt_vec(visible_scale), body_scale, strict=False)],
-            )
+        if _scale_vec_element(visible.find("scale_factors"), body_scale):
             continue
         for geometry in visible.iter("DisplayGeometry"):
-            geometry_scale = geometry.find("scale_factors")
-            if geometry_scale is not None and (geometry_scale.text or "").split():
-                _set_vec(
-                    geometry_scale,
-                    [value * factor for value, factor in zip(_txt_vec(geometry_scale), body_scale, strict=False)],
-                )
+            _scale_vec_element(geometry.find("scale_factors"), body_scale)
 
 
 def _scale_body_element(body: ET.Element, s: Vec3, parent_factors: ScaleFactorSet, scale_mass: bool) -> None:
@@ -304,9 +302,7 @@ def _scale_body_element(body: ET.Element, s: Vec3, parent_factors: ScaleFactorSe
     sx, sy, sz = s
     vol = sx * sy * sz
 
-    mc = body.find("mass_center")
-    if mc is not None and (mc.text or "").split():
-        _set_vec(mc, [v * f for v, f in zip(_txt_vec(mc), s, strict=False)])
+    _scale_vec_element(body.find("mass_center"), s)
 
     inertia_tags = ("inertia_xx", "inertia_yy", "inertia_zz", "inertia_xy", "inertia_xz", "inertia_yz")
     elems = [body.find(t) for t in inertia_tags]
@@ -328,24 +324,19 @@ def _scale_body_element(body: ET.Element, s: Vec3, parent_factors: ScaleFactorSe
     # location_in_parent is in the parent frame.
     for joint in body.iter():
         if joint.tag.endswith("Joint") and joint.tag != "Joint":
-            loc = joint.find("location")
-            if loc is not None and (loc.text or "").split():
-                _set_vec(loc, [v * f for v, f in zip(_txt_vec(loc), s, strict=False)])
+            _scale_vec_element(joint.find("location"), s)
             lip = joint.find("location_in_parent")
             pb = joint.find("parent_body")
             parent_scale = (
                 parent_factors.get((pb.text or "").strip(), (1.0, 1.0, 1.0)) if pb is not None else (1.0, 1.0, 1.0)
             )
-            if lip is not None and (lip.text or "").split():
-                _set_vec(lip, [v * f for v, f in zip(_txt_vec(lip), parent_scale, strict=False)])
+            _scale_vec_element(lip, parent_scale)
             _scale_spatial_transform_translations(joint, parent_scale)
 
     # Wrap objects on this body.
     for wrap in body.iter():
         if wrap.tag.startswith("Wrap") and wrap.tag != "WrapObjectSet":
-            tr = wrap.find("translation")
-            if tr is not None and (tr.text or "").split():
-                _set_vec(tr, [v * f for v, f in zip(_txt_vec(tr), s, strict=False)])
+            _scale_vec_element(wrap.find("translation"), s)
             for dim in _WRAP_DIM_TAGS:
                 de = wrap.find(dim)
                 if de is not None and (de.text or "").split():
@@ -387,9 +378,8 @@ def _scale_osim_document(
     for marker in root.iter("Marker"):
         bd = marker.find("body")
         loc = marker.find("location")
-        if bd is not None and loc is not None and (loc.text or "").split():
-            s = body_of((bd.text or "").strip())
-            _set_vec(loc, [v * f for v, f in zip(_txt_vec(loc), s, strict=False)])
+        if bd is not None:
+            _scale_vec_element(loc, body_of((bd.text or "").strip()))
 
     # Muscle / force path points: location in their body frame.
     for tag in ("PathPoint", "ConditionalPathPoint", "MovingPathPoint"):
@@ -398,9 +388,7 @@ def _scale_osim_document(
             if bd is None:
                 continue
             body_scale = body_of((bd.text or "").strip())
-            loc = pp.find("location")
-            if loc is not None and (loc.text or "").split():
-                _set_vec(loc, [value * factor for value, factor in zip(_txt_vec(loc), body_scale, strict=False)])
+            _scale_vec_element(pp.find("location"), body_scale)
             if tag == "MovingPathPoint":
                 for axis, factor in zip("xyz", body_scale, strict=True):
                     _scale_function_output(pp.find(f"{axis}_location"), factor)
@@ -521,7 +509,29 @@ def _mapped_marker_trajectory(markers: C3DMarkerTrajectory):
     )
 
 
-_MARKER_PLACER_RUNNER = r"""
+_IK_TASK_RUNNER = r"""tasks = placer_xml.find("IKTaskSet")
+if tasks is None:
+    tasks = ET.SubElement(placer_xml, "IKTaskSet", name="gait2354_Scale")
+objects = tasks.find("objects")
+if objects is None:
+    objects = ET.SubElement(tasks, "objects")
+objects.clear()
+for task in config["marker_tasks"]:
+    element = ET.SubElement(objects, "IKMarkerTask", name=task["name"])
+    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
+    ET.SubElement(element, "weight").text = str(task["weight"])
+for task in config["coordinate_tasks"]:
+    element = ET.SubElement(objects, "IKCoordinateTask", name=task["name"])
+    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
+    ET.SubElement(element, "weight").text = str(task["weight"])
+    ET.SubElement(element, "value_type").text = task["value_type"]
+    ET.SubElement(element, "value").text = str(task["value"])
+tree.write(setup_path, encoding="UTF-8", xml_declaration=True)
+"""
+
+
+_MARKER_PLACER_RUNNER = (
+    r"""
 import json
 import os
 from pathlib import Path
@@ -556,28 +566,38 @@ tool.printToXML(str(setup_path))
 
 tree = ET.parse(setup_path)
 placer_xml = next(tree.getroot().iter("MarkerPlacer"))
-tasks = placer_xml.find("IKTaskSet")
-if tasks is None:
-    tasks = ET.SubElement(placer_xml, "IKTaskSet", name="gait2354_Scale")
-objects = tasks.find("objects")
-if objects is None:
-    objects = ET.SubElement(tasks, "objects")
-objects.clear()
-for task in config["marker_tasks"]:
-    element = ET.SubElement(objects, "IKMarkerTask", name=task["name"])
-    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
-    ET.SubElement(element, "weight").text = str(task["weight"])
-for task in config["coordinate_tasks"]:
-    element = ET.SubElement(objects, "IKCoordinateTask", name=task["name"])
-    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
-    ET.SubElement(element, "weight").text = str(task["weight"])
-    ET.SubElement(element, "value_type").text = task["value_type"]
-    ET.SubElement(element, "value").text = str(task["value"])
-tree.write(setup_path, encoding="UTF-8", xml_declaration=True)
-print("OPENSIM_VERSION=" + opensim.GetVersionAndDate())
+"""
+    + _IK_TASK_RUNNER
+    + r"""print("OPENSIM_VERSION=" + opensim.GetVersionAndDate())
 if not opensim.ScaleTool(str(setup_path)).run():
     raise RuntimeError("official OpenSim MarkerPlacer failed")
 """
+)
+
+
+def _run_official_tool(staged: Path, runner: Path, operation: str, install_error: str):
+    """Run an official OpenSim tool and return its process, logs, and marker errors."""
+    result = subprocess.run(
+        [sys.executable, runner.name],
+        cwd=staged,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    runner_log = staged / "runner_output.log"
+    runner_log.write_text(result.stdout + "\n--- STDERR ---\n" + result.stderr)
+    if result.returncode != 0:
+        if "No module named 'opensim'" in result.stderr:
+            raise ImportError(install_error)
+        raise RuntimeError(f"official OpenSim {operation} failed:\n{result.stderr[-2000:]}")
+    opensim_log = staged / "opensim.log"
+    log = result.stdout + result.stderr
+    if opensim_log.is_file():
+        log += opensim_log.read_text(errors="replace")
+    matches = re.findall(r"marker error: RMS = ([^,]+), max = ([^ ]+)", log)
+    if not matches:
+        raise ValueError(f"official {operation} log did not report marker error")
+    return result, runner_log, opensim_log, *(float(value) for value in matches[-1])
 
 
 def place_markers_with_official_opensim(
@@ -619,27 +639,12 @@ def place_markers_with_official_opensim(
         (staged / "runner_config.json").write_text(json.dumps(runner_config, indent=2, sort_keys=True) + "\n")
         runner_path = staged / "run_marker_placer.py"
         runner_path.write_text(_MARKER_PLACER_RUNNER)
-        result = subprocess.run(
-            [sys.executable, runner_path.name],
-            cwd=staged,
-            capture_output=True,
-            text=True,
-            check=False,
+        result, runner_log, opensim_log, marker_rms, marker_max = _run_official_tool(
+            staged,
+            runner_path,
+            "MarkerPlacer",
+            "official marker placement requires `uv run --with opensim==4.6 ...`",
         )
-        runner_log = staged / "runner_output.log"
-        runner_log.write_text(result.stdout + "\n--- STDERR ---\n" + result.stderr)
-        if result.returncode != 0:
-            if "No module named 'opensim'" in result.stderr:
-                raise ImportError("official marker placement requires `uv run --with opensim==4.6 ...`")
-            raise RuntimeError(f"official OpenSim MarkerPlacer failed:\n{result.stderr[-2000:]}")
-        opensim_log = staged / "opensim.log"
-        log = result.stdout + result.stderr
-        if opensim_log.is_file():
-            log += opensim_log.read_text(errors="replace")
-        matches = re.findall(r"marker error: RMS = ([^,]+), max = ([^ ]+)", log)
-        if not matches:
-            raise ValueError("official MarkerPlacer log did not report marker error")
-        marker_rms, marker_max = (float(value) for value in matches[-1])
         placed_model = staged / "placed_subject.osim"
         motion = staged / "static_pose.mot"
         marker_set = staged / "adjusted_markers.xml"
@@ -694,7 +699,8 @@ def place_markers_with_official_opensim(
     )
 
 
-_OFFICIAL_SCALETOOL_RUNNER = r"""
+_OFFICIAL_SCALETOOL_RUNNER = (
+    r"""
 import json
 import os
 from pathlib import Path
@@ -756,25 +762,9 @@ setup_root = tree.getroot()
 scaler_xml = next(setup_root.iter("ModelScaler"))
 scaler_xml.find("scaling_order").text = " measurements "
 placer_xml = next(setup_root.iter("MarkerPlacer"))
-tasks = placer_xml.find("IKTaskSet")
-if tasks is None:
-    tasks = ET.SubElement(placer_xml, "IKTaskSet", name="gait2354_Scale")
-objects = tasks.find("objects")
-if objects is None:
-    objects = ET.SubElement(tasks, "objects")
-objects.clear()
-for task in config["marker_tasks"]:
-    element = ET.SubElement(objects, "IKMarkerTask", name=task["name"])
-    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
-    ET.SubElement(element, "weight").text = str(task["weight"])
-for task in config["coordinate_tasks"]:
-    element = ET.SubElement(objects, "IKCoordinateTask", name=task["name"])
-    ET.SubElement(element, "apply").text = str(task["apply"]).lower()
-    ET.SubElement(element, "weight").text = str(task["weight"])
-    ET.SubElement(element, "value_type").text = task["value_type"]
-    ET.SubElement(element, "value").text = str(task["value"])
-tree.write(setup_path, encoding="UTF-8", xml_declaration=True)
-print("OPENSIM_VERSION=" + opensim.GetVersionAndDate())
+"""
+    + _IK_TASK_RUNNER
+    + r"""print("OPENSIM_VERSION=" + opensim.GetVersionAndDate())
 if not opensim.ScaleTool(str(setup_path)).run():
     raise RuntimeError("official OpenSim ScaleTool failed")
 model = opensim.Model("scaled_subject.osim")
@@ -789,6 +779,7 @@ for index in range(model.getBodySet().getSize()):
     ] + [[0.0, 0.0, 0.0, 1.0]]
 (root / "body_transforms.json").write_text(json.dumps(transforms, indent=2, sort_keys=True) + "\n")
 """
+)
 
 
 def build_subject_with_official_opensim(
@@ -840,27 +831,12 @@ def build_subject_with_official_opensim(
         (staged / "runner_config.json").write_text(json.dumps(runner_config, indent=2, sort_keys=True) + "\n")
         runner = staged / "run_scale_tool.py"
         runner.write_text(_OFFICIAL_SCALETOOL_RUNNER)
-        result = subprocess.run(
-            [sys.executable, runner.name],
-            cwd=staged,
-            capture_output=True,
-            text=True,
-            check=False,
+        result, _runner_log, _opensim_log, marker_rms, marker_max = _run_official_tool(
+            staged,
+            runner,
+            "ScaleTool",
+            "official subject building requires `uv run --with opensim==4.6 ...`",
         )
-        runner_log = staged / "runner_output.log"
-        runner_log.write_text(result.stdout + "\n--- STDERR ---\n" + result.stderr)
-        if result.returncode != 0:
-            if "No module named 'opensim'" in result.stderr:
-                raise ImportError("official subject building requires `uv run --with opensim==4.6 ...`")
-            raise RuntimeError(f"official OpenSim ScaleTool failed:\n{result.stderr[-2000:]}")
-        opensim_log = staged / "opensim.log"
-        log = result.stdout + result.stderr
-        if opensim_log.is_file():
-            log += opensim_log.read_text(errors="replace")
-        marker_matches = re.findall(r"marker error: RMS = ([^,]+), max = ([^ ]+)", log)
-        if not marker_matches:
-            raise ValueError("official ScaleTool log did not report marker error")
-        marker_rms, marker_max = (float(value) for value in marker_matches[-1])
         if marker_rms > max_marker_rms or marker_max > max_marker_error:
             raise ValueError(
                 f"official ScaleTool failed the engineering marker gate: RMS {marker_rms:.6f} > {max_marker_rms:.6f} "

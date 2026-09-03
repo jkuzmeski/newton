@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -17,6 +18,12 @@ import warp as wp
 import newton
 import newton.examples
 from projects.gait_c3d.c3d_adapter import read_c3d_markers
+from projects.gait_c3d.marker_map import (
+    apply_c3d_marker_map,
+    load_c3d_marker_map,
+    load_subject_c3d_marker_map,
+    required_c3d_sources,
+)
 from projects.gait_c3d.native_motion_fit import (
     fit_c3d_marker_motion,
     free_root_quaternion_slice,
@@ -40,12 +47,35 @@ def _default_motion_output(subject: Path, c3d_path: str | Path) -> Path:
     return subject / "motions" / f"{trial_slug}_native_motion"
 
 
+def _resolve_subject_marker_map(subject: Path, explicit: str | None):
+    """Load an explicit marker map or the verified map declared by a subject."""
+    if explicit:
+        path = Path(explicit).expanduser().resolve()
+        return load_c3d_marker_map(path), path, None
+    manifest_path = subject / "subject.json"
+    if not manifest_path.is_file():
+        return None, None, None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return load_subject_c3d_marker_map(subject, manifest)
+
+
+def _strip_c3d_prefix(explicit_map: str | None, keep_prefix: bool, metadata: dict | None) -> bool:
+    """Resolve label-prefix preprocessing from CLI and bundled-map metadata."""
+    if keep_prefix:
+        return False
+    if explicit_map is None and metadata is not None:
+        return metadata.get("strip_prefix", True)
+    return True
+
+
 class Example:
     """Solve native gait markers or replay a saved native motion."""
 
     def __init__(self, viewer, args):
         if args.motion and (args.c3d or args.synthetic):
             raise ValueError("--motion cannot be combined with --c3d or --synthetic")
+        if (args.marker_map or args.keep_c3d_prefix) and not args.c3d:
+            raise ValueError("--marker-map and --keep-c3d-prefix require --c3d")
         if args.motion:
             self._init_motion(viewer, args)
             return
@@ -232,7 +262,25 @@ class Example:
         self.model = builder.finalize(device=args.device)
         self.state = self.model.state()
         self.attachments = marker_attachments_from_model(self.model)
-        source = read_c3d_markers(args.c3d, up_axis=args.c3d_up_axis, forward_axis=args.c3d_forward_axis)
+        marker_map, marker_map_path, marker_map_metadata = _resolve_subject_marker_map(subject, args.marker_map)
+        strip_prefix = _strip_c3d_prefix(args.marker_map, args.keep_c3d_prefix, marker_map_metadata)
+        source = read_c3d_markers(
+            args.c3d,
+            up_axis=args.c3d_up_axis,
+            forward_axis=args.c3d_forward_axis,
+            strip_prefix=strip_prefix,
+        )
+        marker_mapping = None
+        if marker_map is not None:
+            required = required_c3d_sources(attachment.name for attachment in self.attachments)
+            source = apply_c3d_marker_map(source, marker_map, required=required)
+            marker_mapping = {
+                "schema_version": marker_map.schema_version,
+                "file_sha256": hashlib.sha256(marker_map_path.read_bytes()).hexdigest(),
+                "strip_prefix": strip_prefix,
+                "canonical_to_source": {name: marker_map.source_for(name) for name in required},
+            }
+            print(f"Marker map: {len(marker_map.markers)} aliases from {marker_map_path}")
         mapped = map_c3d_markers_to_native(source, self.attachments)
         model_manifest_path = subject / "model" / "manifest.json"
         if args.registration:
@@ -270,6 +318,7 @@ class Example:
             motion_output,
             model_path=subject_xml,
             calibration_path=calibration_path if calibration_path.is_file() else None,
+            marker_mapping=marker_mapping,
             overwrite=args.overwrite,
             settings={
                 "iterations": iterations,
@@ -419,6 +468,15 @@ def create_parser():
     parser = newton.examples.create_parser()
     parser.add_argument("--synthetic", action="store_true", help="Run the synthetic native marker IK gate")
     parser.add_argument("--c3d", help="Fit a real dynamic C3D trial")
+    parser.add_argument(
+        "--marker-map",
+        help="Override the exact C3D label map stored with the subject",
+    )
+    parser.add_argument(
+        "--keep-c3d-prefix",
+        action="store_true",
+        help="Keep subject prefixes such as Person01:LASI when applying the marker map",
+    )
     parser.add_argument("--motion", help="Load a saved native motion artifact directory instead of solving")
     parser.add_argument("--overwrite", action="store_true", help="Replace an existing verified fitted-motion artifact")
     parser.add_argument("--subject", help="Subject bundle containing the native marker sites")

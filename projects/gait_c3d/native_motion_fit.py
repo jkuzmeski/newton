@@ -862,7 +862,13 @@ def map_c3d_markers_to_native(
     markers: C3DMarkerTrajectory,
     attachments: tuple[NativeMarkerAttachment, ...],
 ) -> NativeC3DMarkers:
-    """Join C3D labels to native sites and create declared virtual markers."""
+    """Join C3D labels to native sites and create declared virtual markers.
+
+    Tracking-cluster targets use the centroid of available valid sources on
+    each frame. A source label absent from the complete trial is therefore
+    omitted from that centroid without fabricating a position for the missing
+    source. Other multi-source virtual targets still require all sources.
+    """
     source_index = {name: index for index, name in enumerate(markers.marker_names)}
     output = np.zeros((len(markers.times), len(attachments), 3), dtype=np.float32)
     valid = np.zeros((len(markers.times), len(attachments)), dtype=bool)
@@ -876,14 +882,29 @@ def map_c3d_markers_to_native(
             if source is None:
                 raise ValueError(f"no C3D source mapping for native marker {name!r}")
             sources = (source,)
-        missing = [source for source in sources if source not in source_index]
-        if missing:
-            raise ValueError(f"C3D is missing sources for native marker {name!r}: {missing}")
-        source_columns = [source_index[source] for source in sources]
+        is_tracking_cluster = name in TRACKING_CLUSTER_C3D_SOURCES
+        source_columns = [source_index[source] for source in sources if source in source_index]
+        if not is_tracking_cluster and len(source_columns) != len(sources):
+            continue
+        if not source_columns:
+            continue
         source_valid = markers.valid[:, source_columns]
-        valid[:, column] = np.all(source_valid, axis=1)
-        output[:, column] = np.mean(markers.positions[:, source_columns], axis=1, dtype=np.float32)
-        output[~valid[:, column], column] = 0.0
+        if len(source_columns) == 1:
+            valid[:, column] = source_valid[:, 0]
+            output[:, column] = markers.positions[:, source_columns[0]]
+            output[~valid[:, column], column] = 0.0
+            continue
+        # Tracking clusters are centroids: average every available valid source
+        # on each frame so one missing marker does not discard the cluster.
+        valid[:, column] = np.any(source_valid, axis=1)
+        weighted_positions = np.where(source_valid[..., None], markers.positions[:, source_columns], 0.0)
+        counts = np.sum(source_valid, axis=1)
+        output[:, column] = np.divide(
+            np.sum(weighted_positions, axis=1, dtype=np.float32),
+            counts[:, None],
+            out=np.zeros((len(markers.times), 3), dtype=np.float32),
+            where=counts[:, None] > 0,
+        )
     return NativeC3DMarkers(markers.times.copy(), output, valid, names, markers.source_file, markers.source_sha256)
 
 
@@ -1215,6 +1236,7 @@ def write_native_motion_artifact(
     model_path: str | os.PathLike | None = None,
     calibration_path: str | os.PathLike | None = None,
     settings: dict | None = None,
+    marker_mapping: dict | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Publish a sealed native fitted-motion NPZ artifact."""
@@ -1254,6 +1276,12 @@ def write_native_motion_artifact(
             joint_limit_violation=motion.joint_limit_violation,
             registration=motion.registration,
         )
+        marker_mapping_manifest = {
+            "policy": "arithmetic centroid of complete thigh and shank tracking clusters",
+            "centroids": {name: list(sources) for name, sources in TRACKING_CLUSTER_C3D_SOURCES.items()},
+        }
+        if marker_mapping is not None:
+            marker_mapping_manifest["acquisition"] = marker_mapping
         manifest = {
             "schema_version": "gait_native_motion_artifact_1",
             "coordinate_system": {
@@ -1269,10 +1297,7 @@ def write_native_motion_artifact(
                 "valid_count": int(motion.valid.sum()),
                 "sample_count": int(motion.valid.size),
             },
-            "marker_mapping": {
-                "policy": "arithmetic centroid of complete thigh and shank tracking clusters",
-                "centroids": {name: list(sources) for name, sources in TRACKING_CLUSTER_C3D_SOURCES.items()},
-            },
+            "marker_mapping": marker_mapping_manifest,
             "bodies": {"names": list(motion.body_names), "residuals": "body_rms"},
             "frames": {
                 "count": int(len(motion.times)),
