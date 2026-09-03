@@ -218,6 +218,63 @@ The target hip width defaults to the scaled S001 width. Pass `--hip-width` to
 apply an explicit width; the MJCF femur frames and marker-layout frames are
 updated together.
 
+## Visual marker-set mapping
+
+Use the interactive mapper when a lab uses different C3D labels for the same
+S001 anatomical marker protocol. This project example runs from a Newton source
+checkout because it uses the `projects/gait_c3d` adapters. It overlays the C3D
+points on the neutral MJCF, highlights the selected target and source in orange,
+and draws green lines for
+completed assignments:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples marker_mapper \
+  --subject projects/gait_c3d/assets/s001_calibrated \
+  --c3d "/path/to/static.c3d" \
+  --marker-map "/path/to/my_lab_marker_map.json" \
+  --paused
+```
+
+Choose an MJCF target role and its exact C3D source label in **Example
+Options**, then select **Save marker map**. A button can apply unique normalized
+name suggestions for review; suggestions are never saved without the user's
+explicit action. The editor also includes `C7`, `CLAV`, and `T10` torso
+calibration roles even though they are not MJCF sites. The JSON stores only
+label aliases, and omitted labels use the canonical S001 name. Final matching
+is exact and case-sensitive so the tool never guesses left/right or
+medial/lateral anatomy. The visual registration is display-only and is not
+written into the map; **Fit and lock display from current map** changes it only
+when explicitly selected.
+
+Pass the saved map once when building a subject:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples opensim_subject \
+  --static-cal "/path/to/static.c3d" \
+  --marker-map "/path/to/my_lab_marker_map.json" \
+  --subject /tmp/my_subject \
+  --mass 72 \
+  --overwrite
+```
+
+The builder copies the validated map into the subject bundle. Later dynamic
+motion fitting uses that bundled map automatically:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
+  --subject /tmp/my_subject \
+  --c3d "/path/to/walking.c3d"
+```
+
+Version 1 changes labels only. It covers the 39 sources used by the 27 MJCF
+marker targets plus the `C7`, `CLAV`, and `T10` torso calibration roles;
+unrelated C3D labels pass through unchanged. It keeps the current anatomical
+landmarks and fixed recipes for the sacrum, head, and three-marker thigh/shank
+centroids. A protocol with missing medial landmarks, direct centroid markers,
+or different physical placements needs a new calibration profile rather than
+an alias map.
+Use `--keep-c3d-prefix` when labels such as `Person01:LASI` must remain distinct.
+
 ## Static per-segment calibration
 
 Use a static calibration C3D to build a personalized model with Visual3D-style

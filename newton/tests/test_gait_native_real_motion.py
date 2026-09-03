@@ -3,6 +3,7 @@
 
 """Test real-C3D marker mapping and native motion artifact publication."""
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -11,8 +12,17 @@ from pathlib import Path
 import numpy as np
 
 import newton
-from newton.examples.opensim.example_native_motion_fit import _default_motion_output, create_parser
+from newton.examples.opensim.example_native_motion_fit import (
+    Example as NativeMotionExample,
+)
+from newton.examples.opensim.example_native_motion_fit import (
+    _default_motion_output,
+    _resolve_subject_marker_map,
+    _strip_c3d_prefix,
+    create_parser,
+)
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
+from projects.gait_c3d.marker_map import C3DMarkerMap, apply_c3d_marker_map, save_c3d_marker_map
 from projects.gait_c3d.native_motion_fit import (
     NativeC3DMarkers,
     fit_c3d_marker_motion,
@@ -133,17 +143,70 @@ class TestNativeRealMotion(unittest.TestCase):
         np.testing.assert_allclose(mapped.positions[0], positions[0].reshape(2, 3, 3).mean(axis=1))
         self.assertTrue(np.all(mapped.valid))
 
-    def test_parser_exposes_motion_load_and_overwrite_flags(self):
-        """Parse direct motion replay and full-solve overwrite options."""
-        args = create_parser().parse_args(["--motion", "/tmp/motion", "--overwrite"])
-        self.assertEqual(args.motion, "/tmp/motion")
+    def test_parser_exposes_marker_mapping_and_overwrite_flags(self):
+        """Parse real C3D marker mapping and full-solve overwrite options."""
+        args = create_parser().parse_args(
+            ["--c3d", "/tmp/trial.c3d", "--marker-map", "/tmp/labels.json", "--keep-c3d-prefix", "--overwrite"]
+        )
+        self.assertEqual(args.c3d, "/tmp/trial.c3d")
+        self.assertEqual(args.marker_map, "/tmp/labels.json")
+        self.assertTrue(args.keep_c3d_prefix)
         self.assertTrue(args.overwrite)
+
+    def test_rejects_marker_map_without_c3d_input(self):
+        """Reject mapping controls in synthetic and saved-motion modes."""
+        for values in (
+            ("--synthetic", "--marker-map", "/tmp/map.json"),
+            ("--motion", "/tmp/motion", "--keep-c3d-prefix"),
+        ):
+            with self.subTest(values=values):
+                with self.assertRaisesRegex(ValueError, "require --c3d"):
+                    NativeMotionExample(None, create_parser().parse_args(values))
+
+    def test_reuses_bundled_prefix_policy_unless_cli_overrides_it(self):
+        """Decode dynamic labels with the preprocessing stored beside the map."""
+        metadata = {"strip_prefix": False}
+        self.assertFalse(_strip_c3d_prefix(None, False, metadata))
+        self.assertFalse(_strip_c3d_prefix(None, True, {"strip_prefix": True}))
+        self.assertTrue(_strip_c3d_prefix("/tmp/explicit.json", False, metadata))
 
     def test_default_motion_output_stays_inside_subject_bundle(self):
         """Derive a stable subject-local output path from the trial filename."""
         subject = Path("/subjects/S001_calibrated")
         output = _default_motion_output(subject, "/incoming/Trial 101.v3d.c3d")
         self.assertEqual(output, subject / "motions" / "trial_101_native_motion")
+
+    def test_loads_subject_marker_map_and_allows_explicit_override(self):
+        """Resolve and verify a bundled marker map unless an explicit map overrides it."""
+        with tempfile.TemporaryDirectory() as directory:
+            subject = Path(directory) / "subject"
+            subject.mkdir()
+            bundled = save_c3d_marker_map(C3DMarkerMap({"LASI": "BUNDLED_LASI"}), subject / "labels.json")
+            explicit = save_c3d_marker_map(C3DMarkerMap({"LASI": "EXPLICIT_LASI"}), Path(directory) / "explicit.json")
+            (subject / "subject.json").write_text(
+                json.dumps(
+                    {
+                        "artifacts": {"marker_map": bundled.name},
+                        "marker_mapping": {
+                            "file": bundled.name,
+                            "sha256": hashlib.sha256(bundled.read_bytes()).hexdigest(),
+                            "strip_prefix": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            marker_map, path, metadata = _resolve_subject_marker_map(subject, None)
+            override, override_path, override_metadata = _resolve_subject_marker_map(subject, str(explicit))
+            bundled.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                _resolve_subject_marker_map(subject, None)
+        self.assertEqual(marker_map.source_for("LASI"), "BUNDLED_LASI")
+        self.assertEqual(path, bundled)
+        self.assertTrue(metadata["strip_prefix"])
+        self.assertEqual(override.source_for("LASI"), "EXPLICIT_LASI")
+        self.assertEqual(override_path, explicit)
+        self.assertIsNone(override_metadata)
 
     def test_fits_named_c3d_targets_and_publishes_artifact(self):
         """Fit finite name-joined targets and write a sealed motion artifact."""
@@ -195,6 +258,22 @@ class TestNativeRealMotion(unittest.TestCase):
             source_sha256="1" * 64,
         )
         mapped = map_c3d_markers_to_native(trajectory, self.attachments)
+        aliases = {name: f"LAB_{name}" for name in trajectory.marker_names}
+        custom = C3DMarkerTrajectory(
+            times=trajectory.times.copy(),
+            positions=trajectory.positions.copy(),
+            valid=trajectory.valid.copy(),
+            marker_names=tuple(aliases[name] for name in trajectory.marker_names),
+            rate=trajectory.rate,
+            first_frame=trajectory.first_frame,
+            lab_to_newton=trajectory.lab_to_newton.copy(),
+            source_file=trajectory.source_file,
+            source_sha256=trajectory.source_sha256,
+        )
+        canonicalized = apply_c3d_marker_map(custom, C3DMarkerMap(aliases), required=trajectory.marker_names)
+        custom_mapped = map_c3d_markers_to_native(canonicalized, self.attachments)
+        np.testing.assert_array_equal(custom_mapped.positions, mapped.positions)
+        np.testing.assert_array_equal(custom_mapped.valid, mapped.valid)
         motion = fit_c3d_marker_motion(self.model, self.attachments, mapped, q0, iterations=40)
         self.assertEqual(motion.joint_q.shape, (2, self.model.joint_coord_count))
         self.assertTrue(np.all(np.isfinite(motion.joint_qd)))
@@ -216,6 +295,11 @@ class TestNativeRealMotion(unittest.TestCase):
                 motion,
                 Path(directory) / "motion",
                 model_path=Path("projects/gait_c3d/assets/s001_calibrated/model/subject.xml"),
+                marker_mapping={
+                    "schema_version": "gait_c3d_marker_map_1",
+                    "file_sha256": "a" * 64,
+                    "canonical_to_source": {"LASI": "LAB_LASI"},
+                },
             )
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertTrue((output / "motion.npz").is_file())
@@ -225,6 +309,10 @@ class TestNativeRealMotion(unittest.TestCase):
             self.assertEqual(
                 manifest["marker_mapping"]["centroids"]["R.Thigh.Centroid"],
                 ["RTH2", "RTH3", "RTH4"],
+            )
+            self.assertEqual(
+                manifest["marker_mapping"]["acquisition"]["canonical_to_source"],
+                {"LASI": "LAB_LASI"},
             )
             loaded = load_native_motion_artifact(output / "motion.npz")
             self.assertEqual(loaded.marker_names, motion.marker_names)

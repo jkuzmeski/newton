@@ -1080,6 +1080,7 @@ def write_native_motion_artifact(
     model_path: str | os.PathLike | None = None,
     calibration_path: str | os.PathLike | None = None,
     settings: dict | None = None,
+    marker_mapping: dict | None = None,
     overwrite: bool = False,
 ) -> Path:
     """Publish a sealed native fitted-motion NPZ artifact."""
@@ -1119,6 +1120,12 @@ def write_native_motion_artifact(
             joint_limit_violation=motion.joint_limit_violation,
             registration=motion.registration,
         )
+        marker_mapping_manifest = {
+            "policy": "arithmetic centroid of complete thigh and shank tracking clusters",
+            "centroids": {name: list(sources) for name, sources in TRACKING_CLUSTER_C3D_SOURCES.items()},
+        }
+        if marker_mapping is not None:
+            marker_mapping_manifest["acquisition"] = marker_mapping
         manifest = {
             "schema_version": "gait_native_motion_artifact_1",
             "coordinate_system": {
@@ -1134,10 +1141,7 @@ def write_native_motion_artifact(
                 "valid_count": int(motion.valid.sum()),
                 "sample_count": int(motion.valid.size),
             },
-            "marker_mapping": {
-                "policy": "arithmetic centroid of complete thigh and shank tracking clusters",
-                "centroids": {name: list(sources) for name, sources in TRACKING_CLUSTER_C3D_SOURCES.items()},
-            },
+            "marker_mapping": marker_mapping_manifest,
             "bodies": {"names": list(motion.body_names), "residuals": "body_rms"},
             "frames": {
                 "count": int(len(motion.times)),

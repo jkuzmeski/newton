@@ -33,6 +33,14 @@ from projects.gait_c3d.marker_layout import (
     load_subject_marker_layout,
     scale_subject_marker_layout_from_base,
 )
+from projects.gait_c3d.marker_map import (
+    NATIVE_MARKER_SOURCES,
+    apply_c3d_marker_map,
+    load_c3d_marker_map,
+    load_subject_c3d_marker_map,
+    required_c3d_sources,
+    save_c3d_marker_map,
+)
 from projects.gait_c3d.native_model import SimpleGaitConfig
 from projects.gait_c3d.segment_calibration import build_static_segment_calibration, load_static_segment_calibration
 from projects.gait_c3d.subject_mjcf import scale_subject_mjcf_from_base, write_subject_mjcf
@@ -49,6 +57,28 @@ from projects.gait_c3d.vtp_adapter import (
 )
 
 _SUBJECT_BUNDLE_SCHEMA = "gait_subject_bundle_1"
+_NATIVE_MARKER_REQUIREMENTS = required_c3d_sources(NATIVE_MARKER_SOURCES)
+_PARITY_MARKER_REQUIREMENTS = (
+    "LASI",
+    "RASI",
+    "LSHO",
+    "RSHO",
+    "STRN",
+    "LKNE",
+    "RKNE",
+    "LANK",
+    "RANK",
+    "LHEE",
+    "LHLX",
+    "RHEE",
+    "RHLX",
+    "LPSI",
+    "RPSI",
+    "LFHD",
+    "RFHD",
+    "LBHD",
+    "RBHD",
+)
 
 
 def _resolve_subject_artifact(subject_dir: Path, manifest: dict, name: str, *, required: bool = False) -> Path | None:
@@ -98,6 +128,8 @@ def _write_subject_bundle_manifest(
         path = subject_dir / name
         if path.is_dir() or path.is_file():
             artifacts[name] = name
+    if (subject_dir / "marker_map.json").is_file():
+        artifacts["marker_map"] = "marker_map.json"
     calibration_path = subject_dir / "calibration" / "segment_calibration.json"
     if calibration_path.is_file():
         artifacts["calibration"] = "calibration/segment_calibration.json"
@@ -131,6 +163,7 @@ def _write_subject_bundle_manifest(
             "base_subject": Path(args.base_subject).name if args.base_subject else None,
             "static_calibration": Path(args.static_calibration).name if args.static_calibration else None,
             "c3d": Path(args.c3d).name if args.c3d else None,
+            "marker_map": Path(args.marker_map).name if args.marker_map else None,
             "template": Path(args.template_osim).name if args.template_osim else None,
             "scaled_model": Path(args.scaled_osim).name if args.scaled_osim else None,
         },
@@ -140,7 +173,39 @@ def _write_subject_bundle_manifest(
             "file": "calibration/segment_calibration.json",
             "sha256": hashlib.sha256(calibration_path.read_bytes()).hexdigest(),
         }
+    marker_map_path = subject_dir / "marker_map.json"
+    if marker_map_path.is_file():
+        manifest["marker_mapping"] = {
+            "file": marker_map_path.name,
+            "sha256": hashlib.sha256(marker_map_path.read_bytes()).hexdigest(),
+            "strip_prefix": not args.keep_c3d_prefix,
+        }
     (subject_dir / "subject.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _publish_marker_map(marker_map_path: str | Path, subject_dir: Path):
+    """Copy a validated normalized marker map into a subject bundle."""
+    marker_map = load_c3d_marker_map(marker_map_path)
+    saved = save_c3d_marker_map(marker_map, subject_dir / "marker_map.json")
+    print(f"Marker map: {len(marker_map.markers)} aliases -> {saved}")
+    return marker_map
+
+
+def _apply_subject_marker_map(
+    markers,
+    marker_map_path: str | Path | None,
+    subject_dir: Path,
+    *,
+    required: tuple[str, ...] = (),
+):
+    """Canonicalize decoded labels and publish the map with the subject."""
+    if marker_map_path is None:
+        return markers
+    marker_map = load_c3d_marker_map(marker_map_path)
+    canonical = apply_c3d_marker_map(markers, marker_map, required=required)
+    save_c3d_marker_map(marker_map, subject_dir / "marker_map.json")
+    print(f"Marker map: {len(marker_map.markers)} aliases -> {subject_dir / 'marker_map.json'}")
+    return canonical
 
 
 class Example:
@@ -252,6 +317,12 @@ class Example:
             or args.static_calibration
             or any((args.c3d, args.template_osim, args.scaled_osim, args.geometry_dir))
         )
+        if args.marker_map and not (args.static_calibration or args.c3d or args.base_subject):
+            raise ValueError("--marker-map requires --static-cal, --c3d, or --base-subject")
+        if args.keep_c3d_prefix and not (
+            args.static_calibration or args.c3d or (args.base_subject and args.marker_map)
+        ):
+            raise ValueError("--keep-c3d-prefix requires C3D input or --base-subject with --marker-map")
         if args.static_calibration and args.c3d:
             raise ValueError("--static-cal cannot be combined with --c3d")
         if args.static_calibration and args.marker_demo:
@@ -335,6 +406,10 @@ class Example:
                 raise FileNotFoundError(f"base subject bundle is missing: {base_manifest_path}")
             base_manifest = json.loads(base_manifest_path.read_text(encoding="utf-8"))
             base_metadata = base_manifest.get("subject", {})
+            _, inherited_map, inherited_metadata = load_subject_c3d_marker_map(base_subject, base_manifest)
+            marker_map_path = args.marker_map or inherited_map
+            if args.marker_map is None and inherited_metadata is not None:
+                args.keep_c3d_prefix = not inherited_metadata.get("strip_prefix", True)
             args.base_subject = str(base_subject)
             args.base_marker_set = base_manifest.get("base_marker_set") or base_manifest.get("sources", {}).get(
                 "base_marker_set"
@@ -348,8 +423,14 @@ class Example:
                 self.subject_dir / "markers",
                 up_axis=args.c3d_up_axis,
                 forward_axis=args.c3d_forward_axis,
+                strip_prefix=not args.keep_c3d_prefix,
             )
-            markers = load_marker_artifact(marker_artifact)
+            markers = _apply_subject_marker_map(
+                load_marker_artifact(marker_artifact),
+                marker_map_path,
+                self.subject_dir,
+                required=_NATIVE_MARKER_REQUIREMENTS,
+            )
             calibration_path = self.subject_dir / "calibration" / "segment_calibration.json"
             self.calibration = build_static_segment_calibration(
                 markers,
@@ -417,6 +498,13 @@ class Example:
                 raise FileNotFoundError(f"base subject bundle is missing: {base_manifest_path}")
             base_manifest = json.loads(base_manifest_path.read_text(encoding="utf-8"))
             base_metadata = base_manifest.get("subject", {})
+            _, inherited_map, inherited_metadata = load_subject_c3d_marker_map(base_subject, base_manifest)
+            if args.marker_map:
+                _publish_marker_map(args.marker_map, self.subject_dir)
+            elif inherited_map is not None:
+                _publish_marker_map(inherited_map, self.subject_dir)
+                if inherited_metadata is not None:
+                    args.keep_c3d_prefix = not inherited_metadata.get("strip_prefix", True)
             args.base_marker_set = base_manifest.get("base_marker_set") or base_manifest.get("sources", {}).get(
                 "base_marker_set"
             )
@@ -481,8 +569,21 @@ class Example:
                 self.subject_dir / "markers",
                 up_axis=args.c3d_up_axis,
                 forward_axis=args.c3d_forward_axis,
+                strip_prefix=not args.keep_c3d_prefix,
             )
-            markers = load_marker_artifact(self.marker_artifact)
+            required_markers = (
+                _NATIVE_MARKER_REQUIREMENTS
+                if (args.scaling_backend == "official" and args.template_osim) or args.official_marker_placement
+                else _PARITY_MARKER_REQUIREMENTS
+                if args.template_osim
+                else ()
+            )
+            markers = _apply_subject_marker_map(
+                load_marker_artifact(self.marker_artifact),
+                args.marker_map,
+                self.subject_dir,
+                required=required_markers,
+            )
             self.device_markers = markers.to_warp(args.device)
             print(
                 f"C3D: {len(markers.times)} frames x {len(markers.marker_names)} markers "
@@ -921,6 +1022,15 @@ def create_parser():
         help=argparse.SUPPRESS,
     )
     parser.add_argument("--c3d", help="Optional calibration or dynamic C3D file")
+    parser.add_argument(
+        "--marker-map",
+        help="Exact C3D label map created by the marker_mapper example",
+    )
+    parser.add_argument(
+        "--keep-c3d-prefix",
+        action="store_true",
+        help="Keep subject prefixes such as Person01:LASI when applying the marker map",
+    )
     parser.add_argument("--template", dest="template_osim", help="OpenSim template to scale from --c3d")
     parser.add_argument(
         "--template-osim",

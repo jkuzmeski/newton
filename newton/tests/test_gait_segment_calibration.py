@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
+from projects.gait_c3d.marker_map import C3DMarkerMap, apply_c3d_marker_map
 from projects.gait_c3d.segment_calibration import (
     build_static_segment_calibration,
     load_static_segment_calibration,
@@ -100,6 +101,35 @@ class TestStaticSegmentCalibration(unittest.TestCase):
             (0.0, 0.0, 1.0),
             atol=1.0e-12,
         )
+
+    def test_custom_label_map_preserves_static_calibration(self):
+        """Build identical segment geometry from canonical and custom C3D labels."""
+        canonical = self._markers()
+        aliases = {name: f"LAB_{name}" for name in canonical.marker_names}
+        custom = C3DMarkerTrajectory(
+            times=canonical.times.copy(),
+            positions=canonical.positions.copy(),
+            valid=canonical.valid.copy(),
+            marker_names=tuple(aliases[name] for name in canonical.marker_names),
+            rate=canonical.rate,
+            first_frame=canonical.first_frame,
+            lab_to_newton=canonical.lab_to_newton.copy(),
+            source_file=canonical.source_file,
+            source_sha256=canonical.source_sha256,
+        )
+        mapped = apply_c3d_marker_map(
+            custom,
+            C3DMarkerMap(aliases),
+            required=canonical.marker_names,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            first = build_static_segment_calibration(canonical, Path(directory) / "canonical.json", marker_radius=0.006)
+            second = build_static_segment_calibration(mapped, Path(directory) / "custom.json", marker_radius=0.006)
+        self.assertEqual(first.pelvis, second.pelvis)
+        self.assertEqual(first.segments, second.segments)
+        self.assertEqual(set(first.marker_positions), set(second.marker_positions))
+        for name in first.marker_positions:
+            np.testing.assert_array_equal(first.marker_positions[name], second.marker_positions[name])
 
     def test_preserves_raw_psis_slope_in_pelvis_frame(self):
         """Preserve the bilateral PSIS slope in the calibrated pelvis frame."""

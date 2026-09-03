@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
+from projects.gait_c3d.marker_map import C3DMarkerMap, apply_c3d_marker_map
 from projects.gait_c3d.subject_scaling import (
     _ALIASES,
     _MEASUREMENTS,
@@ -60,6 +61,22 @@ class TestGaitSubjectScaling(unittest.TestCase):
             source_sha256="0" * 64,
         )
         factors, diagnostics = _measurement_factors(trajectory, None)
+        aliases = {name: f"LAB_{name}" for name in trajectory.marker_names}
+        custom = C3DMarkerTrajectory(
+            times=trajectory.times.copy(),
+            positions=trajectory.positions.copy(),
+            valid=trajectory.valid.copy(),
+            marker_names=tuple(aliases[name] for name in trajectory.marker_names),
+            rate=trajectory.rate,
+            first_frame=trajectory.first_frame,
+            lab_to_newton=trajectory.lab_to_newton.copy(),
+            source_file=trajectory.source_file,
+            source_sha256=trajectory.source_sha256,
+        )
+        mapped = apply_c3d_marker_map(custom, C3DMarkerMap(aliases), required=trajectory.marker_names)
+        mapped_factors, mapped_diagnostics = _measurement_factors(mapped, None)
+        self.assertEqual(mapped_factors, factors)
+        self.assertEqual(mapped_diagnostics, diagnostics)
         self.assertEqual(set(diagnostics), {"pelvis", "torso", "thigh", "shank", "foot"})
         for value in factors.values():
             np.testing.assert_allclose(value, (scale, scale, scale), atol=1.0e-7)
