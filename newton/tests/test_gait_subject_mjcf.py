@@ -14,6 +14,7 @@ import numpy as np
 import newton
 from newton.examples.opensim.example_opensim_subject import Example as OpenSimSubjectExample
 from newton.examples.opensim.example_opensim_subject import (
+    _clear_subject_directory_preserving_c3d,
     _resolve_subject_artifact,
     _write_subject_bundle_manifest,
     create_parser,
@@ -38,6 +39,22 @@ class TestGaitSubjectMJCF(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         newton.use_coord_layout_targets = cls.previous_target_layout
+
+    def test_overwrite_preserves_subject_local_c3d_sources(self):
+        """Preserve subject-local C3D files while clearing generated bundle output."""
+        with tempfile.TemporaryDirectory() as directory:
+            subject = Path(directory) / "S002"
+            (subject / "model").mkdir(parents=True)
+            source = subject / "Trial 101.v3d.c3d"
+            source.write_bytes(b"C3D source")
+            (subject / "subject.json").write_text("stale", encoding="utf-8")
+            (subject / "model" / "subject.xml").write_text("stale", encoding="utf-8")
+
+            _clear_subject_directory_preserving_c3d(subject)
+
+            self.assertEqual(source.read_bytes(), b"C3D source")
+            self.assertFalse((subject / "subject.json").exists())
+            self.assertFalse((subject / "model").exists())
 
     def test_scales_complete_s001_subject_from_base_geometry(self):
         """Scale S001 meshes, marker sites, frames, and inertias as one MJCF."""

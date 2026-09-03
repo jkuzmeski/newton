@@ -22,6 +22,7 @@ from newton.examples.opensim.example_native_motion_fit import (
     create_parser,
 )
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
+from projects.gait_c3d.marker_clusters import TRACKING_CLUSTER_C3D_SOURCES
 from projects.gait_c3d.marker_map import C3DMarkerMap, apply_c3d_marker_map, save_c3d_marker_map
 from projects.gait_c3d.native_motion_fit import (
     NativeC3DMarkers,
@@ -108,6 +109,63 @@ class TestNativeRealMotion(unittest.TestCase):
         np.testing.assert_allclose(mapped.positions[0, 0], positions[0, 0])
         np.testing.assert_allclose(mapped.positions[0, 2], 0.5 * (positions[0, 2] + positions[0, 3]))
         np.testing.assert_allclose(mapped.positions[0, 3], positions[0, 4:].mean(axis=0))
+
+    def test_centroids_use_remaining_sources_when_one_label_is_absent(self):
+        """Average available markers for every tracking cluster."""
+        for cluster_name, sources in TRACKING_CLUSTER_C3D_SOURCES.items():
+            with self.subTest(cluster_name=cluster_name):
+                positions = np.asarray(
+                    [
+                        [[0.0, 0.0, 0.0], [0.03, 0.06, 0.09]],
+                        [[0.1, 0.2, 0.3], [0.04, 0.08, 0.12]],
+                    ],
+                    dtype=np.float32,
+                )
+                trajectory = C3DMarkerTrajectory(
+                    times=np.asarray((0.0, 0.01)),
+                    positions=positions,
+                    valid=np.ones((2, 2), dtype=bool),
+                    marker_names=sources[1:],
+                    rate=100.0,
+                    first_frame=0,
+                    lab_to_newton=np.eye(3),
+                    source_file="trial.c3d",
+                    source_sha256="4" * 64,
+                )
+                attachment = type(self.attachments[0])(cluster_name, 0, (0.0, 0.0, 0.0))
+
+                mapped = map_c3d_markers_to_native(trajectory, (attachment,))
+
+                self.assertTrue(np.all(mapped.valid))
+                np.testing.assert_allclose(mapped.positions[:, 0], positions.mean(axis=1))
+
+    def test_centroids_use_framewise_valid_sources(self):
+        """Average only valid cluster markers on each frame."""
+        positions = np.asarray(
+            [
+                [[0.0, 0.0, 0.0], [0.03, 0.06, 0.09]],
+                [[0.1, 0.2, 0.3], [0.04, 0.08, 0.12]],
+            ],
+            dtype=np.float32,
+        )
+        trajectory = C3DMarkerTrajectory(
+            times=np.asarray((0.0, 0.01)),
+            positions=positions,
+            valid=np.asarray([[True, False], [False, False]]),
+            marker_names=("LTH3", "LTH4"),
+            rate=100.0,
+            first_frame=0,
+            lab_to_newton=np.eye(3),
+            source_file="trial.c3d",
+            source_sha256="5" * 64,
+        )
+        attachment = type(self.attachments[0])("L.Thigh.Centroid", 0, (0.0, 0.0, 0.0))
+
+        mapped = map_c3d_markers_to_native(trajectory, (attachment,))
+
+        np.testing.assert_array_equal(mapped.valid[:, 0], np.asarray([True, False]))
+        np.testing.assert_allclose(mapped.positions[0, 0], positions[0, 0])
+        np.testing.assert_array_equal(mapped.positions[1, 0], np.zeros(3, dtype=np.float32))
 
     def test_maps_thigh_and_shank_clusters_to_centroids(self):
         """Average each complete thigh and shank source cluster into one target."""

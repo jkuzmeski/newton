@@ -5,8 +5,8 @@
 
 from __future__ import annotations
 
-# Each cluster is represented by the arithmetic mean of its three marker
-# positions. The source labels are the names used in the gait2354 C3D files.
+# Each cluster is represented by the arithmetic mean of its available valid
+# marker positions. The source labels are the names used in the gait2354 C3D files.
 TRACKING_CLUSTER_MARKERS = {
     "L.Thigh.Centroid": ("L.Thigh.Upper", "L.Thigh.Front", "L.Thigh.Rear"),
     "R.Thigh.Centroid": ("R.Thigh.Upper", "R.Thigh.Front", "R.Thigh.Rear"),

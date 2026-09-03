@@ -99,6 +99,35 @@ def _resolve_subject_artifact(subject_dir: Path, manifest: dict, name: str, *, r
     return path
 
 
+def _clear_subject_directory_preserving_c3d(subject_dir: Path) -> None:
+    """Clear generated bundle files without deleting subject-local C3D sources."""
+    preserved = {path.resolve() for path in subject_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".c3d"}
+
+    def contains_preserved_file(directory: Path) -> bool:
+        """Return whether a directory contains one of the preserved C3D files."""
+        return any(path == directory or directory in path.parents for path in preserved)
+
+    def clear(directory: Path) -> None:
+        """Remove generated children while retaining preserved source files."""
+        for child in directory.iterdir():
+            resolved = child.resolve()
+            if resolved in preserved:
+                continue
+            if child.is_dir():
+                if contains_preserved_file(resolved):
+                    clear(child)
+                    try:
+                        child.rmdir()
+                    except OSError:
+                        pass
+                else:
+                    shutil.rmtree(child)
+            else:
+                child.unlink()
+
+    clear(subject_dir)
+
+
 def _read_subject_bundle(subject_dir: Path) -> tuple[Path, dict]:
     """Read one compiled subject bundle and return its MJCF path and metadata."""
     manifest_path = subject_dir / "subject.json"
@@ -387,7 +416,7 @@ class Example:
             raise ValueError("--base-subject and --subject must refer to different bundles")
         if self.subject_dir.exists() and any(self.subject_dir.iterdir()):
             if args.overwrite_subject_dir:
-                shutil.rmtree(self.subject_dir)
+                _clear_subject_directory_preserving_c3d(self.subject_dir)
             else:
                 raise FileExistsError(
                     f"subject directory is not empty: {self.subject_dir}; pass --overwrite to rebuild"
