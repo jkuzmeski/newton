@@ -1,0 +1,6 @@
+﻿newton.opensim.read\_storage
+============================
+
+.. currentmodule:: newton.opensim
+
+.. autofunction:: read_storage

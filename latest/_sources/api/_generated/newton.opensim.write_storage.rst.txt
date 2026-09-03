@@ -1,0 +1,6 @@
+﻿newton.opensim.write\_storage
+=============================
+
+.. currentmodule:: newton.opensim
+
+.. autofunction:: write_storage

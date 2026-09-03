@@ -1,0 +1,8 @@
+﻿newton.ik.IKObjectivePositionBatch
+==================================
+
+.. autoclass:: newton.ik.IKObjectivePositionBatch
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :member-order: groupwise
