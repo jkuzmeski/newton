@@ -1,0 +1,1 @@
+Split each gait subject foot into a hindfoot and a toes body joined by a metatarsophalangeal hinge, using the joint center and oblique break axis of the scaled OpenSim model. The hallux marker moves to the toes body so inverse kinematics can solve the new angle. A subject is now 10 bodies with 19 joint coordinates.

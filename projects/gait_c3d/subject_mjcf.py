@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .native_model import SimpleGaitConfig
+from .native_model import MTP_AXIS, MTP_LIMITS, TOES_LENGTH_FRACTION, SimpleGaitConfig
 
 
 def _canonical_json(value: dict) -> bytes:
@@ -320,7 +320,7 @@ def subject_mjcf_xml(
         visual_meshes: Body-local neutral mesh assets.
         include_fallback_geometry: Include box and capsule visuals when true.
             Collision-aware box and capsule proxies are always emitted separately.
-        contact_centers: Optional mesh-derived sphere centers keyed by side.
+        contact_centers: Optional measured sphere centers keyed by target body.
         contact_radius: Optional mesh-derived contact radius [m].
         inertial_data: Optional OpenSim-derived inertial properties by target body.
             Proxy geometry always comes from mass and inertia. When provided,
@@ -343,11 +343,13 @@ def subject_mjcf_xml(
         "tibia_right",
         "foot_left",
         "foot_right",
+        "toes_left",
+        "toes_right",
     }
     if unknown_inertials:
         raise ValueError(f"inertial_data contains unknown bodies: {sorted(unknown_inertials)}")
     centers = joint_centers or {}
-    expected_centers = {"hip_left", "hip_right", "knee_left", "knee_right", "ankle_left", "ankle_right"}
+    expected_centers = {f"{joint}_{side}" for joint in ("hip", "knee", "ankle", "mtp") for side in ("left", "right")}
     if centers and set(centers) != expected_centers:
         raise ValueError(f"joint_centers must contain exactly {sorted(expected_centers)}")
     expected_bodies = {
@@ -359,6 +361,8 @@ def subject_mjcf_xml(
         "tibia_right",
         "foot_left",
         "foot_right",
+        "toes_left",
+        "toes_right",
     }
     marker_names: set[str] = set()
     marker_site_names: set[str] = set()
@@ -510,27 +514,30 @@ def subject_mjcf_xml(
         ET.SubElement(contact, "exclude", body1="pelvis", body2=f"femur_{side}")
         ET.SubElement(contact, "exclude", body1=f"femur_{side}", body2=f"tibia_{side}")
         ET.SubElement(contact, "exclude", body1=f"tibia_{side}", body2=f"foot_{side}")
+        ET.SubElement(contact, "exclude", body1=f"foot_{side}", body2=f"toes_{side}")
     degrees = math.pi / 180.0
     radius = config.contact_radius if contact_radius is None else contact_radius
     if not math.isfinite(radius) or radius <= 0.0:
         raise ValueError("contact_radius must be finite and positive")
     if contact_centers is None:
         heel_x = -0.32 * config.foot_length
-        forefoot_x = 0.48 * config.foot_length
+        forefoot_x = 0.48 * config.foot_length - config.toes_offset
         half_width = 0.35 * config.foot_width
-        centers_by_side = dict.fromkeys(
-            ("left", "right"),
-            (
-                (heel_x, -half_width, -radius),
-                (heel_x, half_width, -radius),
-                (forefoot_x, -half_width, -radius),
-                (forefoot_x, half_width, -radius),
-            ),
+        centers_by_body = {
+            f"foot_{side}": ((heel_x, -half_width, -radius), (heel_x, half_width, -radius))
+            for side in ("left", "right")
+        }
+        centers_by_body.update(
+            {
+                f"toes_{side}": ((forefoot_x, -half_width, -radius), (forefoot_x, half_width, -radius))
+                for side in ("left", "right")
+            }
         )
     else:
-        centers_by_side = contact_centers
-        if set(centers_by_side) != {"left", "right"} or any(len(values) < 3 for values in centers_by_side.values()):
-            raise ValueError("contact_centers must provide at least three centers for each foot")
+        centers_by_body = contact_centers
+        expected_bodies = {f"{part}_{side}" for part in ("foot", "toes") for side in ("left", "right")}
+        if set(centers_by_body) != expected_bodies or sum(map(len, centers_by_body.values())) < 6:
+            raise ValueError("contact_centers must provide sphere centers for each foot and toes body")
     for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
         femur_fromto, femur_radius = _capsule_fromto(
             inertia_boxes[f"femur_{side}"],
@@ -674,26 +681,50 @@ def subject_mjcf_xml(
             armature=0.005,
         )
         _add_target_actuators(actuator, ankle_name, ankle_limits)
-        for index, center in enumerate(centers_by_side[side]):
-            ET.SubElement(
-                foot,
-                "geom",
-                name=f"contact_{side}_{index}",
-                type="sphere",
-                size=f"{radius:.9g}",
-                pos=_values(*center),
-                attrib={"class": "collision"},
-            )
-            ET.SubElement(
-                foot,
-                "geom",
-                name=f"visual_foot_{side}_{index}",
-                type="sphere",
-                size=f"{radius:.9g}",
-                pos=_values(*center),
-                attrib={"class": "visual"},
-                rgba="0.18 0.32 0.58 0.35",
-            )
+
+        toes = ET.SubElement(foot, "body", name=f"toes_{side}", pos=_values(config.toes_offset, 0.0, 0.0))
+        body_elements[f"toes_{side}"] = toes
+        _add_inertial(
+            toes,
+            config.toes_mass,
+            (TOES_LENGTH_FRACTION * config.foot_length, config.foot_width, 2.0 * config.contact_radius),
+            inertials.get(f"toes_{side}"),
+        )
+        mtp_name = f"mtp_{side}"
+        _add_joint(
+            toes,
+            name=mtp_name,
+            position=centers.get(mtp_name, (0.0, 0.0, 0.0)),
+            axis=MTP_AXIS[side],
+            limits=MTP_LIMITS,
+            damping=0.05,
+            armature=0.001,
+        )
+        _add_target_actuators(actuator, mtp_name, MTP_LIMITS)
+
+        index = 0
+        for body_name, element in ((f"foot_{side}", foot), (f"toes_{side}", toes)):
+            for center in centers_by_body[body_name]:
+                ET.SubElement(
+                    element,
+                    "geom",
+                    name=f"contact_{side}_{index}",
+                    type="sphere",
+                    size=f"{radius:.9g}",
+                    pos=_values(*center),
+                    attrib={"class": "collision"},
+                )
+                ET.SubElement(
+                    element,
+                    "geom",
+                    name=f"visual_foot_{side}_{index}",
+                    type="sphere",
+                    size=f"{radius:.9g}",
+                    pos=_values(*center),
+                    attrib={"class": "visual"},
+                    rgba="0.18 0.32 0.58 0.35",
+                )
+                index += 1
 
     for marker in marker_sites:
         ET.SubElement(
@@ -724,7 +755,7 @@ def subject_mjcf_xml(
         keyframe,
         "key",
         name="neutral",
-        qpos=_values(0.0, 0.0, config.pelvis_height, 1.0, 0.0, 0.0, 0.0, *([0.0] * 10)),
+        qpos=_values(0.0, 0.0, config.pelvis_height, 1.0, 0.0, 0.0, 0.0, *([0.0] * 12)),
     )
     ET.indent(root)
     return ET.tostring(root, encoding="unicode") + "\n"

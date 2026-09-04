@@ -163,10 +163,18 @@ class TestGaitFootBodyRegistration(unittest.TestCase):
         contact radius and the mesh-derived sphere radius.
         """
         config = SimpleGaitConfig()
-        centers = dict.fromkeys(
-            ("left", "right"),
-            tuple((0.05 * index - 0.1, 0.0, -0.09) for index in range(len(FOOT_SPHERE_LAYOUT))),
-        )
+        layout_centers = tuple((0.05 * index - 0.1, 0.0, -0.09) for index in range(len(FOOT_SPHERE_LAYOUT)))
+        segment_centers = {
+            segment: tuple(
+                center
+                for center, landmark in zip(layout_centers, FOOT_SPHERE_LAYOUT, strict=True)
+                if landmark[3] == (segment == "toes")
+            )
+            for segment in ("foot", "toes")
+        }
+        centers = {
+            f"{segment}_{side}": segment_centers[segment] for segment in ("foot", "toes") for side in ("left", "right")
+        }
         transforms = simple_gait_body_transforms(config)
         with tempfile.TemporaryDirectory() as directory:
             path = write_subject_mjcf(
@@ -182,9 +190,9 @@ class TestGaitFootBodyRegistration(unittest.TestCase):
             state = model.state()
             newton.eval_fk(model, model.joint_q, model.joint_qd, state)
             body_q = state.body_q.numpy()
-        for side in ("left", "right"):
-            index = model.body_label.index(next(label for label in model.body_label if label.endswith(f"foot_{side}")))
-            self.assertAlmostEqual(float(body_q[index][2]), float(transforms[f"foot_{side}"][2, 3]), places=6)
+        for body in (f"{segment}_{side}" for segment in ("foot", "toes") for side in ("left", "right")):
+            index = model.body_label.index(next(label for label in model.body_label if label.endswith(body)))
+            self.assertAlmostEqual(float(body_q[index][2]), float(transforms[body][2, 3]), places=6)
         spheres = [index for index, label in enumerate(model.shape_label) if "/contact_" in label]
         self.assertEqual(len(spheres), 2 * len(FOOT_SPHERE_LAYOUT))
 

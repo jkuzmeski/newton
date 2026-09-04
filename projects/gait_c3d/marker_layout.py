@@ -36,7 +36,21 @@ _SOURCE_TO_TARGET = {
     "tibia_r": "tibia_right",
     "calcn_l": "foot_left",
     "calcn_r": "foot_right",
+    "toes_l": "toes_left",
+    "toes_r": "toes_right",
 }
+_MARKER_TARGET_OVERRIDE = {
+    "L.Toe.Tip": "toes_left",
+    "R.Toe.Tip": "toes_right",
+}
+"""Markers distal to the metatarsophalangeal joint.
+
+The official placed marker set attaches every foot marker to the calcaneus.
+The hallux marker sits past the metatarsal break, so it must follow the toes
+body; otherwise the metatarsophalangeal angle is unobservable and inverse
+kinematics cannot solve it. The metatarsal head markers stay on the hindfoot,
+because they are proximal to that joint.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,7 +259,7 @@ def compile_subject_marker_layout(
         source_transform = source_transforms.get(source_body)
         if source_transform is None:
             raise ValueError(f"marker {name!r} is missing source transform {source_body!r}")
-        target_body = _SOURCE_TO_TARGET[source_body]
+        target_body = _MARKER_TARGET_OVERRIDE.get(name, _SOURCE_TO_TARGET[source_body])
         target_transform = target_transforms[target_body]
         ground_opensim = source_local @ source_transform[:3, :3].T + source_transform[:3, 3]
         ground_newton = ground_opensim @ _OPENSIM_TO_NEWTON.T
@@ -415,8 +429,10 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
         raise ValueError("subject marker layout source provenance is invalid")
     target = manifest.get("target")
     raw_target_transforms = target.get("neutral_body_transforms") if isinstance(target, dict) else None
+    # A layout sealed before the metatarsophalangeal split has no toes bodies,
+    # so a known subset is accepted and only unknown bodies are rejected.
     expected_target_bodies = set(_SOURCE_TO_TARGET.values())
-    if not isinstance(raw_target_transforms, dict) or set(raw_target_transforms) != expected_target_bodies:
+    if not isinstance(raw_target_transforms, dict) or not set(raw_target_transforms).issubset(expected_target_bodies):
         raise ValueError("subject marker layout target transforms are missing or incomplete")
     target_transforms = {name: _validate_transform(name, value) for name, value in raw_target_transforms.items()}
     expected_frame = {
@@ -443,6 +459,10 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
     if not isinstance(offset, (int, float)) or not math.isfinite(offset):
         raise ValueError("subject marker layout ground offset is invalid")
 
+    # A layout sealed before the metatarsophalangeal split keeps every foot
+    # marker on the hindfoot, so accept that pre-split body for the markers
+    # that now belong to the toes.
+    pre_split = not any(name.startswith("toes_") for name in target_transforms)
     markers = []
     names: set[str] = set()
     sites: set[str] = set()
@@ -454,7 +474,9 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
         position = item.get("position_m")
         if not isinstance(name, str) or not name or name in names:
             raise ValueError(f"invalid or duplicate marker name in layout: {name!r}")
-        if source_body not in _SOURCE_TO_TARGET or _SOURCE_TO_TARGET[source_body] != body:
+        source_target = _SOURCE_TO_TARGET.get(source_body)
+        expected_body = source_target if pre_split else _MARKER_TARGET_OVERRIDE.get(name, source_target)
+        if source_body not in _SOURCE_TO_TARGET or expected_body != body:
             raise ValueError(f"marker {name!r} has an invalid body mapping")
         if not isinstance(site_name, str) or site_name != _site_name(name) or site_name in sites:
             raise ValueError(f"marker {name!r} has an invalid site name")

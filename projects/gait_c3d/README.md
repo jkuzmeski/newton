@@ -31,14 +31,17 @@ joint by the configured clearance so adjacent segments do not overlap at their
 rounded ends. Adjacent
 parent-child links remain filtered so joint attachments do not fight their own
 collision response. Foot spheres are the
-active ground and foot self-contact proxies. A later source adapter will convert
+active ground and foot self-contact proxies, with the heel spheres on the
+hindfoot and the forefoot spheres on the toes body. A later source adapter will convert
 scaled OpenSim VTP display meshes into a sealed neutral vertex/index bundle. The
 same native builder will attach those meshes as non-colliding visuals without
 parsing VTP or `.osim` files at runtime.
-The baseline simple model has 8 bodies, 8 joints, 17 generalized coordinates,
-and 16 velocity DOFs. The six free-pelvis controls start and remain uncommanded.
-Static-calibrated subject bundles add three bounded rotational torso axes while
-keeping the same eight-body chain.
+The baseline simple model has 10 bodies, 10 joints, 19 generalized coordinates,
+and 18 velocity DOFs. Each foot is a hindfoot body plus a toes body joined by a
+metatarsophalangeal hinge, where a positive angle dorsiflexes the toes. The six
+free-pelvis controls start and remain uncommanded. Static-calibrated subject
+bundles add three bounded rotational torso axes while keeping the same ten-body
+chain.
 
 This is an engineering approximation. It is not OpenSim parity, predictive gait,
 or an FD-1 result. The next milestone adds bounded non-root torque control and
@@ -516,6 +519,34 @@ Featherstone step than the earlier approximate model. The example defaults to
 50 solver/contact substeps per 60 Hz display frame (`dt = 1/3000 s`). Ten
 substeps caused nonfinite leg state during the second display frame. Override
 with `--substeps` only when running an explicit convergence study.
+
+## Metatarsophalangeal joint
+
+Each foot is two rigid bodies, a hindfoot carrying the merged talus and
+calcaneus and a toes body, joined by a metatarsophalangeal hinge. A subject is
+therefore 10 bodies, 19 joint coordinates and 18 degrees of freedom with a free
+root.
+
+The joint center is the official toes body origin, taken from the scaled
+OpenSim model exactly as the ankle center is taken from the talus origin, so no
+extra offline run is needed. The axis is the oblique metatarsal break axis
+declared by the gait2354 template, `(+0.581, -0.814, 0)` on the left and
+`(-0.581, -0.814, 0)` on the right in Newton axes, not a sagittal hinge. The
+template clamps the joint to zero travel, which would freeze the toes, so the
+model uses a published range of 30 degrees of flexion to 80 degrees of
+extension. A positive coordinate is dorsiflexion.
+
+For inverse kinematics to see the joint at all, one marker must sit distal to
+it. The official placed marker set attaches every foot marker to the calcaneus,
+so the hallux marker `*.Toe.Tip` is re-attached to the toes body while the
+metatarsal head markers stay on the hindfoot. The four rearfoot contact spheres
+stay on the hindfoot and the lateral toe and hallux spheres move to the toes.
+
+Fitted on S001, the metatarsophalangeal angle runs -3.3 to +26.0 degrees on the
+left and -6.5 to +30.3 degrees on the right, with a median near zero and a 95th
+percentile of 17 to 22 degrees, which is the expected walking pattern. The
+split reduces the deepest toe sphere penetration at push-off by 3.5 to 5.3 mm
+and leaves the standing registration unchanged.
 
 ## Foot contact spheres and ground registration
 

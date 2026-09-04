@@ -67,11 +67,11 @@ assert 'newton.opensim' not in sys.modules
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_builds_declared_simple_topology(self):
-        """Build two D6 hips, two hinge knees, and two hinge ankles."""
-        self.assertEqual(self.model.body_count, 8)
-        self.assertEqual(self.model.joint_count, 8)
-        self.assertEqual(self.model.joint_coord_count, 17)
-        self.assertEqual(self.model.joint_dof_count, 16)
+        """Build two D6 hips and hinge knees, ankles, and metatarsal breaks."""
+        self.assertEqual(self.model.body_count, 10)
+        self.assertEqual(self.model.joint_count, 10)
+        self.assertEqual(self.model.joint_coord_count, 19)
+        self.assertEqual(self.model.joint_dof_count, 18)
         self.assertEqual(len(self.build.body_shape_indices), 6)
         self.assertEqual(len(self.build.collision_shape_indices), 6)
         self.assertEqual(len(self.build.contact_shape_indices), 8)
@@ -82,12 +82,15 @@ assert 'newton.opensim' not in sys.modules
             hip = labels.index(f"hip_{side}")
             knee = labels.index(f"knee_{side}")
             ankle = labels.index(f"ankle_{side}")
+            mtp = labels.index(f"mtp_{side}")
             self.assertEqual(types[hip], newton.JointType.D6)
             self.assertEqual(types[knee], newton.JointType.REVOLUTE)
             self.assertEqual(types[ankle], newton.JointType.REVOLUTE)
+            self.assertEqual(types[mtp], newton.JointType.REVOLUTE)
             qd_starts = self.model.joint_qd_start.numpy()
             self.assertEqual(qd_starts[knee + 1] - qd_starts[knee], 1)
             self.assertEqual(qd_starts[ankle + 1] - qd_starts[ankle], 1)
+            self.assertEqual(qd_starts[mtp + 1] - qd_starts[mtp], 1)
         self.assertAlmostEqual(float(np.sum(self.model.body_mass.numpy())), 81.4, places=4)
 
     def test_uses_boxes_capsules_and_foot_spheres(self):
@@ -213,7 +216,7 @@ assert 'newton.opensim' not in sys.modules
         control.joint_f.assign(joint_force)
         result = control.joint_f.numpy()
         np.testing.assert_array_equal(result[self.build.root_dof_slice], np.zeros(6, dtype=result.dtype))
-        np.testing.assert_array_equal(result[list(self.build.actuated_dof_indices)], np.ones(10, dtype=result.dtype))
+        np.testing.assert_array_equal(result[list(self.build.actuated_dof_indices)], np.ones(12, dtype=result.dtype))
 
     def test_featherstone_contact_rollout_stays_finite(self):
         """Advance a short unactuated contact rollout without nonfinite state."""

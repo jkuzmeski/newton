@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import shutil
 import tempfile
 from dataclasses import replace
@@ -169,7 +170,7 @@ def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_o
             forward=forward,
             lateral=lateral,
             foot_length=length,
-            toe_body=f"foot_{side}",
+            toe_body=f"toes_{side}",
             foot_body=f"foot_{side}",
         )[0].radius
         for side, (origin, forward, lateral, length) in axes.items()
@@ -182,19 +183,24 @@ def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_o
             forward=forward,
             lateral=lateral,
             foot_length=length,
-            toe_body=f"foot_{side}",
+            toe_body=f"toes_{side}",
             foot_body=f"foot_{side}",
             radius=radius,
         )
         for side, (origin, forward, lateral, length) in axes.items()
     }
+    # Spheres are laid out in the foot frame, so the two toe spheres move into
+    # the toes body frame across the metatarsophalangeal joint.
     transforms = simple_gait_body_transforms(config)
-    lowest = min(
-        float(transforms[f"foot_{side}"][2, 3]) + sphere.center[2] - radius
-        for side, placed in spheres.items()
-        for sphere in placed
-    )
-    centers = {side: tuple(sphere.center for sphere in placed) for side, placed in spheres.items()}
+    centers = {}
+    lowest = math.inf
+    for side, placed in spheres.items():
+        offset = transforms[f"toes_{side}"][:3, 3] - transforms[f"foot_{side}"][:3, 3]
+        for sphere in placed:
+            local = np.asarray(sphere.center) - (offset if sphere.body.startswith("toes_") else 0.0)
+            centers.setdefault(sphere.body, []).append(tuple(float(value) for value in local))
+            lowest = min(lowest, float(transforms[sphere.body][2, 3]) + float(local[2]) - radius)
+    centers = {body: tuple(values) for body, values in centers.items()}
     return FootContactLayout(radius, centers, ground_offset_z - lowest), planes
 
 
@@ -288,6 +294,7 @@ def _write_subject_bundle_manifest(
                         2.0 * config.thigh_mass,
                         2.0 * config.shank_mass,
                         2.0 * config.foot_mass,
+                        2.0 * config.toes_mass,
                     )
                 )
             ),
@@ -299,7 +306,7 @@ def _write_subject_bundle_manifest(
         if contact_layout is None
         else {
             "sphere_radius_m": float(contact_layout.radius),
-            "spheres_per_foot": {side: len(values) for side, values in contact_layout.centers.items()},
+            "spheres_per_body": {body: len(values) for body, values in contact_layout.centers.items()},
             "landmarks": [name for name, _, _, _ in FOOT_SPHERE_LAYOUT],
             "root_height_offset_m": float(contact_layout.root_height_offset_z),
             "sole_plane": None
@@ -797,7 +804,7 @@ class Example:
                     config,
                     source_body_transforms,
                 )
-                print("Inertia: official OpenSim COM/full tensors mapped to all 8 Newton bodies")
+                print(f"Inertia: official OpenSim COM/full tensors mapped to {len(inertial_data)} Newton bodies")
 
         if args.official_marker_placement and self.marker_placement is None:
             if markers is None or not scaled_osim:
@@ -900,7 +907,7 @@ class Example:
             for side, plane in self.sole_planes.items():
                 pitch, roll = plane.tilt_degrees()
                 print(
-                    f"Sole {side}: {len(contact_layout.centers[side])} spheres, radius "
+                    f"Sole {side}: {len(FOOT_SPHERE_LAYOUT)} spheres, radius "
                     f"{contact_layout.radius:.4f} m, pitch {pitch:.2f} deg, roll {roll:.2f} deg, "
                     f"standing residual {plane.residual * 1000.0:.2f} mm"
                 )
@@ -964,8 +971,8 @@ class Example:
         """Verify model structure, root policy, artifacts, and finite state."""
         if not self.subject_xml.is_file():
             raise ValueError("subject MJCF was not published")
-        expected_dofs = (16 if self.free_root else 10) + self.torso_dof_count
-        if self.model.body_count != 8 or self.model.joint_dof_count != expected_dofs:
+        expected_dofs = (18 if self.free_root else 12) + self.torso_dof_count
+        if self.model.body_count != 10 or self.model.joint_dof_count != expected_dofs:
             raise ValueError("subject model has an unexpected topology")
         shape_types = self.model.shape_type.numpy()
         shape_flags = self.model.shape_flags.numpy()

@@ -3,9 +3,10 @@
 
 """Build a deliberately simple Newton-native human gait articulation.
 
-The model uses fixed-axis hip rotations and one revolute hinge for each knee
-and ankle. Invisible primitive proxies enable self-collision between nonadjacent
-segments while parent-child link pairs remain filtered. It is an engineering
+The model uses fixed-axis hip rotations and one revolute hinge for each knee,
+ankle, and metatarsophalangeal break. Invisible primitive proxies enable
+self-collision between nonadjacent segments while parent-child link pairs
+remain filtered. It is an engineering
 scaffold for solver and contact experiments, not an OpenSim-equivalent model or
 an accepted FD-1 result.
 """
@@ -21,6 +22,23 @@ import warp as wp
 import newton
 
 ARCHITECTURE_ROLE = "native_runtime"
+
+MTP_AXIS = {
+    "left": (0.58095440, -0.81393611, 0.0),
+    "right": (-0.58095440, -0.81393611, 0.0),
+}
+"""Oblique metatarsal break axis of the gait2354 template, in Newton axes."""
+
+MTP_LIMITS = (-30.0 * math.pi / 180.0, 80.0 * math.pi / 180.0)
+"""Metatarsophalangeal range [rad].
+
+The template clamps this joint to zero travel, which would freeze the toes, so
+the model uses a published range instead: about 30 degrees of flexion and 80
+degrees of extension at push-off.
+"""
+
+TOES_LENGTH_FRACTION = 0.22
+"""Toes proxy box length as a fraction of foot length."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +60,11 @@ class SimpleGaitConfig:
     shank_mass: float = 4.0
     """Mass of each shank [kg]."""
 
-    foot_mass: float = 1.7
-    """Mass of each foot [kg]."""
+    foot_mass: float = 1.47
+    """Mass of each hindfoot, the merged talus and calcaneus [kg]."""
+
+    toes_mass: float = 0.23
+    """Mass of each toes segment distal to the metatarsophalangeal joint [kg]."""
 
     hip_half_width: float = 0.076
     """Lateral distance from the pelvis center to either hip [m]."""
@@ -56,6 +77,9 @@ class SimpleGaitConfig:
 
     foot_length: float = 0.25
     """Approximate heel-to-toe length [m]."""
+
+    toes_offset: float = 0.075
+    """Forward distance from the foot body origin to the toes body origin [m]."""
 
     foot_width: float = 0.10
     """Approximate foot width [m]."""
@@ -137,7 +161,7 @@ class SimpleGaitConfig:
         reference_mass = (
             reference.pelvis_mass
             + reference.torso_mass
-            + 2.0 * (reference.thigh_mass + reference.shank_mass + reference.foot_mass)
+            + 2.0 * (reference.thigh_mass + reference.shank_mass + reference.foot_mass + reference.toes_mass)
         )
         mass_scale = body_mass / reference_mass
         length_scale = body_height / 1.695898298375747
@@ -152,10 +176,12 @@ class SimpleGaitConfig:
             thigh_mass=mass_scale * reference.thigh_mass,
             shank_mass=mass_scale * reference.shank_mass,
             foot_mass=mass_scale * reference.foot_mass,
+            toes_mass=mass_scale * reference.toes_mass,
             hip_half_width=0.5 * hip_width if hip_width is not None else length_scale * reference.hip_half_width,
             thigh_length=length_scale * reference.thigh_length,
             shank_length=length_scale * reference.shank_length,
             foot_length=length_scale * reference.foot_length,
+            toes_offset=length_scale * reference.toes_offset,
             foot_width=length_scale * reference.foot_width,
             pelvis_dimensions=scale_dimensions(reference.pelvis_dimensions),
             torso_dimensions=scale_dimensions(reference.torso_dimensions),
@@ -268,7 +294,7 @@ class SimpleGaitBuild:
     """Self-collision proxy shape indices keyed by anatomical label."""
 
     contact_shape_indices: tuple[int, ...]
-    """Foot contact shape indices."""
+    """Hindfoot and toes contact shape indices."""
 
     initial_joint_q: np.ndarray
     """Initial generalized coordinates [m or rad]."""
@@ -327,7 +353,7 @@ def _trimmed_capsule_half_height(length: float, radius: float, clearance: float)
 
 
 def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGaitBuild:
-    """Build a bilateral Newton articulation with hinge knees and ankles.
+    """Build a bilateral Newton articulation with hinge knees, ankles, and toes.
 
     Args:
         config: Approximate dimensions and contact material values.
@@ -374,6 +400,12 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
             f"foot_{side}",
             config.foot_mass,
             (config.foot_length, config.foot_width, 2.0 * config.contact_radius),
+        )
+        bodies[f"toes_{side}"] = _add_body(
+            builder,
+            f"toes_{side}",
+            config.toes_mass,
+            (TOES_LENGTH_FRACTION * config.foot_length, config.foot_width, 2.0 * config.contact_radius),
         )
 
     fallback_geometry = builder.ShapeConfig(
@@ -544,6 +576,21 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
             label=f"ankle_{side}",
         )
         articulation.append(joints[f"ankle_{side}"])
+        joints[f"mtp_{side}"] = builder.add_joint_revolute(
+            parent=bodies[f"foot_{side}"],
+            child=bodies[f"toes_{side}"],
+            axis=MTP_AXIS[side],
+            parent_xform=_joint_frame((config.toes_offset, 0.0, 0.0)),
+            child_xform=_joint_frame((0.0, 0.0, 0.0)),
+            limit_lower=MTP_LIMITS[0],
+            limit_upper=MTP_LIMITS[1],
+            limit_ke=2.0e3,
+            limit_kd=50.0,
+            damping=0.05,
+            armature=0.001,
+            label=f"mtp_{side}",
+        )
+        articulation.append(joints[f"mtp_{side}"])
 
     builder.add_articulation(articulation)
     material = builder.ShapeConfig(
@@ -556,25 +603,34 @@ def build_simple_gait_model(config: SimpleGaitConfig | None = None) -> SimpleGai
     builder.add_ground_plane(cfg=material)
     contact_shapes: list[int] = []
     heel_x = -0.32 * config.foot_length
-    forefoot_x = 0.48 * config.foot_length
+    # The forefoot spheres ride on the toes body, so their center is measured
+    # from the toes origin rather than from the foot origin.
+    forefoot_x = 0.48 * config.foot_length - config.toes_offset
     contact_half_width = 0.35 * config.foot_width
-    contact_centers = (
-        (heel_x, -contact_half_width, -config.contact_radius),
-        (heel_x, contact_half_width, -config.contact_radius),
-        (forefoot_x, -contact_half_width, -config.contact_radius),
-        (forefoot_x, contact_half_width, -config.contact_radius),
-    )
+    contact_centers = {
+        "foot": (
+            (heel_x, -contact_half_width, -config.contact_radius),
+            (heel_x, contact_half_width, -config.contact_radius),
+        ),
+        "toes": (
+            (forefoot_x, -contact_half_width, -config.contact_radius),
+            (forefoot_x, contact_half_width, -config.contact_radius),
+        ),
+    }
     for side in ("left", "right"):
-        for sphere_index, center in enumerate(contact_centers):
-            contact_shapes.append(
-                builder.add_shape_sphere(
-                    bodies[f"foot_{side}"],
-                    xform=_joint_frame(center),
-                    radius=config.contact_radius,
-                    cfg=material,
-                    label=f"contact_{side}_{sphere_index}",
+        sphere_index = 0
+        for segment, centers in contact_centers.items():
+            for center in centers:
+                contact_shapes.append(
+                    builder.add_shape_sphere(
+                        bodies[f"{segment}_{side}"],
+                        xform=_joint_frame(center),
+                        radius=config.contact_radius,
+                        cfg=material,
+                        label=f"contact_{side}_{sphere_index}",
+                    )
                 )
-            )
+                sphere_index += 1
 
     initial_q = np.asarray(builder.joint_q, dtype=np.float32)
     root_start = builder.joint_q_start[joints["pelvis_free"]]

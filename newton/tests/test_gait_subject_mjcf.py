@@ -410,20 +410,82 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             builder = newton.ModelBuilder()
             builder.add_mjcf(str(path), enable_self_collisions=True)
             model = builder.finalize(device="cpu")
-        self.assertEqual(model.body_count, 8)
-        self.assertEqual(model.joint_count, 8)
-        self.assertEqual(model.joint_coord_count, 17)
-        self.assertEqual(model.joint_dof_count, 16)
+        self.assertEqual(model.body_count, 10)
+        self.assertEqual(model.joint_count, 10)
+        self.assertEqual(model.joint_coord_count, 19)
+        self.assertEqual(model.joint_dof_count, 18)
         self.assertEqual(model.shape_count, 30)
         self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 74.0, places=4)
         modes = model.joint_target_mode.numpy()
         np.testing.assert_array_equal(modes[:6], np.zeros(6, dtype=modes.dtype))
         np.testing.assert_array_equal(
             modes[6:],
-            np.full(10, newton.JointTargetMode.POSITION_VELOCITY, dtype=modes.dtype),
+            np.full(12, newton.JointTargetMode.POSITION_VELOCITY, dtype=modes.dtype),
         )
         np.testing.assert_allclose(model.joint_target_ke.numpy()[6:], 100.0)
         np.testing.assert_allclose(model.joint_target_kd.numpy()[6:], 20.0)
+
+    def test_hinges_the_toes_on_a_dorsiflexing_metatarsal_joint(self):
+        """Export both metatarsophalangeal joints with a dorsiflexing positive sign.
+
+        The saved subject must carry an ``mtp_left`` and an ``mtp_right``
+        coordinate, keep exactly the two forefoot contact spheres on each toes
+        body, and follow the measured sign convention where a positive angle
+        lifts the hallux sphere off the ground.
+        """
+        config = SimpleGaitConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_subject_mjcf(config, Path(directory) / "subject.xml")
+            builder = newton.ModelBuilder()
+            builder.add_mjcf(str(path), enable_self_collisions=True)
+            model = builder.finalize(device="cpu")
+        joint_labels = [label.rsplit("/", 1)[-1] for label in model.joint_label]
+        body_labels = [label.rsplit("/", 1)[-1] for label in model.body_label]
+        shape_body = model.shape_body.numpy()
+        shape_transform = model.shape_transform.numpy()
+        joint_q_start = model.joint_q_start.numpy()
+        contact_shapes = [
+            index for index, label in enumerate(model.shape_label) if label.rsplit("/", 1)[-1].startswith("contact_")
+        ]
+        toes_shapes: list[int] = []
+        foot_shapes: list[int] = []
+        for side in ("left", "right"):
+            self.assertIn(f"mtp_{side}", joint_labels)
+            toes = body_labels.index(f"toes_{side}")
+            foot = body_labels.index(f"foot_{side}")
+            on_toes = [index for index in contact_shapes if shape_body[index] == toes]
+            self.assertEqual(len(on_toes), 2)
+            toes_shapes.extend(on_toes)
+            foot_shapes.extend(index for index in contact_shapes if shape_body[index] == foot)
+
+        def rotate(transform, point):
+            """Rotate one point by the xyzw quaternion of a body transform."""
+            axis = np.asarray(transform[3:6], dtype=np.float64)
+            return point + 2.0 * np.cross(axis, transform[6] * point + np.cross(axis, point))
+
+        def sphere_heights(angle):
+            """Return contact sphere world heights for one metatarsal angle."""
+            joint_q = model.joint_q.numpy().copy()
+            for side in ("left", "right"):
+                joint_q[joint_q_start[joint_labels.index(f"mtp_{side}")]] = angle
+            state = model.state()
+            state.joint_q.assign(joint_q)
+            newton.eval_fk(model, state.joint_q, state.joint_qd, state)
+            body_q = state.body_q.numpy()
+            return {
+                index: float(
+                    body_q[shape_body[index], 2]
+                    + rotate(body_q[shape_body[index]], shape_transform[index, :3].astype(np.float64))[2]
+                )
+                for index in contact_shapes
+            }
+
+        neutral = sphere_heights(0.0)
+        dorsiflexed = sphere_heights(0.4)
+        for index in toes_shapes:
+            self.assertGreater(dorsiflexed[index], neutral[index] + 1.0e-3)
+        for index in foot_shapes:
+            self.assertAlmostEqual(dorsiflexed[index], neutral[index], places=9)
 
     def test_resolves_only_declared_in_bundle_artifacts(self):
         """Resolve declared artifacts and reject path escape or missing files."""
@@ -648,9 +710,10 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             model = mujoco.MjModel.from_xml_path(str(path))
             data = mujoco.MjData(model)
             mujoco.mj_resetDataKeyframe(model, data, 0)
-        self.assertEqual(model.nq, 17)
-        self.assertEqual(model.nv, 16)
-        self.assertEqual(model.nu, 20)
+        self.assertEqual(model.nq, 19)
+        self.assertEqual(model.nv, 18)
+        self.assertEqual(model.nu, 24)
+        self.assertEqual(len(model.key_qpos[0]), 19)
         self.assertTrue(np.all(np.isfinite(data.qpos)))
         self.assertAlmostEqual(float(data.qpos[2]), config.pelvis_height)
 

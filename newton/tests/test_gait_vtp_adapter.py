@@ -208,8 +208,10 @@ class TestGaitVTPAdapter(unittest.TestCase):
                 source_body_transforms=transforms,
             )
         self.assertEqual(len(bundle.meshes), 12)
-        self.assertEqual(sum(mesh.body == "foot_left" for mesh in bundle.meshes), 3)
-        self.assertEqual(sum(mesh.body == "foot_right" for mesh in bundle.meshes), 3)
+        self.assertEqual(sum(mesh.body == "foot_left" for mesh in bundle.meshes), 2)
+        self.assertEqual(sum(mesh.body == "foot_right" for mesh in bundle.meshes), 2)
+        self.assertEqual(sum(mesh.body == "toes_left" for mesh in bundle.meshes), 1)
+        self.assertEqual(sum(mesh.body == "toes_right" for mesh in bundle.meshes), 1)
         expected_tibia_offset = -0.015 * config.shank_length / 0.40337880793491127
         for mesh in bundle.meshes:
             if mesh.body.startswith("tibia_"):
@@ -380,8 +382,8 @@ class TestGaitVTPAdapter(unittest.TestCase):
         femur_record = next(record for record in manifest["meshes"] if record["mesh"]["body"] == "femur_left")
         np.testing.assert_allclose(femur_record["source"]["source_proximal_newton"], (0.0, 0.0, 0.2))
         np.testing.assert_allclose(femur_record["source"]["target_proximal_newton"], (0.0, 0.0, 0.225))
-        self.assertEqual(model.body_count, 8)
-        self.assertEqual(model.joint_dof_count, 16)
+        self.assertEqual(model.body_count, 10)
+        self.assertEqual(model.joint_dof_count, 18)
         self.assertEqual(model.shape_count, 30)
         self.assertFalse(any(label.endswith("/geometry_abdomen_connector") for label in model.shape_label))
         shape_types = model.shape_type.numpy()

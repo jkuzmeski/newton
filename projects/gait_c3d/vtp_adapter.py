@@ -31,8 +31,8 @@ _SOURCE_TO_TARGET = {
     "talus_r": "foot_right",
     "calcn_l": "foot_left",
     "calcn_r": "foot_right",
-    "toes_l": "foot_left",
-    "toes_r": "foot_right",
+    "toes_l": "toes_left",
+    "toes_r": "toes_right",
 }
 _LEGACY_ALIASES = {
     ("femur_r", "femur.vtp"): ("femur_r.vtp", "r_femur.vtp"),
@@ -371,7 +371,8 @@ def simple_config_from_scaled_gait2354(
     torso_offset = float(back_parent[1] - back_child[1])
     hip_half_width = float(np.mean([abs(location[2]) for location in hip_locations]))
     hip_drop = float(-np.mean([location[1] for location in hip_locations]))
-    foot_mass = np.mean([mass(f"talus_{side}") + mass(f"calcn_{side}") + mass(f"toes_{side}") for side in ("l", "r")])
+    foot_mass = np.mean([mass(f"talus_{side}") + mass(f"calcn_{side}") for side in ("l", "r")])
+    toes_mass = np.mean([mass(f"toes_{side}") for side in ("l", "r")])
     total_mass = sum(mass(name) for name in required)
     reference = SimpleGaitConfig.for_subject(
         body_mass=total_mass,
@@ -389,6 +390,7 @@ def simple_config_from_scaled_gait2354(
         thigh_mass=0.5 * (mass("femur_l") + mass("femur_r")),
         shank_mass=0.5 * (mass("tibia_l") + mass("tibia_r")),
         foot_mass=float(foot_mass),
+        toes_mass=float(toes_mass),
         hip_half_width=hip_half_width,
         thigh_length=thigh_length,
         shank_length=shank_length,
@@ -526,10 +528,12 @@ def simple_gait_body_transforms(config: SimpleGaitConfig) -> dict[str, np.ndarra
         tibia_z = femur_z - 0.5 * (config.thigh_length + config.shank_length)
         transforms[f"femur_{side}"] = translated(0.0, sign * config.hip_half_width, femur_z)
         transforms[f"tibia_{side}"] = translated(0.0, sign * config.hip_half_width, tibia_z)
-        transforms[f"foot_{side}"] = translated(
-            0.4 * config.foot_length,
+        foot_z = tibia_z - 0.5 * config.shank_length - config.contact_radius
+        transforms[f"foot_{side}"] = translated(0.4 * config.foot_length, sign * config.hip_half_width, foot_z)
+        transforms[f"toes_{side}"] = translated(
+            0.4 * config.foot_length + config.toes_offset,
             sign * config.hip_half_width,
-            tibia_z - 0.5 * config.shank_length - config.contact_radius,
+            foot_z,
         )
     return transforms
 
@@ -551,6 +555,9 @@ def joint_centers_from_official_transforms(
             ("hip", f"femur_{source_side}", f"femur_{side}"),
             ("knee", f"tibia_{source_side}", f"tibia_{side}"),
             ("ankle", f"talus_{source_side}", f"foot_{side}"),
+            # The official toes body origin is the metatarsophalangeal center,
+            # exactly as the talus origin is the ankle center.
+            ("mtp", f"toes_{source_side}", f"toes_{side}"),
         ):
             transform = source_transforms.get(source_body)
             if transform is None or transform.shape != (4, 4):
@@ -583,8 +590,10 @@ def subject_inertials_from_scaled_gait2354(
         "femur_right": ("femur_r",),
         "tibia_left": ("tibia_l",),
         "tibia_right": ("tibia_r",),
-        "foot_left": ("talus_l", "calcn_l", "toes_l"),
-        "foot_right": ("talus_r", "calcn_r", "toes_r"),
+        "foot_left": ("talus_l", "calcn_l"),
+        "foot_right": ("talus_r", "calcn_r"),
+        "toes_left": ("toes_l",),
+        "toes_right": ("toes_r",),
     }
     target_transforms = simple_gait_body_transforms(config)
     output = {}
@@ -644,7 +653,10 @@ def subject_inertials_from_scaled_gait2354(
         if (
             np.any(eigenvalues <= 0.0)
             or not np.all(np.isfinite(local_inertia))
-            or eigenvalues[2] > eigenvalues[0] + eigenvalues[1] + 1.0e-9
+            # A thin segment such as the toes is planar to numerical precision,
+            # so the triangle inequality is only checked against a relative
+            # tolerance rather than an absolute one.
+            or eigenvalues[2] > (eigenvalues[0] + eigenvalues[1]) * (1.0 + 1.0e-6) + 1.0e-12
         ):
             raise ValueError(f"combined inertia for {target!r} is not physical positive definite")
         output[target] = SubjectInertial(
@@ -692,7 +704,7 @@ def _compile_scaled_vtp_visuals(
         source_path = _resolve_geometry(entry, source_geometry)
         vertices, triangles = read_vtp(source_path)
         target_body = _SOURCE_TO_TARGET[entry.source_body]
-        if target_body.startswith("foot_") and not exact_transforms:
+        if target_body.startswith(("foot_", "toes_")) and not exact_transforms:
             continue
         scaled = vertices.astype(np.float64) * entry.scale
         transformed = scaled @ entry.transform[:3, :3].T + entry.transform[:3, 3]
@@ -755,8 +767,18 @@ def _compile_scaled_vtp_visuals(
     contact_layout = None
     foot_bounds = None
     if exact_transforms:
+        # Toe vertices are stored in the toes body frame, so shift them into
+        # the foot frame before measuring one foot as a whole.
+        toes_delta = {
+            side: target_transforms[f"toes_{side}"][:3, 3] - target_transforms[f"foot_{side}"][:3, 3]
+            for side in ("left", "right")
+        }
         foot_geometry = {
-            side: [vertices for _, body, vertices, _, _ in compiled_geometry if body == f"foot_{side}"]
+            side: [
+                vertices if body == f"foot_{side}" else vertices + toes_delta[side]
+                for _, body, vertices, _, _ in compiled_geometry
+                if body in (f"foot_{side}", f"toes_{side}")
+            ]
             for side in ("left", "right")
         }
         if any(not values for values in foot_geometry.values()):
@@ -799,7 +821,7 @@ def _compile_scaled_vtp_visuals(
 
     expected = {"pelvis", "torso", "femur_left", "femur_right", "tibia_left", "tibia_right"}
     if exact_transforms:
-        expected.update(("foot_left", "foot_right"))
+        expected.update(("foot_left", "foot_right", "toes_left", "toes_right"))
     found = {mesh.body for mesh in meshes}
     if found != expected:
         raise ValueError(f"scaled display mapping is incomplete: expected {sorted(expected)}, got {sorted(found)}")
