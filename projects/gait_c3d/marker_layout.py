@@ -372,9 +372,9 @@ def scale_subject_marker_layout_from_base(
     for name, transform in target.items():
         for row in transform[:3]:
             row[3] = float(row[3] * length_scale)
-        if hip_width is not None and name in {"femur_left", "tibia_left", "foot_left"}:
+        if hip_width is not None and name in {"femur_left", "tibia_left", "foot_left", "toes_left"}:
             transform[1][3] = float(0.5 * hip_width)
-        elif hip_width is not None and name in {"femur_right", "tibia_right", "foot_right"}:
+        elif hip_width is not None and name in {"femur_right", "tibia_right", "foot_right", "toes_right"}:
             transform[1][3] = float(-0.5 * hip_width)
     conversion = manifest["conversion"]
     conversion["source_ground_offset_z_m"] = float(conversion["source_ground_offset_z_m"] * length_scale)
@@ -429,10 +429,14 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
         raise ValueError("subject marker layout source provenance is invalid")
     target = manifest.get("target")
     raw_target_transforms = target.get("neutral_body_transforms") if isinstance(target, dict) else None
-    # A layout sealed before the metatarsophalangeal split has no toes bodies,
-    # so a known subset is accepted and only unknown bodies are rejected.
+    # Layouts sealed before the metatarsophalangeal split have the complete
+    # legacy body set and no toes bodies. Reject every other partial topology.
     expected_target_bodies = set(_SOURCE_TO_TARGET.values())
-    if not isinstance(raw_target_transforms, dict) or not set(raw_target_transforms).issubset(expected_target_bodies):
+    legacy_target_bodies = expected_target_bodies - {"toes_left", "toes_right"}
+    if not isinstance(raw_target_transforms, dict) or set(raw_target_transforms) not in (
+        expected_target_bodies,
+        legacy_target_bodies,
+    ):
         raise ValueError("subject marker layout target transforms are missing or incomplete")
     target_transforms = {name: _validate_transform(name, value) for name, value in raw_target_transforms.items()}
     expected_frame = {
@@ -462,7 +466,7 @@ def load_subject_marker_layout(path: str | os.PathLike) -> SubjectMarkerLayout:
     # A layout sealed before the metatarsophalangeal split keeps every foot
     # marker on the hindfoot, so accept that pre-split body for the markers
     # that now belong to the toes.
-    pre_split = not any(name.startswith("toes_") for name in target_transforms)
+    pre_split = set(target_transforms) == legacy_target_bodies
     markers = []
     names: set[str] = set()
     sites: set[str] = set()

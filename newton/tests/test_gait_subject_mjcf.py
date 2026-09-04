@@ -97,6 +97,7 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             pelvis_position = np.asarray([float(value) for value in pelvis.get("pos").split()])
         self.assertAlmostEqual(scaled.length_scale, 1.8 / 1.695898298375747)
         self.assertAlmostEqual(float(np.sum(model.body_mass.numpy())), 90.0, places=4)
+        self.assertAlmostEqual(scaled.config.total_mass, 90.0, places=7)
         self.assertAlmostEqual(pelvis_position[2], scaled.config.pelvis_height, places=7)
         self.assertAlmostEqual(scaled.config.contact_radius, scaled.length_scale * 0.0245631567, places=7)
         self.assertEqual(sum(1 for flags in model.shape_flags.numpy() if flags & newton.ShapeFlags.SITE), 27)
@@ -422,8 +423,16 @@ class TestGaitSubjectMJCF(unittest.TestCase):
             modes[6:],
             np.full(12, newton.JointTargetMode.POSITION_VELOCITY, dtype=modes.dtype),
         )
-        np.testing.assert_allclose(model.joint_target_ke.numpy()[6:], 100.0)
-        np.testing.assert_allclose(model.joint_target_kd.numpy()[6:], 20.0)
+        stiffness = model.joint_target_ke.numpy()
+        damping = model.joint_target_kd.numpy()
+        qd_starts = model.joint_qd_start.numpy()
+        joint_labels = [label.rsplit("/", 1)[-1] for label in model.joint_label]
+        mtp_dofs = [int(qd_starts[joint_labels.index(f"mtp_{side}")]) for side in ("left", "right")]
+        proximal_dofs = [index for index in range(6, model.joint_dof_count) if index not in mtp_dofs]
+        np.testing.assert_allclose(stiffness[proximal_dofs], 100.0)
+        np.testing.assert_allclose(damping[proximal_dofs], 20.0)
+        np.testing.assert_allclose(stiffness[mtp_dofs], 10.0)
+        np.testing.assert_allclose(damping[mtp_dofs], 0.2)
 
     def test_hinges_the_toes_on_a_dorsiflexing_metatarsal_joint(self):
         """Export both metatarsophalangeal joints with a dorsiflexing positive sign.

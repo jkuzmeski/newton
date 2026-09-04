@@ -8,6 +8,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 
@@ -17,6 +19,7 @@ from newton.examples.opensim.example_native_motion_fit import (
 )
 from newton.examples.opensim.example_native_motion_fit import (
     _default_motion_output,
+    _resolve_belt_motion,
     _resolve_subject_marker_map,
     _strip_c3d_prefix,
     _warmup_frame_count,
@@ -25,6 +28,7 @@ from newton.examples.opensim.example_native_motion_fit import (
 from projects.gait_c3d.c3d_adapter import C3DMarkerTrajectory
 from projects.gait_c3d.marker_clusters import TRACKING_CLUSTER_C3D_SOURCES
 from projects.gait_c3d.marker_map import C3DMarkerMap, apply_c3d_marker_map, save_c3d_marker_map
+from projects.gait_c3d.native_model import build_simple_gait_model
 from projects.gait_c3d.native_motion_fit import (
     NativeC3DMarkers,
     fit_c3d_marker_motion,
@@ -34,6 +38,7 @@ from projects.gait_c3d.native_motion_fit import (
     marker_positions_from_joint_q,
     write_native_motion_artifact,
 )
+from projects.gait_c3d.treadmill import COLUMNS
 
 _SOURCE_FOR_NATIVE = {
     "Sternum": "STRN",
@@ -216,6 +221,64 @@ class TestNativeRealMotion(unittest.TestCase):
         self.assertEqual(_warmup_frame_count(**common, batch_size=100), 2)
         self.assertEqual(_warmup_frame_count(**{**common, "max_frames": 4}, batch_size=8), 2)
 
+    def test_builds_synthetic_targets_for_the_mtp_topology(self):
+        """Generate bounded targets without assuming the legacy coordinate count."""
+        model = build_simple_gait_model().builder.finalize(device="cpu")
+        example = NativeMotionExample.__new__(NativeMotionExample)
+        example.model = model
+        example.seed = model.joint_q.numpy().copy()
+        coordinates = example._make_target_coordinates(3)
+        self.assertEqual(coordinates.shape, (3, model.joint_coord_count))
+        self.assertTrue(np.all(np.isfinite(coordinates)))
+
+    def test_resolves_the_c3d_sibling_log_with_matching_axes(self):
+        """Prefer the trial's log and map it with the C3D axis convention."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subject = root / "compiled"
+            trial_dir = root / "source"
+            subject.mkdir()
+            trial_dir.mkdir()
+
+            def write_log(path: Path, speed: float) -> None:
+                """Write a minimal finite treadmill log."""
+                rows = np.column_stack(
+                    (
+                        np.arange(3, dtype=np.float64),
+                        np.full(3, speed),
+                        np.arange(3, dtype=np.float64) * speed,
+                        np.full(3, speed),
+                        np.arange(3, dtype=np.float64) * speed,
+                        np.zeros(3),
+                        np.zeros(3),
+                    )
+                )
+                np.savetxt(path, rows, delimiter="\t", header="\t".join(COLUMNS), comments="")
+
+            write_log(subject / "tm0001.txt", 1.0)
+            write_log(trial_dir / "tm0001.txt", 2.0)
+            c3d = trial_dir / "trial.c3d"
+            c3d.touch()
+            args = SimpleNamespace(
+                no_overground=False,
+                treadmill_log=None,
+                c3d=str(c3d),
+                belt_side="auto",
+                belt_offset=0.0,
+                c3d_up_axis="+Y",
+                c3d_forward_axis="+X",
+            )
+            belt = _resolve_belt_motion(subject, args, np.asarray((0.0, 1.0)))
+        np.testing.assert_allclose(belt.speed, 2.0)
+        np.testing.assert_allclose(belt.axis, (1.0, 0.0, 0.0), atol=1.0e-12)
+
+    def test_initializes_the_displayed_frame_before_mode_setup(self):
+        """Make paused motion replay safe before the first simulation step."""
+        args = create_parser().parse_args(("--motion", "/tmp/motion"))
+        with mock.patch.object(NativeMotionExample, "_init_motion"):
+            example = NativeMotionExample(None, args)
+        self.assertEqual(example.displayed_frame_index, 0)
+
     def test_parser_exposes_motion_load_and_overwrite_flags(self):
         """Parse motion replay, overwrite, and solve-batch options."""
         args = create_parser().parse_args(["--motion", "/tmp/motion", "--overwrite", "--batch-size", "64"])
@@ -383,7 +446,7 @@ class TestNativeRealMotion(unittest.TestCase):
             )
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertTrue((output / "motion.npz").is_file())
-            self.assertEqual(manifest["schema_version"], "gait_native_motion_artifact_2")
+            self.assertEqual(manifest["schema_version"], "gait_native_motion_artifact_3")
             self.assertIsNone(manifest["treadmill"])
             self.assertEqual(manifest["frames"]["count"], 2)
             self.assertEqual(manifest["markers"]["valid_count"], 2 * len(self.attachments))
@@ -397,7 +460,20 @@ class TestNativeRealMotion(unittest.TestCase):
             )
             loaded = load_native_motion_artifact(output / "motion.npz")
             self.assertEqual(loaded.marker_names, motion.marker_names)
+            self.assertEqual(loaded.joint_q.dtype, np.float64)
             np.testing.assert_array_equal(loaded.joint_q, motion.joint_q)
+
+            legacy_manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+            legacy_manifest.pop("seal")
+            legacy_manifest["schema_version"] = "gait_native_motion_artifact_2"
+            content = json.dumps(legacy_manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            legacy_manifest["seal"] = {
+                "algorithm": "sha256",
+                "content_sha256": hashlib.sha256(content).hexdigest(),
+            }
+            (output / "manifest.json").write_text(json.dumps(legacy_manifest), encoding="utf-8")
+            self.assertEqual(load_native_motion_artifact(output).joint_q.dtype, np.float32)
+
             write_native_motion_artifact(motion, output, overwrite=True)
             self.assertEqual(load_native_motion_artifact(output).times.shape, (2,))
             unsafe = Path(directory) / "subject"

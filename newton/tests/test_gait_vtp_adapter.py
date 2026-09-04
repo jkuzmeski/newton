@@ -175,7 +175,7 @@ class TestGaitVTPAdapter(unittest.TestCase):
         self.assertAlmostEqual(config.torso_center_offset, 0.38)
 
     def test_bakes_full_foot_hierarchy_with_official_transforms(self):
-        """Map talus, calcaneus, and toe visuals into merged Newton feet."""
+        """Map talus, calcaneus, and toe visuals into segmented Newton feet."""
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "source"
             source.mkdir()
@@ -207,7 +207,24 @@ class TestGaitVTPAdapter(unittest.TestCase):
                 config,
                 source_body_transforms=transforms,
             )
+            subject_path = write_subject_mjcf(
+                config,
+                bundle.root / "subject.xml",
+                visual_meshes=bundle.meshes,
+                include_fallback_geometry=False,
+                contact_centers=bundle.contact_layout.centers,
+                contact_radius=bundle.contact_layout.radius,
+            )
+            previous_target_layout = newton.use_coord_layout_targets
+            try:
+                newton.use_coord_layout_targets = True
+                builder = newton.ModelBuilder()
+                builder.add_mjcf(str(subject_path))
+                model = builder.finalize(device="cpu")
+            finally:
+                newton.use_coord_layout_targets = previous_target_layout
         self.assertEqual(len(bundle.meshes), 12)
+        self.assertEqual(model.body_count, 10)
         self.assertEqual(sum(mesh.body == "foot_left" for mesh in bundle.meshes), 2)
         self.assertEqual(sum(mesh.body == "foot_right" for mesh in bundle.meshes), 2)
         self.assertEqual(sum(mesh.body == "toes_left" for mesh in bundle.meshes), 1)
@@ -219,6 +236,10 @@ class TestGaitVTPAdapter(unittest.TestCase):
             else:
                 np.testing.assert_allclose(mesh.position, (0.0, 0.0, 0.0))
         self.assertIsNotNone(bundle.contact_layout)
+        self.assertEqual(
+            set(bundle.contact_layout.centers),
+            {"foot_left", "foot_right", "toes_left", "toes_right"},
+        )
         foot_origin_z = (
             config.pelvis_height
             - config.pelvis_hip_drop

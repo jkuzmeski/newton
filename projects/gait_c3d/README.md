@@ -16,7 +16,7 @@ its example-based completion gates are defined in
 - box fallback geometry for the pelvis and torso;
 - capsule fallback geometry for each thigh and shank;
 - invisible box/capsule self-collision proxies for the six non-foot segments; and
-- four contact spheres per foot on a stationary Z-up ground plane.
+- four fallback contact spheres per foot, or six standing-registered spheres per foot, on a stationary Z-up ground plane.
 
 `SimpleGaitConfig.for_subject()` scales all segment lengths from standing height
 and all segment masses from body mass. An optional measured hip width overrides
@@ -39,9 +39,9 @@ parsing VTP or `.osim` files at runtime.
 The baseline simple model has 10 bodies, 10 joints, 19 generalized coordinates,
 and 18 velocity DOFs. Each foot is a hindfoot body plus a toes body joined by a
 metatarsophalangeal hinge, where a positive angle dorsiflexes the toes. The six
-free-pelvis controls start and remain uncommanded. Static-calibrated subject
-bundles add three bounded rotational torso axes while keeping the same ten-body
-chain.
+free-pelvis controls start and remain uncommanded. Newly compiled
+static-calibrated subject bundles add three bounded rotational torso axes while
+keeping the same ten-body chain.
 
 This is an engineering approximation. It is not OpenSim parity, predictive gait,
 or an FD-1 result. The next milestone adds bounded non-root torque control and
@@ -59,7 +59,7 @@ uv run --extra dev -m newton.tests -k test_gait_simple_joints
 MJCF XML model. The XML includes the full simple-joint topology, inertial
 properties, primitive visuals, invisible segment self-collision proxies, foot
 contacts, adjacent-link collision exclusions, a neutral keyframe, and bounded
-position/velocity controls for all ten non-root DOFs. It deliberately creates
+position/velocity controls for all twelve non-root DOFs. It deliberately creates
 no pelvis/root actuator.
 
 The saved XML is loadable in one Newton builder call and is also accepted by
@@ -85,10 +85,11 @@ per-mesh factors and body-local transforms, recenters each mesh at the scaled
 body COM, and rotates OpenSim Y-up coordinates into Newton Z-up coordinates. It
 writes deterministic OBJ assets and a manifest containing source/output hashes.
 
-Only pelvis, torso, femur, tibia, and fibula visuals are compiled. The simple
-model merges the source foot bodies, so feet deliberately retain sphere-only
-geometry until their relative transforms are sealed. Meshes are visual-only;
-they never replace the primitive collision/contact policy.
+Without official body transforms, only pelvis, torso, femur, tibia, and fibula
+visuals are compiled. With those transforms, talus and calcaneus meshes are
+attached to each hindfoot and toe meshes are attached to separate toes bodies.
+Meshes are visual-only; they never replace the primitive collision/contact
+policy.
 
 ```python
 from projects.gait_c3d.subject_mjcf import write_subject_mjcf
@@ -100,18 +101,19 @@ subject_xml = write_subject_mjcf(
     visuals.root / "subject.xml",
     visual_meshes=visuals.meshes,
     include_fallback_geometry=False,
+    contact_centers=visuals.contact_layout.centers if visuals.contact_layout else None,
+    contact_radius=visuals.contact_layout.radius if visuals.contact_layout else None,
 )
 builder = newton.ModelBuilder()
 builder.add_mjcf(str(subject_xml))
 ```
 
-The canonical official S001 conversion resolves 19 VTP assets and loads as 8
-bodies, 16 free-root velocity DOFs, 19 non-colliding mesh visuals, 6 invisible
-segment self-collision proxies, 8 foot contact spheres, 8 translucent sphere
-overlays, and collision/visual ground planes through one
-`ModelBuilder.add_mjcf()` call. Official default-pose body
-transforms bake talus, calcaneus, and toe meshes into each merged Newton foot
-frame. The compiler then raises the complete neutral target hierarchy by one
+A current official S001 conversion resolves 19 VTP assets and loads as 10
+bodies, 18 free-root velocity DOFs, 19 non-colliding mesh visuals, 6 invisible
+segment self-collision proxies, 12 registered foot contact spheres, 12
+translucent sphere overlays, and collision/visual ground planes through one
+`ModelBuilder.add_mjcf()` call. Official default-pose body transforms place the
+talus and calcaneus meshes on each hindfoot and the toe mesh on its toes body. The compiler then raises the complete neutral target hierarchy by one
 audited root-height offset so visuals, joint centers, COMs, inertias, and
 contacts remain in one frame while the lowest visual sole meets the ground. It
 derives contact radius and heel/forefoot/medial/lateral centers from each
@@ -160,9 +162,9 @@ saved runtime model does not import or execute OpenSim code.
 The subject MJCF contains one hidden, non-colliding `<site>` for every converted
 marker. Newton imports these sites with `ModelBuilder.add_mjcf(parse_sites=True)`,
 so later motion fitting can construct public `newton.ik.IKObjectivePosition`
-objectives without a custom forward-kinematics or marker kernel. The canonical
-S001 bundle contains 27 native marker sites on the pelvis, torso, bilateral femurs,
-tibias, and merged feet.
+objectives without a custom forward-kinematics or marker kernel. A current S001
+bundle contains 27 native marker sites on the pelvis, torso, bilateral femurs,
+tibias, hindfeet, and toes.
 
 Run the tracked compact Phase 1 demonstration from a clean checkout. It builds
 a persistent project-local demo subject, imports its ten marker sites, and
@@ -189,7 +191,9 @@ name-mapping artifact used by later motion-retargeting phases.
 `assets/s001_base` is the tracked canonical **S001** base subject. It contains
 27 native marker sites. The four three-marker thigh/shank tracking clusters
 are collapsed to centroids. The bundle also contains the final neutral MJCF and
-19 actual S001 bone meshes.
+19 actual S001 bone meshes. This checked-in compatibility fixture predates the
+MTP split and therefore keeps the legacy eight-body topology; newly compiled
+subjects use the ten-body segmented-foot topology.
 This is the Phase 1 visual gate: the green marker points are imported MJCF
 sites and the gray meshes are the corresponding non-colliding bone visuals.
 No OpenSim runtime is needed to open the bundle.
@@ -511,10 +515,10 @@ unassisted falling model. The saved MJCF itself retains the free joint. When
 source arguments are supplied the example also proves C3D-to-NPZ/Warp
 conversion and scaled VTP-to-OBJ attachment. Its `test_final()` checks finite
 body state, standing pelvis height in inspection mode, exact zero root effort in
-free mode, eight visible foot spheres, one visible ground plane, artifact
-publication, and uploaded marker arrays.
+free mode, all 8 fallback or 12 registered foot spheres, one visible ground
+plane, artifact publication, and uploaded marker arrays.
 
-The exact OpenSim COM/inertia and eight stiff sphere contacts require a smaller
+The exact OpenSim COM/inertia and stiff sphere contacts require a smaller
 Featherstone step than the earlier approximate model. The example defaults to
 50 solver/contact substeps per 60 Hz display frame (`dt = 1/3000 s`). Ten
 substeps caused nonfinite leg state during the second display frame. Override
@@ -525,7 +529,8 @@ with `--substeps` only when running an explicit convergence study.
 Each foot is two rigid bodies, a hindfoot carrying the merged talus and
 calcaneus and a toes body, joined by a metatarsophalangeal hinge. A subject is
 therefore 10 bodies, 19 joint coordinates and 18 degrees of freedom with a free
-root.
+root. The tracked `--marker-demo` command above builds and validates this
+segmented-foot topology without requiring OpenSim or private gait data.
 
 The joint center is the official toes body origin, taken from the scaled
 OpenSim model exactly as the ankle center is taken from the talus origin, so no
@@ -533,8 +538,8 @@ extra offline run is needed. The axis is the oblique metatarsal break axis
 declared by the gait2354 template, `(+0.581, -0.814, 0)` on the left and
 `(-0.581, -0.814, 0)` on the right in Newton axes, not a sagittal hinge. The
 template clamps the joint to zero travel, which would freeze the toes, so the
-model uses a published range of 30 degrees of flexion to 80 degrees of
-extension. A positive coordinate is dorsiflexion.
+reduced model uses an explicit engineering range of 30 degrees of flexion to 80
+degrees of extension. A positive coordinate is dorsiflexion.
 
 For inverse kinematics to see the joint at all, one marker must sit distal to
 it. The official placed marker set attaches every foot marker to the calcaneus,
@@ -557,8 +562,8 @@ above the ground through stance, with the modelled sole tilted against the
 measured one, only 36 to 40 mm of frontal base of support, overlapping
 spheres, and two spheres per foot hanging in free air.
 
-`projects/gait_c3d/foot_contact.py` separates the two decisions that rule
-confused.
+`projects/gait_c3d/foot_contact.py` separates the two decisions that the old
+bounding-box rule mixed together.
 
 **Where the ground is.** A world ground plane seen from a foot body frame is
 the plane `(R^T z) . x == -t_z`. Averaging that over the static standing
@@ -588,8 +593,9 @@ the ground during stance:
 
 Slight penetration under load is expected and is what generates contact force;
 published compliant foot models sit 7 to 21 mm inside the ground at load. The
-remaining spread comes from the foot being one rigid body with no
-metatarsophalangeal joint, so the hallux sphere digs in at push-off.
+remaining spread comes from compliant contact and residual fitting error. The
+metatarsophalangeal joint reduces the previous rigid-forefoot penetration at
+push-off.
 
 The registration is recorded in `subject.json` under `contact`: sphere radius,
 count per foot, landmark names, root height offset, and each foot's sole plane
@@ -601,12 +607,14 @@ registered to the floor.
 
 A treadmill trial holds the subject near the laboratory origin while the belt
 carries the ground backward. `projects/gait_c3d/treadmill.py` recovers the
-overground motion with the virtual-origin map of Jung and Lee, *Sensors* 2021,
-21(3), 786: overground position equals laboratory position minus a virtual
+overground motion with the virtual-origin map of [Jung and Lee, *Sensors* 2021,
+21(3), 786](https://doi.org/10.3390/s21030786): overground position equals
+laboratory position minus a virtual
 origin that travels with the belt. That paper measures belt travel optically
-because a consumer treadmill exposes no speed signal, so its belt marker chain,
-re-indexing and sag projection are replaced here by the measured
-`leftbelt_distance` channel of a Motek D-Flow `tm0001.txt` log.
+because a consumer treadmill exposes no speed signal. Here, the measured Motek
+D-Flow speed channel is integrated piecewise-linearly, while its distance
+channel verifies tied-belt motion. The paper's belt marker chain, re-indexing,
+and sag projection are not needed.
 
 The map is a pure time-varying translation, so it is applied to the fitted free
 root **after** inverse kinematics. Forward kinematics is equivariant under a
@@ -616,7 +624,8 @@ working in its original bounded frame. The finite-difference velocities are
 computed after the shift, so the root linear velocity gains the belt speed.
 
 Keep the log next to the trial C3D as `subjects/S001/tm0001.txt`. The motion fit
-then converts to overground automatically:
+checks the C3D directory first and the compiled subject directory second, then
+converts to overground automatically:
 
 ```bash
 uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
@@ -682,9 +691,9 @@ from 3.20 mm to approximately 1.93 mm on both sides. This gate covers the
 neutral pose only; range-of-motion mesh intersection remains separate work.
 
 The official ScaleTool neutral body transforms also map OpenSim COM and full
-inertia tensors into each simple Newton body frame. Talus, calcaneus, and toes
-are combined with the mass-weighted COM and parallel-axis theorem. The saved
-MJCF now preserves all eight official-derived masses, nonzero COM offsets, full
+inertia tensors into each simple Newton body frame. Talus and calcaneus are
+combined into each hindfoot while each toes segment remains separate. The saved
+MJCF now preserves all ten official-derived masses, nonzero COM offsets, full
 inertia products, and real left/right foot asymmetry. The same mass and inertia
 values also drive the segment proxies: pelvis and torso boxes use the
 inertia-box COM, principal axes, and extents; limb capsules use the longest
@@ -695,16 +704,16 @@ within 1.3e-6 kg, 3.5e-9 m, and 2.1e-8 kg·m².
 ## Official joint-center mapping
 
 The official ScaleTool subprocess exports every source body transform at the
-OpenSim default state. The converter uses the femur, tibia, and talus origins as
-the neutral hip, knee, and ankle centers, rotates them from OpenSim ground into
-Newton ground, applies the same audited root-height registration as the visual
-skeleton, and expresses each center in its simple target child-body frame. The
-MJCF hip, knee, and ankle `joint pos` values come from those mapped centers,
-not from half-length approximations.
+OpenSim default state. The converter uses the femur, tibia, talus, and toes origins as the neutral
+hip, knee, ankle, and metatarsophalangeal centers. It rotates them from OpenSim
+ground into Newton ground, applies the same audited root-height registration as
+the visual skeleton, and expresses each center in its simple target child-body
+frame. The MJCF joint `pos` values come from those mapped centers, not from
+half-length approximations.
 
 On canonical S001, the previous approximate centers were displaced by roughly
 64–70 mm anteriorly and 103 mm vertically from the displayed OpenSim joints.
-After conversion, all six loaded Newton centers agree with the corresponding
+After conversion, all eight loaded Newton centers agree with the corresponding
 official centers within 0.06 micrometers. The 15 mm tibia/fibula mesh clearance
 remains visual-only, so it does not move the official knee center or any physics
 frame.

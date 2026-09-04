@@ -10,7 +10,7 @@ import json
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -23,11 +23,11 @@ from .c3d_adapter import C3DMarkerTrajectory
 from .marker_clusters import TRACKING_CLUSTER_C3D_SOURCES, TRACKING_CLUSTER_MARKERS
 from .treadmill import BeltMotion
 
-_MOTION_SCHEMA = "gait_native_motion_artifact_2"
+_MOTION_SCHEMA = "gait_native_motion_artifact_3"
 """Current sealed fitted-motion manifest schema."""
 
-_MOTION_SCHEMA_HISTORY = (_MOTION_SCHEMA, "gait_native_motion_artifact_1")
-"""Schemas this loader accepts; version 1 predates the treadmill block."""
+_MOTION_SCHEMA_HISTORY = (_MOTION_SCHEMA, "gait_native_motion_artifact_2", "gait_native_motion_artifact_1")
+"""Schemas this loader accepts; v1 predates treadmill metadata and v3 uses float64 coordinates."""
 
 
 @wp.kernel
@@ -820,7 +820,11 @@ class NativeMotionArtifact:
     """Frame times [s]."""
 
     joint_q: np.ndarray
-    """Fitted native coordinates [m or rad], shape [frame, coordinate]."""
+    """Fitted native coordinates [m or rad], shape [frame, coordinate].
+
+    Schema-3 artifacts use float64 so long overground translations retain
+    sub-millimeter precision.
+    """
 
     joint_qd: np.ndarray
     """Finite-difference native velocities [m/s or rad/s]."""
@@ -930,8 +934,8 @@ def apply_marker_registration(markers: NativeC3DMarkers, registration: np.ndarra
     if registration.shape != (4, 4) or not np.all(np.isfinite(registration)):
         raise ValueError("registration must be a finite 4x4 matrix")
     rotation = registration[:3, :3]
-    if not np.allclose(rotation @ rotation.T, np.eye(3), atol=1.0e-7) or not np.isclose(
-        np.linalg.det(rotation), 1.0, atol=1.0e-7
+    if not np.allclose(rotation @ rotation.T, np.eye(3), rtol=0.0, atol=1.0e-7) or not np.isclose(
+        np.linalg.det(rotation), 1.0, rtol=0.0, atol=1.0e-7
     ):
         raise ValueError("registration rotation must be proper and orthonormal")
     positions = markers.positions.astype(np.float64) @ rotation.T + registration[:3, 3]
@@ -1052,6 +1056,7 @@ def fit_c3d_marker_motion(
         raise ValueError("motion frame range is invalid")
     if registration is None:
         registration = np.eye(4, dtype=np.float64)
+    registration = np.asarray(registration, dtype=np.float64)
     registered = apply_marker_registration(markers, registration)
     frame_indices = np.arange(
         start_frame, len(registered.times) if end_frame is None else end_frame, stride, dtype=np.int32
@@ -1065,6 +1070,23 @@ def fit_c3d_marker_motion(
     visible = np.flatnonzero(np.all(selected_valid, axis=0))
     if len(visible) < 6:
         raise ValueError("real motion fit needs at least six markers valid in every selected frame")
+
+    belt_window = None
+    if belt is not None:
+        if len(belt.times) != len(registered.times):
+            raise ValueError("belt motion must cover every source C3D frame")
+        if not np.allclose(belt.times, registered.times, rtol=0.0, atol=1.0e-9):
+            raise ValueError("belt motion frame times must match the source C3D frame times")
+        translation = free_root_translation_slice(model)
+        if translation is None:
+            raise ValueError("a treadmill-to-overground transform needs a free-root model")
+        belt_window = belt.select(frame_indices)
+        if not np.all(belt_window.covered):
+            raise ValueError("selected C3D frames must all be covered by the treadmill log")
+        registered_axis = registration[:3, :3] @ belt_window.axis
+        registered_axis /= np.linalg.norm(registered_axis)
+        belt_window = replace(belt_window, axis=registered_axis)
+
     solved = _solve_marker_sequence_arrays(
         model,
         tuple(attachments[index] for index in visible),
@@ -1077,7 +1099,9 @@ def fit_c3d_marker_motion(
         use_cuda_graph=use_cuda_graph,
         compute_marker_diagnostics=False,
     )
-    joint_q = solved.joint_q
+    # Schema-2 artifacts retain double-precision root travel over long trials.
+    # Joint angles originate in float32 but promote exactly with the root.
+    joint_q = solved.joint_q.astype(np.float64)
     # The array-native solve predicts all attachments on the model device,
     # even though optimization uses only the visible subset.
     predictions = solved.predicted_markers
@@ -1113,26 +1137,18 @@ def fit_c3d_marker_motion(
         )
     times = registered.times[frame_indices]
     treadmill = None
-    if belt is None:
+    if belt_window is None:
         joint_qd = finite_difference_joint_qd(model, joint_q, times)
     else:
-        if len(belt.times) != len(registered.times):
-            raise ValueError("belt motion must cover every source C3D frame")
-        translation = free_root_translation_slice(model)
-        if translation is None:
-            raise ValueError("a treadmill-to-overground transform needs a free-root model")
-        window = belt.select(frame_indices)
-        offsets = window.offsets()
+        offsets = belt_window.offsets()
         # Marker residuals are computed above in the laboratory frame, so the
         # published diagnostics of an overground fit match the lab-frame fit
         # exactly. Only the root translation and its velocity move.
-        overground = joint_q.astype(np.float64)
-        overground[:, translation] += offsets
-        joint_qd = finite_difference_joint_qd(model, overground, times)
-        joint_q = overground.astype(np.float32)
+        joint_q[:, translation] += offsets
+        joint_qd = finite_difference_joint_qd(model, joint_q, times)
         predictions = (predictions.astype(np.float64) + offsets[:, None, :]).astype(np.float32)
         targets = np.where(valid[..., None], targets.astype(np.float64) + offsets[:, None, :], 0.0).astype(np.float32)
-        treadmill = window.manifest_block()
+        treadmill = belt_window.manifest_block()
     return NativeMotionArtifact(
         times,
         joint_q,
@@ -1201,7 +1217,7 @@ def load_native_motion_artifact(path: str | os.PathLike) -> NativeMotionArtifact
 
     dtypes = {
         "times": np.float64,
-        "joint_q": np.float32,
+        "joint_q": np.float64 if manifest.get("schema_version") == _MOTION_SCHEMA else np.float32,
         "joint_qd": np.float32,
         "targets": np.float32,
         "predictions": np.float32,
@@ -1304,7 +1320,7 @@ def write_native_motion_artifact(
         np.savez_compressed(
             payload,
             times=motion.times,
-            joint_q=motion.joint_q,
+            joint_q=np.asarray(motion.joint_q, dtype=np.float64),
             joint_qd=motion.joint_qd,
             targets=motion.targets,
             predictions=motion.predictions,

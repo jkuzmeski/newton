@@ -6,6 +6,7 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -88,6 +89,26 @@ class TestGaitTreadmillLog(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown belt side"):
             log.speed("both")
 
+    def test_drops_every_timestamp_that_breaks_monotonic_order(self):
+        """Drop stale rows until the controller clock exceeds its prior maximum."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "tm0001.txt"
+            rows = np.zeros((4, len(COLUMNS)), dtype=np.float64)
+            rows[:, 0] = (0.0, 2.0, 1.5, 1.75)
+            with path.open("w") as stream:
+                stream.write("\t".join(COLUMNS) + "\n")
+                for row in rows:
+                    stream.write("\t".join(str(value) for value in row) + "\n")
+            log = load_treadmill_log(path)
+        np.testing.assert_array_equal(log.time, (0.0, 2.0))
+
+    def test_ignores_constant_distance_counter_offsets_between_belts(self):
+        """Compare left and right travel after removing each counter's origin."""
+        with tempfile.TemporaryDirectory() as directory:
+            log = load_treadmill_log(_write_log(Path(directory), np.full(600, 1.5)))
+        shifted = replace(log, right_distance=log.right_distance + 4.0)
+        self.assertAlmostEqual(shifted.tied_belt_residual, 0.0)
+
     def test_integrates_piecewise_linear_speed_exactly(self):
         """Recover belt travel of a ramp and a hold to micrometre accuracy."""
         with tempfile.TemporaryDirectory() as directory:
@@ -157,12 +178,20 @@ class TestGaitTreadmillBeltMotion(unittest.TestCase):
         self.assertGreater(motion.tied_belt_residual, 0.1)
 
     def test_marks_frames_outside_the_logged_interval(self):
-        """Flag capture frames the treadmill log does not cover."""
+        """Flag capture frames outside the log and stop their virtual-origin velocity."""
         with tempfile.TemporaryDirectory() as directory:
             motion = belt_motion_for_frames(self._log(directory), 400, rate=100.0)
         self.assertTrue(bool(motion.covered[0]))
         self.assertFalse(bool(motion.covered[-1]))
         self.assertAlmostEqual(float(motion.distance[-1]), float(motion.distance[200]), places=6)
+        self.assertEqual(float(motion.speed[-1]), 0.0)
+
+    def test_rejects_nonmonotonic_frame_times(self):
+        """Reject a capture timeline that cannot define ordered motion."""
+        with tempfile.TemporaryDirectory() as directory:
+            log = self._log(directory)
+        with self.assertRaisesRegex(ValueError, "increase strictly"):
+            belt_motion(log, np.asarray((0.0, 0.02, 0.01)))
 
     def test_publishes_a_sealable_manifest_block(self):
         """Describe the applied transform with JSON-safe manifest values."""
@@ -175,6 +204,7 @@ class TestGaitTreadmillBeltMotion(unittest.TestCase):
         self.assertEqual(block["covered_frames"], 100)
         self.assertAlmostEqual(block["distance_m"], motion.travel)
         self.assertEqual(block["source"]["file"], "tm0001.txt")
+        self.assertAlmostEqual(block["source_rate_hz"], motion.source_rate)
 
     def test_rejects_an_invalid_belt_axis(self):
         """Reject a belt motion whose offset direction is not a unit vector."""
@@ -189,6 +219,7 @@ class TestGaitTreadmillBeltMotion(unittest.TestCase):
                 offset=0.0,
                 source_file="tm0001.txt",
                 source_sha256="0" * 64,
+                source_rate=300.0,
                 tied_belt_residual=0.0,
             )
 
@@ -252,14 +283,15 @@ class TestGaitTreadmillOvergroundFit(unittest.TestCase):
             source_sha256="0" * 64,
         )
 
-    def _fit(self, belt: BeltMotion | None):
-        """Fit the synthetic trial with or without a treadmill transform."""
+    def _fit(self, belt: BeltMotion | None, registration: np.ndarray | None = None):
+        """Fit the synthetic trial with an optional treadmill transform and registration."""
         return fit_c3d_marker_motion(
             self.model,
             self.attachments,
             self.markers,
             self.seed,
             belt=belt,
+            registration=registration,
             iterations=10,
             batch_size=1,
         )
@@ -275,12 +307,31 @@ class TestGaitTreadmillOvergroundFit(unittest.TestCase):
             belt = self._belt(directory)
         lab = self._fit(None)
         overground = self._fit(belt)
+        self.assertEqual(overground.joint_q.dtype, np.float64)
         np.testing.assert_array_equal(overground.joint_q[:, 3:], lab.joint_q[:, 3:])
         np.testing.assert_allclose(
             overground.joint_q[:, :3].astype(np.float64) - lab.joint_q[:, :3].astype(np.float64),
             belt.offsets(),
             atol=1.0e-6,
         )
+
+    def test_rotates_belt_motion_with_marker_registration(self):
+        """Apply belt travel in the same registered frame as the C3D markers."""
+        with tempfile.TemporaryDirectory() as directory:
+            belt = self._belt(directory)
+        registration = np.eye(4)
+        registration[:2, :2] = ((0.0, -1.0), (1.0 + 1.0e-8, 0.0))
+        lab = self._fit(None, registration)
+        overground = self._fit(belt, registration)
+        registered_axis = registration[:3, :3] @ belt.axis
+        registered_axis /= np.linalg.norm(registered_axis)
+        expected = belt.distance[:, None] * registered_axis
+        np.testing.assert_allclose(
+            overground.joint_q[:, :3] - lab.joint_q[:, :3],
+            expected,
+            atol=1.0e-6,
+        )
+        np.testing.assert_allclose(overground.treadmill["axis"], registered_axis, atol=1.0e-12)
 
     def test_keeps_marker_diagnostics_bit_identical(self):
         """Leave every published marker residual unchanged by the transform."""
@@ -315,19 +366,33 @@ class TestGaitTreadmillOvergroundFit(unittest.TestCase):
             artifact = write_native_motion_artifact(overground, Path(directory) / "motion")
             manifest = json.loads((artifact / "manifest.json").read_text())
             loaded = load_native_motion_artifact(artifact)
-        self.assertEqual(manifest["schema_version"], "gait_native_motion_artifact_2")
+        self.assertEqual(manifest["schema_version"], "gait_native_motion_artifact_3")
+        self.assertEqual(loaded.joint_q.dtype, np.float64)
         self.assertEqual(loaded.treadmill, overground.treadmill)
         self.assertEqual(loaded.treadmill["applied_stage"], "post_ik_root_translation")
         self.assertAlmostEqual(loaded.treadmill["distance_m"], belt.travel)
         self.assertIsNone(self._fit(None).treadmill)
 
     def test_rejects_a_belt_that_misses_source_frames(self):
-        """Refuse a belt motion that does not cover the whole source trial."""
+        """Refuse a belt motion that does not cover the selected C3D frames."""
         with tempfile.TemporaryDirectory() as directory:
             log = load_treadmill_log(_write_log(Path(directory), np.full(600, 1.5)))
             short = belt_motion_for_frames(log, len(self.markers.times) - 1, rate=100.0)
+            full = belt_motion_for_frames(log, len(self.markers.times), rate=100.0)
         with self.assertRaisesRegex(ValueError, "every source C3D frame"):
             self._fit(short)
+        uncovered = full.covered.copy()
+        uncovered[-1] = False
+        with self.assertRaisesRegex(ValueError, "selected C3D frames"):
+            self._fit(replace(full, covered=uncovered))
+
+    def test_rejects_a_belt_on_a_different_timeline(self):
+        """Refuse same-length belt samples that do not align with C3D frame times."""
+        with tempfile.TemporaryDirectory() as directory:
+            belt = self._belt(directory)
+        shifted = replace(belt, times=belt.times + 0.001)
+        with self.assertRaisesRegex(ValueError, "frame times"):
+            self._fit(shifted)
 
 
 if __name__ == "__main__":

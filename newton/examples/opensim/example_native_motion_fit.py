@@ -27,6 +27,7 @@ from projects.gait_c3d.marker_map import (
 from projects.gait_c3d.native_motion_fit import (
     fit_c3d_marker_motion,
     free_root_quaternion_slice,
+    free_root_translation_slice,
     load_native_motion_artifact,
     map_c3d_markers_to_native,
     marker_attachments_from_model,
@@ -34,29 +35,34 @@ from projects.gait_c3d.native_motion_fit import (
     solve_marker_sequence,
     write_native_motion_artifact,
 )
-from projects.gait_c3d.treadmill import belt_motion_for_frames, find_treadmill_log, load_treadmill_log
+from projects.gait_c3d.treadmill import BeltMotion, belt_motion, find_treadmill_log, load_treadmill_log
 
 
-def _resolve_belt_motion(subject: Path, args, frame_count: int, rate: float):
+def _resolve_belt_motion(subject: Path, args, frame_times: np.ndarray) -> BeltMotion | None:
     """Return the belt motion for a trial, or ``None`` for a lab-frame fit.
 
     Args:
-        subject: Compiled subject bundle root.
-        args: Parsed example arguments.
-        frame_count: Source C3D point-frame count.
-        rate: Source C3D point rate [Hz].
+        subject: Compiled subject bundle root, used as the fallback log location.
+        args: Parsed example arguments. An explicit log takes precedence over a
+            log next to the C3D, which takes precedence over the subject-local log.
+        frame_times: Source C3D frame times [s].
     """
     if args.no_overground:
         return None
-    path = Path(args.treadmill_log) if args.treadmill_log else find_treadmill_log(subject)
+    if args.treadmill_log:
+        path = Path(args.treadmill_log)
+    else:
+        c3d_log = find_treadmill_log(Path(args.c3d).expanduser().resolve().parent) if args.c3d else None
+        path = c3d_log or find_treadmill_log(subject)
     if path is None:
         return None
-    belt = belt_motion_for_frames(
+    belt = belt_motion(
         load_treadmill_log(path),
-        frame_count,
-        rate=rate,
+        frame_times,
         side=args.belt_side,
         offset=args.belt_offset,
+        up_axis=args.c3d_up_axis,
+        forward_axis=args.c3d_forward_axis,
     )
     print(f"Treadmill: {belt.travel:.3f} m of {belt.side} belt travel from {path}")
     return belt
@@ -131,6 +137,7 @@ class Example:
     """Solve native gait markers or replay a saved native motion."""
 
     def __init__(self, viewer, args):
+        self.displayed_frame_index = 0
         if args.motion and (args.c3d or args.synthetic):
             raise ValueError("--motion cannot be combined with --c3d or --synthetic")
         if (args.marker_map or args.keep_c3d_prefix) and not args.c3d:
@@ -159,11 +166,10 @@ class Example:
         builder = newton.ModelBuilder()
         builder.add_mjcf(str(subject_xml), floating=True, parse_sites=True, enable_self_collisions=True)
         self.model = builder.finalize(device=args.device)
-        if self.model.joint_coord_count != 20:
-            raise ValueError(
-                "native_motion_fit requires the calibrated free-root subject with 20 coordinates; "
-                "use projects/gait_c3d/assets/s001_calibrated"
-            )
+        translation = free_root_translation_slice(self.model)
+        quaternion = free_root_quaternion_slice(self.model)
+        if translation != slice(0, 3) or quaternion != slice(3, 7):
+            raise ValueError("native_motion_fit requires a leading free-root joint")
         self.state = self.model.state()
         self.attachments = marker_attachments_from_model(self.model)
         if args.occlude_every < 0:
@@ -354,7 +360,7 @@ class Example:
                     model_manifest.get("ground", {}).get("global_offset_m", (0.0, 0.0, 0.0)), dtype=np.float64
                 )
             registration_mode = "saved_subject_ground_offset"
-        belt = _resolve_belt_motion(subject, args, len(source.times), source.rate)
+        belt = _resolve_belt_motion(subject, args, source.times)
         iterations = 40 if args.iterations is None else args.iterations
         batch_size = 0 if args.batch_size is None else args.batch_size
         warmup_frames = _warmup_frame_count(
@@ -458,12 +464,20 @@ class Example:
             raise ValueError("--frames must be positive")
         base = self.seed.copy()
         coordinates = []
-        amplitudes = np.asarray(
+        base_amplitudes = np.asarray(
             (0.07, -0.05, 0.04, 0.08, -0.06, 0.05, 0.11, 0.09, 0.12, -0.08, 0.06, -0.10, 0.07),
             dtype=np.float32,
         )
-        if len(amplitudes) != self.model.joint_coord_count - 7:
-            raise ValueError("synthetic target amplitudes do not match the subject coordinate layout")
+        internal_count = self.model.joint_coord_count - 7
+        amplitudes = np.resize(base_amplitudes, internal_count)
+        joint_q_start = self.model.joint_q_start.numpy()
+        knee_coordinates = [
+            int(joint_q_start[index])
+            for index, label in enumerate(self.model.joint_label)
+            if label.rsplit("/", 1)[-1] in {"knee_left", "knee_right"}
+        ]
+        if len(knee_coordinates) != 2:
+            raise ValueError("synthetic target model must contain bilateral knee joints")
         for frame in range(frame_count):
             phase = 2.0 * np.pi * frame / max(frame_count, 1)
             coordinates_frame = base.copy()
@@ -472,16 +486,17 @@ class Example:
             )
             angle = 0.08 * np.sin(phase)
             coordinates_frame[3:7] = np.asarray((0.0, 0.0, np.sin(angle / 2.0), np.cos(angle / 2.0)), dtype=np.float32)
-            coordinates_frame[7:] = amplitudes * np.sin(phase + np.arange(len(amplitudes)) * 0.27)
+            coordinates_frame[7:] = amplitudes * np.sin(phase + np.arange(internal_count) * 0.27)
             # Knee hinge coordinates are nonnegative in the native MJCF.
-            coordinates_frame[13] = 0.18 + 0.08 * np.sin(phase)
-            coordinates_frame[18] = 0.18 + 0.08 * np.cos(phase)
+            coordinates_frame[knee_coordinates[0]] = 0.18 + 0.08 * np.sin(phase)
+            coordinates_frame[knee_coordinates[1]] = 0.18 + 0.08 * np.cos(phase)
             coordinates.append(coordinates_frame)
         return np.asarray(coordinates, dtype=np.float32)
 
     def step(self):
         """Advance the displayed solved frame."""
         if self.real_motion:
+            self.displayed_frame_index = self.frame_index
             self.model.joint_q.assign(self.motion.joint_q[self.frame_index])
             self.model.joint_qd.assign(self.motion.joint_qd[self.frame_index])
             self.target_points.assign(self.motion.targets[self.frame_index, self.visible_indices].astype(np.float32))
@@ -492,6 +507,7 @@ class Example:
             self.frame_index = (self.frame_index + 1) % len(self.motion.times)
             newton.eval_fk(self.model, self.model.joint_q, self.model.joint_qd, self.state)
             return
+        self.displayed_frame_index = self.frame_index
         frame = self.frames[self.frame_index]
         self.model.joint_q.assign(frame.joint_q)
         self.target_points.assign(frame.target_markers.astype(np.float32))
@@ -565,7 +581,9 @@ class Example:
     def render(self):
         """Render target and predicted marker overlays."""
         if self.camera_follow:
-            travel = np.asarray(self.motion.joint_q[self.frame_index, :3], dtype=np.float64) - self.camera_origin
+            travel = (
+                np.asarray(self.motion.joint_q[self.displayed_frame_index, :3], dtype=np.float64) - self.camera_origin
+            )
             position = np.asarray(_CAMERA_POSITION, dtype=np.float64)
             position[:2] += travel[:2]
             self.viewer.set_camera(pos=wp.vec3(*position), pitch=_CAMERA_PITCH, yaw=_CAMERA_YAW)

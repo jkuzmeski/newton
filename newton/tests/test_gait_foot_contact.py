@@ -22,7 +22,7 @@ from projects.gait_c3d.foot_contact import (
     standing_foot_poses,
 )
 from projects.gait_c3d.native_model import SimpleGaitConfig
-from projects.gait_c3d.subject_mjcf import write_subject_mjcf
+from projects.gait_c3d.subject_mjcf import subject_mjcf_xml, write_subject_mjcf
 from projects.gait_c3d.vtp_adapter import simple_gait_body_transforms
 
 
@@ -110,8 +110,7 @@ class TestGaitFootContactSpheres(unittest.TestCase):
             forward=forward,
             lateral=lateral,
             foot_length=length,
-            toe_body=f"foot_{side}",
-            foot_body=f"foot_{side}",
+            toe_offset=np.zeros(3),
             radius=radius,
         )
 
@@ -122,6 +121,25 @@ class TestGaitFootContactSpheres(unittest.TestCase):
         heights = plane.height(np.asarray([sphere.center for sphere in spheres]))
         np.testing.assert_allclose(heights, spheres[0].radius, atol=1.0e-12)
         self.assertEqual([sphere.name for sphere in spheres], [name for name, _, _, _ in FOOT_SPHERE_LAYOUT])
+        self.assertEqual([sphere.body for sphere in spheres], ["foot_left"] * 4 + ["toes_left"] * 2)
+
+    def test_returns_toe_centers_in_the_declared_body_frame(self):
+        """Express toe centers relative to the toes origin without moving them."""
+        plane = SolePlane(np.asarray((0.0, 0.0, 1.0)), -0.1, 1, 0.0)
+        toe_offset = np.asarray((0.075, 0.0, 0.0))
+        spheres = place_foot_spheres(
+            "left",
+            plane,
+            origin=np.asarray((-0.1, 0.0, -0.1)),
+            forward=np.asarray((1.0, 0.0, 0.0)),
+            lateral=np.asarray((0.0, 1.0, 0.0)),
+            foot_length=0.25,
+            toe_offset=toe_offset,
+        )
+        foot_frame_centers = np.asarray(
+            [np.asarray(sphere.center) + (toe_offset if sphere.body == "toes_left" else 0.0) for sphere in spheres]
+        )
+        np.testing.assert_allclose(plane.height(foot_frame_centers), spheres[0].radius, atol=1.0e-12)
 
     def test_keeps_spheres_from_overlapping(self):
         """Choose a radius no larger than half the closest landmark spacing."""
@@ -150,6 +168,40 @@ class TestGaitFootContactSpheres(unittest.TestCase):
         """Refuse foot bounds that do not describe a real box."""
         with self.assertRaisesRegex(ValueError, "nondegenerate box"):
             foot_axes_from_bounds("left", (0.0, 0.0, 0.0), (0.0, 0.1, 0.1))
+
+    def test_rejects_invalid_explicit_radius(self):
+        """Refuse a nonpositive or nonfinite explicit contact radius."""
+        for radius in (0.0, -0.01, float("nan")):
+            with self.subTest(radius=radius), self.assertRaisesRegex(ValueError, "radius"):
+                self._spheres(radius=radius)
+        plane = SolePlane(np.asarray((0.0, 0.0, 1.0)), -0.1, 1, 0.0)
+        with self.assertRaisesRegex(ValueError, "foot length"):
+            place_foot_spheres(
+                "left",
+                plane,
+                origin=np.zeros(3),
+                forward=np.asarray((1.0, 0.0, 0.0)),
+                lateral=np.asarray((0.0, 1.0, 0.0)),
+                foot_length=-0.2,
+                toe_offset=np.zeros(3),
+                radius=0.02,
+            )
+
+    def test_rejects_incomplete_or_nonfinite_mjcf_contact_centers(self):
+        """Require a supported hindfoot count and two finite toe centers per side."""
+        centers = {
+            f"{segment}_{side}": tuple((0.0, 0.0, 0.0) for _ in range(count))
+            for side in ("left", "right")
+            for segment, count in (("foot", 4), ("toes", 2))
+        }
+        incomplete = dict(centers)
+        incomplete["toes_left"] = ()
+        with self.assertRaisesRegex(ValueError, "hindfoot and two toe"):
+            subject_mjcf_xml(SimpleGaitConfig(), contact_centers=incomplete)
+        nonfinite = dict(centers)
+        nonfinite["foot_right"] = (*nonfinite["foot_right"][:-1], (float("nan"), 0.0, 0.0))
+        with self.assertRaisesRegex(ValueError, "finite three-component"):
+            subject_mjcf_xml(SimpleGaitConfig(), contact_centers=nonfinite)
 
 
 class TestGaitFootBodyRegistration(unittest.TestCase):
@@ -183,13 +235,17 @@ class TestGaitFootBodyRegistration(unittest.TestCase):
                 contact_centers=centers,
                 contact_radius=0.5 * config.contact_radius,
             )
-            newton.use_coord_layout_targets = True
-            builder = newton.ModelBuilder()
-            builder.add_mjcf(str(path), floating=True, parse_sites=True)
-            model = builder.finalize(device="cpu")
-            state = model.state()
-            newton.eval_fk(model, model.joint_q, model.joint_qd, state)
-            body_q = state.body_q.numpy()
+            previous_target_layout = newton.use_coord_layout_targets
+            try:
+                newton.use_coord_layout_targets = True
+                builder = newton.ModelBuilder()
+                builder.add_mjcf(str(path), floating=True, parse_sites=True)
+                model = builder.finalize(device="cpu")
+                state = model.state()
+                newton.eval_fk(model, model.joint_q, model.joint_qd, state)
+                body_q = state.body_q.numpy()
+            finally:
+                newton.use_coord_layout_targets = previous_target_layout
         for body in (f"{segment}_{side}" for segment in ("foot", "toes") for side in ("left", "right")):
             index = model.body_label.index(next(label for label in model.body_label if label.endswith(body)))
             self.assertAlmostEqual(float(body_q[index][2]), float(transforms[body][2, 3]), places=6)

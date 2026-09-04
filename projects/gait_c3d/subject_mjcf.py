@@ -279,13 +279,16 @@ def _add_target_actuators(
     actuator: ET.Element,
     joint: str,
     limits: tuple[float, float],
+    *,
+    stiffness: float = 100.0,
+    damping: float = 20.0,
 ) -> None:
     ET.SubElement(
         actuator,
         "position",
         name=f"{joint}_position",
         joint=joint,
-        kp="100",
+        kp=f"{stiffness:.9g}",
         ctrllimited="true",
         ctrlrange=_values(*limits),
     )
@@ -294,7 +297,7 @@ def _add_target_actuators(
         "velocity",
         name=f"{joint}_velocity",
         joint=joint,
-        kv="20",
+        kv=f"{damping:.9g}",
         ctrllimited="true",
         ctrlrange="-20 20",
     )
@@ -321,7 +324,7 @@ def subject_mjcf_xml(
         include_fallback_geometry: Include box and capsule visuals when true.
             Collision-aware box and capsule proxies are always emitted separately.
         contact_centers: Optional measured sphere centers keyed by target body.
-        contact_radius: Optional mesh-derived contact radius [m].
+        contact_radius: Optional contact sphere radius [m].
         inertial_data: Optional OpenSim-derived inertial properties by target body.
             Proxy geometry always comes from mass and inertia. When provided,
             these values replace the scaled nominal fallback values and drive
@@ -535,9 +538,23 @@ def subject_mjcf_xml(
         )
     else:
         centers_by_body = contact_centers
-        expected_bodies = {f"{part}_{side}" for part in ("foot", "toes") for side in ("left", "right")}
-        if set(centers_by_body) != expected_bodies or sum(map(len, centers_by_body.values())) < 6:
-            raise ValueError("contact_centers must provide sphere centers for each foot and toes body")
+        expected_bodies = {f"{segment}_{side}" for segment in ("foot", "toes") for side in ("left", "right")}
+        foot_counts = {len(centers_by_body.get(f"foot_{side}", ())) for side in ("left", "right")}
+        if (
+            set(centers_by_body) != expected_bodies
+            or len(foot_counts) != 1
+            or not foot_counts.issubset({2, 4})
+            or any(len(centers_by_body.get(f"toes_{side}", ())) != 2 for side in ("left", "right"))
+        ):
+            raise ValueError("contact_centers must provide two or four hindfoot and two toe centers per side")
+        for body, body_centers in centers_by_body.items():
+            for center in body_centers:
+                try:
+                    values = np.asarray(center, dtype=np.float64)
+                except (TypeError, ValueError):
+                    values = np.empty(0)
+                if values.shape != (3,) or not np.all(np.isfinite(values)):
+                    raise ValueError(f"contact centers for {body!r} must be finite three-component vectors")
     for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
         femur_fromto, femur_radius = _capsule_fromto(
             inertia_boxes[f"femur_{side}"],
@@ -700,7 +717,9 @@ def subject_mjcf_xml(
             damping=0.05,
             armature=0.001,
         )
-        _add_target_actuators(actuator, mtp_name, MTP_LIMITS)
+        # The toes have much less inertia than the proximal segments. Reusing
+        # their damping gain makes the explicit update unstable even at 3 kHz.
+        _add_target_actuators(actuator, mtp_name, MTP_LIMITS, stiffness=10.0, damping=0.2)
 
         index = 0
         for body_name, element in ((f"foot_{side}", foot), (f"toes_{side}", toes)):
@@ -882,8 +901,19 @@ def scale_subject_mjcf_from_base(
         base_metadata = bundle_manifest.get("subject")
         if not isinstance(base_values, dict) or not isinstance(base_metadata, dict):
             raise ValueError("base subject does not contain a simple model configuration")
-        base_config = SimpleGaitConfig(**base_values)
         root = ET.parse(base_xml).getroot()
+        body_names = {body.get("name") for body in root.iter("body")}
+        toe_bodies = {"toes_left", "toes_right"}
+        present_toe_bodies = body_names & toe_bodies
+        if present_toe_bodies not in (set(), toe_bodies):
+            raise ValueError("base subject has an incomplete toes-body topology")
+        has_separate_toes = present_toe_bodies == toe_bodies
+        if has_separate_toes and not {"toes_mass", "toes_offset"}.issubset(base_values):
+            raise ValueError("base subject toes are missing their configuration values")
+        base_config = SimpleGaitConfig(**base_values)
+        if not has_separate_toes:
+            # Legacy eight-body bundles include the toes mass in ``foot_mass``.
+            base_config = replace(base_config, toes_mass=0.0)
         expected_mesh_hashes = {
             record.get("output", {}).get("file"): record.get("output", {}).get("sha256")
             for record in model_manifest.get("meshes", [])
@@ -928,11 +958,7 @@ def scale_subject_mjcf_from_base(
         base_mass_metadata = float(base_metadata.get("mass_kg", "nan"))
         if not math.isfinite(base_height) or base_height <= 0.0:
             raise ValueError("base subject height must be finite and positive")
-        base_mass = (
-            base_config.pelvis_mass
-            + base_config.torso_mass
-            + 2.0 * (base_config.thigh_mass + base_config.shank_mass + base_config.foot_mass)
-        )
+        base_mass = base_config.total_mass
         if not math.isfinite(base_mass) or base_mass <= 0.0:
             raise ValueError("base subject mass must be finite and positive")
         if math.isfinite(base_mass_metadata) and not math.isclose(base_mass, base_mass_metadata, rel_tol=1.0e-5):

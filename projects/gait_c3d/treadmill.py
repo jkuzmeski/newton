@@ -32,6 +32,7 @@ protocol numbers this module relies on.
 from __future__ import annotations
 
 import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,9 +51,6 @@ COLUMNS = (
     "platform_roll",
 )
 """Column order of a Motek D-Flow treadmill log."""
-
-BELT_TRAVEL_AXIS_LAB = (0.0, 1.0, 0.0)
-"""Laboratory direction the belt surface travels in, subject-backward."""
 
 TIED_BELT_TOLERANCE = 1.0e-3
 """Largest left-right belt travel difference accepted as a tied belt [m]."""
@@ -95,6 +93,8 @@ class TreadmillLog:
 
     def __post_init__(self) -> None:
         sample_count = len(self.time)
+        if self.time.shape != (sample_count,) or not np.all(np.isfinite(self.time)):
+            raise ValueError("treadmill log times must be a finite one-dimensional array")
         for name in ("left_speed", "left_distance", "right_speed", "right_distance", "pitch", "roll"):
             channel = getattr(self, name)
             if channel.shape != (sample_count,):
@@ -123,8 +123,10 @@ class TreadmillLog:
 
     @property
     def tied_belt_residual(self) -> float:
-        """Largest absolute left-right belt travel difference [m]."""
-        return float(np.max(np.abs(self.left_distance - self.right_distance)))
+        """Largest left-right difference in travel from each belt's first sample [m]."""
+        left = self.left_distance - self.left_distance[0]
+        right = self.right_distance - self.right_distance[0]
+        return float(np.max(np.abs(left - right)))
 
     def speed(self, side: str = "left") -> np.ndarray:
         """Return one belt speed channel.
@@ -167,7 +169,10 @@ class TreadmillLog:
         t = self.t
         v = self.speed(side)
         cumulative = np.concatenate([[0.0], np.cumsum(0.5 * (v[1:] + v[:-1]) * np.diff(t))])
-        query = np.clip(np.asarray(times, dtype=np.float64), t[0], t[-1])
+        query = np.asarray(times, dtype=np.float64)
+        if query.ndim != 1 or not np.all(np.isfinite(query)):
+            raise ValueError("travel query times must be a finite one-dimensional array")
+        query = np.clip(query, t[0], t[-1])
         i = np.clip(np.searchsorted(t, query) - 1, 0, len(t) - 2)
         fraction = (query - t[i]) / (t[i + 1] - t[i])
         speed_at = v[i] + (v[i + 1] - v[i]) * fraction
@@ -209,16 +214,33 @@ class BeltMotion:
     source_sha256: str
     """SHA-256 of the source log bytes."""
 
+    source_rate: float
+    """Median source log sample rate [Hz]."""
+
     tied_belt_residual: float
-    """Largest absolute left-right belt travel difference in the log [m]."""
+    """Largest left-right relative-travel difference in the log [m]."""
 
     def __post_init__(self) -> None:
         frame_count = len(self.times)
         for name in ("speed", "distance", "covered"):
             if getattr(self, name).shape != (frame_count,):
                 raise ValueError(f"belt channel {name!r} has an invalid shape")
-        if self.axis.shape != (3,) or not np.isclose(np.linalg.norm(self.axis), 1.0, atol=1.0e-12):
+        if self.axis.shape != (3,) or not np.isclose(np.linalg.norm(self.axis), 1.0, rtol=0.0, atol=1.0e-12):
             raise ValueError("belt axis must be a unit vector")
+        if frame_count < 1 or self.times.shape != (frame_count,) or not np.all(np.isfinite(self.times)):
+            raise ValueError("belt motion times must be a nonempty finite one-dimensional array")
+        if np.any(np.diff(self.times) <= 0.0):
+            raise ValueError("belt motion times must increase strictly")
+        if self.covered.dtype != np.bool_:
+            raise ValueError("belt coverage must be a boolean array")
+        if self.side not in ("left", "right", "mean"):
+            raise ValueError(f"unknown belt side {self.side!r}")
+        if not math.isfinite(self.offset):
+            raise ValueError("belt time offset must be finite")
+        if not math.isfinite(self.source_rate) or self.source_rate <= 0.0:
+            raise ValueError("source log rate must be finite and positive")
+        if not math.isfinite(self.tied_belt_residual) or self.tied_belt_residual < 0.0:
+            raise ValueError("tied belt residual must be finite and nonnegative")
         if not np.all(np.isfinite(self.distance)) or not np.all(np.isfinite(self.speed)):
             raise ValueError("belt motion arrays must be finite")
 
@@ -248,6 +270,8 @@ class BeltMotion:
         indices = np.asarray(indices, dtype=np.int64)
         if indices.ndim != 1 or len(indices) == 0:
             raise ValueError("frame selection must be a nonempty one-dimensional index array")
+        if np.any(indices < 0) or np.any(indices >= len(self.times)) or np.any(np.diff(indices) <= 0):
+            raise ValueError("frame selection indices must be in range and increase strictly")
         distance = self.distance[indices]
         return BeltMotion(
             times=self.times[indices],
@@ -259,6 +283,7 @@ class BeltMotion:
             offset=self.offset,
             source_file=self.source_file,
             source_sha256=self.source_sha256,
+            source_rate=self.source_rate,
             tied_belt_residual=self.tied_belt_residual,
         )
 
@@ -266,6 +291,7 @@ class BeltMotion:
         """Return the sealed-manifest description of this transform."""
         return {
             "source": {"file": self.source_file, "sha256": self.source_sha256},
+            "source_rate_hz": self.source_rate,
             "side": self.side,
             "offset_s": self.offset,
             "axis": [float(value) for value in self.axis],
@@ -291,11 +317,13 @@ def load_treadmill_log(path: str | Path) -> TreadmillLog:
         header = tuple(stream.readline().strip().split("\t"))
     if header != COLUMNS:
         raise ValueError(f"{source}: unexpected treadmill log header {header}")
-    raw = np.loadtxt(source, skiprows=1, dtype=np.float64)
-    if raw.ndim != 2 or raw.shape[1] != len(COLUMNS):
+    raw = np.loadtxt(source, skiprows=1, dtype=np.float64, ndmin=2)
+    if raw.shape[1] != len(COLUMNS):
         raise ValueError(f"{source}: treadmill log must have {len(COLUMNS)} columns")
     raw = raw[np.isfinite(raw).all(axis=1)]
-    raw = raw[np.concatenate([[True], np.diff(raw[:, 0]) > 0.0])]
+    if len(raw):
+        previous_maximum = np.maximum.accumulate(np.concatenate(([-np.inf], raw[:-1, 0])))
+        raw = raw[raw[:, 0] > previous_maximum]
     return TreadmillLog(
         time=raw[:, 0],
         left_speed=raw[:, 1],
@@ -317,7 +345,7 @@ def belt_motion(
     offset: float = 0.0,
     up_axis: str = "+Z",
     forward_axis: str = "-Y",
-    travel_axis_lab: tuple[float, float, float] = BELT_TRAVEL_AXIS_LAB,
+    travel_axis_lab: tuple[float, float, float] | None = None,
     tied_tolerance: float = TIED_BELT_TOLERANCE,
 ) -> BeltMotion:
     """Resample a treadmill log onto capture frame times.
@@ -332,7 +360,8 @@ def belt_motion(
             started before the capture.
         up_axis: Laboratory axis that points upward.
         forward_axis: Laboratory axis that points subject-forward.
-        travel_axis_lab: Laboratory direction the belt surface travels in.
+        travel_axis_lab: Laboratory direction the belt surface travels in, or
+            ``None`` to use the direction opposite ``forward_axis``.
         tied_tolerance: Largest left-right travel difference accepted by
             ``side="auto"`` [m].
 
@@ -341,6 +370,10 @@ def belt_motion(
             ``tied_tolerance``. A split-belt trial needs one virtual origin per
             foot, which this transform does not model.
     """
+    if not math.isfinite(offset):
+        raise ValueError("belt time offset must be finite")
+    if not math.isfinite(tied_tolerance) or tied_tolerance < 0.0:
+        raise ValueError("tied belt tolerance must be finite and nonnegative")
     residual = log.tied_belt_residual
     if side == "auto":
         if residual > tied_tolerance:
@@ -350,17 +383,24 @@ def belt_motion(
             )
         side = "left"
     times = np.asarray(times, dtype=np.float64)
-    if times.ndim != 1 or len(times) == 0:
-        raise ValueError("frame times must be a nonempty one-dimensional array")
+    if times.ndim != 1 or len(times) == 0 or not np.all(np.isfinite(times)):
+        raise ValueError("frame times must be a nonempty finite one-dimensional array")
+    if np.any(np.diff(times) <= 0.0):
+        raise ValueError("frame times must increase strictly")
     query = times + offset
     t = log.t
     travel = log.travel(query, side)
     rotation = lab_to_newton_rotation(up_axis, forward_axis)
+    if travel_axis_lab is None:
+        travel_axis_lab = tuple(-value for value in rotation[0])
     axis = -(rotation @ np.asarray(travel_axis_lab, dtype=np.float64))
-    axis = axis / np.linalg.norm(axis)
+    axis_norm = np.linalg.norm(axis)
+    if not math.isfinite(axis_norm) or axis_norm < 1.0e-12:
+        raise ValueError("belt travel axis must be a finite nonzero vector")
+    axis = axis / axis_norm
     return BeltMotion(
         times=times,
-        speed=np.interp(np.clip(query, t[0], t[-1]), t, log.speed(side)),
+        speed=np.interp(query, t, log.speed(side), left=0.0, right=0.0),
         distance=travel - travel[0],
         covered=(query >= t[0]) & (query <= t[-1]),
         axis=axis,
@@ -368,6 +408,7 @@ def belt_motion(
         offset=float(offset),
         source_file=log.source_file,
         source_sha256=log.source_sha256,
+        source_rate=log.rate,
         tied_belt_residual=residual,
     )
 
@@ -394,8 +435,8 @@ def belt_motion_for_frames(
         stride: Frame stride of the fitted range.
         **kwargs: Forwarded to :func:`belt_motion`.
     """
-    if frame_count < 1 or stride < 1 or rate <= 0.0:
-        raise ValueError("frame count, stride and rate must be positive")
+    if frame_count < 1 or first_frame < 0 or stride < 1 or not math.isfinite(rate) or rate <= 0.0:
+        raise ValueError("frame count, stride and rate must be positive, and first frame must be nonnegative")
     times = (first_frame + stride * np.arange(frame_count, dtype=np.float64)) / rate
     return belt_motion(log, times, **kwargs)
 

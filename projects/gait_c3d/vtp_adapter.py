@@ -57,7 +57,7 @@ class DisplayGeometry:
 
 @dataclass(frozen=True, slots=True)
 class FootContactLayout:
-    """Mesh-derived sphere contact layout for both merged feet."""
+    """Mesh-derived body-local sphere contact layout for both segmented feet."""
 
     radius: float
     centers: dict[str, tuple[tuple[float, float, float], ...]]
@@ -807,11 +807,15 @@ def _compile_scaled_vtp_visuals(
             lateral_y = float(minimum[1] + radius)
             medial_y = float(maximum[1] - radius)
             center_z = float(minimum[2] + radius)
-            centers[side] = (
+            centers[f"foot_{side}"] = (
                 (heel_x, lateral_y, center_z),
                 (heel_x, medial_y, center_z),
-                (forefoot_x, lateral_y, center_z),
-                (forefoot_x, medial_y, center_z),
+            )
+            toe_lateral = np.asarray((forefoot_x, lateral_y, center_z)) - toes_delta[side]
+            toe_medial = np.asarray((forefoot_x, medial_y, center_z)) - toes_delta[side]
+            centers[f"toes_{side}"] = (
+                tuple(float(value) for value in toe_lateral),
+                tuple(float(value) for value in toe_medial),
             )
         contact_layout = FootContactLayout(radius, centers, root_height_offset)
         foot_bounds = {
@@ -855,8 +859,8 @@ def compile_scaled_vtp_visuals(
 
     ``config`` must come from the same subject scaling result as ``scaled_osim``
     so proximal joint registration and segment lengths remain consistent.
-    When official neutral body transforms are supplied, all talus, calcaneus,
-    and toe meshes are baked into the merged Newton foot bodies as well.
+    When official neutral body transforms are supplied, talus and calcaneus
+    meshes are baked into each hindfoot and the toe mesh into its toes body.
     """
     if isinstance(source_body_transforms, (str, os.PathLike)):
         source_body_transforms = {

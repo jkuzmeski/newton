@@ -191,6 +191,20 @@ assert 'newton.opensim' not in sys.modules
         ):
             self.assertAlmostEqual(shape_scale[shape, 1], expected_thigh_half_height, places=6)
 
+    def test_scales_toes_from_a_compiled_base_subject(self):
+        """Scale toe mass and body offset with every other base-subject value."""
+        base = native_model.SimpleGaitConfig(toes_mass=0.5, toes_offset=0.12)
+        base_mass = base.total_mass
+        scaled = native_model.SimpleGaitConfig.for_subject_from_base(
+            base,
+            base_height=1.0,
+            body_mass=3.0 * base_mass,
+            body_height=2.0,
+        )
+        self.assertAlmostEqual(scaled.toes_mass, 1.5)
+        self.assertAlmostEqual(scaled.toes_offset, 0.24)
+        self.assertAlmostEqual(scaled.total_mass, 3.0 * base_mass)
+
     def test_initializes_finite_bilateral_pose(self):
         """Initialize finite mirrored legs with feet tangent to the ground."""
         state = native_model.initialize_simple_gait_state(self.model, self.build)

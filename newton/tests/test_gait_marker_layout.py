@@ -135,6 +135,33 @@ class TestSubjectMarkerLayout(unittest.TestCase):
         centroid = next(marker for marker in layout.markers if marker.name == "L.Thigh.Centroid")
         np.testing.assert_allclose(centroid.position, np.mean([values for _, _, values in cluster_values], axis=0))
 
+    def test_attaches_only_the_hallux_marker_to_the_toes(self):
+        """Keep metatarsal markers proximal while making MTP motion observable."""
+        config = SimpleGaitConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker_path, transforms_path, _ = _write_synthetic_sources(root, config, 0.0)
+            markers = "".join(
+                f'<Marker name="{name}"><socket_parent_frame>/bodyset/calcn_l</socket_parent_frame>'
+                "<location>0.2 0.01 0.0</location></Marker>"
+                for name in ("L.Toe.Lat", "L.Toe.Med", "L.Toe.Tip")
+            )
+            marker_path.write_text(
+                marker_path.read_text().replace("</objects>", markers + "</objects>"),
+                encoding="utf-8",
+            )
+            layout = compile_subject_marker_layout(
+                marker_path,
+                transforms_path,
+                config,
+                root / "marker_layout.json",
+                source_ground_offset_z=0.0,
+            )
+        by_name = {marker.name: marker.body for marker in layout.markers}
+        self.assertEqual(by_name["L.Toe.Tip"], "toes_left")
+        self.assertEqual(by_name["L.Toe.Lat"], "foot_left")
+        self.assertEqual(by_name["L.Toe.Med"], "foot_left")
+
     def test_scales_marker_layout_from_base(self):
         """Scale S001-style marker positions and neutral frames together."""
         config = SimpleGaitConfig()
@@ -171,6 +198,29 @@ class TestSubjectMarkerLayout(unittest.TestCase):
             [(marker["name"], marker["site_name"]) for marker in base_manifest["markers"]],
             [(marker["name"], marker["site_name"]) for marker in scaled_manifest["markers"]],
         )
+
+    def test_moves_toe_frames_with_an_explicit_hip_width(self):
+        """Keep toe and proximal leg frames on the requested lateral offset."""
+        config = SimpleGaitConfig()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker_path, transforms_path, _ = _write_synthetic_sources(root, config, 0.0)
+            base = compile_subject_marker_layout(
+                marker_path,
+                transforms_path,
+                config,
+                root / "base_layout.json",
+                source_ground_offset_z=0.0,
+            )
+            scaled = scale_subject_marker_layout_from_base(
+                base.path,
+                root / "scaled_layout.json",
+                length_scale=1.0,
+                hip_width=0.4,
+            )
+        for side, expected in (("left", 0.2), ("right", -0.2)):
+            for segment in ("femur", "tibia", "foot", "toes"):
+                self.assertAlmostEqual(scaled.target_body_transforms[f"{segment}_{side}"][1, 3], expected)
 
     def test_rejects_tampered_layout(self):
         """Reject marker data changed without updating the content seal."""
@@ -224,6 +274,12 @@ class TestSubjectMarkerLayout(unittest.TestCase):
             missing_target = json.loads(json.dumps(manifest))
             del missing_target["target"]
             layout.path.write_text(json.dumps(_reseal(missing_target)), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "target transforms"):
+                load_subject_marker_layout(layout.path)
+
+            incomplete_target = json.loads(json.dumps(manifest))
+            del incomplete_target["target"]["neutral_body_transforms"]["toes_left"]
+            layout.path.write_text(json.dumps(_reseal(incomplete_target)), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "target transforms"):
                 load_subject_marker_layout(layout.path)
 

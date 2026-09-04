@@ -1,7 +1,7 @@
 # Treadmill-to-overground conversion plan
 
-Status: phases P1 to P3 and P5 are implemented; see `README.md`. P4 gates run
-as unit tests plus the measured S001 numbers below. P6 is not started.
+Status: phases P1 through P5 are implemented; see `README.md`. P6 is not
+started.
 
 Goal: convert the treadmill trials (`Trial 101.v3d.c3d` + `tm0001.txt`) into a
 world-referenced overground motion, so the fitted subject walks and runs across
@@ -9,8 +9,8 @@ the ground instead of marching in place.
 
 ## 1. What the data actually contains
 
-Measured from `subjects/S001` and `subjects/S014`
-(`subjects/_analysis/treadmill_log_report.md`):
+Measured from the local S001 and S014 source captures used to validate this
+implementation:
 
 - `tm0001.txt` is a D-Flow controller log at 300 Hz. `Time` is controller
   uptime, not trial time and not wall clock.
@@ -33,7 +33,8 @@ Measured from `subjects/S001` and `subjects/S014`
 
 ## 2. What carries over from the paper
 
-Jung & Lee, *Sensors* 2021, 21(3), 786 (`_research/treadmill_to_overground_paper.md`).
+Jung & Lee, *Sensors* 2021, 21(3), 786
+(https://doi.org/10.3390/s21030786).
 
 Carry over:
 
@@ -52,11 +53,11 @@ Do **not** carry over:
 - Their re-indexing and sag-projection steps (Eq. 1, 4, 5). Those only exist to
   clean up the optical belt-marker chain.
 
-Our replacement input is better than theirs: a directly logged belt distance
-channel. This is alternative (B) in the research report (integrate a measured
-belt channel). Their own validated accuracy was 0.3-1.0% of travel distance;
-our belt channel is exact against its own command, and tracks the real belt to
-better than 1% (checked against stance-foot marker speed).
+Our replacement input is better than theirs: directly logged belt speed and
+distance channels. The implementation integrates the piecewise-linear speed and
+uses the distance channel to verify tied-belt operation. Their own validated
+accuracy was 0.3-1.0% of travel distance; our belt command tracks the real belt
+to better than 1% when checked against stance-foot marker speed.
 
 The `Platform:` markers (FLeft, FRight, ORight, BLeft, BRight) give the paper's
 treadmill frame {TR}. We use them to define the belt travel axis and to check
@@ -64,8 +65,7 @@ lab-vs-belt yaw, not to measure belt motion.
 
 ## 3. Where it goes: after IK, not before
 
-Recommendation: apply the shift **after** the IK solve, to the fitted free-root
-translation (`subjects/_analysis/pipeline_map.md`, option b).
+Apply the shift **after** the IK solve, to the fitted free-root translation.
 
 Reason it is exact: joint 0 is a `FREE` joint with identity parent and child
 transforms, so `joint_q[0:3]` is literally the pelvis world position. Forward
@@ -89,13 +89,12 @@ So: solve IK in the original bounded lab frame, then translate.
 
 ### 4.1 New module `projects/gait_c3d/treadmill.py`
 
-Promote the validated prototype in `subjects/_analysis/treadmill_log.py`.
-
 - `load_treadmill_log(path) -> TreadmillLog`: parse the tab-separated log,
   keep the raw 300 Hz samples, no filtering (the signal is noise-free;
   filtering only smears the 8 ramp corners).
-- `belt_displacement(log, frame_count, point_rate, offset_s=0.0, side="tied")
-  -> BeltDisplacement` with `distance[F]`, `displacement[F]`, `speed[F]`.
+- `belt_motion_for_frames(log, frame_count, rate=100.0, offset=0.0,
+  side="auto") -> BeltMotion` with per-frame distance, offset, speed, and
+  coverage arrays.
   Interpolate on **time**, never on sample index. Linear interpolation for
   speed is exact because the reference is piecewise linear; integrate the
   piecewise-linear speed exactly for distance. Measured accuracy on the 100 Hz
@@ -103,8 +102,8 @@ Promote the validated prototype in `subjects/_analysis/treadmill_log.py`.
 - Tied-belt guard: raise if `max|left - right| > 1 mm`. A single virtual origin
   is only valid for tied belts. Split belt needs a per-foot formulation and is
   out of scope for v1.
-- Belt axis: default lab +Y; optionally fit the axis from the `Platform:`
-  markers and warn above a yaw threshold.
+- Belt axis: by default, derive subject-backward from the declared C3D forward
+  axis. An explicit laboratory travel vector remains available for other rigs.
 
 ### 4.2 Integration in `native_motion_fit.fit_c3d_marker_motion()`
 
@@ -121,8 +120,9 @@ Between the solve and `finite_difference_joint_qd()`:
 - Add a `treadmill` block to the sealed manifest: source file and sha256, log
   sample rate, sync offset, belt axis in Newton frame, side policy, total
   distance, applied stage, and the tied-belt check result.
-- Bump `gait_native_motion_artifact_1` -> `_2`. Keep the loader accepting `_1`
-  as treadmill-framed.
+- Bump `gait_native_motion_artifact_1` -> `_3`. Version 2 introduced the
+  treadmill block but retained float32 coordinates; version 3 stores coordinates
+  in float64. Keep the loader accepting versions 1 and 2.
 - Do **not** fold the shift into `registration` (a single 4x4 cannot express a
   growing translation) and do **not** reuse `ground.global_offset_m` (pinned at
   atol 2e-6 by existing tests).
@@ -132,9 +132,10 @@ Between the solve and `finite_difference_joint_qd()`:
 
 ### 4.4 CLI and replay
 
-- `example_native_motion_fit.py`: `--treadmill-log PATH`, `--belt-offset-s`,
-  `--belt-side {tied,left,right}`, and `--no-overground` to keep the old
-  behavior. Default: overground on when a log is given.
+- `example_native_motion_fit.py`: `--treadmill-log PATH`, `--belt-offset`,
+  `--belt-side {auto,left,right,mean}`, and `--no-overground` to keep the old
+  behavior. Default: overground on when a log is found beside the C3D or in the
+  subject bundle.
 - The replay camera is fixed and Newton has no follow camera, so the subject
   leaves the view within seconds. Add a simple per-frame camera offset in the
   example, or offer `--camera follow`.
@@ -147,11 +148,11 @@ Between the solve and `finite_difference_joint_qd()`:
    artifact directly.
 3. **P3 Pipeline integration. Done.** Post-IK shift in
    `fit_c3d_marker_motion()`, sealed manifest block, schema
-   `gait_native_motion_artifact_2`, CLI flags, README.
+   `gait_native_motion_artifact_3`, CLI flags, README.
 4. **P4 Validation gates. Done** as unit tests, plus the measured S001 numbers
    in section 6.
 5. **P5 Camera. Done.** The replay camera follows an overground motion;
-   `--camera fixed` holds the view. A README screenshot is still open.
+   `--camera fixed` holds the view.
 6. **P6 (future) Force plates.** Decode analog GRF, translate the COP/point of
    application by the same `-d(t)`, leave force and free moment unchanged,
    recompute moments about a fixed origin, gate on Fz.
@@ -193,6 +194,5 @@ path never receives a belt argument.
    boost, so dynamics are safe. During the 4 ramps (+/-0.5 m/s^2) the mapped
    frame accelerates. Run inverse dynamics in the lab frame, or restrict
    dynamic analysis to the constant-speed windows.
-5. **Data hygiene.** `opensim_subject --overwrite` deletes every non-`.c3d`
-   file in the subject folder, including `tm0001.txt`. Keep the logs backed up
-   outside the subject bundle, and change the builder to preserve `.txt` logs.
+5. **Data hygiene.** `opensim_subject --overwrite` preserves subject-local
+   `.c3d` captures and `.txt` treadmill logs while replacing generated output.

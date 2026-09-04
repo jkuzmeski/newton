@@ -20,7 +20,7 @@ the bone surface, not the surface the subject stands on. Placing contact
 spheres tangent to that mesh leaves the model floating 22 to 34 mm above the
 ground through stance and tilts the modelled sole against the real one.
 
-This module separates the two decisions that the bounding-box rule confused:
+This module separates the two decisions that the old bounding-box rule mixed:
 
 * where the ground is, which comes from the subject's own standing pose and
   yields a *sole plane* in each foot body frame, and
@@ -85,6 +85,8 @@ class SolePlane:
             raise ValueError("sole plane normal must be a unit vector")
         if not math.isfinite(self.offset) or self.samples < 1:
             raise ValueError("sole plane needs a finite offset and at least one sample")
+        if not math.isfinite(self.residual) or self.residual < 0.0:
+            raise ValueError("sole plane residual must be finite and nonnegative")
 
     def height(self, point: np.ndarray) -> np.ndarray:
         """Return the height of foot-frame points above the sole plane [m].
@@ -142,7 +144,7 @@ class ContactSphere:
     """Newton body the sphere belongs to."""
 
     center: tuple[float, float, float]
-    """Sphere center in the foot body frame [m]."""
+    """Sphere center in the body named by :attr:`body` [m]."""
 
     radius: float
     """Sphere radius [m]."""
@@ -167,6 +169,8 @@ def fit_sole_plane(poses: np.ndarray) -> SolePlane:
     poses = np.asarray(poses, dtype=np.float64)
     if poses.ndim != 3 or poses.shape[1:] != (4, 4) or len(poses) < 1:
         raise ValueError("standing foot poses must have shape [sample_count, 4, 4]")
+    if not np.all(np.isfinite(poses)):
+        raise ValueError("standing foot poses must be finite")
     normals = poses[:, 2, :3]
     offsets = -poses[:, 2, 3]
     mean_normal = normals.mean(axis=0)
@@ -198,6 +202,8 @@ def foot_sphere_radius(foot_length: float, *, spacing: float | None = None) -> f
         raise ValueError("foot length must be finite and positive")
     radius = float(np.clip(RADIUS_LENGTH_FRACTION * foot_length, *RADIUS_BOUNDS))
     if spacing is not None:
+        if not math.isfinite(spacing) or spacing <= 0.0:
+            raise ValueError("sphere spacing must be finite and positive")
         # Non-overlap wins over the lower bound: two spheres that share a
         # region would apply the same contact twice.
         radius = min(radius, OVERLAP_MARGIN * 0.5 * spacing)
@@ -212,8 +218,7 @@ def place_foot_spheres(
     forward: np.ndarray,
     lateral: np.ndarray,
     foot_length: float,
-    toe_body: str,
-    foot_body: str,
+    toe_offset: np.ndarray,
     radius: float | None = None,
 ) -> tuple[ContactSphere, ...]:
     """Place the six anatomical contact spheres of one foot on its sole plane.
@@ -229,18 +234,32 @@ def place_foot_spheres(
         forward: Unit foot-frame direction from heel to toe, shape [3].
         lateral: Unit foot-frame direction toward the lateral border, shape [3].
         foot_length: Foot length from the posterior border to the toe tip [m].
-        toe_body: Body name carrying the toe spheres.
-        foot_body: Body name carrying the rearfoot spheres.
+        toe_offset: Toes-body origin in the foot body frame [m], shape [3].
+            This is required because toe sphere centers are returned in that
+            body's local frame.
         radius: Explicit sphere radius [m], or ``None`` to derive it.
     """
     if side not in ("left", "right"):
         raise ValueError(f"unknown foot side {side!r}")
+    if not math.isfinite(foot_length) or foot_length <= 0.0:
+        raise ValueError("foot length must be finite and positive")
     origin = np.asarray(origin, dtype=np.float64)
     forward = np.asarray(forward, dtype=np.float64)
     lateral = np.asarray(lateral, dtype=np.float64)
+    toe_offset = np.asarray(toe_offset, dtype=np.float64)
+    if origin.shape != (3,) or not np.all(np.isfinite(origin)):
+        raise ValueError("foot origin must be a finite three-component vector")
+    if toe_offset.shape != (3,) or not np.all(np.isfinite(toe_offset)):
+        raise ValueError("toe offset must be a finite three-component vector")
     for name, axis in (("forward", forward), ("lateral", lateral)):
-        if axis.shape != (3,) or not np.isclose(np.linalg.norm(axis), 1.0, atol=1.0e-9):
+        if (
+            axis.shape != (3,)
+            or not np.all(np.isfinite(axis))
+            or not np.isclose(np.linalg.norm(axis), 1.0, atol=1.0e-9)
+        ):
             raise ValueError(f"{name} axis must be a unit vector")
+    if not np.isclose(forward @ lateral, 0.0, atol=1.0e-9):
+        raise ValueError("forward and lateral axes must be orthogonal")
     points = np.stack(
         [
             origin + length * foot_length * forward + width * foot_length * lateral
@@ -248,15 +267,19 @@ def place_foot_spheres(
         ]
     )
     placed = sole.project(points)
-    spacing = float(np.min(np.linalg.norm(placed[:, None, :] - placed[None, :, :], axis=-1)[np.triu_indices(6, 1)]))
+    spacing = float(
+        np.min(np.linalg.norm(placed[:, None, :] - placed[None, :, :], axis=-1)[np.triu_indices(len(placed), 1)])
+    )
     radius = foot_sphere_radius(foot_length, spacing=spacing) if radius is None else float(radius)
+    if not math.isfinite(radius) or radius <= 0.0:
+        raise ValueError("contact sphere radius must be finite and positive")
     centers = placed + radius * sole.normal
     return tuple(
         ContactSphere(
             name=name,
             side=side,
-            body=toe_body if on_toes else foot_body,
-            center=(float(center[0]), float(center[1]), float(center[2])),
+            body=f"{'toes' if on_toes else 'foot'}_{side}",
+            center=tuple(float(value) for value in center - (toe_offset if on_toes else 0.0)),
             radius=radius,
         )
         for (name, _, _, on_toes), center in zip(FOOT_SPHERE_LAYOUT, centers, strict=True)
@@ -291,6 +314,10 @@ def standing_foot_poses(
     if measured.ndim != 3 or measured.shape[1:] != site_positions.shape:
         raise ValueError("measured markers must have shape [sample_count, marker_count, 3]")
     valid = np.ones(measured.shape[:2], dtype=bool) if valid is None else np.asarray(valid, dtype=bool)
+    if valid.shape != measured.shape[:2]:
+        raise ValueError("marker visibility must have shape [sample_count, marker_count]")
+    if not np.all(np.isfinite(site_positions)) or not np.all(np.isfinite(measured[valid])):
+        raise ValueError("visible standing marker positions must be finite")
     poses = []
     for sample in range(len(measured)):
         columns = np.flatnonzero(valid[sample])
@@ -300,6 +327,8 @@ def standing_foot_poses(
         world = measured[sample, columns]
         local_center = local.mean(axis=0)
         world_center = world.mean(axis=0)
+        if np.linalg.matrix_rank(local - local_center) < 2 or np.linalg.matrix_rank(world - world_center) < 2:
+            continue
         u, _, vt = np.linalg.svd((local - local_center).T @ (world - world_center))
         correction = np.diag((1.0, 1.0, float(np.sign(np.linalg.det(vt.T @ u.T)))))
         rotation = vt.T @ correction @ u.T
@@ -334,8 +363,14 @@ def foot_axes_from_bounds(
         raise ValueError(f"unknown foot side {side!r}")
     minimum = np.asarray(minimum, dtype=np.float64)
     maximum = np.asarray(maximum, dtype=np.float64)
-    if minimum.shape != (3,) or maximum.shape != (3,) or np.any(maximum <= minimum):
-        raise ValueError("foot bounds must be a nondegenerate box")
+    if (
+        minimum.shape != (3,)
+        or maximum.shape != (3,)
+        or not np.all(np.isfinite(minimum))
+        or not np.all(np.isfinite(maximum))
+        or np.any(maximum <= minimum)
+    ):
+        raise ValueError("foot bounds must be a finite nondegenerate box")
     origin = np.asarray((minimum[0], 0.5 * (minimum[1] + maximum[1]), 0.5 * (minimum[2] + maximum[2])))
     forward = np.asarray((1.0, 0.0, 0.0))
     lateral = np.asarray((0.0, 1.0 if side == "left" else -1.0, 0.0))

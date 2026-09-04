@@ -109,18 +109,26 @@ def _resolve_subject_artifact(subject_dir: Path, manifest: dict, name: str, *, r
     return path
 
 
-def _standing_sole_planes(marker_layout, markers, sides=("left", "right")):
-    """Fit each foot's ground plane from the static standing capture.
+def _standing_sole_planes(marker_layout, markers, sides=("left", "right"), time_range=None):
+    """Fit each foot's ground plane from the selected static standing interval.
 
     Args:
         marker_layout: Compiled neutral subject marker layout.
         markers: Decoded static C3D markers in the Newton laboratory frame.
         sides: Foot sides to fit.
+        time_range: Inclusive standing time range ``(start, end)`` [s], or
+            ``None`` to use every sample.
 
     Returns:
         The fitted sole plane of each foot, keyed by side.
     """
     columns = {name: index for index, name in enumerate(markers.marker_names)}
+    selected_samples = np.ones(len(markers.times), dtype=bool)
+    if time_range is not None:
+        start, end = time_range
+        selected_samples = (markers.times >= start) & (markers.times <= end)
+        if not np.any(selected_samples):
+            raise ValueError("sole-plane time range contains no marker samples")
     planes = {}
     for side in sides:
         body = f"foot_{side}"
@@ -136,13 +144,17 @@ def _standing_sole_planes(marker_layout, markers, sides=("left", "right")):
         if len(selected) < 3:
             raise ValueError(f"{body} needs three measured markers to register its sole plane")
         plane = fit_sole_plane(
-            standing_foot_poses(np.asarray(sites), markers.positions[:, selected], markers.valid[:, selected])
+            standing_foot_poses(
+                np.asarray(sites),
+                markers.positions[selected_samples][:, selected],
+                markers.valid[selected_samples][:, selected],
+            )
         )
         planes[side] = plane.level_roll()
     return planes
 
 
-def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_offset_z):
+def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_offset_z, *, time_range=None):
     """Place anatomical contact spheres on each measured standing sole plane.
 
     The scaled OpenSim foot mesh is a skeleton, so its lowest vertex is bone
@@ -151,17 +163,21 @@ def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_o
 
     Args:
         config: Subject configuration carrying the provisional root height.
-        ground_offset_z: Provisional vertical registration already in ``config`` [m].
         foot_bounds: Foot mesh bounding box per side in the foot body frame.
         marker_layout: Compiled neutral subject marker layout.
         markers: Decoded static C3D markers in the Newton laboratory frame.
+        ground_offset_z: Provisional vertical registration already in ``config`` [m].
+        time_range: Inclusive standing time range ``(start, end)`` [s], or
+            ``None`` to use every sample.
 
     Returns:
         ``(layout, planes)`` with the registered contact layout and the fitted
         sole planes.
     """
-    planes = _standing_sole_planes(marker_layout, markers)
+    planes = _standing_sole_planes(marker_layout, markers, time_range=time_range)
     axes = {side: foot_axes_from_bounds(side, *foot_bounds[side]) for side in planes}
+    transforms = simple_gait_body_transforms(config)
+    toe_offsets = {side: transforms[f"toes_{side}"][:3, 3] - transforms[f"foot_{side}"][:3, 3] for side in planes}
     radius = min(
         place_foot_spheres(
             side,
@@ -170,8 +186,7 @@ def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_o
             forward=forward,
             lateral=lateral,
             foot_length=length,
-            toe_body=f"toes_{side}",
-            foot_body=f"foot_{side}",
+            toe_offset=toe_offsets[side],
         )[0].radius
         for side, (origin, forward, lateral, length) in axes.items()
     )
@@ -183,23 +198,17 @@ def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_o
             forward=forward,
             lateral=lateral,
             foot_length=length,
-            toe_body=f"toes_{side}",
-            foot_body=f"foot_{side}",
+            toe_offset=toe_offsets[side],
             radius=radius,
         )
         for side, (origin, forward, lateral, length) in axes.items()
     }
-    # Spheres are laid out in the foot frame, so the two toe spheres move into
-    # the toes body frame across the metatarsophalangeal joint.
-    transforms = simple_gait_body_transforms(config)
     centers = {}
     lowest = math.inf
-    for side, placed in spheres.items():
-        offset = transforms[f"toes_{side}"][:3, 3] - transforms[f"foot_{side}"][:3, 3]
+    for placed in spheres.values():
         for sphere in placed:
-            local = np.asarray(sphere.center) - (offset if sphere.body.startswith("toes_") else 0.0)
-            centers.setdefault(sphere.body, []).append(tuple(float(value) for value in local))
-            lowest = min(lowest, float(transforms[sphere.body][2, 3]) + float(local[2]) - radius)
+            centers.setdefault(sphere.body, []).append(sphere.center)
+            lowest = min(lowest, float(transforms[sphere.body][2, 3]) + sphere.center[2] - radius)
     centers = {body: tuple(values) for body, values in centers.items()}
     return FootContactLayout(radius, centers, ground_offset_z - lowest), planes
 
@@ -286,18 +295,7 @@ def _write_subject_bundle_manifest(
         "base_marker_set": getattr(args, "base_marker_set", None),
         "subject": {
             "name": args.subject_name,
-            "mass_kg": float(
-                sum(
-                    (
-                        config.pelvis_mass,
-                        config.torso_mass,
-                        2.0 * config.thigh_mass,
-                        2.0 * config.shank_mass,
-                        2.0 * config.foot_mass,
-                        2.0 * config.toes_mass,
-                    )
-                )
-            ),
+            "mass_kg": float(config.total_mass),
             "height_m": float(args.body_height),
             "hip_width_m": float(2.0 * config.hip_half_width),
             "visual_mesh_count": int(visual_mesh_count),
@@ -795,7 +793,7 @@ class Example:
         if scaled_osim:
             config = simple_config_from_scaled_gait2354(scaled_osim, body_height=args.body_height)
             print(
-                f"Scale: {config.pelvis_mass + config.torso_mass + 2.0 * (config.thigh_mass + config.shank_mass + config.foot_mass):.3f} kg, "
+                f"Scale: {config.total_mass:.3f} kg, "
                 f"thigh {config.thigh_length:.3f} m, shank {config.shank_length:.3f} m"
             )
             if source_body_transforms is not None:
@@ -887,6 +885,7 @@ class Example:
                 self.marker_layout,
                 markers,
                 source_ground_offset_z,
+                time_range=(args.scale_start, args.scale_end),
             )
             registration_shift = contact_layout.root_height_offset_z - source_ground_offset_z
             source_ground_offset_z = contact_layout.root_height_offset_z
@@ -971,8 +970,21 @@ class Example:
         """Verify model structure, root policy, artifacts, and finite state."""
         if not self.subject_xml.is_file():
             raise ValueError("subject MJCF was not published")
-        expected_dofs = (18 if self.free_root else 12) + self.torso_dof_count
-        if self.model.body_count != 10 or self.model.joint_dof_count != expected_dofs:
+        body_names = {label.rsplit("/", 1)[-1] for label in self.model.body_label}
+        toe_bodies = {"toes_left", "toes_right"}
+        present_toe_bodies = body_names & toe_bodies
+        if present_toe_bodies == toe_bodies:
+            expected_body_count = 10
+            internal_dofs = 12
+        elif not present_toe_bodies:
+            # Keep checked-in pre-MTP subject artifacts loadable while new
+            # subject builds use the segmented-foot topology.
+            expected_body_count = 8
+            internal_dofs = 10
+        else:
+            raise ValueError("subject model has an incomplete toes-body topology")
+        expected_dofs = (6 if self.free_root else 0) + internal_dofs + self.torso_dof_count
+        if self.model.body_count != expected_body_count or self.model.joint_dof_count != expected_dofs:
             raise ValueError("subject model has an unexpected topology")
         shape_types = self.model.shape_type.numpy()
         shape_flags = self.model.shape_flags.numpy()
@@ -991,16 +1003,16 @@ class Example:
             for index, label in enumerate(self.model.shape_label)
             if "/contact_left_" in label or "/contact_right_" in label
         ]
-        expected_spheres = 2 * (len(FOOT_SPHERE_LAYOUT) if self.sole_planes is not None else 4)
-        if len(contact_spheres) != expected_spheres or any(
+        expected_spheres = {8, 2 * len(FOOT_SPHERE_LAYOUT)}
+        if len(contact_spheres) not in expected_spheres or any(
             shape_types[index] != newton.GeoType.SPHERE for index in contact_spheres
         ):
-            raise ValueError(f"subject model must contain {expected_spheres} foot contact spheres")
+            raise ValueError("subject model must contain 8 or 12 foot contact spheres")
         visible_feet = [index for index, label in enumerate(self.model.shape_label) if "/visual_foot_" in label]
-        if len(visible_feet) != expected_spheres or any(
+        if len(visible_feet) != len(contact_spheres) or any(
             shape_types[index] != newton.GeoType.SPHERE for index in visible_feet
         ):
-            raise ValueError(f"subject viewer must contain {expected_spheres} visible foot spheres")
+            raise ValueError("subject viewer must visualize every foot contact sphere")
 
         ground = [index for index, label in enumerate(self.model.shape_label) if label.endswith("/ground")]
         if len(ground) != 1 or shape_types[ground[0]] != newton.GeoType.PLANE:

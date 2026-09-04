@@ -33,8 +33,8 @@ MTP_LIMITS = (-30.0 * math.pi / 180.0, 80.0 * math.pi / 180.0)
 """Metatarsophalangeal range [rad].
 
 The template clamps this joint to zero travel, which would freeze the toes, so
-the model uses a published range instead: about 30 degrees of flexion and 80
-degrees of extension at push-off.
+the reduced model uses an explicit engineering range of 30 degrees of flexion
+to 80 degrees of extension.
 """
 
 TOES_LENGTH_FRACTION = 0.22
@@ -132,6 +132,15 @@ class SimpleGaitConfig:
     self_collision_mu: float = 0.8
     """Self-collision friction coefficient."""
 
+    @property
+    def total_mass(self) -> float:
+        """Total bilateral model mass [kg]."""
+        return (
+            self.pelvis_mass
+            + self.torso_mass
+            + 2.0 * (self.thigh_mass + self.shank_mass + self.foot_mass + self.toes_mass)
+        )
+
     @classmethod
     def for_subject(
         cls,
@@ -158,12 +167,7 @@ class SimpleGaitConfig:
         if hip_width is not None and (not math.isfinite(hip_width) or hip_width <= 0.0):
             raise ValueError("hip_width must be finite and positive")
         reference = cls()
-        reference_mass = (
-            reference.pelvis_mass
-            + reference.torso_mass
-            + 2.0 * (reference.thigh_mass + reference.shank_mass + reference.foot_mass + reference.toes_mass)
-        )
-        mass_scale = body_mass / reference_mass
+        mass_scale = body_mass / reference.total_mass
         length_scale = body_height / 1.695898298375747
 
         def scale_dimensions(values: tuple[float, float, float]) -> tuple[float, float, float]:
@@ -234,11 +238,10 @@ class SimpleGaitConfig:
             raise ValueError("body_height must be finite and positive")
         if hip_width is not None and (not math.isfinite(hip_width) or hip_width <= 0.0):
             raise ValueError("hip_width must be finite and positive")
-        base_mass = base.pelvis_mass + base.torso_mass + 2.0 * (base.thigh_mass + base.shank_mass + base.foot_mass)
-        if not math.isfinite(base_mass) or base_mass <= 0.0:
+        if not math.isfinite(base.total_mass) or base.total_mass <= 0.0:
             raise ValueError("base configuration must have finite positive total mass")
         length_scale = body_height / base_height
-        mass_scale = body_mass / base_mass
+        mass_scale = body_mass / base.total_mass
 
         def scale_dimensions(values: tuple[float, float, float]) -> tuple[float, float, float]:
             return tuple(length_scale * value for value in values)
@@ -250,10 +253,12 @@ class SimpleGaitConfig:
             thigh_mass=mass_scale * base.thigh_mass,
             shank_mass=mass_scale * base.shank_mass,
             foot_mass=mass_scale * base.foot_mass,
+            toes_mass=mass_scale * base.toes_mass,
             hip_half_width=0.5 * hip_width if hip_width is not None else length_scale * base.hip_half_width,
             thigh_length=length_scale * base.thigh_length,
             shank_length=length_scale * base.shank_length,
             foot_length=length_scale * base.foot_length,
+            toes_offset=length_scale * base.toes_offset,
             foot_width=length_scale * base.foot_width,
             pelvis_dimensions=scale_dimensions(base.pelvis_dimensions),
             torso_dimensions=scale_dimensions(base.torso_dimensions),

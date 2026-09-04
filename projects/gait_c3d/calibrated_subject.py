@@ -414,6 +414,11 @@ def write_calibrated_subject_mjcf(
     mass_scale = body_mass / base_mass
     root = ET.parse(base_xml).getroot()
     bodies = {body.get("name", ""): body for body in root.iter("body") if body.get("name")}
+    toe_bodies = {"toes_left", "toes_right"}
+    present_toe_bodies = set(bodies) & toe_bodies
+    if present_toe_bodies not in (set(), toe_bodies):
+        raise ValueError("base subject has an incomplete toes-body topology")
+    has_separate_toes = present_toe_bodies == toe_bodies
     target_markers = target_calibration.marker_positions
     target_pelvis_origin = np.asarray(target_calibration.pelvis["origin_m"], dtype=np.float64)
     target_pelvis_rotation = _pelvis_basis(target_calibration)
@@ -483,6 +488,8 @@ def write_calibrated_subject_mjcf(
         ):
             name = f"{body}_{side}"
             body_scaling[name] = (f"{segment}_{side}", _source_joint_position(bodies[name], joint))
+        if has_separate_toes:
+            body_scaling[f"toes_{side}"] = (f"foot_{side}", np.zeros(3))
 
     body_world = {"pelvis": (target_pelvis_origin, target_pelvis_rotation)}
     for side in ("left", "right"):
@@ -497,6 +504,14 @@ def write_calibrated_subject_mjcf(
                 np.asarray(origin, dtype=np.float64),
                 _segment_basis(target_calibration, f"{segment}_{side}"),
             )
+        if has_separate_toes:
+            foot_name = f"foot_{side}"
+            toes_name = f"toes_{side}"
+            foot_origin, foot_rotation = body_world[foot_name]
+            source_ankle = _source_joint_position(bodies[foot_name], f"ankle_{side}")
+            source_toes = _vector(bodies[toes_name], "pos", "0 0 0")
+            toes_from_ankle = (source_toes - source_ankle) * scale[foot_name]
+            body_world[toes_name] = (foot_origin + foot_rotation @ toes_from_ankle, foot_rotation)
     if "torso" in bodies:
         if "torso" in target_calibration.segments:
             record = target_calibration.segments["torso"]
@@ -577,7 +592,7 @@ def write_calibrated_subject_mjcf(
                 raise ValueError(f"mesh geometry position is invalid: {mesh_name}")
             transformed = transform_points(body_name, _read_obj(source) + geom_pos)
             records.append((geom, source, transformed))
-            if body_name.startswith("foot_"):
+            if body_name.startswith(("foot_", "toes_")):
                 body_mesh_min_z[body_name] = min(
                     body_mesh_min_z.get(body_name, math.inf), float(np.min(transformed[:, 2]))
                 )
@@ -599,11 +614,17 @@ def write_calibrated_subject_mjcf(
         torso_mesh_z_scale = target_top_head_z / (torso_mesh_max_z - torso_mesh_min_z)
         for _, _, vertices in body_mesh_vertices["torso"]:
             vertices[:, 2] = (vertices[:, 2] - torso_mesh_min_z) * torso_mesh_z_scale
-    foot_origins = {side: body_world[f"foot_{side}"][0][2] for side in ("left", "right")}
-    foot_world_min = min(foot_origins[side] + body_mesh_min_z[f"foot_{side}"] for side in ("left", "right"))
-    foot_offsets = {
-        side: foot_world_min - foot_origins[side] - body_mesh_min_z[f"foot_{side}"] for side in ("left", "right")
+    foot_world_min_by_side = {
+        side: min(
+            body_world[body][0][2] + body_mesh_min_z[body]
+            for body in (f"foot_{side}", f"toes_{side}")
+            if body in body_mesh_min_z
+        )
+        for side in ("left", "right")
     }
+    foot_world_min = min(foot_world_min_by_side.values())
+    foot_offsets = {side: foot_world_min - foot_world_min_by_side[side] for side in ("left", "right")}
+    contact_radius_scale = min(float(np.min(scale[f"foot_{side}"])) for side in ("left", "right"))
     global_offset = np.asarray((0.0, 0.0, -foot_world_min), dtype=np.float64)
     target_world = {name: (origin + global_offset, rotation) for name, (origin, rotation) in body_world.items()}
     with tempfile.TemporaryDirectory(
@@ -616,8 +637,9 @@ def write_calibrated_subject_mjcf(
         for body_name, records in body_mesh_vertices.items():
             for geom, source, vertices in records:
                 offset = np.zeros(3)
-                if body_name.startswith("foot_"):
-                    offset[2] = foot_offsets[body_name.removeprefix("foot_")]
+                if body_name.startswith(("foot_", "toes_")):
+                    side = body_name.rsplit("_", 1)[-1]
+                    offset[2] = foot_offsets[side]
                 destination = staged / mesh_file[geom.get("mesh")]
                 _write_obj(source, destination, vertices, offset)
                 output_meshes.append(destination)
@@ -642,12 +664,15 @@ def write_calibrated_subject_mjcf(
                 body.set("quat", _fmt(_quat_wxyz(parent_rotation.T @ rotation)))
 
             segment_key, _ = body_scaling[body_name]
+            body_scale = scale[segment_key]
             if body_name.startswith(("femur_", "tibia_", "foot_")):
                 for joint in body.findall("joint"):
                     joint.set("pos", "0 0 0")
                     if (joint.get("name") or "").startswith("knee_"):
                         joint.set("range", _fmt((-0.5, 2.617993877991494)))
-            body_scale = scale[segment_key]
+            elif body_name.startswith("toes_"):
+                for joint in body.findall("joint"):
+                    joint.set("pos", _fmt(_vector(joint, "pos", "0 0 0") * body_scale))
             if body_name == "pelvis":
                 column_linear = pelvis_row_linear.T
             else:
@@ -678,8 +703,15 @@ def write_calibrated_subject_mjcf(
                         raise ValueError(f"collision capsule is too short for {body_name}")
                     geom.set("size", f"{radius:.9g}")
                     geom.set("fromto", _fmt((0.0, 0.0, -proximal_center, 0.0, 0.0, -distal_center)))
-                elif body_name.startswith("foot_") and name.startswith(("contact_", "visual_foot_")):
-                    pass
+                elif body_name.startswith(("foot_", "toes_")) and name.startswith(("contact_", "visual_foot_")):
+                    if has_separate_toes:
+                        radius = float(geom.get("size", "nan")) * contact_radius_scale
+                        position = transform_points(body_name, _vector(geom, "pos", "0 0 0")[None, :])[0]
+                        local_up = rotation.T @ np.asarray((0.0, 0.0, 1.0))
+                        world_height = origin[2] + float((rotation @ position)[2])
+                        position += (radius - world_height) * local_up
+                        geom.set("pos", _fmt(position))
+                        geom.set("size", f"{radius:.9g}")
                 elif geom.get("mesh") is None and geom.get("type") == "box":
                     _transform_box(geom, lambda points, name=body_name: transform_points(name, points))
                 elif geom.get("mesh") is None:
@@ -689,7 +721,7 @@ def write_calibrated_subject_mjcf(
                     if "size" in geom.attrib:
                         values = _vector(geom, "size")
                         geom.set("size", _fmt(values * body_scale[: values.size]))
-            if body_name.startswith("foot_"):
+            if body_name.startswith("foot_") and not has_separate_toes:
                 side = body_name.removeprefix("foot_")
                 all_vertices = np.concatenate(
                     [
