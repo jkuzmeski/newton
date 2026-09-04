@@ -529,8 +529,8 @@ def subject_mjcf_xml(
         )
     else:
         centers_by_side = contact_centers
-        if set(centers_by_side) != {"left", "right"} or any(len(values) != 4 for values in centers_by_side.values()):
-            raise ValueError("contact_centers must provide four centers for each foot")
+        if set(centers_by_side) != {"left", "right"} or any(len(values) < 3 for values in centers_by_side.values()):
+            raise ValueError("contact_centers must provide at least three centers for each foot")
     for side, lateral_sign in (("left", 1.0), ("right", -1.0)):
         femur_fromto, femur_radius = _capsule_fromto(
             inertia_boxes[f"femur_{side}"],
@@ -642,6 +642,9 @@ def subject_mjcf_xml(
             attrib={"class": "self_collision"},
         )
 
+        # The foot body height follows the declared configuration, not the
+        # contact sphere radius, so it stays equal to the neutral body
+        # transform that registers meshes, markers, and joint centers.
         foot = ET.SubElement(
             tibia,
             "body",
@@ -649,14 +652,14 @@ def subject_mjcf_xml(
             pos=_values(
                 0.4 * config.foot_length,
                 0.0,
-                -0.5 * config.shank_length - radius,
+                -0.5 * config.shank_length - config.contact_radius,
             ),
         )
         body_elements[f"foot_{side}"] = foot
         _add_inertial(
             foot,
             config.foot_mass,
-            (config.foot_length, config.foot_width, 2.0 * radius),
+            (config.foot_length, config.foot_width, 2.0 * config.contact_radius),
             inertials.get(f"foot_{side}"),
         )
         ankle_name = f"ankle_{side}"
@@ -664,7 +667,7 @@ def subject_mjcf_xml(
         _add_joint(
             foot,
             name=ankle_name,
-            position=centers.get(f"ankle_{side}", (-0.4 * config.foot_length, 0.0, radius)),
+            position=centers.get(f"ankle_{side}", (-0.4 * config.foot_length, 0.0, config.contact_radius)),
             axis=(0.0, -1.0, 0.0),
             limits=ankle_limits,
             damping=0.2,

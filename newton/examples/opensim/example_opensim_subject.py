@@ -28,6 +28,13 @@ import newton
 import newton.examples
 from projects.gait_c3d.c3d_adapter import c3d_to_marker_artifact, load_marker_artifact
 from projects.gait_c3d.calibrated_subject import write_calibrated_subject_mjcf
+from projects.gait_c3d.foot_contact import (
+    FOOT_SPHERE_LAYOUT,
+    fit_sole_plane,
+    foot_axes_from_bounds,
+    place_foot_spheres,
+    standing_foot_poses,
+)
 from projects.gait_c3d.marker_layout import (
     compile_subject_marker_layout,
     load_subject_marker_layout,
@@ -50,9 +57,11 @@ from projects.gait_c3d.subject_scaling import (
     scale_gait2354_from_markers,
 )
 from projects.gait_c3d.vtp_adapter import (
+    FootContactLayout,
     compile_scaled_vtp_visuals,
     joint_centers_from_official_transforms,
     simple_config_from_scaled_gait2354,
+    simple_gait_body_transforms,
     subject_inertials_from_scaled_gait2354,
 )
 
@@ -97,6 +106,96 @@ def _resolve_subject_artifact(subject_dir: Path, manifest: dict, name: str, *, r
     if not path.exists():
         raise FileNotFoundError(f"subject bundle artifact {name!r} is missing: {path}")
     return path
+
+
+def _standing_sole_planes(marker_layout, markers, sides=("left", "right")):
+    """Fit each foot's ground plane from the static standing capture.
+
+    Args:
+        marker_layout: Compiled neutral subject marker layout.
+        markers: Decoded static C3D markers in the Newton laboratory frame.
+        sides: Foot sides to fit.
+
+    Returns:
+        The fitted sole plane of each foot, keyed by side.
+    """
+    columns = {name: index for index, name in enumerate(markers.marker_names)}
+    planes = {}
+    for side in sides:
+        body = f"foot_{side}"
+        sites, selected = [], []
+        for entry in marker_layout.markers:
+            if entry.body != body:
+                continue
+            sources = NATIVE_MARKER_SOURCES.get(entry.name, ())
+            if len(sources) != 1 or sources[0] not in columns:
+                continue
+            sites.append(entry.position)
+            selected.append(columns[sources[0]])
+        if len(selected) < 3:
+            raise ValueError(f"{body} needs three measured markers to register its sole plane")
+        plane = fit_sole_plane(
+            standing_foot_poses(np.asarray(sites), markers.positions[:, selected], markers.valid[:, selected])
+        )
+        planes[side] = plane.level_roll()
+    return planes
+
+
+def _register_foot_contact(config, foot_bounds, marker_layout, markers, ground_offset_z):
+    """Place anatomical contact spheres on each measured standing sole plane.
+
+    The scaled OpenSim foot mesh is a skeleton, so its lowest vertex is bone
+    rather than the surface the subject stands on. The standing capture
+    measures that surface directly, including heel pad and shoe.
+
+    Args:
+        config: Subject configuration carrying the provisional root height.
+        ground_offset_z: Provisional vertical registration already in ``config`` [m].
+        foot_bounds: Foot mesh bounding box per side in the foot body frame.
+        marker_layout: Compiled neutral subject marker layout.
+        markers: Decoded static C3D markers in the Newton laboratory frame.
+
+    Returns:
+        ``(layout, planes)`` with the registered contact layout and the fitted
+        sole planes.
+    """
+    planes = _standing_sole_planes(marker_layout, markers)
+    axes = {side: foot_axes_from_bounds(side, *foot_bounds[side]) for side in planes}
+    radius = min(
+        place_foot_spheres(
+            side,
+            planes[side],
+            origin=origin,
+            forward=forward,
+            lateral=lateral,
+            foot_length=length,
+            toe_body=f"foot_{side}",
+            foot_body=f"foot_{side}",
+        )[0].radius
+        for side, (origin, forward, lateral, length) in axes.items()
+    )
+    spheres = {
+        side: place_foot_spheres(
+            side,
+            planes[side],
+            origin=origin,
+            forward=forward,
+            lateral=lateral,
+            foot_length=length,
+            toe_body=f"foot_{side}",
+            foot_body=f"foot_{side}",
+            radius=radius,
+        )
+        for side, (origin, forward, lateral, length) in axes.items()
+    }
+    transforms = simple_gait_body_transforms(config)
+    lowest = min(
+        float(transforms[f"foot_{side}"][2, 3]) + sphere.center[2] - radius
+        for side, placed in spheres.items()
+        for sphere in placed
+    )
+    centers = {side: tuple(sphere.center for sphere in placed) for side, placed in spheres.items()}
+    return FootContactLayout(radius, centers, ground_offset_z - lowest), planes
 
 
 _SUBJECT_SOURCE_SUFFIXES = (".c3d", ".txt")
@@ -158,6 +257,8 @@ def _write_subject_bundle_manifest(
     args,
     config: SimpleGaitConfig,
     visual_mesh_count: int,
+    contact_layout=None,
+    sole_planes=None,
 ) -> None:
     """Publish the metadata needed to reopen one compiled subject folder."""
     artifacts = {"model": "model/subject.xml"}
@@ -193,6 +294,26 @@ def _write_subject_bundle_manifest(
             "height_m": float(args.body_height),
             "hip_width_m": float(2.0 * config.hip_half_width),
             "visual_mesh_count": int(visual_mesh_count),
+        },
+        "contact": None
+        if contact_layout is None
+        else {
+            "sphere_radius_m": float(contact_layout.radius),
+            "spheres_per_foot": {side: len(values) for side, values in contact_layout.centers.items()},
+            "landmarks": [name for name, _, _, _ in FOOT_SPHERE_LAYOUT],
+            "root_height_offset_m": float(contact_layout.root_height_offset_z),
+            "sole_plane": None
+            if sole_planes is None
+            else {
+                side: {
+                    "normal": [float(value) for value in plane.normal],
+                    "offset_m": float(plane.offset),
+                    "standing_samples": int(plane.samples),
+                    "standing_residual_m": float(plane.residual),
+                    "source": "static standing capture, frontal tilt levelled",
+                }
+                for side, plane in sole_planes.items()
+            },
         },
         "artifacts": artifacts,
         "sources": {
@@ -325,6 +446,7 @@ class Example:
         self.sim_time = 0.0
         self.calibration = None
         self.calibration_points = None
+        self.sole_planes = None
         default_subject_dir = (
             Path(__file__).resolve().parents[3] / "projects" / "gait_c3d" / "assets" / "s001_calibrated"
         )
@@ -751,6 +873,39 @@ class Example:
             )
             print(f"Markers: {len(self.marker_layout.markers)} native MJCF sites -> {self.marker_layout.path}")
 
+        if contact_layout is not None and visuals.foot_bounds is not None and self.marker_layout is not None:
+            contact_layout, self.sole_planes = _register_foot_contact(
+                config,
+                visuals.foot_bounds,
+                self.marker_layout,
+                markers,
+                source_ground_offset_z,
+            )
+            registration_shift = contact_layout.root_height_offset_z - source_ground_offset_z
+            source_ground_offset_z = contact_layout.root_height_offset_z
+            config = replace(config, pelvis_height=config.pelvis_height + registration_shift)
+            if source_body_transforms is not None:
+                joint_centers = joint_centers_from_official_transforms(
+                    config,
+                    source_body_transforms,
+                    source_ground_offset_z=source_ground_offset_z,
+                )
+            self.marker_layout = compile_subject_marker_layout(
+                marker_set_path,
+                marker_source_transforms,
+                config,
+                self.model_dir / "marker_layout.json",
+                source_ground_offset_z=source_ground_offset_z,
+            )
+            for side, plane in self.sole_planes.items():
+                pitch, roll = plane.tilt_degrees()
+                print(
+                    f"Sole {side}: {len(contact_layout.centers[side])} spheres, radius "
+                    f"{contact_layout.radius:.4f} m, pitch {pitch:.2f} deg, roll {roll:.2f} deg, "
+                    f"standing residual {plane.residual * 1000.0:.2f} mm"
+                )
+            print(f"Ground: root height offset {source_ground_offset_z:.4f} m ({registration_shift * 1000.0:+.1f} mm)")
+
         self.visual_mesh_count = len(visual_meshes)
         self.inertial_data = inertial_data
         self.joint_centers = joint_centers
@@ -771,6 +926,8 @@ class Example:
             args=args,
             config=config,
             visual_mesh_count=len(visual_meshes),
+            contact_layout=contact_layout,
+            sole_planes=self.sole_planes,
         )
         self._init_runtime(args)
 
@@ -827,11 +984,17 @@ class Example:
             for index, label in enumerate(self.model.shape_label)
             if "/contact_left_" in label or "/contact_right_" in label
         ]
-        if len(contact_spheres) != 8 or any(shape_types[index] != newton.GeoType.SPHERE for index in contact_spheres):
-            raise ValueError("subject model must contain eight foot contact spheres")
+        expected_spheres = 2 * (len(FOOT_SPHERE_LAYOUT) if self.sole_planes is not None else 4)
+        if len(contact_spheres) != expected_spheres or any(
+            shape_types[index] != newton.GeoType.SPHERE for index in contact_spheres
+        ):
+            raise ValueError(f"subject model must contain {expected_spheres} foot contact spheres")
         visible_feet = [index for index, label in enumerate(self.model.shape_label) if "/visual_foot_" in label]
-        if len(visible_feet) != 8 or any(shape_types[index] != newton.GeoType.SPHERE for index in visible_feet):
-            raise ValueError("subject viewer must contain eight visible foot spheres")
+        if len(visible_feet) != expected_spheres or any(
+            shape_types[index] != newton.GeoType.SPHERE for index in visible_feet
+        ):
+            raise ValueError(f"subject viewer must contain {expected_spheres} visible foot spheres")
+
         ground = [index for index, label in enumerate(self.model.shape_label) if label.endswith("/ground")]
         if len(ground) != 1 or shape_types[ground[0]] != newton.GeoType.PLANE:
             raise ValueError("subject model must contain one ground plane")

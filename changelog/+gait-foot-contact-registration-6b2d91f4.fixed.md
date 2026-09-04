@@ -1,0 +1,1 @@
+Stop the compiled gait subject from floating above the ground. The foot body height followed the mesh-derived contact sphere radius while the neutral body registration assumed the configured contact radius, so every shipped model stood about 10 mm above the ground plane.

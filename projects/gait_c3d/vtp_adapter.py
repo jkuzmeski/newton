@@ -72,6 +72,8 @@ class CompiledVisuals:
     manifest_path: Path
     meshes: tuple[SubjectVisualMesh, ...]
     contact_layout: FootContactLayout | None = None
+    foot_bounds: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] | None = None
+    """Foot mesh bounding box per side in the foot body frame [m]."""
 
 
 def _sha256(path: str | os.PathLike) -> str:
@@ -751,6 +753,7 @@ def _compile_scaled_vtp_visuals(
         mesh_records.append(record)
         compiled_geometry.append((output_path, target_body, body_local, triangles, record))
     contact_layout = None
+    foot_bounds = None
     if exact_transforms:
         foot_geometry = {
             side: [vertices for _, body, vertices, _, _ in compiled_geometry if body == f"foot_{side}"]
@@ -789,6 +792,10 @@ def _compile_scaled_vtp_visuals(
                 (forefoot_x, medial_y, center_z),
             )
         contact_layout = FootContactLayout(radius, centers, root_height_offset)
+        foot_bounds = {
+            side: (tuple(float(v) for v in minimum), tuple(float(v) for v in maximum))
+            for side, (minimum, maximum) in bounds.items()
+        }
 
     expected = {"pelvis", "torso", "femur_left", "femur_right", "tibia_left", "tibia_right"}
     if exact_transforms:
@@ -811,7 +818,7 @@ def _compile_scaled_vtp_visuals(
     }
     manifest_path = root / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n")
-    return CompiledVisuals(root, manifest_path, tuple(meshes), contact_layout)
+    return CompiledVisuals(root, manifest_path, tuple(meshes), contact_layout, foot_bounds)
 
 
 def compile_scaled_vtp_visuals(
@@ -848,4 +855,6 @@ def compile_scaled_vtp_visuals(
             source_body_transforms,
         )
         os.rename(staged_root, root)
-    return CompiledVisuals(root, root / staged.manifest_path.name, staged.meshes, staged.contact_layout)
+    return CompiledVisuals(
+        root, root / staged.manifest_path.name, staged.meshes, staged.contact_layout, staged.foot_bounds
+    )

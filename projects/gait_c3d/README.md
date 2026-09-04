@@ -517,6 +517,55 @@ Featherstone step than the earlier approximate model. The example defaults to
 substeps caused nonfinite leg state during the second display frame. Override
 with `--substeps` only when running an explicit convergence study.
 
+## Foot contact spheres and ground registration
+
+The scaled OpenSim foot geometry is a skeleton, so its lowest mesh vertex is
+bone, not the surface the subject stands on. Placing contact spheres at the
+corners of that mesh bounding box left both subjects floating: 22 to 34 mm
+above the ground through stance, with the modelled sole tilted against the
+measured one, only 36 to 40 mm of frontal base of support, overlapping
+spheres, and two spheres per foot hanging in free air.
+
+`projects/gait_c3d/foot_contact.py` separates the two decisions that rule
+confused.
+
+**Where the ground is.** A world ground plane seen from a foot body frame is
+the plane `(R^T z) . x == -t_z`. Averaging that over the static standing
+capture gives the surface the subject stands on, including heel pad and shoe.
+The foot pose per standing sample comes from a rigid fit of the compiled foot
+marker sites onto their measured positions, so no extra input is needed. The
+frontal tilt of that plane is levelled: standing is toed out and rolled 5 to 8
+degrees against walking, while standing pitch and plane height match walking
+within 0.5 degrees and 0.5 mm.
+
+**Where the spheres sit.** Six landmarks per foot follow the mean of two
+published six-sphere sets, the Lin and Pandy lineage used by OpenCap and the
+OpenSim `example3DWalking` set, expressed as fractions of the subject's own
+foot length: heel 7%, lateral rearfoot 33%, fifth metatarsal head 59%, first
+metatarsal head 71%, lateral toes 83%, hallux 96%. The radius is 13% of foot
+length, clamped to 20 to 35 mm and reduced further if two spheres would
+overlap. The neutral root height then registers the lowest sphere surface to
+`z = 0`.
+
+Measured on the fitted trials, per foot contact sphere surface height above
+the ground during stance:
+
+| | neutral pose | standing | locomotion stance median |
+|---|---|---|---|
+| mesh corner spheres | +10.2 mm float | +37 mm float | +33.6 mm (S001), +22.1 mm (S014) |
+| registered spheres | 0.0 mm | within 3 mm | -6.1 mm (S001), -9.5 mm (S014) |
+
+Slight penetration under load is expected and is what generates contact force;
+published compliant foot models sit 7 to 21 mm inside the ground at load. The
+remaining spread comes from the foot being one rigid body with no
+metatarsophalangeal joint, so the hallux sphere digs in at push-off.
+
+The registration is recorded in `subject.json` under `contact`: sphere radius,
+count per foot, landmark names, root height offset, and each foot's sole plane
+normal, offset, standing sample count and fit residual. Rebuild a subject to
+apply it; no motion is changed, because the measured markers were already
+registered to the floor.
+
 ## Treadmill-to-overground motion
 
 A treadmill trial holds the subject near the laboratory origin while the belt

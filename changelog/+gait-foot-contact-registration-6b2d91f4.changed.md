@@ -1,0 +1,1 @@
+Place gait subject foot contact spheres at six anatomical landmarks on a sole plane measured from the static standing capture, instead of at the corners of the foot bone mesh bounding box. Stance foot height moves from 22-34 mm of float to a few millimetres, the frontal base of support grows from about 38 mm to about 106 mm, and neighbouring spheres no longer overlap.
