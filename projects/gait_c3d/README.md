@@ -515,6 +515,52 @@ Featherstone step than the earlier approximate model. The example defaults to
 substeps caused nonfinite leg state during the second display frame. Override
 with `--substeps` only when running an explicit convergence study.
 
+## Treadmill-to-overground motion
+
+A treadmill trial holds the subject near the laboratory origin while the belt
+carries the ground backward. `projects/gait_c3d/treadmill.py` recovers the
+overground motion with the virtual-origin map of Jung and Lee, *Sensors* 2021,
+21(3), 786: overground position equals laboratory position minus a virtual
+origin that travels with the belt. That paper measures belt travel optically
+because a consumer treadmill exposes no speed signal, so its belt marker chain,
+re-indexing and sag projection are replaced here by the measured
+`leftbelt_distance` channel of a Motek D-Flow `tm0001.txt` log.
+
+The map is a pure time-varying translation, so it is applied to the fitted free
+root **after** inverse kinematics. Forward kinematics is equivariant under a
+root translation, so the joint angles, marker targets and every published
+residual are identical to the laboratory-frame fit, while the solver keeps
+working in its original bounded frame. The finite-difference velocities are
+computed after the shift, so the root linear velocity gains the belt speed.
+
+Keep the log next to the trial C3D as `subjects/S001/tm0001.txt`. The motion fit
+then converts to overground automatically:
+
+```bash
+uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
+  --subject projects/gait_c3d/subjects/S001 \
+  --c3d "projects/gait_c3d/subjects/S001/Trial 101.v3d.c3d" \
+  --start-frame 800 --end-frame 1400 --max-frames 0
+```
+
+The replay camera follows the subject whenever a treadmill transform is
+applied. Use `--camera fixed` to hold the view, `--no-overground` to keep the
+laboratory frame, `--treadmill-log` for a log outside the subject bundle,
+`--belt-offset` for a measured log-to-capture time offset, and `--belt-side` to
+choose a channel.
+
+Belt travel is resampled onto the C3D frame times, never onto log sample
+indices, and the piecewise-linear D-Flow speed reference is integrated exactly.
+The resampler reproduces per-frame belt displacement to 1.3e-5 m. `"auto"`
+belt-side selection refuses a split-belt trial, because one virtual origin only
+represents a tied belt; a split-belt protocol needs one origin per foot.
+
+On S001 frames 800-1400 the belt travels 8.985 m, the fitted root travels
+9.038 m, the mean root fore-aft velocity is 1.509 m/s against a commanded
+1.5 m/s, and the median fore-aft speed of a stance heel marker drops from about
+1.5 m/s to 20 mm/s. The fitted motion manifest records the log file and hash,
+belt side, sync offset, offset axis, travel and the tied-belt residual.
+
 ## Official OpenSim subject building
 
 When `--template` is supplied, the progress example starts from static C3D

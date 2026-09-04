@@ -34,6 +34,42 @@ from projects.gait_c3d.native_motion_fit import (
     solve_marker_sequence,
     write_native_motion_artifact,
 )
+from projects.gait_c3d.treadmill import belt_motion_for_frames, find_treadmill_log, load_treadmill_log
+
+
+def _resolve_belt_motion(subject: Path, args, frame_count: int, rate: float):
+    """Return the belt motion for a trial, or ``None`` for a lab-frame fit.
+
+    Args:
+        subject: Compiled subject bundle root.
+        args: Parsed example arguments.
+        frame_count: Source C3D point-frame count.
+        rate: Source C3D point rate [Hz].
+    """
+    if args.no_overground:
+        return None
+    path = Path(args.treadmill_log) if args.treadmill_log else find_treadmill_log(subject)
+    if path is None:
+        return None
+    belt = belt_motion_for_frames(
+        load_treadmill_log(path),
+        frame_count,
+        rate=rate,
+        side=args.belt_side,
+        offset=args.belt_offset,
+    )
+    print(f"Treadmill: {belt.travel:.3f} m of {belt.side} belt travel from {path}")
+    return belt
+
+
+_CAMERA_POSITION = (3.2, -3.2, 1.7)
+"""Replay camera position for a subject standing at the origin [m]."""
+
+_CAMERA_PITCH = -5.0
+"""Replay camera pitch [deg]."""
+
+_CAMERA_YAW = 135.0
+"""Replay camera yaw [deg]."""
 
 
 def _default_motion_output(subject: Path, c3d_path: str | Path) -> Path:
@@ -186,7 +222,7 @@ class Example:
             len(self.visible_attachments), wp.vec3(0.10, 0.75, 0.98), dtype=wp.vec3, device=self.model.device
         )
         self.viewer.set_model(self.model)
-        self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
+        self._init_camera(args)
         print(
             f"Synthetic native IK: {len(self.visible_attachments)}/{len(self.attachments)} markers, "
             f"{len(self.frames)} frames, neutral RMS {self.neutral_rms * 1000.0:.2f} mm"
@@ -250,7 +286,7 @@ class Example:
             len(self.visible_indices), wp.vec3(0.10, 0.75, 0.98), dtype=wp.vec3, device=self.model.device
         )
         self.viewer.set_model(self.model)
-        self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
+        self._init_camera(args)
         print(
             f"Loaded native motion: {len(self.visible_indices)}/{len(self.attachments)} always-valid markers, "
             f"{len(self.motion.times)} frames from {motion_path}"
@@ -318,6 +354,7 @@ class Example:
                     model_manifest.get("ground", {}).get("global_offset_m", (0.0, 0.0, 0.0)), dtype=np.float64
                 )
             registration_mode = "saved_subject_ground_offset"
+        belt = _resolve_belt_motion(subject, args, len(source.times), source.rate)
         iterations = 40 if args.iterations is None else args.iterations
         batch_size = 0 if args.batch_size is None else args.batch_size
         warmup_frames = _warmup_frame_count(
@@ -351,6 +388,7 @@ class Example:
             self.attachments,
             mapped,
             self.model.joint_q.numpy(),
+            belt=belt,
             registration=registration,
             iterations=iterations,
             joint_limit_weight=args.joint_limit_weight,
@@ -377,6 +415,7 @@ class Example:
                 "stride": args.stride,
                 "max_frames": args.max_frames,
                 "registration_mode": registration_mode,
+                "overground": belt is not None,
             },
         )
         self.real_motion = True
@@ -396,7 +435,7 @@ class Example:
             len(self.visible_indices), wp.vec3(0.10, 0.75, 0.98), dtype=wp.vec3, device=self.model.device
         )
         self.viewer.set_model(self.model)
-        self.viewer.set_camera(pos=wp.vec3(3.2, -3.2, 1.7), pitch=-5.0, yaw=135.0)
+        self._init_camera(args)
         self.pipeline_seconds = time.perf_counter() - pipeline_start
         print(
             f"Real native IK: {len(self.visible_indices)}/{len(self.attachments)} always-valid markers, "
@@ -507,8 +546,29 @@ class Example:
         if jumps and max(jumps) > 0.8:
             raise ValueError("warm-started synthetic IK produced a frame jump")
 
+    def _init_camera(self, args):
+        """Place the replay camera and decide whether it follows the subject.
+
+        An overground motion leaves a fixed view within a few strides, so a
+        treadmill-mapped trial follows the fitted root by default.
+
+        Args:
+            args: Parsed example arguments.
+        """
+        treadmill = self.motion.treadmill if self.real_motion else None
+        self.camera_follow = self.real_motion and (
+            args.camera == "follow" or (args.camera == "auto" and treadmill is not None)
+        )
+        self.camera_origin = np.asarray(self.motion.joint_q[0, :3], dtype=np.float64) if self.camera_follow else None
+        self.viewer.set_camera(pos=wp.vec3(*_CAMERA_POSITION), pitch=_CAMERA_PITCH, yaw=_CAMERA_YAW)
+
     def render(self):
         """Render target and predicted marker overlays."""
+        if self.camera_follow:
+            travel = np.asarray(self.motion.joint_q[self.frame_index, :3], dtype=np.float64) - self.camera_origin
+            position = np.asarray(_CAMERA_POSITION, dtype=np.float64)
+            position[:2] += travel[:2]
+            self.viewer.set_camera(pos=wp.vec3(*position), pitch=_CAMERA_PITCH, yaw=_CAMERA_YAW)
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state)
         prefix = "motion" if self.real_motion else "synthetic"
@@ -539,6 +599,33 @@ def create_parser():
         help="Override the default subject-local fitted-motion output directory",
     )
     parser.add_argument("--registration", help="Optional JSON 4x4 C3D-to-model registration matrix")
+    parser.add_argument(
+        "--treadmill-log",
+        help="Treadmill belt log; the subject-local tm0001.txt is used when present",
+    )
+    parser.add_argument(
+        "--no-overground",
+        action="store_true",
+        help="Keep the fitted motion in the treadmill laboratory frame",
+    )
+    parser.add_argument(
+        "--belt-side",
+        default="auto",
+        choices=("auto", "left", "right", "mean"),
+        help="Belt channel driving the overground offset",
+    )
+    parser.add_argument(
+        "--belt-offset",
+        type=float,
+        default=0.0,
+        help="Treadmill log time of capture frame zero [s]",
+    )
+    parser.add_argument(
+        "--camera",
+        default="auto",
+        choices=("auto", "fixed", "follow"),
+        help="Replay camera; auto follows an overground motion",
+    )
     parser.add_argument("--c3d-up-axis", default="+Z", help="Lab axis that points upward")
     parser.add_argument("--c3d-forward-axis", default="-Y", help="Lab axis that points subject-forward")
     parser.add_argument("--start-frame", type=int, default=0, help="First C3D frame index")

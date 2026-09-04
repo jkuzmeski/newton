@@ -1,0 +1,1 @@
+Map treadmill gait to overground motion from a Motek D-Flow belt log. The fitted free root is translated by the measured belt travel after inverse kinematics, so joint angles and marker residuals are unchanged while the root velocity gains the belt speed. The applied transform is sealed in the fitted-motion manifest.

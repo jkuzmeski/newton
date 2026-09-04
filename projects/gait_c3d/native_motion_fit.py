@@ -21,6 +21,13 @@ import newton.ik as ik
 
 from .c3d_adapter import C3DMarkerTrajectory
 from .marker_clusters import TRACKING_CLUSTER_C3D_SOURCES, TRACKING_CLUSTER_MARKERS
+from .treadmill import BeltMotion
+
+_MOTION_SCHEMA = "gait_native_motion_artifact_2"
+"""Current sealed fitted-motion manifest schema."""
+
+_MOTION_SCHEMA_HISTORY = (_MOTION_SCHEMA, "gait_native_motion_artifact_1")
+"""Schemas this loader accepts; version 1 predates the treadmill block."""
 
 
 @wp.kernel
@@ -708,6 +715,12 @@ def free_root_quaternion_slice(model: newton.Model) -> slice | None:
     return None
 
 
+def free_root_translation_slice(model: newton.Model) -> slice | None:
+    """Return the free-root translation coordinate slice, if the model has one."""
+    quaternion = free_root_quaternion_slice(model)
+    return None if quaternion is None else slice(quaternion.start - 3, quaternion.start)
+
+
 def joint_limit_violation(model: newton.Model, joint_q: np.ndarray) -> float:
     """Return the maximum bounded joint-coordinate limit violation [m or rad]."""
     joint_q = np.asarray(joint_q, dtype=np.float64)
@@ -857,6 +870,9 @@ class NativeMotionArtifact:
     registration: np.ndarray
     """4x4 row-vector registration from C3D Newton frame to model frame."""
 
+    treadmill: dict | None = None
+    """Applied treadmill-to-overground transform, or ``None`` for a lab-frame fit."""
+
 
 def map_c3d_markers_to_native(
     markers: C3DMarkerTrajectory,
@@ -992,6 +1008,7 @@ def fit_c3d_marker_motion(
     markers: NativeC3DMarkers,
     seed: np.ndarray,
     *,
+    belt: BeltMotion | None = None,
     registration: np.ndarray | None = None,
     iterations: int = 40,
     joint_limit_weight: float = 0.1,
@@ -1009,6 +1026,8 @@ def fit_c3d_marker_motion(
         attachments: Native marker site bindings.
         markers: C3D markers reordered into attachment order.
         seed: Initial generalized coordinates [m or rad].
+        belt: Treadmill belt motion over the complete source trial. When given,
+            the fitted free root is moved into the overground frame.
         registration: Row-vector 4x4 C3D-to-model transform.
         iterations: LM iterations per selected frame.
         joint_limit_weight: Weight of the public joint-limit objective.
@@ -1092,9 +1111,30 @@ def fit_c3d_marker_motion(
                 where=body_count > 0,
             )
         )
-    joint_qd = finite_difference_joint_qd(model, joint_q, registered.times[frame_indices])
+    times = registered.times[frame_indices]
+    treadmill = None
+    if belt is None:
+        joint_qd = finite_difference_joint_qd(model, joint_q, times)
+    else:
+        if len(belt.times) != len(registered.times):
+            raise ValueError("belt motion must cover every source C3D frame")
+        translation = free_root_translation_slice(model)
+        if translation is None:
+            raise ValueError("a treadmill-to-overground transform needs a free-root model")
+        window = belt.select(frame_indices)
+        offsets = window.offsets()
+        # Marker residuals are computed above in the laboratory frame, so the
+        # published diagnostics of an overground fit match the lab-frame fit
+        # exactly. Only the root translation and its velocity move.
+        overground = joint_q.astype(np.float64)
+        overground[:, translation] += offsets
+        joint_qd = finite_difference_joint_qd(model, overground, times)
+        joint_q = overground.astype(np.float32)
+        predictions = (predictions.astype(np.float64) + offsets[:, None, :]).astype(np.float32)
+        targets = np.where(valid[..., None], targets.astype(np.float64) + offsets[:, None, :], 0.0).astype(np.float32)
+        treadmill = window.manifest_block()
     return NativeMotionArtifact(
-        registered.times[frame_indices],
+        times,
         joint_q,
         joint_qd,
         targets,
@@ -1112,6 +1152,7 @@ def fit_c3d_marker_motion(
         markers.source_file,
         markers.source_sha256,
         registration.copy(),
+        treadmill,
     )
 
 
@@ -1131,7 +1172,7 @@ def load_native_motion_artifact(path: str | os.PathLike) -> NativeMotionArtifact
         "algorithm": "sha256",
         "content_sha256": hashlib.sha256(_canonical_motion_json(manifest)).hexdigest(),
     }
-    if seal != expected_seal or manifest.get("schema_version") != "gait_native_motion_artifact_1":
+    if seal != expected_seal or manifest.get("schema_version") not in _MOTION_SCHEMA_HISTORY:
         raise ValueError("native motion manifest seal or schema mismatch")
 
     payload = manifest.get("payload", {})
@@ -1226,6 +1267,7 @@ def load_native_motion_artifact(path: str | os.PathLike) -> NativeMotionArtifact
         source["file"],
         source["sha256"],
         registration,
+        manifest.get("treadmill"),
     )
 
 
@@ -1283,7 +1325,7 @@ def write_native_motion_artifact(
         if marker_mapping is not None:
             marker_mapping_manifest["acquisition"] = marker_mapping
         manifest = {
-            "schema_version": "gait_native_motion_artifact_1",
+            "schema_version": _MOTION_SCHEMA,
             "coordinate_system": {
                 "frame": "Newton world",
                 "length_unit": "m",
@@ -1305,6 +1347,7 @@ def write_native_motion_artifact(
                 "end_s": float(motion.times[-1]),
             },
             "registration": motion.registration.tolist(),
+            "treadmill": motion.treadmill,
             "model": _artifact_file_metadata(model_path),
             "calibration": _artifact_file_metadata(calibration_path),
             "settings": settings or {},

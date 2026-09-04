@@ -383,7 +383,8 @@ class TestNativeRealMotion(unittest.TestCase):
             )
             manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
             self.assertTrue((output / "motion.npz").is_file())
-            self.assertEqual(manifest["schema_version"], "gait_native_motion_artifact_1")
+            self.assertEqual(manifest["schema_version"], "gait_native_motion_artifact_2")
+            self.assertIsNone(manifest["treadmill"])
             self.assertEqual(manifest["frames"]["count"], 2)
             self.assertEqual(manifest["markers"]["valid_count"], 2 * len(self.attachments))
             self.assertEqual(
