@@ -1,0 +1,1 @@
+Keep subject-local treadmill belt logs when rebuilding a gait subject bundle with `--overwrite`. The rebuild previously deleted every file that was not a `.c3d` capture, including the `tm0001.txt` log needed for the treadmill-to-overground transform.

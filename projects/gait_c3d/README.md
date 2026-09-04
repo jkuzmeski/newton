@@ -227,6 +227,7 @@ bundle. The layout is:
 projects/gait_c3d/subjects/S002/
 ├── Cal 101.v3d.c3d       # static calibration
 ├── Trial 101.v3d.c3d     # dynamic trial(s)
+├── tm0001.txt            # treadmill belt log, if the trial used one
 ├── markers/              # generated Newton-frame marker artifact
 ├── model/                # generated native MJCF and marker layout
 └── subject.json          # generated bundle manifest
@@ -285,8 +286,9 @@ uv run --extra dev --with ezc3d -m newton.examples native_motion_fit \
 ```
 
 Use `S002_calibrated` in the last command when using the calibrated variant.
-Rebuilding with `--overwrite` preserves all `.c3d` files already inside the
-subject directory, so keeping the source data there is safe.
+Rebuilding with `--overwrite` preserves the raw acquisition files already
+inside the subject directory, which are its `.c3d` captures and its `.txt`
+treadmill logs, so keeping the source data there is safe.
 
 ## Visual marker-set mapping
 

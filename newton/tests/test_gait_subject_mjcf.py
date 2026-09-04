@@ -14,7 +14,7 @@ import numpy as np
 import newton
 from newton.examples.opensim.example_opensim_subject import Example as OpenSimSubjectExample
 from newton.examples.opensim.example_opensim_subject import (
-    _clear_subject_directory_preserving_c3d,
+    _clear_subject_directory_preserving_sources,
     _resolve_subject_artifact,
     _write_subject_bundle_manifest,
     create_parser,
@@ -40,19 +40,26 @@ class TestGaitSubjectMJCF(unittest.TestCase):
     def tearDownClass(cls):
         newton.use_coord_layout_targets = cls.previous_target_layout
 
-    def test_overwrite_preserves_subject_local_c3d_sources(self):
-        """Preserve subject-local C3D files while clearing generated bundle output."""
+    def test_overwrite_preserves_subject_local_acquisition_sources(self):
+        """Preserve subject-local acquisition files while clearing generated output.
+
+        A rebuild must keep every raw source the laboratory delivered with the
+        trial, including the treadmill belt log, not only the C3D files.
+        """
         with tempfile.TemporaryDirectory() as directory:
             subject = Path(directory) / "S002"
             (subject / "model").mkdir(parents=True)
             source = subject / "Trial 101.v3d.c3d"
             source.write_bytes(b"C3D source")
+            belt_log = subject / "tm0001.txt"
+            belt_log.write_text("Time\tleftbelt_speed\n0.0\t1.5\n", encoding="utf-8")
             (subject / "subject.json").write_text("stale", encoding="utf-8")
             (subject / "model" / "subject.xml").write_text("stale", encoding="utf-8")
 
-            _clear_subject_directory_preserving_c3d(subject)
+            _clear_subject_directory_preserving_sources(subject)
 
             self.assertEqual(source.read_bytes(), b"C3D source")
+            self.assertTrue(belt_log.is_file())
             self.assertFalse((subject / "subject.json").exists())
             self.assertFalse((subject / "model").exists())
 

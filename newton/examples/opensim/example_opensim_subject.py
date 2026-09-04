@@ -99,12 +99,20 @@ def _resolve_subject_artifact(subject_dir: Path, manifest: dict, name: str, *, r
     return path
 
 
-def _clear_subject_directory_preserving_c3d(subject_dir: Path) -> None:
-    """Clear generated bundle files without deleting subject-local C3D sources."""
-    preserved = {path.resolve() for path in subject_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".c3d"}
+_SUBJECT_SOURCE_SUFFIXES = (".c3d", ".txt")
+"""Raw acquisition file types a subject rebuild must never delete."""
+
+
+def _clear_subject_directory_preserving_sources(subject_dir: Path) -> None:
+    """Clear generated bundle files without deleting subject-local acquisition sources."""
+    preserved = {
+        path.resolve()
+        for path in subject_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in _SUBJECT_SOURCE_SUFFIXES
+    }
 
     def contains_preserved_file(directory: Path) -> bool:
-        """Return whether a directory contains one of the preserved C3D files."""
+        """Return whether a directory contains one of the preserved source files."""
         return any(path == directory or directory in path.parents for path in preserved)
 
     def clear(directory: Path) -> None:
@@ -416,7 +424,7 @@ class Example:
             raise ValueError("--base-subject and --subject must refer to different bundles")
         if self.subject_dir.exists() and any(self.subject_dir.iterdir()):
             if args.overwrite_subject_dir:
-                _clear_subject_directory_preserving_c3d(self.subject_dir)
+                _clear_subject_directory_preserving_sources(self.subject_dir)
             else:
                 raise FileExistsError(
                     f"subject directory is not empty: {self.subject_dir}; pass --overwrite to rebuild"

@@ -20,7 +20,6 @@ from projects.gait_c3d.native_motion_fit import (
     write_native_motion_artifact,
 )
 from projects.gait_c3d.treadmill import (
-    BeltMotion,
     COLUMNS,
     BeltMotion,
     belt_motion,
