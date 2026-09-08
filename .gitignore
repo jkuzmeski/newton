@@ -78,3 +78,7 @@ docs/_static/viser/
 # Locally compiled gait subject bundles
 /projects/gait_c3d/subjects/*
 !/projects/gait_c3d/subjects/.gitkeep
+
+# Generated Digital Instron calibration and presentation outputs
+/DigitalInstron/processed/v2_cache/
+/DigitalInstron/digital_shoe_showcase/

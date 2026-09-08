@@ -960,6 +960,28 @@ python -m newton.examples basic_urdf --device cuda:0
 python -m newton.examples basic_viewer --viewer gl --num-frames 500 --device cpu
 ```
 
+## Digital Instron / Digital Shoe showcase
+
+This fork includes a standalone shoe calibrated from Digital Instron measurements.
+Export the fitted artifact and HTML report, then launch the Virtual Instron:
+
+```bash
+uv run --extra examples -m projects.digital_instron_v2.export_digital_shoe \
+  --manifest DigitalInstron/manifest_v2.json \
+  --output DigitalInstron/digital_shoe_showcase
+uv run --extra examples -m projects.digital_shoe.showcase \
+  --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json \
+  --mode instron --viewer gl
+```
+
+Use `--mode drop` for the 80 kg free-body drop or `--mode rocker` for the
+heel-to-toe demonstration. See [Digital Shoe](projects/digital_shoe/README.md)
+for headless tests, GIF recording, methods, and known validation limits.
+The measurements and footwear assets are restricted to internal fork use; see
+[asset provenance](ASSET_PROVENANCE.md) before redistribution.
+The integration retains the current Newton-native gait and motion adapters;
+it does not restore the branch's legacy OpenSim runtime or human-shoe pipeline.
+
 ## Contributing and Development
 
 See the [contribution guidelines](https://github.com/newton-physics/newton-governance/blob/main/CONTRIBUTING.md) and the [development guide](https://newton-physics.github.io/newton/latest/guide/development.html) for instructions on how to contribute to Newton.

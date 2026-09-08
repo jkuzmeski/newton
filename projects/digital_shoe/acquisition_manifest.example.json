@@ -1,0 +1,189 @@
+{
+  "acquisitions": [
+    {
+      "channels": {
+        "displacement": {
+          "column": "displacement_m",
+          "compression_sign": 1,
+          "unit": "m"
+        },
+        "force": {
+          "column": "force_n",
+          "compression_sign": 1,
+          "unit": "N"
+        },
+        "time": {
+          "column": "time_s",
+          "unit": "s"
+        }
+      },
+      "id": "rear_cyclic_0p10_r1",
+      "observed": "TO_BE_RECORDED",
+      "protocol_id": "rear_cyclic_0p10",
+      "raw_path": "raw/rear_cyclic_0p10_r1.csv",
+      "repeat": 1,
+      "sha256": "TO_BE_RECORDED"
+    },
+    {
+      "channels": {
+        "displacement": {
+          "column": "displacement_m",
+          "compression_sign": 1,
+          "unit": "m"
+        },
+        "force": {
+          "column": "force_n",
+          "compression_sign": 1,
+          "unit": "N"
+        },
+        "time": {
+          "column": "time_s",
+          "unit": "s"
+        }
+      },
+      "id": "rear_cyclic_2p00_r1",
+      "observed": "TO_BE_RECORDED",
+      "protocol_id": "rear_cyclic_2p00",
+      "raw_path": "raw/rear_cyclic_2p00_r1.csv",
+      "repeat": 1,
+      "sha256": "TO_BE_RECORDED"
+    },
+    {
+      "channels": {
+        "displacement": {
+          "column": "displacement_m",
+          "compression_sign": 1,
+          "unit": "m"
+        },
+        "force": {
+          "column": "force_n",
+          "compression_sign": 1,
+          "unit": "N"
+        },
+        "time": {
+          "column": "time_s",
+          "unit": "s"
+        }
+      },
+      "id": "rear_hold_mid_r1",
+      "observed": "TO_BE_RECORDED",
+      "protocol_id": "rear_hold_mid",
+      "raw_path": "raw/rear_hold_mid_r1.csv",
+      "repeat": 1,
+      "sha256": "TO_BE_RECORDED"
+    },
+    {
+      "channels": {
+        "displacement": {
+          "column": "displacement_m",
+          "compression_sign": 1,
+          "unit": "m"
+        },
+        "force": {
+          "column": "force_n",
+          "compression_sign": 1,
+          "unit": "N"
+        },
+        "time": {
+          "column": "time_s",
+          "unit": "s"
+        }
+      },
+      "id": "fullfoot_blind_1p00_r1",
+      "observed": "TO_BE_RECORDED",
+      "protocol_id": "fullfoot_blind_1p00",
+      "raw_path": "raw/fullfoot_blind_1p00_r1.csv",
+      "repeat": 1,
+      "sha256": "TO_BE_RECORDED"
+    }
+  ],
+  "fixtures": {
+    "fullfoot": {
+      "asset": "geometry/shoe_last.stl",
+      "asset_sha256": "TO_BE_RECORDED",
+      "type": "shoe_last"
+    },
+    "rearfoot": {
+      "radius_m": 0.022,
+      "type": "circular_punch"
+    }
+  },
+  "protocols": [
+    {
+      "control_mode": "displacement",
+      "cycles": 20,
+      "fixture_id": "rearfoot",
+      "id": "rear_cyclic_0p10",
+      "mode": "cyclic",
+      "period_s": 0.1,
+      "preconditioning_cycles": 20,
+      "recovery_s": 600,
+      "sample_rate_hz": 5000,
+      "target_displacement_m": 0.018,
+      "waveform": "triangle"
+    },
+    {
+      "control_mode": "displacement",
+      "cycles": 20,
+      "fixture_id": "rearfoot",
+      "id": "rear_cyclic_2p00",
+      "mode": "cyclic",
+      "period_s": 2.0,
+      "preconditioning_cycles": 20,
+      "recovery_s": 600,
+      "sample_rate_hz": 1000,
+      "target_displacement_m": 0.018,
+      "waveform": "triangle"
+    },
+    {
+      "control_mode": "displacement",
+      "fixture_id": "rearfoot",
+      "hold_duration_s": 60.0,
+      "id": "rear_hold_mid",
+      "mode": "hold_relaxation",
+      "preconditioning_cycles": 20,
+      "ramp_duration_s": 0.1,
+      "recovery_s": 600,
+      "sample_rate_hz": 5000,
+      "target_displacement_m": 0.012
+    },
+    {
+      "control_mode": "displacement",
+      "cycles": 20,
+      "fixture_id": "fullfoot",
+      "id": "fullfoot_blind_1p00",
+      "mode": "cyclic",
+      "period_s": 1.0,
+      "preconditioning_cycles": 20,
+      "recovery_s": 600,
+      "sample_rate_hz": 1000,
+      "target_displacement_m": 0.016,
+      "waveform": "triangle"
+    }
+  ],
+  "schema_version": "digital_shoe_acquisition_1",
+  "splits": {
+    "policy": "hold out an entire rate, fixture, and physical block",
+    "train_acquisition_ids": [
+      "rear_cyclic_0p10_r1",
+      "rear_cyclic_2p00_r1",
+      "rear_hold_mid_r1"
+    ],
+    "validate_acquisition_ids": [
+      "fullfoot_blind_1p00_r1"
+    ]
+  },
+  "study": {
+    "calibration_id": "RECORD_CALIBRATION_ID",
+    "condition": "new",
+    "humidity_percent": 45.0,
+    "load_cell_id": "RECORD_LOAD_CELL_ID",
+    "machine_id": "RECORD_MACHINE_ID",
+    "operator": "RECORD_OPERATOR",
+    "shoe_model": "example_running_shoe",
+    "side": "left",
+    "size": "US9",
+    "specimen_id": "FR3",
+    "temperature_c": 23.0
+  }
+}
