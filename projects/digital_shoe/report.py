@@ -102,7 +102,7 @@ def _material_rows(shoe: DigitalShoe) -> str:
         "equilibrium_fraction": ("Equilibrium fraction", "1"),
         "pasternak_n_per_m": ("Pasternak coupling", "N/m"),
         "effective_poisson_ratio": ("Effective Poisson ratio (fixed)", "1"),
-        "maxwell_relaxation_time_s": ("Maxwell relaxation time (fixed)", "s"),
+        "maxwell_relaxation_time_s": ("Maxwell relaxation time (fitted)", "s"),
     }
     values = shoe.raw["constitutive_model"]["parameters"]
     return "".join(

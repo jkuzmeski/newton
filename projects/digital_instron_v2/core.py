@@ -19,6 +19,7 @@ class Material:
     hyperfoam_exponent: float
     equilibrium_fraction: float
     pasternak_n_per_m: float
+    maxwell_relaxation_time_s: float = MAXWELL_RELAXATION_TIME_S
 
     def __post_init__(self) -> None:
         if not np.all(np.isfinite(tuple(self.__dict__.values()))):
@@ -29,6 +30,8 @@ class Material:
             raise ValueError("equilibrium fraction must be in (0, 1]")
         if self.pasternak_n_per_m < 0.0:
             raise ValueError("Pasternak coupling must be nonnegative")
+        if self.maxwell_relaxation_time_s <= 0.0:
+            raise ValueError("Maxwell relaxation time must be positive")
 
 
 # Fitted intact-shoe parameters produced by the checked-in Digital Instron
@@ -39,6 +42,7 @@ CALIBRATED_MATERIAL = Material(
     hyperfoam_exponent=5.130337945940782,
     equilibrium_fraction=0.10551133632840169,
     pasternak_n_per_m=918.131962374505,
+    maxwell_relaxation_time_s=MAXWELL_RELAXATION_TIME_S,
 )
 
 
@@ -101,10 +105,38 @@ def predict(trial: Trial, material: Material) -> np.ndarray:
     equilibrium = _hyperfoam_pressure(strain, material)
     pressure = np.array(equilibrium, copy=True)
     maxwell_fraction = (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction
-    pressure += _periodic_maxwell_branch(equilibrium, trial.dt_s, maxwell_fraction, MAXWELL_RELAXATION_TIME_S)
+    pressure += _periodic_maxwell_branch(equilibrium, trial.dt_s, maxwell_fraction, material.maxwell_relaxation_time_s)
+    # Clamp only the unilateral ground reaction, then add the shear-layer flux.
+    # Clamping their sum would clip the flux and invent support under columns
+    # that carry no compression, so the runtime uses this same order.
+    ground = np.maximum(pressure, 0.0)
     if trial.compression_laplacian_m_inv is not None:
-        pressure -= material.pasternak_n_per_m * trial.compression_laplacian_m_inv
-    return np.sum(trial.area_m2 * np.maximum(pressure, 0.0), axis=1)
+        ground = ground - material.pasternak_n_per_m * trial.compression_laplacian_m_inv
+    return np.sum(trial.area_m2 * ground, axis=1)
+
+
+HYSTERESIS_WEIGHT = 5.0
+PEAK_WEIGHT = 6.0
+
+
+def _trial_residual(trial: Trial, material: Material) -> np.ndarray:
+    """Return one trial's force, loop-area, and peak residuals.
+
+    Force error alone barely notices the hysteresis loop, because the loop is
+    small next to the peak load. The declared gates score peak force and loop
+    area as well, so the identification objective scores all three.
+    """
+    predicted = predict(trial, material)
+    scale = max(float(np.max(trial.force_n)), 1.0)
+    measured_loop = float(np.trapezoid(trial.force_n, trial.displacement_m))
+    loop_error = float(np.trapezoid(predicted, trial.displacement_m)) - measured_loop
+    return np.concatenate(
+        [
+            (predicted - trial.force_n) / scale,
+            [HYSTERESIS_WEIGHT * loop_error / max(abs(measured_loop), 1.0e-9)],
+            [PEAK_WEIGHT * (float(np.max(predicted)) - float(np.max(trial.force_n))) / scale],
+        ]
+    )
 
 
 def fit_material(
@@ -113,15 +145,13 @@ def fit_material(
     evaluations: int,
     history: list[dict[str, float]] | None = None,
 ) -> Material:
-    """Fit one material to all trials."""
+    """Fit one material to all trials against force, loop area, and peak."""
 
     from scipy.optimize import least_squares
 
     def residual(values: np.ndarray) -> np.ndarray:
         material = Material(*values)
-        return np.concatenate(
-            [(predict(trial, material) - trial.force_n) / max(float(np.max(trial.force_n)), 1.0) for trial in trials]
-        )
+        return np.concatenate([_trial_residual(trial, material) for trial in trials])
 
     def record(values: np.ndarray) -> None:
         if history is None:
@@ -134,15 +164,15 @@ def fit_material(
         }
         offset = 0
         for trial in trials:
-            count = len(trial.force_n)
+            count = len(trial.force_n) + 2
             row[f"loss_{trial.name}"] = float(np.mean(residuals[offset : offset + count] ** 2))
             offset += count
         history.append(row)
 
     x0 = np.asarray(list(initial.__dict__.values()))
     record(x0)
-    lower = [1.0e3, 0.1, 0.01, 0.0]
-    upper = [1.0e8, 20.0, 1.0, 1.0e5]
+    lower = [1.0e3, 0.1, 0.01, 0.0, 5.0e-3]
+    upper = [1.0e8, 20.0, 1.0, 1.0e5, 2.0]
     result = least_squares(
         residual,
         x0,

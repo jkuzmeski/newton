@@ -18,7 +18,7 @@ from projects.digital_shoe.artifact import MODEL_TYPE, SCHEMA_VERSION, validate_
 from projects.digital_shoe.report import write_report
 from projects.digital_shoe.runtime import ShoeMaterial
 
-from .core import EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material, predict
+from .core import EFFECTIVE_POISSON_RATIO, Material, predict
 from .dynamics import _neighbor_indices, build_foundation_geometry
 from .geometry import build_column_grid, load_mesh, transform_mesh
 from .phase1 import evaluate
@@ -173,7 +173,7 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
         fitted.equilibrium_fraction,
         fitted.pasternak_n_per_m,
         EFFECTIVE_POISSON_RATIO,
-        MAXWELL_RELAXATION_TIME_S,
+        fitted.maxwell_relaxation_time_s,
     )
     artifact = {
         "schema_version": SCHEMA_VERSION,

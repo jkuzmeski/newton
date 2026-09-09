@@ -121,6 +121,7 @@ def foundation_apply(
     contact_power: wp.array[wp.float32],
     max_compression: wp.array[wp.float32],
     column_force: wp.array[wp.vec3],
+    pressed_force: wp.array[wp.float32],
 ):
     """Pasternak coupling, per-column wrench into ``body_f``, and force diagnostics."""
     i = wp.tid()
@@ -134,10 +135,13 @@ def foundation_apply(
             lap += ci  # natural (zero-gradient) footprint boundary
     lap *= params.inv_h2
 
-    pressure = base_pressure[i] - params.pasternak * lap
-    if pressure < 0.0:
-        pressure = 0.0
-    fn = pressure * area[i]
+    # Clamp only the unilateral ground reaction. Clamping the combined pressure
+    # would also clip the shear-layer flux and invent support under columns that
+    # carry no compression at all.
+    ground = base_pressure[i]
+    if ground < 0.0:
+        ground = 0.0
+    fn = (ground - params.pasternak * lap) * area[i]
 
     q_body = body_q[carrier]
     world = wp.transform_point(q_body, anchor_local[i])
@@ -148,8 +152,11 @@ def foundation_apply(
 
     if ci > 0.0:
         fn = fn - params.normal_damping * point_vel[2]
-    if fn < 0.0:
-        fn = 0.0
+    # A column may now transmit a small pull where the shear layer lifts it.
+    # Friction still needs a nonnegative cone, so it uses the pressed part only.
+    pressed = fn
+    if pressed < 0.0:
+        pressed = 0.0
 
     # Anchored bristle (elastoplastic) Coulomb friction: a per-column tangential
     # spring pulls the contact patch back toward a world stick point, so a planted
@@ -157,9 +164,9 @@ def foundation_apply(
     # without needing a slip velocity. When the spring force would exceed the cone
     # mu*fn it saturates and the anchor slides forward onto the cone (kinetic regime).
     p_t = wp.vec2(world[0], world[1])
-    f_max = params.mu * fn
+    f_max = params.mu * pressed
     f_tan = wp.vec2(0.0, 0.0)
-    if fn <= 0.0 or params.friction_kt <= 0.0:
+    if pressed <= 0.0 or params.friction_kt <= 0.0:
         tangent_anchor[i] = p_t
         tangent_stuck[i] = 0
     else:
@@ -177,7 +184,8 @@ def foundation_apply(
     column_force[i] = force
     wp.atomic_add(body_f, carrier, wp.spatial_vector(force, wp.cross(r, force)))
     wp.atomic_add(normal_force, 0, fn)
-    wp.atomic_add(cop_moment, 0, wp.vec3(world[0] * fn, world[1] * fn, 0.0))
+    wp.atomic_add(cop_moment, 0, wp.vec3(world[0] * pressed, world[1] * pressed, 0.0))
+    wp.atomic_add(pressed_force, 0, pressed)
     wp.atomic_add(resultant_force, 0, force)
     wp.atomic_add(resultant_moment_origin, 0, wp.cross(world, force))
     wp.atomic_add(contact_power, 0, wp.dot(force, point_vel))
@@ -198,6 +206,7 @@ def foundation_reset(
     resultant_moment_origin: wp.array[wp.vec3],
     contact_power: wp.array[wp.float32],
     max_compression: wp.array[wp.float32],
+    pressed_force: wp.array[wp.float32],
 ):
     """Zero the per-substep foundation accumulators (and optionally the carrier wrench).
 
@@ -214,6 +223,7 @@ def foundation_reset(
     resultant_moment_origin[0] = wp.vec3(0.0, 0.0, 0.0)
     contact_power[0] = 0.0
     max_compression[0] = 0.0
+    pressed_force[0] = 0.0
     if clear_body_force != 0:
         body_f[carrier] = wp.spatial_vector(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
@@ -318,6 +328,7 @@ class MidsoleFoundation:
         self.contact_power = wp.zeros(1, dtype=wp.float32, device=device)
         self.max_compression = wp.zeros(1, dtype=wp.float32, device=device)
         self.column_force = wp.zeros(m, dtype=wp.vec3, device=device)
+        self.pressed_force = wp.zeros(1, dtype=wp.float32, device=device)
 
     def reset(self) -> None:
         """Clear the viscoelastic overstress history and release the friction bristles."""
@@ -350,6 +361,7 @@ class MidsoleFoundation:
                 self.resultant_moment_origin,
                 self.contact_power,
                 self.max_compression,
+                self.pressed_force,
             ],
             device=self.device,
         )
@@ -396,6 +408,7 @@ class MidsoleFoundation:
                 self.contact_power,
                 self.max_compression,
                 self.column_force,
+                self.pressed_force,
             ],
             device=self.device,
         )
@@ -403,10 +416,12 @@ class MidsoleFoundation:
     def diagnostics(self) -> dict[str, float]:
         """Return the last substep's total normal force, center of pressure, and active count."""
         fz = float(self.normal_force.numpy()[0])
+        pressed = float(self.pressed_force.numpy()[0])
         moment = self.cop_moment.numpy()[0]
-        cop = (float(moment[0] / fz), float(moment[1] / fz)) if fz > 1.0e-9 else (0.0, 0.0)
+        cop = (float(moment[0] / pressed), float(moment[1] / pressed)) if pressed > 1.0e-9 else (0.0, 0.0)
         return {
             "normal_force_n": fz,
+            "pressed_force_n": pressed,
             "cop_x_m": cop[0],
             "cop_y_m": cop[1],
             "active_columns": int(self.active.numpy()[0]),

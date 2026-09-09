@@ -266,7 +266,7 @@ def run(manifest_path: str | Path, evaluations: int, plots: bool = False) -> dic
     midsole = load_mesh(base / config["midsole_mesh"], 0.001)
     grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
     trials, displacement, uv = prepare_trials(base, config, grid, midsole)
-    initial = Material(*config["fit"].values())
+    initial = Material(*config["fit"].values(), MAXWELL_RELAXATION_TIME_S)
     history: list[dict[str, float]] = []
     material = fit_material(trials, initial, evaluations, history)
     report = {
@@ -274,7 +274,7 @@ def run(manifest_path: str | Path, evaluations: int, plots: bool = False) -> dic
         "model": {
             "type": "reduced_hyperfoam_maxwell_pasternak",
             "effective_poisson_ratio": EFFECTIVE_POISSON_RATIO,
-            "maxwell_relaxation_time_s": MAXWELL_RELAXATION_TIME_S,
+            "maxwell_relaxation_time_s": material.maxwell_relaxation_time_s,
             "state_initialization": "periodic_cycle_fixed_point",
             "fit_objective": "per_trial_peak_normalized_pointwise_force_rmse",
         },

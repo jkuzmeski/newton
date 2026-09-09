@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import math
 from dataclasses import replace
@@ -17,6 +18,7 @@ import newton
 import newton.examples
 from projects.digital_shoe import FoundationConfig, MidsoleFoundation, load_artifact
 from projects.digital_shoe.rendering import attached_column_endpoints, column_colors
+from projects.digital_shoe.runtime import FoundationParams, _hyperfoam_pressure
 
 from .orientation import orient_shoe
 from .profile import load_profile
@@ -154,6 +156,324 @@ def _record_sample(
     )
 
 
+@wp.kernel
+def _relax_free_columns(
+    dt: float,
+    carrier: wp.int32,
+    body_q: wp.array[wp.transform],
+    driven: wp.array[wp.int32],
+    neighbors: wp.array2d[wp.int32],
+    anchor_local: wp.array[wp.vec3],
+    rest: wp.array[wp.float32],
+    area: wp.array[wp.float32],
+    q_state: wp.array[wp.float32],
+    params: FoundationParams,
+    coupling_scale: float,
+    attachment: float,
+    max_strain: float,
+    relaxation_time: float,
+    deflection: wp.array[wp.float32],
+    deflection_out: wp.array[wp.float32],
+    rate_out: wp.array[wp.float32],
+):
+    """Balance an outer column's ground reaction against its bond to the shoe.
+
+    ``deflection`` is how far a top has been pushed up relative to the position
+    the last imposes, so the shear layer resists deformation inside the shoe.
+    With no ground load the bond returns the column to its undeformed shape and
+    it leaves the floor with the shoe.
+    """
+    i = wp.tid()
+    if driven[i] != 0:
+        deflection_out[i] = 0.0
+        rate_out[i] = 0.0
+        return
+    thickness = rest[i]
+    bottom = wp.transform_point(body_q[carrier], anchor_local[i])[2]
+    lift = deflection[i]
+    coupling = coupling_scale * params.pasternak * params.inv_h2 * area[i]
+    # The outer material is also bonded to the shoe above it, so an isolated
+    # bulge has a restoring path even when its neighbours have moved with it.
+    bond = attachment * lift
+    links = float(0.0)
+    for side in range(4):
+        j = neighbors[i, side]
+        if j >= 0:
+            bond += coupling * (lift - deflection[j])
+            links += 1.0
+    c = wp.clamp(-(bottom + lift), 0.0, max_strain * thickness)
+    # Ground reaction only. Unloaded foam cannot pull its own surface down.
+    support = wp.max(_hyperfoam_pressure(c / thickness, params) + q_state[i], 0.0) * area[i]
+    step = 0.001 * thickness
+    tangent = float(0.0)
+    if c > 0.0:
+        tangent = (
+            wp.max(_hyperfoam_pressure((c + step) / thickness, params) + q_state[i], 0.0) * area[i] - support
+        ) / step
+    # Convex local balance solved by damped Newton steps toward equilibrium.
+    stiffness = wp.max(tangent + links * coupling + attachment, 1.0e-6)
+    update = (support - bond) / stiffness * (1.0 - wp.exp(-dt / relaxation_time))
+    lift = lift + update
+    if lift < 0.0:
+        lift = 0.0  # the last drives the surface down; the bond cannot push past it
+    if -(bottom + lift) > max_strain * thickness:
+        lift = -bottom - max_strain * thickness
+    deflection_out[i] = lift
+    rate_out[i] = update / dt
+
+
+@wp.kernel
+def _write_free_geometry(
+    carrier: wp.int32,
+    body_q: wp.array[wp.transform],
+    driven: wp.array[wp.int32],
+    anchor_local: wp.array[wp.vec3],
+    deflection: wp.array[wp.float32],
+    z_free: wp.array[wp.float32],
+    bottom_world: wp.array[wp.float32],
+):
+    """Publish the free-surface offset that the shared pressure kernel consumes."""
+    i = wp.tid()
+    bottom = wp.transform_point(body_q[carrier], anchor_local[i])[2]
+    if driven[i] != 0:
+        z_free[i] = 0.0
+        bottom_world[i] = bottom
+    else:
+        # comp = z_free - world_z reproduces -(rigid_bottom_z + deflection).
+        z_free[i] = -deflection[i]
+        bottom_world[i] = bottom + deflection[i]
+
+
+@wp.kernel
+def _free_column_metrics(
+    driven: wp.array[wp.int32],
+    compression: wp.array[wp.float32],
+    rest: wp.array[wp.float32],
+    forces: wp.array[wp.vec3],
+    velocity: wp.array[wp.float32],
+    metrics: wp.array[wp.float32],
+):
+    """Summarize the passive outer region without hiding its extremes."""
+    i = wp.tid()
+    if driven[i] != 0:
+        wp.atomic_add(metrics, 0, forces[i][2])
+        return
+    wp.atomic_add(metrics, 1, forces[i][2])
+    wp.atomic_max(metrics, 2, compression[i] / rest[i])
+    wp.atomic_max(metrics, 3, wp.abs(velocity[i]))
+    if forces[i][2] > 0.01:
+        wp.atomic_add(metrics, 4, 1.0)
+
+
+@wp.kernel
+def _constrain_planar_axes(
+    index: int,
+    reference: wp.array2d[wp.float32],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+):
+    """Leave both X/Z states dynamic; the external robot motor prescribes only pitch."""
+    a = wp.transform_get_translation(body_q[0])
+    c = wp.transform_get_translation(body_q[1])
+    va = wp.spatial_top(body_qd[0])
+    vc = wp.spatial_top(body_qd[1])
+    body_q[0] = wp.transform(
+        wp.vec3(a[0], 0.0, a[2]), wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), reference[index, 2])
+    )
+    body_q[1] = wp.transform(wp.vec3(c[0], 0.0, c[2]), wp.quat_identity())
+    body_qd[0] = wp.spatial_vector(wp.vec3(va[0], 0.0, va[2]), wp.vec3(0.0, reference[index, 7], 0.0))
+    body_qd[1] = wp.spatial_vector(wp.vec3(vc[0], 0.0, vc[2]), wp.vec3(0.0))
+
+
+@wp.kernel
+def _apply_planar_leg(
+    index: int,
+    reference: wp.array2d[wp.float32],
+    mass: float,
+    foot_mass: float,
+    stiffness: float,
+    damping: float,
+    force_limit: float,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_f: wp.array[wp.spatial_vector],
+    diagnostics: wp.array[wp.float32],
+):
+    """Couple the actual endpoints with a central axial force, not two unrelated Z sliders."""
+    r = wp.transform_get_translation(body_q[1]) - wp.transform_get_translation(body_q[0])
+    length = wp.max(wp.length(r), 1.0e-6)
+    n = r / length
+    relative_velocity = wp.spatial_top(body_qd[1]) - wp.spatial_top(body_qd[0])
+    rate = wp.dot(n, relative_velocity)
+    error = length - reference[index, 13]
+    desired_rate = reference[index, 14]
+    gain, gain_rate = reference[index, 19], reference[index, 20]
+    k, b = stiffness * gain, damping * gain
+    other = wp.vec3(reference[index, 23], 0.0, reference[index, 12])
+    measured = wp.vec3(reference[index, 22], 0.0, reference[index, 11])
+    target = (1.0 - foot_mass / mass) * measured - (foot_mass / mass) * other
+    # A single axial actuator cannot independently impose both measured force components.
+    feedforward = reference[index, 24] * wp.dot(target, n) - reference[index, 21] / wp.max(n[2], 0.25)
+    raw = feedforward - k * error + b * (desired_rate - rate)
+    force = wp.clamp(raw, -force_limit, force_limit)
+    f = force * n
+    wp.atomic_add(body_f, 0, wp.spatial_vector(-f, wp.vec3(0.0)))
+    wp.atomic_add(body_f, 1, wp.spatial_vector(f + other, wp.vec3(0.0)))
+    diagnostics[0] = force
+    diagnostics[1] = (
+        (feedforward + b * desired_rate + force - raw) * rate
+        - k * error * desired_rate
+        + 0.5 * stiffness * gain_rate * error * error
+    )
+    diagnostics[2] = -b * rate * rate
+    diagnostics[3] = 0.5 * k * error * error
+    diagnostics[4] = float(wp.abs(force - raw) > 1.0e-4)
+    diagnostics[5] = length
+    diagnostics[6] = rate
+    diagnostics[7] = f[0]
+    diagnostics[8] = f[2]
+
+
+@wp.kernel
+def _contact_motion_metrics(
+    dt: float,
+    mu: float,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    anchors: wp.array[wp.vec3],
+    forces: wp.array[wp.vec3],
+    old_anchor: wp.array[wp.vec2],
+    old_active: wp.array[wp.int32],
+    ground_anchor: wp.array[wp.vec2],
+    active: wp.array[wp.int32],
+    metrics: wp.array[wp.float32],
+):
+    """Separate material-point speed, elastic shear, and plastic-anchor drift."""
+    i = wp.tid()
+    f = forces[i]
+    if f[2] > 0.01:
+        p = wp.transform_point(body_q[0], anchors[i])
+        r = p - wp.transform_get_translation(body_q[0])
+        v = wp.spatial_top(body_qd[0]) + wp.cross(wp.spatial_bottom(body_qd[0]), r)
+        speed = wp.length(wp.vec2(v[0], v[1]))
+        drift, extension = float(0.0), float(0.0)
+        if active[i] != 0:
+            extension = wp.length(wp.vec2(p[0], p[1]) - ground_anchor[i])
+            if old_active[i] != 0:
+                drift = wp.length(ground_anchor[i] - old_anchor[i]) / dt
+        wp.atomic_add(metrics, 0, f[2])
+        wp.atomic_add(metrics, 1, f[2] * speed)
+        wp.atomic_add(metrics, 2, f[2] * drift)
+        wp.atomic_add(metrics, 3, f[2] * extension)
+        if drift > 0.001:
+            wp.atomic_add(metrics, 4, f[2])
+        wp.atomic_add(metrics, 5, f[0] * v[0] + f[1] * v[1])
+        if mu > 0.0:
+            wp.atomic_max(metrics, 6, wp.length(wp.vec2(f[0], f[1])) / (mu * f[2]))
+
+
+@wp.kernel
+def _draw_friction_columns(
+    body_q: wp.array[wp.transform],
+    anchors: wp.array[wp.vec3],
+    rest: wp.array[wp.float32],
+    forces: wp.array[wp.vec3],
+    deflection: wp.array[wp.float32],
+    ground_anchor: wp.array[wp.vec2],
+    active: wp.array[wp.int32],
+    bottom_out: wp.array[wp.vec3],
+    top_out: wp.array[wp.vec3],
+):
+    """Draw each column where it actually is, including a lifted outer surface."""
+    i = wp.tid()
+    bottom = wp.transform_point(body_q[0], anchors[i])
+    top = wp.transform_point(body_q[0], anchors[i] + wp.vec3(0.0, 0.0, rest[i]))
+    lift = deflection[i]
+    bz = bottom[2] + lift
+    tz = top[2] + lift
+    # A loaded outsole cannot pass through the floor; an unloaded one leaves it.
+    if bz < 0.0:
+        bz = 0.0
+    if tz < bz:
+        tz = bz
+    if forces[i][2] > 0.01 and active[i] != 0:
+        bottom_out[i] = wp.vec3(ground_anchor[i][0], ground_anchor[i][1], bz)
+    else:
+        bottom_out[i] = wp.vec3(bottom[0], bottom[1], bz)
+    top_out[i] = wp.vec3(top[0], top[1], tz)
+
+
+@wp.kernel
+def _record_planar_sample(
+    index: int,
+    reference: wp.array2d[wp.float32],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_f: wp.array[wp.spatial_vector],
+    force: wp.array[wp.vec3],
+    cop_moment: wp.array[wp.vec3],
+    contact_power: wp.array[wp.float32],
+    compression: wp.array[wp.float32],
+    diagnostics: wp.array[wp.float32],
+    contact_metrics: wp.array[wp.float32],
+    free_metrics: wp.array[wp.float32],
+    com_mass: float,
+    pitch_inertia: float,
+    gravity: float,
+    trace: wp.array2d[wp.float32],
+):
+    """Record actual planar motion and friction, including all external motor work."""
+    a = wp.transform_get_translation(body_q[0])
+    c = wp.transform_get_translation(body_q[1])
+    va = wp.spatial_top(body_qd[0])
+    vc = wp.spatial_top(body_qd[1])
+    f = force[0]
+    torque = pitch_inertia * reference[index, 15] - wp.spatial_bottom(body_f[0])[1]
+    trace[index, 0] = f[2]
+    trace[index, 1] = 0.0
+    if f[2] > 1.0:
+        trace[index, 1] = cop_moment[0][0] / f[2]
+    trace[index, 2] = a[2]
+    trace[index, 3] = c[2]
+    trace[index, 4] = vc[2]
+    trace[index, 5] = diagnostics[0]
+    trace[index, 6] = diagnostics[1]
+    trace[index, 7] = diagnostics[2]
+    trace[index, 8] = torque * reference[index, 7]
+    trace[index, 9] = contact_power[0]
+    trace[index, 10] = com_mass * (gravity * c[2] + 0.5 * vc[2] * vc[2])
+    trace[index, 11] = compression[0]
+    trace[index, 12] = diagnostics[4]
+    trace[index, 13] = diagnostics[3]
+    trace[index, 14] = reference[index, 12] * vc[2] + reference[index, 23] * vc[0]
+    trace[index, 16] = 0.0
+    trace[index, 17] = 0.0
+    trace[index, 15] = va[2]
+    trace[index, 18] = torque
+    trace[index, 19] = a[0]
+    trace[index, 20] = c[0]
+    trace[index, 21] = va[0]
+    trace[index, 22] = vc[0]
+    trace[index, 23] = f[0]
+    trace[index, 24] = f[1]
+    trace[index, 25] = diagnostics[5]
+    trace[index, 26] = diagnostics[6]
+    trace[index, 27] = diagnostics[7]
+    trace[index, 28] = diagnostics[8]
+    normal = wp.max(contact_metrics[0], 1.0e-9)
+    trace[index, 29] = contact_metrics[1] / normal
+    trace[index, 30] = contact_metrics[2] / normal
+    trace[index, 31] = contact_metrics[3] / normal
+    trace[index, 32] = contact_metrics[4] / normal
+    trace[index, 33] = contact_metrics[5]
+    trace[index, 34] = contact_metrics[6]
+    trace[index, 35] = free_metrics[0]
+    trace[index, 36] = free_metrics[1]
+    trace[index, 37] = free_metrics[2]
+    trace[index, 38] = free_metrics[3]
+    trace[index, 39] = free_metrics[4]
+
+
 def _curve(values: np.ndarray, source_time: np.ndarray, time: np.ndarray):
     """Interpolate optical knots with a C1 Hermite curve and analytic derivatives."""
     slopes = np.gradient(values, source_time, edge_order=2)
@@ -181,12 +501,11 @@ def _camera(eye, target):
 
 
 class Example:
-    """Run one measured stance with two vertical masses, not a human skeleton.
+    """Run a foot and body lump with a geometric leg, not a human skeleton.
 
-    Fore-aft travel and foot pitch are prescribed robot axes. Only vertical
-    motion interacts with the calibrated, normal-only shoe foundation.
-    The world-vertical sliders exchange generalized forces. Prescribed guides
-    supply spatial reaction moments; this is not a free Cartesian human leg.
+    In planar mode both X/Z states respond to forces. An external ideal robot
+    motor prescribes foot pitch, while the out-of-plane axes remain constrained.
+    The old vertical-only setup is retained as an explicit comparison mode.
     """
 
     def __init__(self, viewer, args):
@@ -196,6 +515,7 @@ class Example:
         if (args.screenshot or args.record_gif) and not hasattr(viewer, "get_frame"):
             raise ValueError("Screenshots and GIF recording require --viewer gl")
         self.reference_mode = args.reference_mode
+        self.planar = args.dynamics == "planar" and self.reference_mode == "pitch"
         if self.reference_mode == "pitch" and args.mode != "impedance":
             raise ValueError(
                 "Pitch mode has no vertical replay trajectory; use --reference-mode markers for legacy replay"
@@ -241,6 +561,17 @@ class Example:
             raise ValueError("Masses, gains, scale, substeps, and force limit must be finite and positive")
         if not np.isfinite(args.ankle_x) or not np.isfinite(args.track_speed):
             raise ValueError("Track settings must be finite")
+        if self.planar and args.track_speed != 0.0:
+            raise ValueError(
+                "Planar motion is dynamic; use --ankle-entry-vx for an initial velocity, not --track-speed"
+            )
+        if (
+            not np.all(np.isfinite([args.com_offset_x, args.friction_mu, args.contact_kt, args.contact_kd]))
+            or min(args.friction_mu, args.contact_kt, args.contact_kd) < 0
+        ):
+            raise ValueError(
+                "Planar initial offset and contact parameters must be finite; friction parameters nonnegative"
+            )
         self.frame_dt = 1.0 / 120.0
         self.sim_dt = self.frame_dt / args.substeps
         self.duration = float(self.profile["time_s"][-1])
@@ -254,6 +585,8 @@ class Example:
         self.pitch_inertia = 0.025
         self._screenshot_saved = False
         self._gif_frames = []
+        self._gif_times = []
+        self._captured_index = -1
         self._make_reference()
         last_local = self.shoe.visual_mesh("fullfoot_last").vertices_m - self.ankle_mount
         self.minimum_last_offsets = np.empty(self.sample_count)
@@ -315,22 +648,31 @@ class Example:
             ],
             np.float32,
         )
+        if self.planar:
+            initial[:, :3] = self.planar_initial_positions
         velocity = np.zeros((2, 6), np.float32)
         velocity[0, 2] = self.reference[0, 6]
         velocity[1, 2] = self.reference[0, 9]
+        if self.planar:
+            velocity = self.planar_initial_velocity.copy()
         self.state_0.body_q.assign(initial)
         self.state_0.body_qd.assign(velocity)
         self.state_1.body_q.assign(initial)
         self.state_1.body_qd.assign(velocity)
         self.reference_device = wp.array(self.reference, dtype=wp.float32, device=self.device)
-        self.trace_device = wp.zeros((self.sample_count, 19), dtype=wp.float32, device=self.device)
-        self.leg_diagnostics = wp.zeros(5, dtype=wp.float32, device=self.device)
+        self.trace_device = wp.zeros((self.sample_count, 40), dtype=wp.float32, device=self.device)
+        self.leg_diagnostics = wp.zeros(9, dtype=wp.float32, device=self.device)
         bed = self.shoe.column_bed
         scale = args.shoe_stiffness_scale
         material = replace(
             self.shoe.material,
             instantaneous_shear_modulus_pa=self.shoe.material.instantaneous_shear_modulus_pa * scale,
             pasternak_n_per_m=self.shoe.material.pasternak_n_per_m * scale,
+        )
+        self.contact_config = FoundationConfig(
+            friction_stiffness=args.contact_kt if self.planar else 0.0,
+            friction=args.contact_kd if self.planar else 0.0,
+            mu=args.friction_mu if self.planar else 0.0,
         )
         self.foundation = MidsoleFoundation(
             bed.anchor_bottom_m - self.ankle_mount,
@@ -342,18 +684,44 @@ class Example:
             material,
             self.carrier,
             self.model.body_com,
-            FoundationConfig(),
+            self.contact_config,
             self.device,
         )
+        count = len(bed.rest_length_m)
+        driven = np.ones(count, np.int32)
+        if self.planar and args.passive_outer:
+            lookup = {tuple(np.round(point, 8)): index for index, point in enumerate(bed.anchor_bottom_m[:, :2])}
+            fixture = self.shoe.instron_fixture("fullfoot_last")
+            supported = np.array([lookup[tuple(np.round(point, 8))] for point in fixture.carrier_anchor_m[:, :2]])
+            driven[:] = 0
+            driven[supported] = 1
+        # A massless outer surface avoids inventing an unidentified surface mass.
+        self.free_columns = int(count - driven.sum())
+        if self.free_columns and (args.outer_relaxation <= 0.0 or not 0.0 < args.outer_max_strain < 1.0):
+            raise ValueError("Passive outer relaxation time must be positive and its strain limit inside (0, 1)")
+        self.driven = wp.array(driven, dtype=wp.int32, device=self.device)
+        # Deflection of an outer top above the position the last would impose.
+        self.free_top = wp.zeros(count, dtype=wp.float32, device=self.device)
+        self.free_top_next = wp.zeros_like(self.free_top)
+        self.free_velocity = wp.zeros_like(self.free_top)
+        self.bottom_world = wp.zeros_like(self.free_top)
+        self.free_metrics = wp.zeros(5, dtype=wp.float32, device=self.device)
+        self.old_tangent_anchor = wp.zeros_like(self.foundation.tangent_anchor)
+        self.old_tangent_active = wp.zeros_like(self.foundation.tangent_stuck)
+        self.contact_metrics = wp.zeros(7, dtype=wp.float32, device=self.device)
         self.points = wp.zeros(len(bed.rest_length_m), dtype=wp.vec3, device=self.device)
         self.tops = wp.zeros_like(self.points)
         self.colors = wp.zeros_like(self.points)
         self.leg_start = wp.zeros(1, dtype=wp.vec3, device=self.device)
         self.leg_end = wp.zeros_like(self.leg_start)
+        self.com_point = wp.zeros_like(self.leg_start)
         self.com_color = wp.array([[0.12, 0.62, 0.95]], dtype=wp.vec3, device=self.device)
         self.viewer.set_model(self.model)
         center = 0.5 * (lo + hi)
         self.viewer.set_camera(*_camera((center + 0.7, -1.85, 0.95), (center, 0.0, 0.55)))
+        if self.free_columns:
+            self.free_top.zero_()
+            self.free_velocity.zero_()
         self._prescribe(0)
         self.metadata = {
             "profile_hash": hashlib.sha256(Path(args.profile).read_bytes()).hexdigest(),
@@ -364,6 +732,7 @@ class Example:
             "damping_n_s_m": args.damping,
             "dt_s": self.sim_dt,
             "mode": self.mode,
+            "dynamics": "planar" if self.planar else "vertical",
             "reference_mode": self.reference_mode,
             "shoe_orientation": self.shoe_orientation,
             "ankle_mount_m": self.ankle_mount.tolist(),
@@ -371,6 +740,10 @@ class Example:
             "shoe_stiffness_scale": scale,
             "scenario_changes": ["shoe_stiffness_scale"],
             "initial_state": {
+                "ankle_x_m": float(initial[0, 0]),
+                "upper_x_m": float(initial[1, 0]),
+                "ankle_vx_m_s": float(velocity[0, 0]),
+                "upper_vx_m_s": float(velocity[1, 0]),
                 "foot_z_m": float(initial[0, 2]),
                 "foot_vz_m_s": float(velocity[0, 2]),
                 "com_z_m": float(initial[1, 2]),
@@ -381,7 +754,9 @@ class Example:
             "reference_processing": self.reference_processing,
             "processed_reference_hash": hashlib.sha256(self.reference.tobytes()).hexdigest(),
             "runtime_source_hash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            "solver": "newton.solvers.SolverSemiImplicit; angular_damping=0; prescribed robot axes",
+            "solver": "newton.solvers.SolverSemiImplicit; angular_damping=0; planar X/Z are dynamic, world pitch motor prescribed"
+            if self.planar
+            else "newton.solvers.SolverSemiImplicit; legacy prescribed horizontal axes",
             "pitch_inertia_kg_m2": self.pitch_inertia,
             "gravity_m_s2": self.gravity,
             "shoe_identification_passed": self.shoe.raw["identification"]["passed_all_declared_gates"],
@@ -394,19 +769,33 @@ class Example:
             "profile_limits": [
                 "Representative running inputs from another shoe, NOT same-Puma validation; user confirmed cross-shoe example scope.",
                 "Heel triangle tracks rearfoot rotation; LTOE is on the upper over the second metatarsal head, not the toe tip.",
-                "Pitch mode uses a declared static mechanical neutral and fixed ankle mount, not an anatomical foot insertion fit.",
+                "Pitch uses a declared static neutral and fixed shoe-local mounting point; in planar mode the ankle position itself is free. This is not an anatomical fit.",
                 "Opposite-foot vertical force is an explicit replay boundary, not a simulated second leg.",
                 "The COM reference is force-integrated with assumed initial conditions, not measured anatomical COM.",
+                "Planar mode integrates both X/Z states with a central geometric leg; nominal rolling geometry is not a prescribed trajectory.",
+                "Friction parameters are assumed. Bristle reference anchors and their drift are not independently measured outsole slip.",
+                "Pitch is an external ideal robotic motor with separately recorded work, not a complete anatomical ankle/shank actuator model.",
             ],
             "force_limit_n": args.force_limit_bw * self.mass * self.gravity,
             "normal_damping_n_s_m_per_column": 0.0,
-            "friction": "disabled; measured Fx is context only",
+            "friction": {
+                "enabled": self.planar and self.args.friction_mu > 0 and self.args.contact_kt > 0,
+                "mu": self.contact_config.mu,
+                "stiffness_n_m_per_column": self.contact_config.friction_stiffness,
+                "damping_n_s_m_per_column": self.contact_config.friction,
+                "identified": False,
+                "rendering": "Ground points are bristle reference anchors, not a no-slip constraint.",
+                "slip_metric": "Material-point speed, elastic shear and plastic-anchor drift are distinct; contact initialization is not classified as drift.",
+                "wrench_limit": "Existing effective foundation applies its tangential wrench at virtual bottom sites, sometimes below the plane; not a calibrated real-ground ankle moment.",
+            },
             "power_definition": "Active source power includes feedforward/retraction, moving spring rest length, scheduled stiffness, desired damping rate, and saturation intervention; passive damping and guide drives are separate. Not metabolic cost.",
         }
 
     def _make_reference(self):
         if getattr(self.args, "reference_mode", "markers") == "pitch":
             self._make_pitch_reference()
+            if self.planar:
+                self._make_planar_reference()
             return
         self.reference_processing = "optical-clock C1 Hermite with analytic derivatives; legacy marker trajectory"
         source_t = np.asarray(self.profile["time_s"], dtype=float)
@@ -519,7 +908,7 @@ class Example:
             -touch_bottom - center_vz[0] * touchdown + 0.5 * self.gravity * touchdown**2 + self.args.initial_clearance
         )
         first_bottom = float(np.min(-np.sin(pitch[0]) * anchors[:, 0] + np.cos(pitch[0]) * anchors[:, 2]))
-        if initial_ankle_z + first_bottom < -1.0e-6:
+        if not self.planar and initial_ankle_z + first_bottom < -1.0e-6:
             raise ValueError(
                 "The angle-only initialization would preload the shoe; choose a different declared initial condition"
             )
@@ -602,7 +991,146 @@ class Example:
             "cop_comparison": "source measured COP kept as context; no marker-translation registration to the pitch-only rig",
         }
 
+    def _make_planar_reference(self):
+        """Anchor declared entry conditions at touchdown, independently of clip padding."""
+        ref = self.reference.astype(np.float64)
+        time = self.times
+        angle, omega = ref[:, 2], ref[:, 7]
+        anchors = self.shoe.column_bed.anchor_bottom_m - self.ankle_mount
+        support_height = -np.min(
+            -np.sin(angle[:, None]) * anchors[None, :, 0] + np.cos(angle[:, None]) * anchors[None, :, 2], axis=1
+        )
+        touchdown = self.registration["touchdown_time_s"]
+        delta = time - touchdown
+        support_entry = float(np.interp(touchdown, time, support_height)) + self.args.initial_clearance
+        omega_entry = float(np.interp(touchdown, time, omega))
+        ankle_entry_vx = omega_entry * support_entry if self.args.ankle_entry_vx is None else self.args.ankle_entry_vx
+        entry_vx = float(self.profile["provenance"]["com_surrogate"]["initial_vx_m_s"])
+        flight = float(self.profile["provenance"]["running"]["flight_before_s"])
+        entry_vz = -0.5 * self.gravity * flight if self.args.com_entry_vz is None else self.args.com_entry_vz
+        if (
+            not np.all(np.isfinite([ankle_entry_vx, entry_vx, entry_vz, self.args.com_entry_height]))
+            or self.args.com_entry_height <= support_entry
+        ):
+            raise ValueError("Entry state must be finite with COM above the ankle")
+        entry_com_x = self.args.ankle_x + self.args.com_offset_x
+        entry_com_z = self.args.com_entry_height
+        centroid = self.centroid_reference.copy()
+        # Re-anchor the force-integrated nominal path without changing sensor forces.
+        for column, velocity_column, position_entry, velocity_entry in (
+            (0, 2, entry_com_x, entry_vx),
+            (1, 3, entry_com_z, entry_vz),
+        ):
+            old_position = float(np.interp(touchdown, time, centroid[:, column]))
+            old_velocity = float(np.interp(touchdown, time, centroid[:, velocity_column]))
+            adjustment = velocity_entry - old_velocity
+            centroid[:, column] += adjustment * delta + position_entry - old_position
+            centroid[:, velocity_column] += adjustment
+        self.centroid_reference = centroid
+        nominal_vx = omega * support_height
+        distance = np.r_[0.0, np.cumsum(0.5 * (nominal_vx[1:] + nominal_vx[:-1]) * np.diff(time))]
+        ankle_x = self.args.ankle_x + distance - float(np.interp(touchdown, time, distance))
+        ankle_z = support_height + self.args.initial_clearance
+        before = time < touchdown
+        ankle_x[before] = self.args.ankle_x + ankle_entry_vx * delta[before]
+        ankle_z[before] = support_entry + entry_vz * delta[before] - 0.5 * self.gravity * delta[before] ** 2
+        nominal_vx[before] = ankle_entry_vx
+        ankle_vz = np.gradient(ankle_z, time, edge_order=2)
+        upper_x = (self.mass * centroid[:, 0] - self.foot_mass * ankle_x) / self.com_mass
+        upper_z = (self.mass * centroid[:, 1] - self.foot_mass * ankle_z) / self.com_mass
+        length = np.hypot(upper_x - ankle_x, upper_z - ankle_z)
+        length_rate = np.gradient(length, time, edge_order=2)
+        upper_vx = (self.mass * centroid[:, 2] - self.foot_mass * nominal_vx) / self.com_mass
+        upper_vz = (self.mass * centroid[:, 3] - self.foot_mass * ankle_vz) / self.com_mass
+        ref[:, 0], ref[:, 1], ref[:, 3], ref[:, 4] = ankle_x, ankle_z, upper_x, upper_z
+        ref[:, 5], ref[:, 6], ref[:, 8], ref[:, 9] = nominal_vx, ankle_vz, upper_vx, upper_vz
+        ref[:, 13], ref[:, 14] = length, length_rate
+        engage_duration = self.args.engage_duration
+        if not np.isfinite(engage_duration) or engage_duration <= 0.0:
+            raise ValueError("Planar engagement duration must be finite and positive")
+        w = np.clip((time - touchdown) / engage_duration, 0.0, 1.0)
+        engage = w**3 * (10.0 - 15.0 * w + 6.0 * w**2)
+        engage_rate = 30.0 * w**2 * (1.0 - w) ** 2 / engage_duration
+        out_gain, out_rate = ref[:, 19].copy(), ref[:, 20].copy()
+        ref[:, 19] = engage * out_gain
+        ref[:, 20] = engage_rate * out_gain + engage * out_rate
+        source_t = self.profile["time_s"]
+        other_fx = np.interp(time, source_t, self.profile["other_fx_n"])
+        self.reference = np.column_stack([ref, self.reference_fx, other_fx, engage * out_gain]).astype(np.float32)
+        # Before contact both masses follow a ballistic approach. Adding frames
+        # changes the starting state, not the declared landing position or speed.
+        initial_ankle = np.array(
+            [
+                self.args.ankle_x - ankle_entry_vx * touchdown,
+                0.0,
+                support_entry - entry_vz * touchdown - 0.5 * self.gravity * touchdown**2,
+            ]
+        )
+        initial_com = np.array(
+            [
+                entry_com_x - entry_vx * touchdown,
+                0.0,
+                entry_com_z - entry_vz * touchdown - 0.5 * self.gravity * touchdown**2,
+            ]
+        )
+        initial_upper = (self.mass * initial_com - self.foot_mass * initial_ankle) / self.com_mass
+        self.planar_initial_positions = np.array([initial_ankle, initial_upper], np.float32)
+        velocity = np.zeros((2, 6), np.float32)
+        velocity[0, 0], velocity[0, 2] = ankle_entry_vx, entry_vz + self.gravity * touchdown
+        total_velocity = np.array([entry_vx, 0.0, entry_vz + self.gravity * touchdown])
+        velocity[1, :3] = (self.mass * total_velocity - self.foot_mass * velocity[0, :3]) / self.com_mass
+        self.planar_initial_velocity = velocity
+        for key in (
+            "constant_leg_rest_length_m",
+            "vertical_reference",
+            "initial_ankle_z_m",
+            "ankle_x_m",
+            "track_speed_m_s",
+        ):
+            self.registration.pop(key, None)
+        self.registration.update(
+            {
+                "kind": "planar dynamic X/Z foot and body lump with a central axial leg",
+                "touchdown_com_offset_x_m": self.args.com_offset_x,
+                "touchdown_com_height_m": entry_com_z,
+                "touchdown_com_vx_m_s": entry_vx,
+                "touchdown_com_vz_m_s": entry_vz,
+                "entry_vz_policy": "equal-height preceding flight assumption, not measured COM"
+                if self.args.com_entry_vz is None
+                else "explicit user scenario",
+                "touchdown_ankle_x_m": self.args.ankle_x,
+                "touchdown_ankle_z_m": support_entry,
+                "touchdown_ankle_vx_m_s": float(ankle_entry_vx),
+                "initial_com_xyz_m": initial_com.tolist(),
+                "initial_ankle_xyz_m": initial_ankle.tolist(),
+                "initial_geometric_leg_length_m": float(np.linalg.norm(initial_upper - initial_ankle)),
+                "initial_outsole_clearance_m": float(initial_ankle[2] - support_height[0]),
+                "predicted_precontact_min_clearance_m": float(np.min(ankle_z[before] - support_height[before]))
+                if np.any(before)
+                else 0.0,
+                "initialization": "ballistic backward construction from declared touchdown state; no marker XYZ replay",
+                "leg_reference": "nominal force-integrated COM and geometry-only rolling ankle define scalar reference length; no position targets are applied",
+                "nominal_rolling": "ankle vx approximately omega*support height",
+                "engage_duration_s": engage_duration,
+                "dynamics": "Actual X/Z states are integrated; only pitch and out-of-plane axes are prescribed",
+                "friction_parameters": {
+                    "mu": self.args.friction_mu,
+                    "stiffness_n_m_per_column": self.args.contact_kt,
+                    "damping_n_s_m_per_column": self.args.contact_kd,
+                    "identified": False,
+                },
+            }
+        )
+
     def _prescribe(self, index):
+        if self.planar:
+            wp.launch(
+                _constrain_planar_axes,
+                dim=1,
+                inputs=[index, self.reference_device, self.state_0.body_q, self.state_0.body_qd],
+                device=self.device,
+            )
+            return
         wp.launch(
             _prescribe_axes,
             dim=1,
@@ -616,10 +1144,136 @@ class Example:
             device=self.device,
         )
 
+    def _relax_free_surface(self):
+        """Move outer tops with neighbour coupling and the floor, not with the last."""
+        f = self.foundation
+        for _ in range(self.args.outer_substeps):
+            wp.launch(
+                _relax_free_columns,
+                dim=f.column_count,
+                inputs=[
+                    self.sim_dt / self.args.outer_substeps,
+                    self.carrier,
+                    self.state_0.body_q,
+                    self.driven,
+                    f.neighbors,
+                    f.anchor_local,
+                    f.rest_len,
+                    f.area,
+                    f.q_state,
+                    f.params,
+                    self.args.outer_coupling_scale,
+                    self.args.outer_attachment,
+                    self.args.outer_max_strain,
+                    self.args.outer_relaxation,
+                    self.free_top,
+                    self.free_top_next,
+                    self.free_velocity,
+                ],
+                device=self.device,
+            )
+            self.free_top, self.free_top_next = self.free_top_next, self.free_top
+        wp.launch(
+            _write_free_geometry,
+            dim=f.column_count,
+            inputs=[
+                self.carrier,
+                self.state_0.body_q,
+                self.driven,
+                f.anchor_local,
+                self.free_top,
+                f.z_free,
+                self.bottom_world,
+            ],
+            device=self.device,
+        )
+
     def _sample(self, index):
         self._prescribe(index)
         self.state_0.clear_forces()
+        if self.planar:
+            wp.copy(self.old_tangent_anchor, self.foundation.tangent_anchor)
+            wp.copy(self.old_tangent_active, self.foundation.tangent_stuck)
+        if self.free_columns:
+            self._relax_free_surface()
         self.foundation.apply(self.state_0, self.sim_dt)
+        if self.planar:
+            wp.launch(
+                _apply_planar_leg,
+                dim=1,
+                inputs=[
+                    index,
+                    self.reference_device,
+                    self.mass,
+                    self.foot_mass,
+                    self.args.stiffness,
+                    self.args.damping,
+                    self.args.force_limit_bw * self.mass * self.gravity,
+                    self.state_0.body_q,
+                    self.state_0.body_qd,
+                    self.state_0.body_f,
+                    self.leg_diagnostics,
+                ],
+                device=self.device,
+            )
+            self.free_metrics.zero_()
+            if self.free_columns:
+                wp.launch(
+                    _free_column_metrics,
+                    dim=self.foundation.column_count,
+                    inputs=[
+                        self.driven,
+                        self.foundation.compression,
+                        self.foundation.rest_len,
+                        self.foundation.column_force,
+                        self.free_velocity,
+                        self.free_metrics,
+                    ],
+                    device=self.device,
+                )
+            self.contact_metrics.zero_()
+            wp.launch(
+                _contact_motion_metrics,
+                dim=self.foundation.column_count,
+                inputs=[
+                    self.sim_dt,
+                    self.args.friction_mu,
+                    self.state_0.body_q,
+                    self.state_0.body_qd,
+                    self.foundation.anchor_local,
+                    self.foundation.column_force,
+                    self.old_tangent_anchor,
+                    self.old_tangent_active,
+                    self.foundation.tangent_anchor,
+                    self.foundation.tangent_stuck,
+                    self.contact_metrics,
+                ],
+                device=self.device,
+            )
+            wp.launch(
+                _record_planar_sample,
+                dim=1,
+                inputs=[
+                    index,
+                    self.reference_device,
+                    self.state_0.body_q,
+                    self.state_0.body_qd,
+                    self.state_0.body_f,
+                    self.foundation.resultant_force,
+                    self.foundation.cop_moment,
+                    self.foundation.contact_power,
+                    self.foundation.max_compression,
+                    self.leg_diagnostics,
+                    self.contact_metrics,
+                    self.free_metrics,
+                    self.com_mass,
+                    self.pitch_inertia,
+                    self.gravity,
+                    self.trace_device,
+                ],
+                device=self.device,
+            )
+            return
         wp.launch(
             _apply_leg,
             dim=1,
@@ -681,19 +1335,37 @@ class Example:
         """Show the measured track motion, dynamic COM, and actual shoe columns."""
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
-        wp.launch(
-            attached_column_endpoints,
-            dim=self.foundation.column_count,
-            inputs=[
-                self.carrier,
-                self.state_0.body_q,
-                self.foundation.anchor_local,
-                self.foundation.rest_len,
-                self.points,
-                self.tops,
-            ],
-            device=self.device,
-        )
+        if self.planar:
+            wp.launch(
+                _draw_friction_columns,
+                dim=self.foundation.column_count,
+                inputs=[
+                    self.state_0.body_q,
+                    self.foundation.anchor_local,
+                    self.foundation.rest_len,
+                    self.foundation.column_force,
+                    self.free_top,
+                    self.foundation.tangent_anchor,
+                    self.foundation.tangent_stuck,
+                    self.points,
+                    self.tops,
+                ],
+                device=self.device,
+            )
+        else:
+            wp.launch(
+                attached_column_endpoints,
+                dim=self.foundation.column_count,
+                inputs=[
+                    self.carrier,
+                    self.state_0.body_q,
+                    self.foundation.anchor_local,
+                    self.foundation.rest_len,
+                    self.points,
+                    self.tops,
+                ],
+                device=self.device,
+            )
         wp.launch(
             column_colors,
             dim=self.foundation.column_count,
@@ -707,11 +1379,19 @@ class Example:
             positions[0:1] + np.array([[0.0, 0.0, 0.0 if self.reference_mode == "pitch" else 0.09]], np.float32)
         )
         center = (self.foot_mass * positions[0] + self.com_mass * positions[1]) / self.mass
-        self.leg_end.assign(center.reshape(1, 3))
-        self.viewer.log_points("impedance/virtual_COM", self.leg_end, radii=0.065, colors=self.com_color)
+        self.leg_end.assign(positions[1:2] if self.planar else center.reshape(1, 3))
+        self.com_point.assign(center.reshape(1, 3))
+        self.viewer.log_points("impedance/virtual_COM", self.com_point, radii=0.065, colors=self.com_color)
         self.viewer.log_lines("impedance/virtual_leg", self.leg_start, self.leg_end, (0.2, 0.65, 0.9), width=0.012)
         self.viewer.log_scalar("/impedance/time_s", self.sim_time)
         self.viewer.log_scalar("/impedance/com_height_m", float(center[2]))
+        self.viewer.log_scalar("/impedance/com_x_m", float(center[0]))
+        self.viewer.log_scalar("/impedance/ankle_x_m", float(positions[0, 0]))
+        if self.planar:
+            self.viewer.log_scalar(
+                "/impedance/geometric_leg_length_m", float(np.linalg.norm(positions[1] - positions[0]))
+            )
+            self.viewer.log_scalar("/impedance/shoe_Fx_n", float(self.foundation.resultant_force.numpy()[0, 0]))
         self.viewer.log_scalar("/impedance/reference_force_n", float(self.reference[max(0, self.index - 1), 11]))
         self.viewer.log_scalar("/impedance/shoe_force_n", float(self.foundation.normal_force.numpy()[0]))
         self.viewer.end_frame()
@@ -719,8 +1399,10 @@ class Example:
             from PIL import Image, ImageOps
 
             image = Image.fromarray(self.viewer.get_frame().numpy())
-            if self.args.record_gif and self.index < self.sample_count:
+            if self.args.record_gif and self.index != self._captured_index:
                 self._gif_frames.append(image.resize((720, round(720 * image.height / image.width))))
+                self._gif_times.append(self.sim_time)
+                self._captured_index = self.index
             if self.args.screenshot and not self._screenshot_saved and self.sim_time >= self.duration * 0.45:
                 path = Path(self.args.screenshot)
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -735,9 +1417,16 @@ class Example:
             ref = self.reference[i]
             center_z = (self.foot_mass * float(values[2]) + self.com_mass * float(values[3])) / self.mass
             center_vz = (self.foot_mass * float(values[15]) + self.com_mass * float(values[4])) / self.mass
-            center_x, reference_z, center_vx, reference_vz = self.centroid_reference[i]
+            reference_x, reference_z, reference_vx, reference_vz = self.centroid_reference[i]
+            ankle_x = float(values[19]) if self.planar else float(ref[0])
+            upper_x = float(values[20]) if self.planar else float(ref[3])
+            ankle_vx = float(values[21]) if self.planar else float(ref[5])
+            upper_vx = float(values[22]) if self.planar else float(ref[8])
+            center_x = (self.foot_mass * ankle_x + self.com_mass * upper_x) / self.mass
+            center_vx = (self.foot_mass * ankle_vx + self.com_mass * upper_vx) / self.mass
             row = {
                 "time_s": float(self.times[i]),
+                "source_time_s": float(self.profile["source_time_s"][0] + self.times[i]),
                 "reference_fz_n": float(ref[11]),
                 "shoe_fz_n": float(values[0]),
                 "reference_fx_n": float(self.reference_fx[i]),
@@ -745,7 +1434,8 @@ class Example:
                 "reference_cop_x_m": float(self.reference_cop[i]) if self.reference_mode == "markers" else float("nan"),
                 "source_cop_x_m": float(self.reference_cop[i]),
                 "shoe_cop_x_m": float(values[1]) if values[0] > 1.0 else float("nan"),
-                "foot_x_m": float(ref[0]),
+                "foot_x_m": ankle_x,
+                "foot_vx_m_s": ankle_vx,
                 "foot_z_m": float(values[2]),
                 "reference_foot_z_m": float(ref[1]),
                 "pitch_rad": float(ref[2]),
@@ -756,15 +1446,20 @@ class Example:
                 "impedance_gain": float(ref[19]) if len(ref) >= 22 else 1.0,
                 "retraction_force_n": float(ref[21]) if len(ref) >= 22 else 0.0,
                 "last_min_height_m": float(values[2] + self.minimum_last_offsets[i]),
-                "ankle_x_m": float(ref[0]) if self.reference_mode == "pitch" else float("nan"),
+                "ankle_x_m": ankle_x if self.reference_mode == "pitch" else float("nan"),
                 "ankle_z_m": float(values[2]) if self.reference_mode == "pitch" else float("nan"),
                 "shoe_origin_x_m": float(
-                    ref[0] - np.cos(ref[2]) * self.ankle_mount[0] - np.sin(ref[2]) * self.ankle_mount[2]
+                    ankle_x - np.cos(ref[2]) * self.ankle_mount[0] - np.sin(ref[2]) * self.ankle_mount[2]
                 ),
                 "shoe_origin_z_m": float(
                     values[2] + np.sin(ref[2]) * self.ankle_mount[0] - np.cos(ref[2]) * self.ankle_mount[2]
                 ),
                 "com_x_m": float(center_x),
+                "com_vx_m_s": float(center_vx),
+                "reference_com_x_m": float(reference_x),
+                "reference_com_vx_m_s": float(reference_vx),
+                "upper_slider_x_m": upper_x,
+                "upper_slider_vx_m_s": upper_vx,
                 "com_z_m": center_z,
                 "reference_com_z_m": float(reference_z),
                 "com_vz_m_s": center_vz,
@@ -788,10 +1483,35 @@ class Example:
                 "track_power_w": float(values[17]),
                 "rig_energy_j": float(values[10] + values[13])
                 + self.foot_mass * (self.gravity * float(values[2]) + 0.5 * float(values[15]) ** 2)
-                + 0.5 * self.foot_mass * float(ref[5]) ** 2
-                + 0.5 * self.com_mass * float(ref[8]) ** 2
+                + 0.5 * self.foot_mass * ankle_vx**2
+                + 0.5 * self.com_mass * upper_vx**2
                 + 0.5 * self.pitch_inertia * float(ref[7]) ** 2,
             }
+            if self.planar:
+                row.update(
+                    {
+                        "shoe_fx_n": float(values[23]),
+                        "shoe_fy_n": float(values[24]),
+                        "leg_length_m": float(values[25]),
+                        "leg_length_rate_m_s": float(values[26]),
+                        "reference_leg_length_m": float(ref[13]),
+                        "leg_fx_n": float(values[27]),
+                        "leg_fz_n": float(values[28]),
+                        "contact_material_speed_m_s": float(values[29]),
+                        "bristle_anchor_drift_m_s": float(values[30]),
+                        "contact_shear_extension_m": float(values[31]),
+                        "plastic_anchor_load_fraction": float(values[32]),
+                        "tangential_contact_power_w": float(values[33]),
+                        "max_coulomb_utilization": float(values[34]),
+                        "driven_column_force_n": float(values[35]),
+                        "passive_column_force_n": float(values[36]),
+                        "passive_max_strain": float(values[37]),
+                        "passive_max_surface_speed_m_s": float(values[38]),
+                        "passive_loaded_columns": float(values[39]),
+                        "com_ankle_dx_m": float(center_x - ankle_x),
+                        "com_ankle_distance_m": float(np.hypot(center_x - ankle_x, center_z - float(values[2]))),
+                    }
+                )
             result.append(row)
         return result
 
@@ -830,7 +1550,7 @@ class Example:
         return {
             "passed": not reasons,
             "reasons": reasons,
-            "scope": "finite, complete, loaded two-slider engineering demonstration; not a measured-human validation",
+            "scope": "runtime diagnostics for the mechanical example, not human validation or a new test suite",
         }
 
     def test_final(self):
@@ -852,6 +1572,39 @@ class Example:
             path = Path(self.args.record_gif)
             path.parent.mkdir(parents=True, exist_ok=True)
             self._gif_frames[0].save(path, save_all=True, append_images=self._gif_frames[1:], duration=50, loop=0)
+            from PIL import Image, ImageDraw
+
+            td = self.registration["touchdown_time_s"]
+            to = self.registration.get("toeoff_time_s", self.duration)
+            phases = [
+                ("Approach", 0.0),
+                ("Measured touchdown", td),
+                ("Loading", td + 0.04),
+                ("Midstance", 0.5 * (td + to)),
+                ("Measured toe-off", to),
+                ("Release context", self.duration),
+            ]
+            width = 480
+            height = round(width * self._gif_frames[0].height / self._gif_frames[0].width)
+            sheet = Image.new("RGB", (3 * width, 2 * (height + 34)), "white")
+            draw = ImageDraw.Draw(sheet)
+            for slot, (label, time_s) in enumerate(phases):
+                index = int(np.argmin(np.abs(np.asarray(self._gif_times) - time_s)))
+                x, y = (slot % 3) * width, (slot // 3) * (height + 34)
+                sheet.paste(self._gif_frames[index].resize((width, height)), (x, y + 34))
+                draw.text((x + 8, y + 8), f"{label} | t={self._gif_times[index]:.3f} s", fill="black")
+            sequence = Path(self.args.output) / "contact_sequence.jpg"
+            sheet.save(sequence)
+            print(f"Contact sequence: {sequence}")
+        if self.planar:
+            rows = self.rows()
+            td = self.registration["toeoff_time_s"]
+            at_to = min(rows, key=lambda row: abs(row["time_s"] - td))
+            print(
+                f"Planar example: COM offset at toe-off {at_to['com_ankle_dx_m']:.3f} m; "
+                f"ankle X {rows[0]['ankle_x_m']:.3f} -> {rows[-1]['ankle_x_m']:.3f} m; "
+                f"peak Fz {max(row['shoe_fz_n'] for row in rows):.1f} N; final Fz {rows[-1]['shoe_fz_n']:.3f} N"
+            )
         print(f"Report: {report}")
         return report
 
@@ -860,9 +1613,76 @@ def create_parser():
     """Expose motion, material scenarios, and explicit controller settings."""
     parser = newton.examples.create_parser()
     parser.set_defaults(num_frames=120)
-    parser.add_argument("--profile", type=Path, default=Path("outputs/impedance_instron/stance_pitch.json"))
+    parser.add_argument("--profile", type=Path, default=Path("outputs/impedance_instron/stance_planar_context.json"))
     parser.add_argument("--artifact", type=Path, default=Path("DigitalInstron/digital_shoe_showcase/digital_shoe.json"))
     parser.add_argument("--mode", choices=["impedance", "replay"], default="impedance")
+    parser.add_argument(
+        "--dynamics",
+        choices=["planar", "vertical"],
+        default="planar",
+        help="Force-driven X/Z foot and COM, or retained vertical-only comparison.",
+    )
+    parser.add_argument(
+        "--com-offset-x", type=float, default=-0.4, help="Total COM X behind ankle at nominal touchdown [m]."
+    )
+    parser.add_argument(
+        "--com-entry-height", type=float, default=1.0, help="Assumed total COM height at touchdown [m]."
+    )
+    parser.add_argument(
+        "--com-entry-vz",
+        type=float,
+        default=None,
+        help="Assumed COM vertical velocity at touchdown [m/s]; default uses half the preceding flight duration.",
+    )
+    parser.add_argument(
+        "--ankle-entry-vx",
+        type=float,
+        default=None,
+        help="Ankle X velocity at touchdown [m/s]; default is rolling-compatible and only initializes the state.",
+    )
+    parser.add_argument(
+        "--engage-duration",
+        type=float,
+        default=0.02,
+        help="Virtual impedance engagement interval after measured touchdown [s].",
+    )
+    parser.add_argument(
+        "--passive-outer",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Let columns outside the last footprint deform through neighbors instead of following the rigid last.",
+    )
+    parser.add_argument(
+        "--outer-relaxation",
+        type=float,
+        default=0.002,
+        help="Passive outer surface relaxation time [s] toward its local balance; assumed, not identified.",
+    )
+    parser.add_argument(
+        "--outer-coupling-scale",
+        type=float,
+        default=1.0,
+        help="Assumed lateral drive on the passive outer surface as a fraction of the identified rigid-top coupling.",
+    )
+    parser.add_argument(
+        "--outer-attachment",
+        type=float,
+        default=200.0,
+        help="Assumed vertical bond stiffness per outer column to the shoe above it [N/m]; not identified.",
+    )
+    parser.add_argument(
+        "--outer-max-strain", type=float, default=0.9, help="Passive outer compression limit as a fraction of rest."
+    )
+    parser.add_argument(
+        "--outer-substeps", type=int, default=4, help="Free-surface relaxation substeps per solver substep."
+    )
+    parser.add_argument(
+        "--friction-mu", type=float, default=0.8, help="Assumed Coulomb coefficient; not fitted from compression data."
+    )
+    parser.add_argument(
+        "--contact-kt", type=float, default=10000.0, help="Bristle tangential stiffness per column [N/m]."
+    )
+    parser.add_argument("--contact-kd", type=float, default=10.0, help="Bristle tangential damping per column [N s/m].")
     parser.add_argument(
         "--reference-mode",
         choices=["pitch", "markers"],
@@ -915,7 +1735,7 @@ def create_parser():
         help="Additional fixture lift acceleration during release [m/s^2]; default uses gravity compensation only.",
     )
     parser.add_argument("--stiffness", type=float, default=12000.0, help="Virtual leg stiffness [N/m].")
-    parser.add_argument("--damping", type=float, default=250.0, help="Virtual leg damping [N s/m].")
+    parser.add_argument("--damping", type=float, default=500.0, help="Virtual leg damping [N s/m].")
     parser.add_argument(
         "--foot-mass", type=float, default=2.0, help="Fixture inertia mass [kg], included in total mass."
     )
@@ -942,7 +1762,7 @@ def create_parser():
         default=None,
         help="Optical knot rate [Hz]; must match source marker sampling.",
     )
-    parser.add_argument("--output", type=Path, default=Path("outputs/impedance_instron/pitch_baseline"))
+    parser.add_argument("--output", type=Path, default=Path("outputs/impedance_instron/planar_baseline"))
     parser.add_argument("--compare", type=Path, help="Prior output directory for audited comparison.")
     parser.add_argument("--screenshot", type=Path, help="Save a 320x320 JPG near midstance with --viewer gl.")
     parser.add_argument("--record-gif", type=Path, help="Save a slowed OpenGL stance animation.")

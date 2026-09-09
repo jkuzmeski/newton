@@ -48,6 +48,8 @@ _AUDIT_FIELDS = {
     "damping_n_s_m": ("damping_n_s_m", "leg_damping_n_s_m", "vertical_damping_n_s_m"),
     "dt_s": ("dt_s", "dt"),
     "mode": ("mode",),
+    "dynamics": ("dynamics",),
+    "friction": ("friction",),
     "reference_mode": ("reference_mode",),
     "ankle_mount_m": ("ankle_mount_m",),
     "shoe_orientation": ("shoe_orientation",),
@@ -55,16 +57,23 @@ _AUDIT_FIELDS = {
     "shoe_stiffness_scale": ("shoe_stiffness_scale",),
 }
 _LIMITS = (
-    "Vertical impedance only. Fore-aft motion and foot pitch are prescribed, not predicted.",
-    "COM is a force-integrated surrogate, not measured whole-body COM.",
+    "This is a reduced mechanical rig. The run metadata identifies which axes are dynamic and which are prescribed.",
+    "COM is a virtual lumped-mass model; its nominal reference is force-integrated, not measured whole-body COM.",
     "Synthetic material scales are controlled scenarios, not identified new shoes.",
     "This is an engineering demonstration, not human validation or evidence of metabolic savings.",
-    "Shoe contact work includes imposed foot translation and pitch. It is not a closed-loop material hysteresis measurement.",
+    "Shoe contact work includes translation, rotation and any tangential contact contribution. It is not a closed-loop material hysteresis measurement.",
     "Active leg work, damping loss, pitch drive, replay guides, and horizontal track are separate channels. The rig energy balance is not a whole-human energy balance.",
 )
 _METRIC_LABELS = {
     "peak_shoe_force_n": "Peak shoe vertical force [N]",
     "final_shoe_force_n": "Final shoe force after the supplied window [N]",
+    "peak_fore_aft_force_n": "Peak absolute fore-aft ground force [N]",
+    "leg_length_min_m": "Minimum actual geometric leg length [m]",
+    "leg_length_max_m": "Maximum actual geometric leg length [m]",
+    "toeoff_com_ankle_dx_m": "COM X ahead of ankle at measured toe-off [m]",
+    "loaded_material_speed_m_s": "Load-weighted material-point speed [m/s]",
+    "loaded_anchor_drift_m_s": "Load-weighted plastic-anchor drift [m/s]",
+    "loaded_shear_extension_m": "Load-weighted elastic contact shear [m]",
     "shoe_impulse_n_s": "Shoe vertical impulse [N s]",
     "reference_impulse_n_s": "Reference vertical impulse [N s]",
     "force_rmse_n": "Time-weighted vertical force RMSE [N]",
@@ -184,6 +193,21 @@ def _summarize(columns: dict[str, np.ndarray], metadata: dict) -> dict:
         "max_compression_m": float(np.max(columns["max_compression_m"])),
         "controller_clipped_time_fraction": _integral(time, columns["controller_clipped"]) / duration,
     }
+    if "shoe_fx_n" in columns:
+        metrics["peak_fore_aft_force_n"] = float(np.max(np.abs(columns["shoe_fx_n"])))
+        metrics["leg_length_min_m"] = float(np.min(columns["leg_length_m"]))
+        metrics["leg_length_max_m"] = float(np.max(columns["leg_length_m"]))
+        to = metadata.get("registration", {}).get("toeoff_time_s", float(time[-1]))
+        idx = int(np.argmin(np.abs(time - to)))
+        metrics["toeoff_com_ankle_dx_m"] = float(columns["com_ankle_dx_m"][idx])
+        loaded = columns["shoe_fz_n"] > 100.0
+        if np.any(loaded):
+            for channel, metric in (
+                ("contact_material_speed_m_s", "loaded_material_speed_m_s"),
+                ("bristle_anchor_drift_m_s", "loaded_anchor_drift_m_s"),
+                ("contact_shear_extension_m", "loaded_shear_extension_m"),
+            ):
+                metrics[metric] = float(np.average(columns[channel][loaded], weights=columns["shoe_fz_n"][loaded]))
     for channel, metric, reduction in (
         ("last_min_height_m", "minimum_last_height_m", np.min),
         ("ankle_torque_nm", "peak_ankle_torque_nm", lambda v: np.max(np.abs(v))),
@@ -435,7 +459,7 @@ def _plots(columns: dict[str, np.ndarray], previous: dict[str, np.ndarray] | Non
             ],
         ),
         (
-            "Force-integrated surrogate COM height",
+            "Dynamic virtual COM and nominal reference",
             "m",
             [
                 ("com_z_m", "Current surrogate COM", "#1967b3", False),
@@ -460,7 +484,37 @@ def _plots(columns: dict[str, np.ndarray], previous: dict[str, np.ndarray] | Non
                 ("shoe_contact_power_w", "Shoe contact", "#16806a", False),
             ],
         ),
-        ("Vertical leg force", "N", [("leg_force_n", "Current leg force", "#1967b3", False)]),
+        ("Axial/vertical leg force (see mode)", "N", [("leg_force_n", "Current leg force", "#1967b3", False)]),
+        (
+            "Fore-aft ground force",
+            "N",
+            [
+                ("shoe_fx_n", "Simulated traction", "#1967b3", False),
+                ("reference_fx_n", "Measured reference", "#b55214", True),
+            ],
+        ),
+        (
+            "Geometric virtual leg length",
+            "m",
+            [
+                ("leg_length_m", "Actual endpoints", "#1967b3", False),
+                ("reference_leg_length_m", "Nominal scalar reference", "#b55214", True),
+            ],
+        ),
+        ("COM position relative to ankle", "m", [("com_ankle_dx_m", "Actual fore-aft offset", "#1967b3", False)]),
+        (
+            "Contact motion diagnostics",
+            "m/s",
+            [
+                ("contact_material_speed_m_s", "Runtime material point", "#737e88", False),
+                ("bristle_anchor_drift_m_s", "Plastic reference-anchor drift", "#1967b3", False),
+            ],
+        ),
+        (
+            "Elastic contact shear",
+            "m",
+            [("contact_shear_extension_m", "Force-weighted bristle extension", "#1967b3", False)],
+        ),
         ("Vertical impedance engagement", "0-1", [("impedance_gain", "Quintic toe-off release", "#1967b3", False)]),
         (
             "Fixture release force",
@@ -469,7 +523,7 @@ def _plots(columns: dict[str, np.ndarray], previous: dict[str, np.ndarray] | Non
         ),
         ("Peak spring compression", "m", [("max_compression_m", "Current shoe", "#1967b3", False)]),
         (
-            "Prescribed fore-aft positions",
+            "Fore-aft positions (dynamic in planar mode)",
             "m",
             [("foot_x_m", "Foot", "#1967b3", False), ("com_x_m", "Surrogate COM", "#b55214", True)],
         ),
@@ -562,7 +616,7 @@ def _render(summary: dict, columns: dict[str, np.ndarray], previous: dict | None
     metadata_json = _escape(json.dumps(metadata, indent=2, sort_keys=True, allow_nan=False))
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vertical impedance Instron comparison</title><style>
+<title>Impedance Instron comparison</title><style>
 :root{{font-family:system-ui,sans-serif;color:#192d42;background:#f2f5f8;line-height:1.5}}
 body{{max-width:1320px;margin:auto;padding:24px}}h1,h2,h3{{line-height:1.25}}h1{{margin-bottom:8px}}
 a{{color:#125c9b}}header,article,.plot{{background:white;border:1px solid #dce4ec;border-radius:10px;padding:20px;margin-bottom:18px}}
@@ -575,7 +629,7 @@ table{{width:100%;border-collapse:collapse;font-size:.88rem}}th,td{{padding:8px 
 td{{font-variant-numeric:tabular-nums}}tbody th{{font-weight:500}}thead{{background:#edf2f7}}code{{overflow-wrap:anywhere}}.scroll{{overflow:auto}}
 pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.8rem}}li{{margin:5px 0}}.panels+article{{margin-top:18px}}
 @media(max-width:800px){{body{{padding:10px}}.panels{{grid-template-columns:1fr}}}}@media print{{body{{background:white}}.plot{{break-inside:avoid}}}}
-</style></head><body><header><h1>Vertical impedance Instron</h1>
+</style></head><body><header><h1>Impedance Instron</h1>
 <p class="subtitle">Offline mechanical comparison · prescribed motion context · separate actuator and contact work</p>
 <span class="badge">Window: {_escape(window["status"])}</span><span class="badge">Saved / expected: {duration}</span>
 <span class="badge">{summary["sample_count"]} samples</span><p><a href="trace.csv">Download trace CSV</a> · <a href="summary.json">Download summary JSON</a></p>
