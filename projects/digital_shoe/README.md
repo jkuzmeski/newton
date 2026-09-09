@@ -59,6 +59,20 @@ The output directory is intentionally ignored. The measurements, footwear
 geometry, fitted artifact, and their derivatives are not cleared for upstream
 redistribution. See `ASSET_PROVENANCE.md`.
 
+To refresh only the report layout, reuse the existing artifact and recordings:
+
+```bash
+uv run -m projects.digital_shoe.report \
+  DigitalInstron/digital_shoe_showcase/digital_shoe.json \
+  --output DigitalInstron/digital_shoe_showcase/validation_report.html \
+  --media-dir DigitalInstron/digital_shoe_showcase
+```
+
+The report opens with its validation status and limitations. Section links lead
+to methods, results, examples, and reproduction commands. Detailed equations and
+source hashes are expandable; the failed gates remain visible without expanding
+anything. The report is self-contained and works offline.
+
 ## Mechanical demonstrations
 
 All three scenes consume only `digital_shoe.json`.
@@ -102,11 +116,12 @@ missing `.ptx` cache entry.
 Use `--viewer null --num-frames N --test` for a headless audit. Useful minimum
 runs are 180 frames for Instron, 60 for drop, and 80 for rocker.
 
-The scenes do not use proxy shoe boxes. The Virtual Instron uses the posed
-shoe-last and calibrated midsole meshes. The drop is a free six-DOF 80 kg body
-carried by the calibrated full-foot last; it renders the last above the exposed
-colored springs and does not render the shoe surface. The rocker also renders
-only its spring bed, so spring length and contact-color changes remain visible.
+The scenes do not use proxy shoe boxes. The Virtual Instron renders the posed
+shoe-last or punch above exposed springs, with two endpoint nodes per column
+and no solid midsole surface. The drop is a free six-DOF 80 kg body carried by
+the calibrated full-foot last; it also renders the last above exposed colored
+springs. The rocker renders only its spring bed. Spring length and
+contact-color changes remain visible in all three modes.
 
 The drop demo adds 5 N·s/m per-column normal damping for impact stability. That
 value is a scenario parameter and was not identified by the current

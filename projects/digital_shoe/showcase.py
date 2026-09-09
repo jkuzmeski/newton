@@ -15,13 +15,7 @@ import newton
 import newton.examples
 
 from .artifact import load_artifact
-from .rendering import (
-    attached_column_endpoints,
-    column_colors,
-    column_world_positions,
-    deform_attached_mesh,
-    deform_instron_mesh,
-)
+from .rendering import attached_column_endpoints, column_colors, column_world_positions
 from .runtime import FoundationConfig, MidsoleFoundation
 
 DEFAULT_ARTIFACT = "DigitalInstron/digital_shoe_showcase/digital_shoe.json"
@@ -159,24 +153,11 @@ class Example:
         self._colors = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._frame_compression = wp.zeros(self.column_count, dtype=wp.float32, device=self.device)
         self._frame_max_compression = wp.zeros(1, dtype=wp.float32, device=self.device)
-        midsole_mesh = self.shoe.visual_mesh("midsole")
-        self._mesh_source = wp.array(
-            np.ascontiguousarray(midsole_mesh.vertices_m, np.float32), dtype=wp.vec3, device=self.device
-        )
-        self._mesh_points = wp.zeros(len(midsole_mesh.vertices_m), dtype=wp.vec3, device=self.device)
-        self._mesh_indices = wp.array(
-            np.ascontiguousarray(midsole_mesh.triangles.reshape(-1), np.int32), dtype=wp.int32, device=self.device
-        )
         self._fixed_bottom = None
-        self._mesh_column_index = None
-        self._mesh_height_fraction = None
         if self.mode == "instron":
             fixture = self.shoe.instron_fixture(self.fixture_name)
             fixed = np.column_stack([fixture.carrier_anchor_m[:, :2], fixture.foam_bottom_m])
             self._fixed_bottom = wp.array(np.ascontiguousarray(fixed, np.float32), dtype=wp.vec3, device=self.device)
-            column_index, height_fraction = self._instron_mesh_mapping(midsole_mesh.vertices_m, fixture)
-            self._mesh_column_index = wp.array(column_index, dtype=wp.int32, device=self.device)
-            self._mesh_height_fraction = wp.array(height_fraction, dtype=wp.float32, device=self.device)
         self._peak_force = wp.zeros(1, dtype=wp.float32, device=self.device)
         self._peak_compression = wp.zeros(1, dtype=wp.float32, device=self.device)
         self._impulse = wp.zeros(1, dtype=wp.float32, device=self.device)
@@ -188,21 +169,6 @@ class Example:
         self._camera_eye_offset = np.array([0.8 * span, -0.9 * span, 0.55 * span], dtype=np.float64)
         self._camera_target_offset = np.array([0.0, 0.0, 0.015], dtype=np.float64)
         self.viewer.set_camera(*_look_at(self._camera_eye_offset, self._camera_target_offset))
-
-    @staticmethod
-    def _instron_mesh_mapping(vertices: np.ndarray, fixture) -> tuple[np.ndarray, np.ndarray]:
-        """Map each midsole vertex to its nearest active fixture column."""
-        vertex_xy = np.asarray(vertices[:, :2], dtype=np.float64)
-        column_xy = np.asarray(fixture.carrier_anchor_m[:, :2], dtype=np.float64)
-        distance2 = np.sum((vertex_xy[:, None, :] - column_xy[None, :, :]) ** 2, axis=2)
-        column_index = np.argmin(distance2, axis=1).astype(np.int32)
-        nearest_distance2 = distance2[np.arange(len(vertices)), column_index]
-        active = nearest_distance2 <= (1.25 * fixture.spacing_m) ** 2
-        bottom = fixture.foam_bottom_m[column_index]
-        fraction = np.clip((vertices[:, 2] - bottom) / fixture.rest_length_m[column_index], 0.0, 1.0)
-        column_index[~active] = -1
-        fraction[~active] = 0.0
-        return np.ascontiguousarray(column_index), np.ascontiguousarray(fraction, dtype=np.float32)
 
     def _add_fullfoot_last_visual(self, builder, *, label: str) -> None:
         """Attach the baked, calibrated full-foot Instron last to the carrier."""
@@ -442,18 +408,6 @@ class Example:
                 inputs=[self.carrier, self.state_0.body_q, self._anchor, self._points],
                 device=self.device,
             )
-            wp.launch(
-                deform_instron_mesh,
-                dim=len(self._mesh_points),
-                inputs=[
-                    self._mesh_source,
-                    self._mesh_column_index,
-                    self._mesh_height_fraction,
-                    self.foundation.compression,
-                    self._mesh_points,
-                ],
-                device=self.device,
-            )
             self.viewer.log_lines("digital_shoe/columns", self._fixed_bottom, self._points, self._colors, width=0.003)
         else:
             wp.launch(
@@ -469,23 +423,7 @@ class Example:
                 ],
                 device=self.device,
             )
-            if self.mode == "rocker":
-                wp.launch(
-                    deform_attached_mesh,
-                    dim=len(self._mesh_points),
-                    inputs=[self.carrier, self.state_0.body_q, self._mesh_source, self._mesh_points],
-                    device=self.device,
-                )
             self.viewer.log_lines("digital_shoe/columns", self._points, self._tops, self._colors, width=0.003)
-        if self.mode == "instron":
-            self.viewer.log_mesh(
-                "digital_shoe/midsole",
-                self._mesh_points,
-                self._mesh_indices,
-                backface_culling=False,
-                color=(0.78, 0.44, 0.16),
-                roughness=0.85,
-            )
         point_radius = 0.0018 if self.mode == "drop" else 0.0025
         if self.mode == "instron":
             self.viewer.log_points(

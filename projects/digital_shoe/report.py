@@ -17,13 +17,10 @@ from .artifact import DigitalShoe, load_artifact
 
 
 def _polyline(x: np.ndarray, y: np.ndarray, xlim: tuple[float, float], ylim: tuple[float, float]) -> str:
-    width, height = 720.0, 300.0
-    left, right, top, bottom = 60.0, 20.0, 20.0, 45.0
-    plot_w, plot_h = width - left - right, height - top - bottom
     dx = max(xlim[1] - xlim[0], 1.0e-12)
     dy = max(ylim[1] - ylim[0], 1.0e-12)
-    px = left + (x - xlim[0]) / dx * plot_w
-    py = top + (1.0 - (y - ylim[0]) / dy) * plot_h
+    px = 70.0 + (x - xlim[0]) / dx * 626.0
+    py = 44.0 + (1.0 - (y - ylim[0]) / dy) * 226.0
     return " ".join(f"{a:.2f},{b:.2f}" for a, b in zip(px, py, strict=True))
 
 
@@ -40,17 +37,40 @@ def _svg(curve: dict, *, domain: str) -> str:
     ylim = (0.0, 1.05 * float(max(measured.max(), predicted.max(), 1.0)))
     measured_points = _polyline(x, measured, xlim, ylim)
     predicted_points = _polyline(x, predicted, xlim, ylim)
-    return f"""<svg viewBox="0 0 720 300" role="img" aria-label="Measured and predicted force">
-<rect x="60" y="20" width="640" height="235" fill="#fff" stroke="#ccd5df"/>
-<line x1="60" y1="255" x2="700" y2="255" stroke="#334155"/><line x1="60" y1="20" x2="60" y2="255" stroke="#334155"/>
+    ticks = []
+    for fraction in np.linspace(0.0, 1.0, 5):
+        px, py = 70.0 + 626.0 * fraction, 270.0 - 226.0 * fraction
+        xvalue = xlim[0] + fraction * (xlim[1] - xlim[0])
+        yvalue = fraction * ylim[1]
+        ticks.append(
+            f'<line x1="{px:.1f}" y1="44" x2="{px:.1f}" y2="270" stroke="#e5eaf0"/>'
+            f'<line x1="70" y1="{py:.1f}" x2="696" y2="{py:.1f}" stroke="#e5eaf0"/>'
+            f'<text x="{px:.1f}" y="290" text-anchor="middle">{xvalue:.3g}</text>'
+            f'<text x="60" y="{py + 4:.1f}" text-anchor="end">{yvalue:.0f}</text>'
+        )
+    return f"""<svg class="response-plot" viewBox="0 0 720 324" role="img" aria-label="Measured and predicted force versus {xlabel}">
+<g font-family="system-ui,sans-serif" font-size="13" fill="#526174">
+<rect x="70" y="44" width="626" height="226" fill="#fff"/>
+{"".join(ticks)}
+<line x1="70" y1="270" x2="696" y2="270" stroke="#9aa8b8"/>
+<line x1="70" y1="44" x2="70" y2="270" stroke="#9aa8b8"/>
 <polyline points="{measured_points}" fill="none" stroke="#1261a0" stroke-width="2.5"/>
-<polyline points="{predicted_points}" fill="none" stroke="#d94801" stroke-width="2.5"/>
-<text x="380" y="290" text-anchor="middle">{xlabel}</text><text x="15" y="140" transform="rotate(-90 15 140)" text-anchor="middle">Force [N]</text>
-<text x="60" y="275">{xlim[0]:.3g}</text><text x="700" y="275" text-anchor="end">{xlim[1]:.3g}</text>
-<text x="52" y="255" text-anchor="end">0</text><text x="52" y="28" text-anchor="end">{ylim[1]:.0f}</text>
-<line x1="475" y1="35" x2="505" y2="35" stroke="#1261a0" stroke-width="3"/><text x="512" y="40">measured</text>
-<line x1="585" y1="35" x2="615" y2="35" stroke="#d94801" stroke-width="3"/><text x="622" y="40">predicted</text>
-</svg>"""
+<polyline points="{predicted_points}" fill="none" stroke="#d94801" stroke-width="2.5" stroke-dasharray="7 4"/>
+<text x="383" y="316" text-anchor="middle">{xlabel}</text>
+<text x="18" y="157" transform="rotate(-90 18 157)" text-anchor="middle">Force [N]</text>
+<line x1="70" y1="20" x2="98" y2="20" stroke="#1261a0" stroke-width="3"/>
+<text x="106" y="24">Measured</text>
+<line x1="210" y1="20" x2="238" y2="20" stroke="#d94801" stroke-width="3" stroke-dasharray="7 4"/>
+<text x="246" y="24">Predicted</text>
+</g></svg>"""
+
+
+def _fixture_label(curve: dict) -> str:
+    """Use readable fixture names while retaining unknown trial names."""
+    return {
+        "rearfoot_punch": "Rearfoot punch",
+        "fullfoot_last": "Full-foot last",
+    }.get(curve.get("fixture"), curve["name"])
 
 
 def _percent(value: float) -> str:
@@ -64,7 +84,7 @@ def _metric_rows(curves: Iterable[dict]) -> str:
         passed = bool(metric["passed"])
         rows.append(
             "<tr>"
-            f"<td>{html.escape(curve['name'])}</td>"
+            f'<th scope="row">{html.escape(_fixture_label(curve))}</th>'
             f"<td>{_percent(metric['peak_force_error'])}</td>"
             f"<td>{_percent(metric['force_rmse_relative'])}</td>"
             f"<td>{_percent(metric['hysteresis_error'])}</td>"
@@ -96,10 +116,19 @@ def _methods_section() -> str:
     diagram = (directory / "methods.svg").read_text()
     mermaid_source = html.escape((directory / "methods.mmd").read_text())
     return f"""<section id="methods"><h2>1. Methods</h2>
-<p>The Digital Shoe is an <strong>effective intact-shoe model</strong>. It identifies one compact law from measured force-displacement cycles, bakes the measured geometry into a column bed, and deploys exactly that law in the runtime artifact. The fitted values therefore describe the tested shoe assembly—not isolated foam chemistry.</p>
+<p>One <strong>effective intact-shoe model</strong> connects the measured force&ndash;compression cycles to the Newton simulations. Geometry, fitted parameters, and validation curves travel together in a portable artifact.</p>
+<ol class="workflow">
+<li><strong>Measure</strong><span>Instron cycles and shoe geometry</span></li>
+<li><strong>Identify</strong><span>One shared model across fixtures</span></li>
+<li><strong>Export</strong><span>Portable digital_shoe.json</span></li>
+<li><strong>Simulate</strong><span>Instron, drop, and rocker</span></li>
+</ol>
+<details class="workflow-details"><summary>Detailed workflow diagram</summary><div class="details-body">
 <div class="method-diagram">{diagram}</div>
 <details><summary>Mermaid source for the method diagram</summary><pre><code class="language-mermaid">{mermaid_source}</code></pre></details>
-
+</div></details>
+<details class="derivation"><summary>Model equations and assumptions</summary>
+<div class="details-body">
 <h3>1.1 Geometry and column kinematics</h3>
 <p>The calibrated midsole mesh is sampled on a 5 mm grid. Each valid ray through the mesh creates a column with rest length &#8467;<sub>0,i</sub>, tributary area A<sub>i</sub>, and four-neighbor topology. The fixture or rigid shoe carrier determines the current top position. Ground is the horizontal z = 0 plane.</p>
 <div class="equation">c<sub>i</sub> = max(z<sub>free,i</sub> &minus; z<sub>i</sub>(q), 0), &nbsp; &epsilon;<sub>i</sub> = c<sub>i</sub>/&#8467;<sub>0,i</sub>, &nbsp; &lambda;<sub>i</sub> = max(1 &minus; &epsilon;<sub>i</sub>, &lambda;<sub>min</sub>)</div>
@@ -112,7 +141,7 @@ def _methods_section() -> str:
 <p>G<sub>inst</sub> sets the instantaneous stiffness, &alpha; controls nonlinear stiffening, f<sub>eq</sub> is the long-term-to-instantaneous modulus fraction, and the effective Poisson ratio &nu; is fixed at 0.30 because the current tests do not identify it independently.</p>
 
 <h3>1.3 Rate dependence and hysteresis: one Maxwell memory branch</h3>
-<p>Hyperfoam alone is conservative and cannot open a load-unload loop. A generalized-Maxwell overstress q stores the minimal memory needed for rate-dependent hysteresis. Its exact discrete update avoids timestep-dependent numerical damping.</p>
+<p>Hyperfoam alone is conservative and cannot open a load-unload loop. A generalized-Maxwell overstress q stores the minimal memory needed for rate-dependent hysteresis. The recurrence integrates exponential relaxation over each timestep.</p>
 <div class="equation">d = exp(&minus;&Delta;t/&tau;), &nbsp; r = &tau;(1&minus;d)/&Delta;t, &nbsp; &gamma; = (1&minus;f<sub>eq</sub>)/f<sub>eq</sub></div>
 <div class="equation">q<sub>i,n</sub> = d q<sub>i,n&minus;1</sub> + &gamma;r[p<sub>eq,i,n</sub> &minus; p<sub>eq,i,n&minus;1</sub>], &nbsp; p<sub>base,i</sub> = p<sub>eq,i</sub> + q<sub>i</sub></div>
 <p>The relaxation time &tau; is fixed at 0.08 s. Additional free branches were not retained because the two current single-rate tests do not identify a unique relaxation spectrum.</p>
@@ -141,13 +170,17 @@ def _methods_section() -> str:
 <li><strong>Practical speed:</strong> roughly 910 columns map naturally to one GPU thread per column and support real-time rigid-body experiments.</li>
 </ul>
 <p>A full three-dimensional finite-element foam model was not selected because the present data lack multi-rate, relaxation, shear, and lateral-strain measurements needed to identify it, while its cost conflicts with real-time and differentiable use. Linear and Kelvin-Voigt foundations were rejected because they do not transfer the observed nonlinear force envelope and loop work across both fixtures.</p>
+</div></details>
 </section>"""
 
 
 def _experiment_media(media_dir: str | Path | None) -> str:
     """Return embedded experiment loops or a reproducible recording instruction."""
     labels = {
-        "instron": ("Virtual Instron", "Held-out compression cycle after viscoelastic warm-up."),
+        "instron": (
+            "Virtual Instron",
+            "Held-out compression cycle after viscoelastic warm-up. Two endpoint nodes and their connecting springs remain visible beneath the fixture; the solid midsole surface is hidden.",
+        ),
         "drop": (
             "Free six-DOF body-weight drop",
             "An 80 kg body-weight load carried by the calibrated shoe last above exposed springs; this impact extrapolates beyond the fitted amplitude.",
@@ -164,9 +197,9 @@ def _experiment_media(media_dir: str | Path | None) -> str:
             continue
         encoded = base64.b64encode(path.read_bytes()).decode("ascii")
         cards.append(
-            f'<figure><img class="experiment" src="data:image/gif;base64,{encoded}" '
-            f'alt="{html.escape(title)} experiment loop">'
-            f"<figcaption><strong>{html.escape(title)}</strong><br>{html.escape(description)}</figcaption></figure>"
+            f"<figure><figcaption><strong>{html.escape(title)}</strong><p>{html.escape(description)}</p></figcaption>"
+            f'<img class="experiment" src="data:image/gif;base64,{encoded}" '
+            f'alt="{html.escape(title)} experiment loop" loading="lazy"></figure>'
         )
     if cards:
         note = ""
@@ -180,10 +213,121 @@ def _experiment_media(media_dir: str | Path | None) -> str:
         )
         return f'<section id="examples"><h2>3. Examples</h2><p>The same exported shoe artifact drives all three scenes without refitting.</p>{legend}<div class="experiment-grid">{"".join(cards)}</div>{note}</section>'
     return (
-        "<section><h2>Mechanical experiment loops</h2><p>Generate and embed all three audited loops with:</p>"
+        '<section id="examples"><h2>3. Examples</h2><p>No recordings are embedded yet. Generate all three loops with:</p>'
         "<pre><code>uv run --extra examples -m projects.digital_shoe.record_gifs "
         "--artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json</code></pre></section>"
     )
+
+
+_REPORT_CSS = """
+:root {
+    color-scheme: light;
+    --ink: #172b40;
+    --muted: #526174;
+    --line: #dce3eb;
+    --panel: #f5f7fa;
+    --blue: #1261a0;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 1.5rem; }
+body {
+    margin: 0 auto;
+    max-width: 1200px;
+    padding: 3rem 2rem;
+    color: var(--ink);
+    background: #fff;
+    font: 16px/1.65 system-ui, sans-serif;
+}
+a { color: var(--blue); text-underline-offset: .2em; }
+a:focus-visible, summary:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; }
+h1, h2, h3, h4 { line-height: 1.25; letter-spacing: -.025em; }
+h1 { max-width: 850px; margin: .6rem 0 1rem; font-size: clamp(2rem, 4vw, 3.2rem); }
+h2 { margin: 0 0 1.5rem; font-size: 1.75rem; }
+h3 { margin: 2rem 0 1rem; font-size: 1.15rem; }
+h4 { margin: 0 0 1rem; font-size: 1.1rem; }
+p { margin: .75rem 0; }
+.eyebrow { color: var(--blue); font-size: .8rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.subtitle { max-width: 780px; color: var(--muted); font-size: 1.1rem; }
+.shoe-id { margin: 1rem 0; color: var(--muted); }
+.report-nav { display: flex; flex-wrap: wrap; gap: .65rem 1.75rem; padding: 1.25rem 0; border-bottom: 1px solid var(--line); }
+.report-nav a { font-size: .9rem; font-weight: 650; text-decoration: none; }
+.report-nav a:hover { text-decoration: underline; }
+section { margin-top: 3rem; }
+.status-panel { margin: 1.5rem 0 .5rem; padding: 1.1rem 1.3rem; border: 1px solid var(--line); border-radius: .65rem; }
+.status-panel.fail { background: #fff8f4; border-color: #edc9b8; }
+.status-panel.pass { background: #f0f9f3; border-color: #c0ddca; }
+.status { display: block; font-size: .85rem; font-weight: 750; letter-spacing: .015em; }
+.pass { color: #176b3a; }
+.fail { color: #a3331d; }
+.status-panel p { margin: .5rem 0 0; color: var(--ink); font-weight: 400; font-size: .95rem; }
+.section-note, .plot-caption { color: var(--muted); font-size: .9rem; }
+.table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: .55rem; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; font-variant-numeric: tabular-nums; }
+caption { padding: .8rem 1rem; text-align: left; color: var(--muted); }
+th, td { padding: .85rem 1rem; border-bottom: 1px solid var(--line); text-align: left; }
+thead th { background: var(--panel); font-weight: 650; white-space: nowrap; }
+tbody th { font-weight: 600; }
+tbody tr:last-child > * { border-bottom: 0; }
+.metrics td { white-space: nowrap; }
+.metrics .pass, .metrics .fail { font-size: .8rem; font-weight: 700; }
+.plot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
+.plot-grid > figure { min-width: 0; }
+article { margin: 1.5rem 0; padding: 1.25rem; border: 1px solid var(--line); border-radius: .65rem; }
+figure { margin: 0; }
+.response-plot { display: block; width: 100%; height: auto; }
+.plot-grid figcaption { margin-bottom: .5rem; color: var(--muted); font-size: .85rem; }
+.experiment-grid { display: block; }
+.experiment-grid figure { max-width: 1000px; margin: 0 auto 2rem; border: 1px solid var(--line); border-radius: .65rem; overflow: hidden; }
+.experiment-grid figcaption { padding: 1rem 1.25rem; background: var(--panel); }
+.experiment-grid figcaption strong { display: block; font-size: 1.05rem; }
+.experiment-grid figcaption p { margin: .35rem 0 0; color: var(--muted); font-size: .9rem; }
+img.experiment { display: block; width: 100%; height: auto; background: #fff; }
+.heatmap-legend { max-width: 1000px; margin: 1.25rem auto 2rem; font-size: .85rem; }
+.heatmap-bar { height: 14px; margin: .5rem 0; border: 1px solid #64748b; border-radius: .25rem; background: linear-gradient(90deg,#0000ff 0%,#00ffff 33.3%,#ffff00 66.7%,#ff0000 100%); }
+.heatmap-labels { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .35rem .75rem; color: var(--muted); }
+code { font-size: .85em; overflow-wrap: anywhere; }
+pre { max-width: 100%; margin: .75rem 0; padding: 1rem; overflow-x: auto; border-radius: .4rem; background: var(--panel); font-size: .9rem; line-height: 1.65; }
+pre code { overflow-wrap: normal; }
+.method-diagram { margin: 1.5rem 0; padding: 1rem; border: 1px solid var(--line); border-radius: .6rem; overflow-x: auto; }
+.method-diagram svg { display: block; width: 100%; height: auto; min-width: 740px; margin: auto; }
+#mermaid-svg .nodeLabel { font: 14px/1.5 Arial, sans-serif; }
+.workflow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; list-style: none; padding: 0; margin: 1.25rem 0; counter-reset: stage; }
+.workflow li { padding: 1rem; border: 1px solid var(--line); border-radius: .5rem; counter-increment: stage; }
+.workflow strong { display: block; font-size: .95rem; }
+.workflow strong::before { content: counter(stage) " / "; color: var(--blue); }
+.workflow span { display: block; margin-top: .3rem; color: var(--muted); font-size: .85rem; overflow-wrap: anywhere; }
+.equation { margin: .8rem 0; padding: .85rem 1rem; border-left: 3px solid var(--blue); background: #f1f6fb; font: .95rem/1.7 ui-monospace, monospace; overflow-x: auto; }
+details { margin: 1rem 0; border: 1px solid var(--line); border-radius: .5rem; }
+summary { padding: .85rem 1rem; cursor: pointer; font-size: .95rem; font-weight: 600; }
+summary:hover { background: var(--panel); }
+details > pre { margin: 0 1rem 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.details-body { padding: 0 1.25rem 1.25rem; }
+.details-body > h3:first-child { margin-top: 1rem; }
+.sources { margin: 0; padding-left: 1.25rem; }
+.sources li { padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.sources li:last-child { border-bottom: 0; }
+.source-role { display: block; color: var(--muted); font-size: .85rem; }
+.source-hash { display: block; margin-top: .25rem; color: var(--muted); }
+footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; }
+@media (max-width: 760px) {
+    body { padding: 1.5rem 1rem; }
+    section { margin-top: 2rem; }
+    .plot-grid { grid-template-columns: minmax(0, 1fr); }
+    .workflow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    article { padding: .75rem; }
+    .status-panel { padding: 1rem; }
+    th, td { padding: .7rem; }
+}
+@media print {
+    body { max-width: none; padding: 0; font-size: 11pt; }
+    .report-nav { display: none; }
+    section { margin-top: 1.5rem; }
+    article, figure, .status-panel { break-inside: avoid; }
+    .table-scroll, .method-diagram { overflow: visible; }
+    .method-diagram svg { min-width: 0; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+}
+"""
 
 
 def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> str:
@@ -193,38 +337,75 @@ def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> st
     curve_figures = []
     for curve in curves:
         curve_figures.append(
-            f"<article><h4>{html.escape(curve['name'])}: held-out cycles</h4>"
-            '<div class="plot-grid"><figure>'
-            f"{_svg(curve, domain='displacement')}<figcaption>Force-compression loop</figcaption></figure>"
-            f"<figure>{_svg(curve, domain='time')}<figcaption>Force history</figcaption></figure></div></article>"
+            f"<article><h4>{html.escape(_fixture_label(curve))}</h4>"
+            '<div class="plot-grid"><figure><figcaption>Force&ndash;compression loop</figcaption>'
+            f"{_svg(curve, domain='displacement')}</figure>"
+            "<figure><figcaption>Force history</figcaption>"
+            f"{_svg(curve, domain='time')}</figure></div></article>"
         )
     status = "ALL DECLARED GATES PASSED" if passed else "RESEARCH BASELINE — SOME DECLARED GATES FAILED"
     status_class = "pass" if passed else "fail"
     claim = html.escape(shoe.validation["claim_boundary"])
     sources = "".join(
-        f"<li><code>{html.escape(item['name'])}</code> — {html.escape(item['role'])} — <code>{item['sha256']}</code></li>"
+        f"<li><code>{html.escape(item['name'])}</code>"
+        f'<span class="source-role">{html.escape(item["role"])}</span>'
+        f'<code class="source-hash">SHA-256: {html.escape(item["sha256"])}</code></li>'
         for item in shoe.provenance["source_files"]
     )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Digital Shoe validation — {html.escape(shoe.shoe_id)}</title>
-<style>
-:root{{--ink:#172033;--muted:#5f6b7a;--panel:#f5f7fa;--blue:#1261a0;--orange:#d94801;--green:#137333;--red:#a61b1b}}body{{font:16px/1.5 system-ui,sans-serif;color:var(--ink);max-width:1200px;margin:auto;padding:2rem}}h1{{font-size:2.3rem;margin-bottom:.2rem}}h2{{margin-top:2.2rem}}.subtitle{{color:var(--muted);font-size:1.15rem}}.status{{display:inline-block;padding:.35rem .65rem;border-radius:.3rem;font-weight:700}}.pass{{color:var(--green);font-weight:700}}.fail{{color:var(--red);font-weight:700}}.status.pass{{background:#dff3e4}}.status.fail{{background:#fbe1e1}}.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1.5rem 0}}.card{{background:var(--panel);padding:1rem;border-radius:.5rem}}table{{border-collapse:collapse;width:100%}}th,td{{padding:.65rem;border-bottom:1px solid #d7dee8;text-align:left}}th{{background:var(--panel)}}.plot-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(480px,1fr));gap:1rem}}.experiment-grid{{display:block}}.experiment-grid figure{{max-width:1000px;margin:0 auto 2.5rem}}.heatmap-legend{{max-width:1000px;margin:0 auto 1.5rem}}.heatmap-bar{{height:24px;margin-top:.5rem;border:1px solid #64748b;border-radius:.25rem;background:linear-gradient(90deg,#0000ff 0%,#00ffff 33.3%,#ffff00 66.7%,#ff0000 100%)}}.heatmap-labels{{display:flex;justify-content:space-between;gap:.5rem;font-size:.85rem;color:var(--muted)}}figure{{margin:0}}svg{{width:100%;height:auto;background:white}}img.experiment{{display:block;width:100%;height:auto;border:1px solid #ccd5df;border-radius:.4rem;background:#fff}}figcaption{{text-align:center;color:var(--muted);padding-top:.4rem}}code{{font-size:.85em;overflow-wrap:anywhere}}.boundary{{border-left:5px solid var(--orange);padding:1rem;background:#fff5ed}}.method-diagram{{margin:1.5rem 0;padding:1rem;border:1px solid #d7dee8;border-radius:.5rem;background:#fff;overflow-x:auto}}.method-diagram svg{{display:block;width:100%;height:auto;min-width:900px}}.equation{{margin:.8rem 0;padding:.85rem 1rem;border-left:4px solid var(--blue);background:#eef6ff;font:1.02rem/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-x:auto}}details{{margin:1rem 0}}details pre{{white-space:pre-wrap;background:var(--panel);padding:1rem;border-radius:.4rem}}article{{margin:1.5rem 0 2.5rem}}
-</style></head><body>
-<header><h1>From Instron Data to a Digital Shoe</h1><p class="subtitle">Portable effective shoe dynamics for <code>{html.escape(shoe.shoe_id)}</code></p></header>
+<title>Digital Instron showcase — {html.escape(shoe.shoe_id)}</title>
+<style>{_REPORT_CSS}</style></head><body>
+<header>
+<p class="eyebrow">Digital Instron / Research showcase</p>
+<h1>From Instron Data to a Digital Shoe</h1>
+<p class="subtitle">Identify an effective shoe model from bench measurements. Export it once. Use the same model in three Newton simulations.</p>
+<p class="shoe-id">Shoe artifact · <code>{html.escape(shoe.shoe_id)}</code></p>
+<div class="status-panel {status_class}" role="note" aria-label="Validation status and limitations">
+<strong class="status {status_class}">{status}</strong><p>{claim}</p>
+</div>
+<nav class="report-nav" aria-label="Report sections">
+<a href="#methods">01 Methods</a><a href="#results">02 Results</a>
+<a href="#examples">03 Examples</a><a href="#reproduce">04 Reproduce</a>
+</nav>
+</header>
+<main>
 {_methods_section()}
-<section id="results"><h2>2. Results</h2><p><span class="status {status_class}">{status}</span></p>
-<h3>2.1 Held-out validation summary</h3><table><thead><tr><th>Trial</th><th>Peak error</th><th>Active RMSE</th><th>Hysteresis error</th><th>Measured peak</th><th>Declared 10% gates</th></tr></thead><tbody>{_metric_rows(curves)}</tbody></table>
-<h3>2.2 Held-out response curves</h3>{"".join(curve_figures)}
-<h3>2.3 Identified effective model</h3><table><thead><tr><th>Parameter</th><th>Value</th><th>Unit</th></tr></thead><tbody>{_material_rows(shoe)}</tbody></table><p>The parameters describe the intact tested shoe system. They include geometry, outsole, plate, bonding, confinement, and foam response.</p>
-<h3>2.4 Claim boundary</h3><p class="boundary">{claim}</p></section>
+<section id="results"><h2>2. Results</h2>
+<h3>2.1 Held-out validation</h3>
+<p class="section-note">Lower errors are better. Each declared error must be below 10% to pass. These held-out cycles test local repeatability, not performance under new physical conditions.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Held-out validation metrics">
+<table class="metrics"><caption>Measured versus predicted response · held-out cycles</caption>
+<thead><tr><th scope="col">Fixture</th><th scope="col">Peak error</th><th scope="col">Active RMSE</th><th scope="col">Hysteresis error</th><th scope="col">Measured peak</th><th scope="col">Overall</th></tr></thead>
+<tbody>{_metric_rows(curves)}</tbody></table></div>
+<h3>2.2 Response curves</h3>
+<p class="plot-caption">Blue solid: measured. Orange dashed: predicted. Both curves use the same axes within each plot.</p>
+{"".join(curve_figures)}
+<h3>2.3 Effective model parameters</h3>
+<p class="section-note">These values describe the tested shoe assembly, not isolated foam. Fixed assumptions are marked below.</p>
+<div class="table-scroll" tabindex="0" role="region" aria-label="Effective model parameters">
+<table><thead><tr><th scope="col">Parameter</th><th scope="col">Value</th><th scope="col">Unit</th></tr></thead><tbody>{_material_rows(shoe)}</tbody></table></div>
+</section>
 {_experiment_media(media_dir)}
-<section id="reproduce"><h2>4. Reproduce and provenance</h2><h3>4.1 Commands</h3><pre><code>uv run -m projects.digital_instron_v2.export_digital_shoe --manifest DigitalInstron/manifest_v2.json --output DigitalInstron/digital_shoe_showcase
-uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode instron --viewer gl
+<section id="reproduce"><h2>4. Reproduce and provenance</h2>
+<p>Run these commands from the repository root. The report and its embedded animations work offline.</p>
+<h3>Rebuild this report only</h3>
+<p class="section-note">Reuse the existing artifact and GIFs. No fitting or simulation is needed.</p>
+<pre><code>uv run -m projects.digital_shoe.report DigitalInstron/digital_shoe_showcase/digital_shoe.json --output DigitalInstron/digital_shoe_showcase/validation_report.html --media-dir DigitalInstron/digital_shoe_showcase</code></pre>
+<details><summary>Full workflow: fit, simulate, and record</summary><div class="details-body">
+<h3>Identify and export</h3>
+<pre><code>uv run --extra examples -m projects.digital_instron_v2.export_digital_shoe --manifest DigitalInstron/manifest_v2.json --output DigitalInstron/digital_shoe_showcase</code></pre>
+<h3>Open a mechanical example</h3>
+<pre><code>uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode instron --viewer gl
 uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode drop --viewer gl
-uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode rocker --viewer gl
-uv run --extra examples -m projects.digital_shoe.record_gifs --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json</code></pre>
-<h3>4.2 Source integrity</h3><ul>{sources}</ul></section>
+uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode rocker --viewer gl</code></pre>
+<h3>Record all three animations and rebuild the report</h3>
+<pre><code>uv run --extra examples -m projects.digital_shoe.record_gifs --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json</code></pre>
+</div></details>
+<details><summary>Source files and SHA-256 hashes</summary><div class="details-body"><ul class="sources">{sources}</ul></div></details>
+</section>
+</main>
+<footer>Digital Instron · Effective intact-shoe model · Standalone Newton showcase</footer>
 </body></html>"""
 
 
