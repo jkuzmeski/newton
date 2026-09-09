@@ -5,7 +5,8 @@
 
 The offline exporter calls the source worktree's public C3D adapters in that
 worktree's own uv environment. The portable loader needs no gait code or C3D.
-Foot motion is a heel/toe marker proxy, not a shoe transform or native-body pose.
+The default pitch fits a calibrated heel triangle; the legacy marker-line proxy
+is still available. Neither mode establishes a measured sole or Puma-shoe frame.
 """
 
 from __future__ import annotations
@@ -22,7 +23,30 @@ from pathlib import Path
 
 import numpy as np
 
-SCHEMA = "impedance_stance_1"
+LEGACY_SCHEMA = "impedance_stance_1"
+SCHEMA = "impedance_stance_2"
+PITCH_METHOD = "heel_cluster_kabsch_static_ground_forward"
+PITCH_FORMULA = "unwrap(-atan2((R @ static_forward)_z, (R @ static_forward)_x)); world +Y toe-down"
+PITCH_CONTEXT_S = 0.15
+FIT_RMS_LIMIT_M = 0.002
+FIT_MAX_LIMIT_M = 0.003
+MIN_TRIANGLE_AREA_M2 = 0.0001
+NEUTRAL_REFERENCE = {
+    "kind": "mechanical_flat_reference_assumption",
+    "neutral_pitch_rad": 0.0,
+    "independently_measured_sole_axis": False,
+    "static_flat_standing_assumed": True,
+    "marker_placement_unchanged_between_cal_and_trial_assumed": True,
+    "limitations": "Cal ground-projected marker heading defines mechanical zero; no measured sole axis or marker-to-Puma registration",
+}
+ACQUISITION_FACTS = {
+    "source": "user_confirmed_marker_placement_and_cross_shoe_scope",
+    "heel_markers": "HEE/HEE2/HEE3 triangle on heel",
+    "TOE_marker": "shoe upper over second metatarsal head; not hallux or toe tip",
+    "capture_shoe_matches_modeled_puma": False,
+    "usage": "representative cross-shoe engineering example; matching-shoe data later",
+    "unknowns": "capture shoe identity; marker attachment rigidity; unchanged Cal/Trial placement; sole registration; prior gap filling",
+}
 ARRAYS = (
     "time_s",
     "source_time_s",
@@ -91,11 +115,240 @@ def _integrate(times: np.ndarray, acceleration: np.ndarray, x0: float, v0: float
     return position, velocity
 
 
+def _finite_array(value, shape: tuple[int, ...], name: str) -> np.ndarray:
+    array = np.asarray(value, dtype=object)
+    if array.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}")
+    return np.asarray([_number(x, name) for x in array.flat]).reshape(shape)
+
+
+def _proper_rotations(rotations: np.ndarray, name: str) -> None:
+    if not np.allclose(rotations @ np.swapaxes(rotations, -1, -2), np.eye(3), rtol=0, atol=1e-9) or not np.allclose(
+        np.linalg.det(rotations), 1.0, rtol=0, atol=1e-9
+    ):
+        raise ValueError(f"{name} must contain proper rotations, not reflections or scale")
+
+
+def _triangle_area(points: np.ndarray) -> np.ndarray:
+    return 0.5 * np.linalg.norm(
+        np.cross(points[..., 1, :] - points[..., 0, :], points[..., 2, :] - points[..., 0, :]), axis=-1
+    )
+
+
+def _fit_heel_cluster(template: np.ndarray, observed: np.ndarray):
+    """Fit proper no-scale Cal-to-Trial rotations from only three heel markers."""
+    template = np.asarray(template, dtype=float)
+    observed = np.asarray(observed, dtype=float)
+    if template.shape != (3, 3) or observed.ndim != 3 or observed.shape[1:] != (3, 3):
+        raise ValueError("heel fit requires one template and a sequence of three-marker triangles")
+    if not np.all(np.isfinite(template)) or not np.all(np.isfinite(observed)):
+        raise ValueError("heel fit requires finite markers")
+    if _triangle_area(template) < MIN_TRIANGLE_AREA_M2 or np.any(_triangle_area(observed) < MIN_TRIANGLE_AREA_M2):
+        raise ValueError("heel triangle is degenerate or too small for stable tracking")
+    centroid = template.mean(axis=0)
+    target_centroid = observed.mean(axis=1)
+    centered = template - centroid
+    target_centered = observed - target_centroid[:, None, :]
+    u, _, vt = np.linalg.svd(np.einsum("mi,nmj->nij", centered, target_centered))
+    v = np.swapaxes(vt, -1, -2)
+    correction = np.broadcast_to(np.eye(3), v.shape).copy()
+    correction[:, 2, 2] = np.linalg.det(v @ np.swapaxes(u, -1, -2))
+    rotation = v @ correction @ np.swapaxes(u, -1, -2)
+    translation = target_centroid - np.einsum("nij,j->ni", rotation, centroid)
+    fitted = np.einsum("nij,mj->nmi", rotation, template) + translation[:, None, :]
+    error = np.linalg.norm(fitted - observed, axis=2)
+    _proper_rotations(rotation, "heel fit")
+    return rotation, translation, np.sqrt(np.mean(error**2, axis=1)), error.max(axis=1)
+
+
+def _pitch_from_rotations(rotation: np.ndarray, forward: np.ndarray) -> np.ndarray:
+    direction = np.einsum("nij,j->ni", rotation, forward)
+    if np.any(np.linalg.norm(direction[:, (0, 2)], axis=1) < 0.1):
+        raise ValueError("heel forward vector has degenerate world sagittal projection")
+    return np.unwrap(-np.arctan2(direction[:, 2], direction[:, 0]))
+
+
+def _pitch_kinematics(prefix: str) -> dict:
+    return {
+        "kind": "measured_heel_cluster_pitch_with_assumed_flat_reference",
+        "heel_marker": prefix + "HEE",
+        "toe_marker": prefix + "TOE",
+        "source_rate_hz": 100.0,
+        "interpolation": "raw optical pitch knots linearly sampled at native analog times; runtime smoothing is separate",
+        "pitch_formula": PITCH_FORMULA,
+        "context_only_arrays": ["foot_x_m", "foot_z_m"],
+        "limitations": "heel translation and full rotations are context only, not prescribed fixture XYZ/yaw/roll; not a sole/Puma frame or independently measured COM",
+    }
+
+
+def _validate_pitch_reference(result: dict, values: dict) -> None:
+    """Check v2 optical geometry and provenance without weakening v1 physics checks."""
+    ref = result["pitch_reference"]
+    expected = {
+        "method",
+        "source_rate_hz",
+        "knot_time_s",
+        "pitch_rad",
+        "rotation_matrix",
+        "translation_m",
+        "heel_marker_xyz_m",
+        "fit_rms_m",
+        "fit_max_m",
+        "static_template",
+        "quality",
+        "neutral_reference",
+    }
+    if not isinstance(ref, dict) or set(ref) != expected or ref["method"] != PITCH_METHOD:
+        raise ValueError("invalid pitch_reference fields or method")
+    meta = result["provenance"]
+    if set(meta["sources"]) != {
+        "c3d",
+        "calibration",
+        "treadmill_log",
+        "subject_manifest",
+        "c3d_adapter",
+        "contact_dataset",
+        "treadmill_adapter",
+        "exporter",
+    }:
+        raise ValueError("v2 requires known C3D, Cal, and source-adapter provenance")
+    if any(set(source) != {"path", "sha256"} or not source["path"].strip() for source in meta["sources"].values()):
+        raise ValueError("invalid v2 source fields")
+    if meta.get("acquisition") != ACQUISITION_FACTS or ref["neutral_reference"] != NEUTRAL_REFERENCE:
+        raise ValueError("pitch must retain acquisition facts and the unvalidated mechanical flat-reference assumption")
+    prefix = "L" if result["side"] == "left" else "R"
+    if meta["kinematics"] != _pitch_kinematics(prefix):
+        raise ValueError("v2 kinematics must identify heel-cluster pitch and context-only translation")
+    rotation = _finite_array(meta["registration"].get("lab_to_newton"), (3, 3), "lab_to_newton")
+    _proper_rotations(rotation, "lab_to_newton")
+    transform = _finite_array(meta["registration"].get("rigid_registration_after_rotation"), (4, 4), "registration")
+    if not np.array_equal(transform, np.eye(4)):
+        raise ValueError("v2 requires direct acquisition markers without further rigid registration")
+    source_rate = _number(ref["source_rate_hz"], "pitch source rate")
+    analog_rate = _number(meta["kinetics"].get("source_rate_hz"), "force source rate")
+    if source_rate != 100.0 or analog_rate != 2000.0:
+        raise ValueError("v2 requires original 100 Hz optical knots and 2000 Hz force samples")
+    if not np.allclose(np.diff(values["time_s"]), 1 / analog_rate, rtol=0, atol=1e-10):
+        raise ValueError("profile clock disagrees with native force rate")
+    knot_list = ref["knot_time_s"]
+    if not isinstance(knot_list, list) or len(knot_list) < 4:
+        raise ValueError("pitch requires original optical knots with outer context")
+    count = len(knot_list)
+    knots = _finite_array(knot_list, (count,), "pitch knot clock")
+    angles = _finite_array(ref["pitch_rad"], (count,), "pitch knot angles")
+    absolute = knots + values["source_time_s"][0]
+    if not np.allclose(np.diff(knots), 1 / source_rate, rtol=0, atol=1e-10) or not np.allclose(
+        absolute * source_rate, np.rint(absolute * source_rate), rtol=0, atol=1e-7
+    ):
+        raise ValueError("pitch knots must retain the original optical clock, not analog-grid resampling")
+    if knots[0] > -PITCH_CONTEXT_S + 1e-10 or knots[-1] < values["time_s"][-1] + PITCH_CONTEXT_S - 1e-10:
+        raise ValueError("pitch knots require at least 0.15 s context before and after the padded profile")
+    recording = meta.get("recording", {})
+    recording_range = _finite_array(recording.get("time_range_s"), (2,), "recording time range")
+    point_count = _number(recording.get("point_count"), "recording point count")
+    if (
+        recording_range[0] != 0.0
+        or point_count < count
+        or point_count != int(point_count)
+        or abs(recording_range[1] - (point_count - 1) / source_rate) > 1e-10
+        or absolute[0] < -1e-10
+        or absolute[-1] > recording_range[1] + 1e-10
+    ):
+        raise ValueError("pitch knots or recording length disagree with source clock")
+    template = ref["static_template"]
+    template_fields = {
+        "marker_names",
+        "position_m",
+        "forward_marker",
+        "forward_marker_position_m",
+        "forward_unit_vector",
+        "time_window_s",
+        "sample_count",
+        "source_rate_hz",
+        "fit_rms_m",
+        "fit_max_m",
+        "triangle_area_m2",
+    }
+    if not isinstance(template, dict) or set(template) != template_fields:
+        raise ValueError("invalid static heel template fields")
+    if (
+        template["marker_names"] != [prefix + name for name in ("HEE", "HEE2", "HEE3")]
+        or template["forward_marker"] != prefix + "TOE"
+    ):
+        raise ValueError("rigid fit must use only HEE/HEE2/HEE3; TOE supplies static heading only")
+    if (
+        template["time_window_s"] != [0.5, 1.0]
+        or _number(template["sample_count"], "static count") != 51
+        or _number(template["source_rate_hz"], "static rate") != source_rate
+    ):
+        raise ValueError("static template must use Cal 0.5-1.0 s at original optical rate")
+    static = _finite_array(template["position_m"], (3, 3), "static heel template")
+    toe = _finite_array(template["forward_marker_position_m"], (3,), "static second-metatarsal marker")
+    forward = _finite_array(template["forward_unit_vector"], (3,), "static forward direction")
+    expected_forward = toe - static.mean(axis=0)
+    expected_forward[2] = 0.0
+    if np.linalg.norm(expected_forward) < 0.1 or expected_forward[0] <= 0.0:
+        raise ValueError("static heel-to-metatarsal heading must define a nondegenerate forward ground projection")
+    expected_forward /= np.linalg.norm(expected_forward)
+    if not np.allclose(forward, expected_forward, rtol=0, atol=1e-10):
+        raise ValueError("static forward must be the ground-projected heel-centroid-to-TOE direction")
+    area = _number(template["triangle_area_m2"], "static triangle area")
+    if area < MIN_TRIANGLE_AREA_M2 or abs(float(_triangle_area(static)) - area) > 1e-12:
+        raise ValueError("invalid static heel triangle area")
+    rotations = _finite_array(ref["rotation_matrix"], (count, 3, 3), "pitch rotations")
+    translations = _finite_array(ref["translation_m"], (count, 3), "heel translations")
+    observed = _finite_array(ref["heel_marker_xyz_m"], (count, 3, 3), "observed heel markers")
+    _proper_rotations(rotations, "pitch rotations")
+    fitted_rotations, fitted_translations, rms, maximum = _fit_heel_cluster(static, observed)
+    if not np.allclose(rotations, fitted_rotations, rtol=0, atol=1e-9) or not np.allclose(
+        translations, fitted_translations, rtol=0, atol=1e-10
+    ):
+        raise ValueError("pitch rotation/translation must be the declared no-scale heel Kabsch fit")
+    expected_angles = _pitch_from_rotations(rotations, forward)
+    if not np.allclose(angles, expected_angles, rtol=0, atol=1e-10) or not np.allclose(
+        values["pitch_rad"], np.interp(values["time_s"], knots, angles), rtol=0, atol=1e-10
+    ):
+        raise ValueError("pitch samples must follow unwrapped heel-rotation angles on the declared clocks")
+    for key, expected_error in (("fit_rms_m", rms), ("fit_max_m", maximum)):
+        errors = _finite_array(ref[key], (count,), key)
+        if not np.allclose(errors, expected_error, rtol=0, atol=1e-10):
+            raise ValueError("heel fit residuals disagree with observed markers")
+    static_rms = _finite_array(template["fit_rms_m"], (51,), "static fit RMS")
+    static_max = _finite_array(template["fit_max_m"], (51,), "static fit max")
+    if (
+        np.any(static_rms < 0)
+        or np.any(static_max < static_rms)
+        or max(float(static_rms.max()), float(rms.max())) > FIT_RMS_LIMIT_M
+        or max(float(static_max.max()), float(maximum.max())) > FIT_MAX_LIMIT_M
+    ):
+        raise ValueError("heel fit exceeds the declared rigid-triangle residual bounds")
+    expected_quality = _pitch_quality(rms, maximum, float(_triangle_area(observed).min()))
+    if ref["quality"] != expected_quality:
+        raise ValueError("pitch quality must retain measured residuals and explicit unvalidated limits")
+
+
+def _pitch_quality(rms: np.ndarray, maximum: np.ndarray, min_area: float) -> dict:
+    return {
+        "passed": True,
+        "kind": "geometric_consistency_only_not_shoe_or_sole_validation",
+        "max_allowed_rms_m": FIT_RMS_LIMIT_M,
+        "max_allowed_point_error_m": FIT_MAX_LIMIT_M,
+        "min_allowed_triangle_area_m2": MIN_TRIANGLE_AREA_M2,
+        "mean_fit_rms_m": float(rms.mean()),
+        "max_fit_rms_m": float(rms.max()),
+        "max_point_error_m": float(maximum.max()),
+        "min_observed_triangle_area_m2": min_area,
+        "required_context_each_end_s": PITCH_CONTEXT_S,
+        "independent_validation": False,
+        "limitations": "short heel triangle amplifies marker noise; good rigid residuals do not establish sole motion, attachment rigidity, or gap-filling history",
+    }
+
+
 def load_profile(path: str | Path) -> dict:
     """Verify a portable running profile and return its JSON object.
 
     Args:
-        path: Sealed ``impedance_stance_1`` JSON file.
+        path: Sealed ``impedance_stance_1`` or ``impedance_stance_2`` JSON file.
 
     Raises:
         ValueError: If schema, seal, arrays, source attribution, or physics
@@ -112,7 +365,10 @@ def load_profile(path: str | Path) -> dict:
         "provenance",
         "seal",
     }
-    if set(result) != required or result["schema_version"] != SCHEMA:
+    schema = result.get("schema_version")
+    if schema == SCHEMA:
+        required.add("pitch_reference")
+    if set(result) != required or schema not in (LEGACY_SCHEMA, SCHEMA):
         raise ValueError("unsupported profile fields or schema")
     if result["coordinate_system"] != COORDINATES or result["side"] not in ("left", "right"):
         raise ValueError("invalid coordinate system or side")
@@ -218,12 +474,86 @@ def load_profile(path: str | Path) -> dict:
             v, values[f"reference_com_v{axis}_m_s"], rtol=0, atol=1e-9
         ):
             raise ValueError("COM surrogate is not the declared measured-force integration")
+    if schema == SCHEMA:
+        _validate_pitch_reference(result, values)
     return result
 
 
 def _events(mask: np.ndarray):
     edges = np.diff(np.r_[False, mask, False].astype(np.int8))
     return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1), strict=True))
+
+
+def _build_pitch_reference(markers, calibration, times: np.ndarray, side: str) -> dict:
+    """Reconstruct native optical pitch with context, not new analog-rate poses."""
+    prefix = "L" if side == "left" else "R"
+    names = [prefix + name for name in ("HEE", "HEE2", "HEE3")]
+    forward_name = prefix + "TOE"
+    if markers.rate != 100.0 or calibration.rate != 100.0:
+        raise ValueError("heel-cluster reconstruction requires original 100 Hz optical inputs")
+    if not np.array_equal(markers.lab_to_newton, calibration.lab_to_newton):
+        raise ValueError("Cal and Trial must use identical laboratory-axis conversion")
+    _proper_rotations(markers.lab_to_newton, "marker lab_to_newton")
+    static_selection = (calibration.times >= 0.5 - 1e-10) & (calibration.times <= 1.0 + 1e-10)
+    if static_selection.sum() != 51 or not np.allclose(
+        calibration.times[static_selection], np.linspace(0.5, 1.0, 51), rtol=0, atol=1e-10
+    ):
+        raise ValueError("Cal must supply all 51 original optical samples in 0.5-1.0 s")
+    first = int(np.searchsorted(markers.times, times[0] - PITCH_CONTEXT_S, side="right")) - 1
+    last = int(np.searchsorted(markers.times, times[-1] + PITCH_CONTEXT_S, side="left"))
+    if first < 0 or last >= len(markers.times):
+        raise ValueError("Trial cannot provide the required 0.15 s optical context at each end")
+    selection = slice(first, last + 1)
+    try:
+        static_indices = [calibration.marker_names.index(name) for name in [*names, forward_name]]
+        dynamic_indices = [markers.marker_names.index(name) for name in names]
+    except ValueError as error:
+        raise ValueError("heel-cluster reconstruction requires HEE/HEE2/HEE3 and static TOE") from error
+    if not np.all(calibration.valid[static_selection][:, static_indices]) or not np.all(
+        markers.valid[selection][:, dynamic_indices]
+    ):
+        raise ValueError(
+            "heel reconstruction requires valid measured markers at all static and context knots; no gap filling"
+        )
+    static_samples = np.asarray(calibration.positions[static_selection][:, static_indices], dtype=float)
+    template = static_samples[:, :3].mean(axis=0)
+    forward_marker = static_samples[:, 3].mean(axis=0)
+    forward = forward_marker - template.mean(axis=0)
+    forward[2] = 0.0
+    if np.linalg.norm(forward) < 0.1 or forward[0] <= 0:
+        raise ValueError("static centroid-to-TOE ground projection must point forward with nondegenerate length")
+    forward /= np.linalg.norm(forward)
+    _, _, static_rms, static_max = _fit_heel_cluster(template, static_samples[:, :3])
+    observed = np.asarray(markers.positions[selection][:, dynamic_indices], dtype=float)
+    rotation, translation, rms, maximum = _fit_heel_cluster(template, observed)
+    if max(rms.max(), static_rms.max()) > FIT_RMS_LIMIT_M or max(maximum.max(), static_max.max()) > FIT_MAX_LIMIT_M:
+        raise ValueError("heel triangle fails geometric consistency: >2 mm frame RMS or >3 mm point error")
+    return {
+        "method": PITCH_METHOD,
+        "source_rate_hz": float(markers.rate),
+        "knot_time_s": (markers.times[selection] - times[0]).tolist(),
+        "pitch_rad": _pitch_from_rotations(rotation, forward).tolist(),
+        "rotation_matrix": rotation.tolist(),
+        "translation_m": translation.tolist(),
+        "heel_marker_xyz_m": observed.tolist(),
+        "fit_rms_m": rms.tolist(),
+        "fit_max_m": maximum.tolist(),
+        "static_template": {
+            "marker_names": names,
+            "position_m": template.tolist(),
+            "forward_marker": forward_name,
+            "forward_marker_position_m": forward_marker.tolist(),
+            "forward_unit_vector": forward.tolist(),
+            "time_window_s": [0.5, 1.0],
+            "sample_count": int(static_selection.sum()),
+            "source_rate_hz": float(calibration.rate),
+            "fit_rms_m": static_rms.tolist(),
+            "fit_max_m": static_max.tolist(),
+            "triangle_area_m2": float(_triangle_area(template)),
+        },
+        "quality": _pitch_quality(rms, maximum, float(_triangle_area(observed).min())),
+        "neutral_reference": NEUTRAL_REFERENCE.copy(),
+    }
 
 
 def _extract(config: dict) -> None:
@@ -236,6 +566,8 @@ def _extract(config: dict) -> None:
     subject = root / config["subject"]
     c3d = subject / config["c3d"]
     log_path = subject / config["treadmill_log"]
+    use_heel_cluster = config.get("pitch_source", "heel-cluster") == "heel-cluster"
+    calibration_path = subject / config.get("calibration", "Cal 101.v3d.c3d")
     source_paths = {
         "c3d": c3d,
         "treadmill_log": log_path,
@@ -245,8 +577,13 @@ def _extract(config: dict) -> None:
         "treadmill_adapter": root / "projects/gait_c3d/treadmill.py",
         "exporter": Path(__file__).resolve(),
     }
+    if use_heel_cluster:
+        source_paths["calibration"] = calibration_path
     sources = {name: {"path": str(path), "sha256": _hash(path)} for name, path in source_paths.items()}
     markers = read_c3d_markers(c3d, up_axis="+Z", forward_axis="-Y")
+    calibration = read_c3d_markers(calibration_path, up_axis="+Z", forward_axis="-Y") if use_heel_cluster else None
+    if calibration is not None and calibration.source_sha256 != sources["calibration"]["sha256"]:
+        raise ValueError("calibration source changed during decoding")
     wrench = read_c3d_contact_wrenches(
         c3d,
         platform_sides=("unassigned", "unassigned"),
@@ -378,6 +715,10 @@ def _extract(config: dict) -> None:
     if np.any(np.linalg.norm(vector[:, (0, 2)], axis=1) < 0.1):
         raise ValueError("degenerate heel-to-toe sagittal orientation")
     pitch = np.unwrap(-np.arctan2(vector[:, 2], vector[:, 0]))
+    pitch_reference = None
+    if use_heel_cluster:
+        pitch_reference = _build_pitch_reference(markers, calibration, ts, config["side"])
+        pitch = np.interp(relative, pitch_reference["knot_time_s"], pitch_reference["pitch_rad"])
     cop_x = np.zeros(len(ts))
     cop_x[reference_loaded] = -summed_moment[reference_loaded, 1] / reference[reference_loaded, 2]
     cop_x += displacement - heel[0, 0]
@@ -476,8 +817,11 @@ def _extract(config: dict) -> None:
         },
         "reproduction_options": {key: value for key, value in config.items() if key != "output"},
     }
+    if use_heel_cluster:
+        provenance["kinematics"] = _pitch_kinematics(prefix)
+        provenance["acquisition"] = ACQUISITION_FACTS.copy()
     result = {
-        "schema_version": SCHEMA,
+        "schema_version": SCHEMA if use_heel_cluster else LEGACY_SCHEMA,
         "coordinate_system": COORDINATES,
         "mass_kg": float(mass),
         "side": config["side"],
@@ -503,6 +847,8 @@ def _extract(config: dict) -> None:
         "reference_com_vz_m_s": vz.tolist(),
         "provenance": provenance,
     }
+    if pitch_reference is not None:
+        result["pitch_reference"] = pitch_reference
     for name, path in source_paths.items():
         if _hash(path) != sources[name]["sha256"]:
             raise ValueError(f"source changed during export: {name}")
@@ -521,6 +867,13 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--subject", default="projects/gait_c3d/subjects/S001")
     parser.add_argument("--c3d", default="Trial 101.v3d.c3d")
+    parser.add_argument("--calibration", default="Cal 101.v3d.c3d", help="Static C3D, absolute or relative to subject")
+    parser.add_argument(
+        "--pitch-source",
+        choices=("heel-cluster", "heel-metatarsal-line"),
+        default="heel-cluster",
+        help="Heel-cluster v2 with assumed flat reference (default), or legacy v1 HEE-to-TOE line",
+    )
     parser.add_argument("--treadmill-log", default="tm0001.txt")
     parser.add_argument(
         "--window-start", type=float, required=True, help="Explicit classification-window start on source C3D clock [s]"

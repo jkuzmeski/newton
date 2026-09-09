@@ -1,1 +1,1 @@
-Add a measured-running foot-and-virtual-COM impedance Instron example with a portable stance exporter, the calibrated Digital Shoe, and auditable offline mechanical comparisons.
+Add a measured-running foot-and-virtual-COM impedance Instron with heel-triangle pitch at a fixed mechanical ankle, explicit unloading, portable inputs, the calibrated Digital Shoe, and auditable mechanical comparisons.

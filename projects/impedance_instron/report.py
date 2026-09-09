@@ -48,6 +48,9 @@ _AUDIT_FIELDS = {
     "damping_n_s_m": ("damping_n_s_m", "leg_damping_n_s_m", "vertical_damping_n_s_m"),
     "dt_s": ("dt_s", "dt"),
     "mode": ("mode",),
+    "reference_mode": ("reference_mode",),
+    "ankle_mount_m": ("ankle_mount_m",),
+    "shoe_orientation": ("shoe_orientation",),
     "initial_state": ("initial_state",),
     "shoe_stiffness_scale": ("shoe_stiffness_scale",),
 }
@@ -61,10 +64,11 @@ _LIMITS = (
 )
 _METRIC_LABELS = {
     "peak_shoe_force_n": "Peak shoe vertical force [N]",
+    "final_shoe_force_n": "Final shoe force after the supplied window [N]",
     "shoe_impulse_n_s": "Shoe vertical impulse [N s]",
     "reference_impulse_n_s": "Reference vertical impulse [N s]",
     "force_rmse_n": "Time-weighted vertical force RMSE [N]",
-    "positive_active_leg_work_j": "Positive active leg work [J]",
+    "positive_active_leg_work_j": "Positive active-source work [J]",
     "negative_active_leg_work_j": "Negative active leg work (signed) [J]",
     "net_active_leg_work_j": "Net active leg work [J]",
     "damping_dissipation_j": "Leg damping dissipation (positive loss) [J]",
@@ -82,6 +86,9 @@ _METRIC_LABELS = {
     "com_endpoint_velocity_error_m_s": "COM final velocity minus reference [m/s]",
     "com_energy_change_j": "COM energy: end minus start [J]",
     "max_compression_m": "Peak shoe compression [m]",
+    "minimum_last_height_m": "Minimum rigid-last height above ground [m]",
+    "peak_ankle_torque_nm": "Peak absolute ankle drive torque [N m]",
+    "peak_pitch_acceleration_rad_s2": "Peak absolute pitch acceleration [rad/s^2]",
     "controller_clipped_time_fraction": "Controller-clipped time fraction [0-1]",
     "rig_energy_change_j": "Rig energy: end minus start [J]",
     "rig_energy_balance_residual_j": "Rig mechanical energy balance residual [J]",
@@ -155,6 +162,7 @@ def _summarize(columns: dict[str, np.ndarray], metadata: dict) -> dict:
     contact = _work(time, columns["shoe_contact_power_w"])
     metrics = {
         "peak_shoe_force_n": float(np.max(columns["shoe_fz_n"])),
+        "final_shoe_force_n": float(columns["shoe_fz_n"][-1]),
         "shoe_impulse_n_s": _integral(time, columns["shoe_fz_n"]),
         "reference_impulse_n_s": _integral(time, columns["reference_fz_n"]),
         "force_rmse_n": float(
@@ -176,6 +184,15 @@ def _summarize(columns: dict[str, np.ndarray], metadata: dict) -> dict:
         "max_compression_m": float(np.max(columns["max_compression_m"])),
         "controller_clipped_time_fraction": _integral(time, columns["controller_clipped"]) / duration,
     }
+    for channel, metric, reduction in (
+        ("last_min_height_m", "minimum_last_height_m", np.min),
+        ("ankle_torque_nm", "peak_ankle_torque_nm", lambda v: np.max(np.abs(v))),
+        ("pitch_acceleration_rad_s2", "peak_pitch_acceleration_rad_s2", lambda v: np.max(np.abs(v))),
+    ):
+        if channel in columns:
+            if not np.all(np.isfinite(columns[channel])):
+                raise ValueError(f"Nonfinite trace values in {channel}")
+            metrics[metric] = float(reduction(columns[channel]))
     for channel, prefix in (
         ("replay_vertical_power_w", "replay_vertical_drive"),
         ("track_power_w", "track_drive"),
@@ -410,9 +427,12 @@ def _plots(columns: dict[str, np.ndarray], previous: dict[str, np.ndarray] | Non
             ],
         ),
         (
-            "Foot height",
+            "Fixture/ankle height (free in impedance mode)",
             "m",
-            [("foot_z_m", "Current foot", "#1967b3", False), ("reference_foot_z_m", "Reference foot", "#b55214", True)],
+            [
+                ("foot_z_m", "Current fixture", "#1967b3", False),
+                ("reference_foot_z_m", "Nominal inertial reference, not imposed", "#b55214", True),
+            ],
         ),
         (
             "Force-integrated surrogate COM height",
@@ -441,13 +461,33 @@ def _plots(columns: dict[str, np.ndarray], previous: dict[str, np.ndarray] | Non
             ],
         ),
         ("Vertical leg force", "N", [("leg_force_n", "Current leg force", "#1967b3", False)]),
+        ("Vertical impedance engagement", "0-1", [("impedance_gain", "Quintic toe-off release", "#1967b3", False)]),
+        (
+            "Fixture release force",
+            "N",
+            [("retraction_force_n", "Gravity compensation plus optional lift", "#1967b3", False)],
+        ),
         ("Peak spring compression", "m", [("max_compression_m", "Current shoe", "#1967b3", False)]),
         (
             "Prescribed fore-aft positions",
             "m",
             [("foot_x_m", "Foot", "#1967b3", False), ("com_x_m", "Surrogate COM", "#b55214", True)],
         ),
-        ("Prescribed foot pitch", "rad", [("pitch_rad", "Pitch", "#1967b3", False)]),
+        (
+            "Prescribed foot pitch",
+            "rad",
+            [
+                ("pitch_rad", "Applied angle", "#1967b3", False),
+                ("raw_pitch_rad", "Source angle before command smoothing", "#b55214", True),
+            ],
+        ),
+        ("Ankle drive torque", "N m", [("ankle_torque_nm", "Pitch motor", "#1967b3", False)]),
+        ("Rigid last ground clearance", "m", [("last_min_height_m", "Lowest rigid-last vertex", "#1967b3", False)]),
+        (
+            "Measured COP context (original heel-origin frame)",
+            "m",
+            [("source_cop_x_m", "Not position-registered to pitch-only rig", "#737e88", True)],
+        ),
     ]
     plots = []
     for title, unit, channels in definitions:

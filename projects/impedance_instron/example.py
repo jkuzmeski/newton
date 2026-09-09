@@ -18,8 +18,10 @@ import newton.examples
 from projects.digital_shoe import FoundationConfig, MidsoleFoundation, load_artifact
 from projects.digital_shoe.rendering import attached_column_endpoints, column_colors
 
+from .orientation import orient_shoe
 from .profile import load_profile
 from .report import write_report
+from .trajectory import TrajectoryCubic
 
 # Device reference columns: foot x/z, pitch, COM x/z, foot vx/vz, pitch rate,
 # COM vx/vz, foot az, left Fz, other Fz, leg reference length/rate.
@@ -71,8 +73,17 @@ def _apply_leg(
     rate = wp.spatial_top(body_qd[1])[2] - wp.spatial_top(body_qd[0])[2]
     error = length - reference[index, 13]
     desired_rate = reference[index, 14]
-    feedforward = reference[index, 11] - foot_mass * (gravity + reference[index, 10])
-    raw_force = feedforward - stiffness * error + damping * (desired_rate - rate)
+    gain = float(1.0)
+    gain_rate = float(0.0)
+    retract_force = float(0.0)
+    if reference.shape[1] >= 22:
+        gain = reference[index, 19]
+        gain_rate = reference[index, 20]
+        retract_force = reference[index, 21]
+    k = stiffness * gain
+    b = damping * gain
+    feedforward = reference[index, 11] - foot_mass * (gravity + reference[index, 10]) - retract_force
+    raw_force = feedforward - k * error + b * (desired_rate - rate)
     force = wp.clamp(raw_force, -force_limit, force_limit)
     wp.atomic_add(body_f, 0, wp.spatial_vector(wp.vec3(0.0, 0.0, -force), wp.vec3(0.0)))
     wp.atomic_add(body_f, 1, wp.spatial_vector(wp.vec3(0.0, 0.0, force + reference[index, 12]), wp.vec3(0.0)))
@@ -80,10 +91,12 @@ def _apply_leg(
     # physical damper dissipation, and any force-limit intervention.
     diagnostics[0] = force
     diagnostics[1] = (
-        feedforward + damping * desired_rate + force - raw_force
-    ) * rate - stiffness * error * desired_rate
-    diagnostics[2] = -damping * rate * rate
-    diagnostics[3] = 0.5 * stiffness * error * error
+        (feedforward + b * desired_rate + force - raw_force) * rate
+        - k * error * desired_rate
+        + 0.5 * stiffness * gain_rate * error * error
+    )
+    diagnostics[2] = -b * rate * rate
+    diagnostics[3] = 0.5 * k * error * error
     diagnostics[4] = float(wp.abs(force - raw_force) > 1.0e-4)
 
 
@@ -123,6 +136,7 @@ def _record_sample(
     trace[index, 7] = diagnostics[2]
     # Isotropic fixture inertia: prescribed pitch drive balances contact torque.
     trace[index, 8] = (pitch_inertia * reference[index, 15] - wp.spatial_bottom(body_f[0])[1]) * reference[index, 7]
+    trace[index, 18] = pitch_inertia * reference[index, 15] - wp.spatial_bottom(body_f[0])[1]
     trace[index, 9] = contact_power[0]
     trace[index, 10] = com_mass * (gravity * com_z + 0.5 * com_vz * com_vz)
     trace[index, 11] = compression[0]
@@ -181,7 +195,16 @@ class Example:
         self.args = args
         if (args.screenshot or args.record_gif) and not hasattr(viewer, "get_frame"):
             raise ValueError("Screenshots and GIF recording require --viewer gl")
+        self.reference_mode = args.reference_mode
+        if self.reference_mode == "pitch" and args.mode != "impedance":
+            raise ValueError(
+                "Pitch mode has no vertical replay trajectory; use --reference-mode markers for legacy replay"
+            )
         self.profile = load_profile(args.profile)
+        if self.reference_mode == "pitch" and self.profile["schema_version"] != "impedance_stance_2":
+            raise ValueError(
+                "Pitch mode requires a heel-cluster v2 profile; export stance_pitch.json or select --reference-mode markers"
+            )
         self.gravity = float(self.profile["provenance"]["com_surrogate"]["gravity_m_s2"])
         source_rate = float(self.profile["provenance"]["kinematics"]["source_rate_hz"])
         if args.kinematic_rate_hz is not None and not math.isclose(args.kinematic_rate_hz, source_rate):
@@ -189,7 +212,14 @@ class Example:
         args.kinematic_rate_hz = source_rate
         if not math.isfinite(args.initial_clearance) or args.initial_clearance < 0.0:
             raise ValueError("Initial clearance must be finite and nonnegative; preloaded history is not supported")
-        self.shoe = load_artifact(args.artifact)
+        self.shoe, self.shoe_orientation = orient_shoe(
+            load_artifact(args.artifact), target_side=args.shoe_side, source_side=args.source_shoe_side
+        )
+        self.ankle_mount = np.asarray(
+            args.ankle_mount if self.reference_mode == "pitch" else (0.0, 0.0, 0.0), dtype=float
+        )
+        if self.ankle_mount.shape != (3,) or not np.all(np.isfinite(self.ankle_mount)):
+            raise ValueError("The mechanical ankle mount must be three finite shoe-local coordinates")
         self.device = wp.get_device()
         self.mode = args.mode
         self.mass = float(self.profile["mass_kg"])
@@ -205,9 +235,12 @@ class Example:
             args.substeps,
             args.force_limit_bw,
             args.kinematic_rate_hz,
+            self.gravity,
         ]
         if not np.all(np.isfinite(params)) or min(params) <= 0.0:
             raise ValueError("Masses, gains, scale, substeps, and force limit must be finite and positive")
+        if not np.isfinite(args.ankle_x) or not np.isfinite(args.track_speed):
+            raise ValueError("Track settings must be finite")
         self.frame_dt = 1.0 / 120.0
         self.sim_dt = self.frame_dt / args.substeps
         self.duration = float(self.profile["time_s"][-1])
@@ -222,6 +255,14 @@ class Example:
         self._screenshot_saved = False
         self._gif_frames = []
         self._make_reference()
+        last_local = self.shoe.visual_mesh("fullfoot_last").vertices_m - self.ankle_mount
+        self.minimum_last_offsets = np.empty(self.sample_count)
+        for start in range(0, self.sample_count, 128):
+            angle = self.reference[start : start + 128, 2].astype(float)
+            self.minimum_last_offsets[start : start + 128] = np.min(
+                -np.sin(angle[:, None]) * last_local[None, :, 0] + np.cos(angle[:, None]) * last_local[None, :, 2],
+                axis=1,
+            )
 
         builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, -self.gravity))
         builder.add_ground_plane()
@@ -235,11 +276,17 @@ class Example:
         mesh = self.shoe.visual_mesh("fullfoot_last")
         builder.add_shape_mesh(
             self.carrier,
-            mesh=newton.Mesh(np.asarray(mesh.vertices_m, np.float32), np.asarray(mesh.triangles, np.int32).ravel()),
+            mesh=newton.Mesh(
+                np.asarray(mesh.vertices_m - self.ankle_mount, np.float32), np.asarray(mesh.triangles, np.int32).ravel()
+            ),
             cfg=cfg,
             color=(0.72, 0.77, 0.82),
             label="calibrated_last",
         )
+        if self.reference_mode == "pitch":
+            builder.add_shape_sphere(
+                self.carrier, radius=0.017, cfg=cfg, color=(1.0, 0.5, 0.08), label="mechanical_ankle_pivot"
+            )
         self.com_body = builder.add_body(
             mass=self.com_mass, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)), label="upper_inertial_slider"
         )
@@ -276,7 +323,7 @@ class Example:
         self.state_1.body_q.assign(initial)
         self.state_1.body_qd.assign(velocity)
         self.reference_device = wp.array(self.reference, dtype=wp.float32, device=self.device)
-        self.trace_device = wp.zeros((self.sample_count, 18), dtype=wp.float32, device=self.device)
+        self.trace_device = wp.zeros((self.sample_count, 19), dtype=wp.float32, device=self.device)
         self.leg_diagnostics = wp.zeros(5, dtype=wp.float32, device=self.device)
         bed = self.shoe.column_bed
         scale = args.shoe_stiffness_scale
@@ -286,7 +333,7 @@ class Example:
             pasternak_n_per_m=self.shoe.material.pasternak_n_per_m * scale,
         )
         self.foundation = MidsoleFoundation(
-            bed.anchor_bottom_m,
+            bed.anchor_bottom_m - self.ankle_mount,
             np.zeros(len(bed.rest_length_m)),
             bed.rest_length_m,
             bed.area_m2,
@@ -317,6 +364,9 @@ class Example:
             "damping_n_s_m": args.damping,
             "dt_s": self.sim_dt,
             "mode": self.mode,
+            "reference_mode": self.reference_mode,
+            "shoe_orientation": self.shoe_orientation,
+            "ankle_mount_m": self.ankle_mount.tolist(),
             "expected_duration_s": self.duration,
             "shoe_stiffness_scale": scale,
             "scenario_changes": ["shoe_stiffness_scale"],
@@ -328,7 +378,7 @@ class Example:
             },
             "registration": self.registration,
             "kinematic_rate_hz": args.kinematic_rate_hz,
-            "reference_processing": "optical-clock C1 Hermite with finite-difference knot slopes; analytic velocity/acceleration; v1",
+            "reference_processing": self.reference_processing,
             "processed_reference_hash": hashlib.sha256(self.reference.tobytes()).hexdigest(),
             "runtime_source_hash": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "solver": "newton.solvers.SolverSemiImplicit; angular_damping=0; prescribed robot axes",
@@ -337,18 +387,28 @@ class Example:
             "shoe_identification_passed": self.shoe.raw["identification"]["passed_all_declared_gates"],
             "initial_prescribed_state": self.reference[0].tolist(),
             "profile_provenance": self.profile.get("provenance", {}),
+            "pitch_reconstruction": {
+                key: self.profile.get("pitch_reference", {}).get(key)
+                for key in ("method", "quality", "neutral_reference", "static_template")
+            },
             "profile_limits": [
-                "Running stance selected from measured recordings; see source classification evidence.",
+                "Representative running inputs from another shoe, NOT same-Puma validation; user confirmed cross-shoe example scope.",
+                "Heel triangle tracks rearfoot rotation; LTOE is on the upper over the second metatarsal head, not the toe tip.",
+                "Pitch mode uses a declared static mechanical neutral and fixed ankle mount, not an anatomical foot insertion fit.",
                 "Opposite-foot vertical force is an explicit replay boundary, not a simulated second leg.",
                 "The COM reference is force-integrated with assumed initial conditions, not measured anatomical COM.",
             ],
             "force_limit_n": args.force_limit_bw * self.mass * self.gravity,
             "normal_damping_n_s_m_per_column": 0.0,
             "friction": "disabled; measured Fx is context only",
-            "power_definition": "Active source power includes feedforward, moving spring rest length, desired damping rate, and saturation intervention; passive damping and guide drives are separate. Not metabolic cost.",
+            "power_definition": "Active source power includes feedforward/retraction, moving spring rest length, scheduled stiffness, desired damping rate, and saturation intervention; passive damping and guide drives are separate. Not metabolic cost.",
         }
 
     def _make_reference(self):
+        if getattr(self.args, "reference_mode", "markers") == "pitch":
+            self._make_pitch_reference()
+            return
+        self.reference_processing = "optical-clock C1 Hermite with analytic derivatives; legacy marker trajectory"
         source_t = np.asarray(self.profile["time_s"], dtype=float)
 
         def sample(key):
@@ -428,9 +488,119 @@ class Example:
             "touchdown_clearance_m": self.args.initial_clearance,
             "anatomical_registration_validated": False,
         }
+        self.raw_pitch = sample("pitch_rad")
         self.reference_fx = sample("reference_fx_n")
         cop = np.asarray([np.nan if v is None else v for v in self.profile["reference_cop_x_m"]])
         self.reference_cop = np.interp(self.times, source_t, cop)
+
+    def _make_pitch_reference(self):
+        """Drive only calibrated pitch; derive vertical intent from force and constant leg length."""
+        source_t = np.asarray(self.profile["time_s"], dtype=float)
+
+        def sample(key):
+            return np.interp(self.times, source_t, np.asarray(self.profile[key], dtype=float))
+
+        pitch_data = self.profile["pitch_reference"]
+        trajectory = TrajectoryCubic.fit(
+            pitch_data["knot_time_s"], pitch_data["pitch_rad"], cutoff_hz=self.args.pitch_cutoff
+        )
+        pitch, omega, alpha = trajectory.evaluate(self.times)
+        self.raw_pitch = np.interp(self.times, pitch_data["knot_time_s"], pitch_data["pitch_rad"])
+        self.reference_processing = trajectory.smoothing
+        source_start = float(self.profile["source_time_s"][0])
+        touchdown = float(self.profile["provenance"]["running"]["selected_stance_source_s"][0]) - source_start
+        touch_pitch = float(trajectory.evaluate(np.array([touchdown]))[0][0])
+        anchors = self.shoe.column_bed.anchor_bottom_m - self.ankle_mount
+        touch_bottom = float(np.min(-np.sin(touch_pitch) * anchors[:, 0] + np.cos(touch_pitch) * anchors[:, 2]))
+        center_z, center_vz = sample("com_z_m"), sample("reference_com_vz_m_s")
+        # One initial height predicts threshold touchdown under free fall. It is
+        # not a prescribed ankle trajectory or a calibrated anatomical contact.
+        initial_ankle_z = (
+            -touch_bottom - center_vz[0] * touchdown + 0.5 * self.gravity * touchdown**2 + self.args.initial_clearance
+        )
+        first_bottom = float(np.min(-np.sin(pitch[0]) * anchors[:, 0] + np.cos(pitch[0]) * anchors[:, 2]))
+        if initial_ankle_z + first_bottom < -1.0e-6:
+            raise ValueError(
+                "The angle-only initialization would preload the shoe; choose a different declared initial condition"
+            )
+        x = self.args.ankle_x + self.args.track_speed * self.times
+        vx, ax = np.full_like(self.times, self.args.track_speed), np.zeros_like(self.times)
+        center_x = sample("com_x_m")
+        center_vx = sample("reference_com_vx_m_s")
+        center_ax = sample("total_measured_fx_n") / self.mass
+        self.centroid_reference = np.column_stack([center_x, center_z, center_vx, center_vz])
+        z = center_z - center_z[0] + initial_ankle_z
+        vz = center_vz.copy()
+        az = (sample("reference_fz_n") + sample("other_fz_n")) / self.mass - self.gravity
+        cx = (self.mass * center_x - self.foot_mass * x) / self.com_mass
+        cvx = (self.mass * center_vx - self.foot_mass * vx) / self.com_mass
+        cax = (self.mass * center_ax - self.foot_mass * ax) / self.com_mass
+        cz = (self.mass * center_z - self.foot_mass * z) / self.com_mass
+        rest_length = float(cz[0] - z[0])
+        if rest_length <= 0.0:
+            raise ValueError("Virtual COM must begin above the mechanical ankle")
+        toeoff = float(self.profile["provenance"]["running"]["selected_stance_source_s"][1]) - source_start
+        duration = self.args.unload_duration
+        if not np.isfinite(duration) or duration < 0.0 or duration >= toeoff - touchdown:
+            raise ValueError("Unload duration must be zero or shorter than stance")
+        if not np.isfinite(self.args.unload_acceleration) or self.args.unload_acceleration < 0.0:
+            raise ValueError("Unload acceleration must be finite and nonnegative")
+        gain, gain_rate = np.ones_like(z), np.zeros_like(z)
+        if duration > 0.0:
+            u = np.clip((self.times - (toeoff - duration)) / duration, 0.0, 1.0)
+            gain = np.clip(1.0 - u**3 * (10.0 - 15.0 * u + 6.0 * u**2), 0.0, 1.0)
+            gain_rate = -30.0 * u**2 * (1.0 - u) ** 2 / duration
+        retract = (1.0 - gain) * self.foot_mass * (self.gravity + self.args.unload_acceleration)
+        self.reference = np.column_stack(
+            [
+                x,
+                z,
+                pitch,
+                cx,
+                cz,
+                vx,
+                vz,
+                omega,
+                cvx,
+                center_vz,
+                az,
+                sample("reference_fz_n"),
+                sample("other_fz_n"),
+                np.full_like(z, rest_length),
+                np.zeros_like(z),
+                alpha,
+                az,
+                ax,
+                cax,
+                gain,
+                gain_rate,
+                retract,
+            ]
+        ).astype(np.float32)
+        self.reference_fx = sample("reference_fx_n")
+        self.reference_cop = np.interp(
+            self.times, source_t, [np.nan if v is None else v for v in self.profile["reference_cop_x_m"]]
+        )
+        self.registration = {
+            "kind": "fixed mechanical ankle mount; no marker XYZ replay",
+            "ankle_mount_in_oriented_shoe_m": self.ankle_mount.tolist(),
+            "fixture_mass_location": "lumped at mechanical ankle; not anatomical foot COM",
+            "ankle_x_m": self.args.ankle_x,
+            "track_speed_m_s": self.args.track_speed,
+            "initialization": "free-fall estimate to threshold touchdown using measured pitch and assumed COM entry velocity",
+            "touchdown_time_s": touchdown,
+            "touchdown_clearance_m": self.args.initial_clearance,
+            "initial_ankle_z_m": initial_ankle_z,
+            "initial_outsole_clearance_m": initial_ankle_z + first_bottom,
+            "constant_leg_rest_length_m": rest_length,
+            "unload_duration_s": self.args.unload_duration,
+            "unload_acceleration_m_s2": self.args.unload_acceleration,
+            "unload_policy": "quintic impedance fade to zero at measured toe-off plus bounded internal fixture lift; not a marker trajectory",
+            "toeoff_time_s": toeoff,
+            "vertical_reference": "force-integrated total centroid and constant leg length; NOT prescribed XYZ motion",
+            "anatomical_registration_validated": False,
+            "cop_comparison": "source measured COP kept as context; no marker-translation registration to the pitch-only rig",
+        }
 
     def _prescribe(self, index):
         wp.launch(
@@ -533,7 +703,9 @@ class Example:
         self.viewer.log_lines("impedance/shoe_columns", self.points, self.tops, self.colors, width=0.002)
         self.viewer.log_points("impedance/shoe_bottom", self.points, radii=0.0015, colors=self.colors)
         positions = self.state_0.body_q.numpy()[:, :3]
-        self.leg_start.assign(positions[0:1] + np.array([[0.0, 0.0, 0.09]], np.float32))
+        self.leg_start.assign(
+            positions[0:1] + np.array([[0.0, 0.0, 0.0 if self.reference_mode == "pitch" else 0.09]], np.float32)
+        )
         center = (self.foot_mass * positions[0] + self.com_mass * positions[1]) / self.mass
         self.leg_end.assign(center.reshape(1, 3))
         self.viewer.log_points("impedance/virtual_COM", self.leg_end, radii=0.065, colors=self.com_color)
@@ -570,12 +742,28 @@ class Example:
                 "shoe_fz_n": float(values[0]),
                 "reference_fx_n": float(self.reference_fx[i]),
                 "other_fz_n": float(ref[12]),
-                "reference_cop_x_m": float(self.reference_cop[i]),
+                "reference_cop_x_m": float(self.reference_cop[i]) if self.reference_mode == "markers" else float("nan"),
+                "source_cop_x_m": float(self.reference_cop[i]),
                 "shoe_cop_x_m": float(values[1]) if values[0] > 1.0 else float("nan"),
                 "foot_x_m": float(ref[0]),
                 "foot_z_m": float(values[2]),
                 "reference_foot_z_m": float(ref[1]),
                 "pitch_rad": float(ref[2]),
+                "raw_pitch_rad": float(self.raw_pitch[i]),
+                "pitch_velocity_rad_s": float(ref[7]),
+                "pitch_acceleration_rad_s2": float(ref[15]),
+                "ankle_torque_nm": float(values[18]),
+                "impedance_gain": float(ref[19]) if len(ref) >= 22 else 1.0,
+                "retraction_force_n": float(ref[21]) if len(ref) >= 22 else 0.0,
+                "last_min_height_m": float(values[2] + self.minimum_last_offsets[i]),
+                "ankle_x_m": float(ref[0]) if self.reference_mode == "pitch" else float("nan"),
+                "ankle_z_m": float(values[2]) if self.reference_mode == "pitch" else float("nan"),
+                "shoe_origin_x_m": float(
+                    ref[0] - np.cos(ref[2]) * self.ankle_mount[0] - np.sin(ref[2]) * self.ankle_mount[2]
+                ),
+                "shoe_origin_z_m": float(
+                    values[2] + np.sin(ref[2]) * self.ankle_mount[0] - np.cos(ref[2]) * self.ankle_mount[2]
+                ),
                 "com_x_m": float(center_x),
                 "com_z_m": center_z,
                 "reference_com_z_m": float(reference_z),
@@ -624,6 +812,15 @@ class Example:
                 reasons.append(f"Shoe peak outside engineering bounds: {peak:.1f} N")
             if not 0.0 < compression < 0.05:
                 reasons.append(f"Compression outside engineering bounds: {compression:.6f} m")
+            last_height = trace[:, 2] + self.minimum_last_offsets[: self.index]
+            if np.min(last_height) < -0.001:
+                reasons.append(f"Rigid last penetrated ground: {1000 * np.min(last_height):.2f} mm")
+            if (
+                self.reference_mode == "pitch"
+                and self.index == self.sample_count
+                and trace[-1, 0] > 0.1 * self.mass * self.gravity
+            ):
+                reasons.append(f"Fixture remains loaded after toe-off: {trace[-1, 0]:.1f} N")
             if np.any(trace[:, 12] != 0.0):
                 reasons.append("Controller hit its force limit")
             if self.mode == "impedance" and np.max(np.abs(trace[:, 2] - self.reference[: self.index, 1])) < 1.0e-5:
@@ -663,9 +860,60 @@ def create_parser():
     """Expose motion, material scenarios, and explicit controller settings."""
     parser = newton.examples.create_parser()
     parser.set_defaults(num_frames=120)
-    parser.add_argument("--profile", type=Path, default=Path("outputs/impedance_instron/stance.json"))
+    parser.add_argument("--profile", type=Path, default=Path("outputs/impedance_instron/stance_pitch.json"))
     parser.add_argument("--artifact", type=Path, default=Path("DigitalInstron/digital_shoe_showcase/digital_shoe.json"))
     parser.add_argument("--mode", choices=["impedance", "replay"], default="impedance")
+    parser.add_argument(
+        "--reference-mode",
+        choices=["pitch", "markers"],
+        default="pitch",
+        help="Pitch-only mechanical ankle, or legacy marker-trajectory experiment.",
+    )
+    parser.add_argument(
+        "--ankle-mount",
+        type=float,
+        nargs=3,
+        default=(-0.075, 0.0, 0.105),
+        metavar=("X", "Y", "Z"),
+        help="Fixed mechanical ankle in oriented shoe coordinates [m]; not an anatomical fit.",
+    )
+    parser.add_argument("--ankle-x", type=float, default=0.0, help="Initial world track coordinate [m].")
+    parser.add_argument(
+        "--track-speed",
+        type=float,
+        default=0.0,
+        help="Prescribed ankle track speed [m/s], independent of marker translations.",
+    )
+    parser.add_argument(
+        "--pitch-cutoff",
+        type=float,
+        default=12.0,
+        help="Offline optical-angle smoothing cutoff [Hz], 0 disables smoothing (C2 interpolation remains).",
+    )
+    parser.add_argument(
+        "--source-shoe-side",
+        choices=["left", "right"],
+        default="right",
+        help="Explicit interpretation of baked geometry, NOT inferred from the artifact label; supplied artifact audit indicates right.",
+    )
+    parser.add_argument(
+        "--shoe-side",
+        choices=["left", "right"],
+        default="left",
+        help="Chosen mechanical fixture side; anatomy certification remains separate.",
+    )
+    parser.add_argument(
+        "--unload-duration",
+        type=float,
+        default=0.04,
+        help="Impedance fade duration before measured toe-off [s]; 0 disables release scheduling.",
+    )
+    parser.add_argument(
+        "--unload-acceleration",
+        type=float,
+        default=0.0,
+        help="Additional fixture lift acceleration during release [m/s^2]; default uses gravity compensation only.",
+    )
     parser.add_argument("--stiffness", type=float, default=12000.0, help="Virtual leg stiffness [N/m].")
     parser.add_argument("--damping", type=float, default=250.0, help="Virtual leg damping [N s/m].")
     parser.add_argument(
@@ -694,7 +942,7 @@ def create_parser():
         default=None,
         help="Optical knot rate [Hz]; must match source marker sampling.",
     )
-    parser.add_argument("--output", type=Path, default=Path("outputs/impedance_instron/baseline"))
+    parser.add_argument("--output", type=Path, default=Path("outputs/impedance_instron/pitch_baseline"))
     parser.add_argument("--compare", type=Path, help="Prior output directory for audited comparison.")
     parser.add_argument("--screenshot", type=Path, help="Save a 320x320 JPG near midstance with --viewer gl.")
     parser.add_argument("--record-gif", type=Path, help="Save a slowed OpenGL stance animation.")

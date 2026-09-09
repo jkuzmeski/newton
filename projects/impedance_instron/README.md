@@ -1,36 +1,46 @@
-# Impedance Instron
+# Impedance Instron: pitch-driven mechanical ankle
 
-A runnable **running-stance** experiment with a shoe, a foot fixture, and a virtual
-center of mass. There is no human skeleton, muscle model, or human multibody
-rollout. Newton integrates two inertial bodies; only their vertical motion is
-free. The robot track and foot pitch follow measured motion.
+The default example uses **measured running pitch and kinetics**, a rigid shoe
+last, a compliant Digital Shoe, and a virtual COM. There is no human skeleton or
+muscle simulation. The mechanical ankle rotates about one fixed mounting point.
+**Measured marker XYZ trajectories do not drive the vertical controller.**
 
-This is an engineering example, not a validated prediction of human performance.
-It does not implement a physical robot or online learning yet.
+This is a representative cross-shoe engineering example. The capture shoe was
+**not the modeled Puma**. Matching-shoe data will be collected later; this is not
+same-shoe or human-performance validation.
 
-## Run the supplied local example
+## Run the supplied-data example
 
-From this worktree:
+From this worktree, with the two generated local inputs already present:
 
 ```bash
-uv run --extra examples -m newton.examples impedance_instron --viewer gl
-
-# Complete the same stance without a window and check the engineering state.
 uv run --extra examples -m newton.examples impedance_instron \
-  --viewer null --num-frames 120 --test
+  --viewer gl --render-fps 20
+
+uv run --extra examples -m newton.examples impedance_instron \
+  --viewer null --test
 ```
 
-The defaults load `outputs/impedance_instron/stance.json` and
-`DigitalInstron/digital_shoe_showcase/digital_shoe.json`. These generated inputs
-are intentionally ignored. Missing inputs fail explicitly; there is no synthetic
-motion or proxy-shoe fallback. The blue point is the **combined COM**, not just
-the upper inertial slider. The exposed colored columns are the actual calibrated
-Digital Shoe. One stance plays and then holds; no fabricated swing is appended.
+The defaults are:
+
+- `outputs/impedance_instron/stance_pitch.json`: real running inputs and calibrated
+  heel-triangle rotations.
+- `DigitalInstron/digital_shoe_showcase/digital_shoe.json`: the identified shoe.
+- `outputs/impedance_instron/pitch_baseline/`: trace CSV, summary JSON, and offline HTML.
+
+The orange point is the mechanical ankle. The blue point is the **mass-weighted
+COM**, not merely the upper inertial body. The gray mesh is a rigid Instron last;
+the colored columns supply the shoe's effective compliance. The last mesh itself
+has no ground collision. This is not an anatomical insertion/contact solve between
+a human foot and a shoe upper.
+
+One measured window plays and then holds. There is no fabricated swing trajectory.
+Missing inputs fail explicitly; there is no synthetic-motion or proxy-shoe fallback.
 
 ## Rebuild the inputs
 
-Reuse the existing calibrated shoe artifact, or generate it from the supplied
-measurements as described in [Digital Shoe](../digital_shoe/README.md):
+The calibrated shoe may be reused unchanged. If it is missing, follow
+[Digital Shoe](../digital_shoe/README.md):
 
 ```bash
 uv run -m projects.digital_instron_v2.export_digital_shoe \
@@ -40,177 +50,208 @@ uv run -m projects.digital_instron_v2.export_digital_shoe \
 uv run -m projects.impedance_instron.profile \
   --source-worktree /home/jo31399/newton-worktrees/foot-contact \
   --window-start 90 --window-end 95 --side left --stance-index 0 \
-  --output outputs/impedance_instron/stance.json
+  --pitch-source heel-cluster --calibration "Cal 101.v3d.c3d" \
+  --output outputs/impedance_instron/stance_pitch.json
 ```
 
-The exporter refuses to overwrite an existing profile. Use a new output filename
-for another selection and pass it with `--profile` when running the example.
-The source worktree must contain the local S001 acquisition and public
-`projects.gait_c3d` adapters. Its own `uv` environment performs the offline C3D
-extraction, with `ezc3d==1.7.2` as an isolated optional dependency. The example
-runtime needs only the two portable JSON inputs; it never imports the gait
-pipeline, opens a C3D, or loads a human model.
+The exporter refuses to overwrite an existing profile. Select a new output path
+for another experiment, then pass it with `--profile`.
 
-### Why this is running, not the walking lead-in
+The source worktree contains the local S001 data and public `projects.gait_c3d`
+adapters. Its own `uv` environment performs the offline extraction with an
+isolated `ezc3d==1.7.2` dependency. The example runtime loads only the two JSON
+inputs. It does not open C3D files, import the gait pipeline, or load a human model.
 
-The source is S001 `Trial 101.v3d.c3d` in branch `jkuzmeski/foot-contact`.
-The full recording is about 178 seconds long. The earlier 8-14 second reference
-on that branch is **walking and is not used** here.
+### The data are running, not the walking lead-in
 
-The explicit 90-95 second window has:
+The source is S001 `Trial 101.v3d.c3d` on `jkuzmeski/foot-contact`.
+Its earlier 8-14 second reference is walking and is **not used** here.
 
-- A steady 3 m/s belt command/reference, not independently measured belt speed.
-- Alternating marker-assigned support events and force-free flight.
-- Approximately 0.30 second contacts and 167-168 steps/min cadence.
-- Selected left contact at **90.0115-90.3065 s**, with 0.0535 s preceding flight
-  and 0.0645 s following flight.
-- Exported interval **89.9915-90.3265 s**, including 20 ms flight padding at each end.
+- Explicit classification window: 90-95 s, with a steady 3 m/s belt
+  command/reference (not independently measured belt speed).
+- Selected left contact: **90.0115-90.3065 s**, duration 0.295 s.
+- Preceding/following flight: 0.0535 / 0.0645 s; cadence about 167-168 steps/min.
+- Exported force window: **89.9915-90.3265 s**, including 20 ms flight padding.
+- 671 force samples at 2000 Hz; 65 original 100 Hz angle knots include at least
+  150 ms of extra optical context on either side of the exported window.
 
-Both feet use **the same physical force platform** during this running section.
-The exporter assigns each event from simultaneous heel/toe markers, COP distance,
-and opposite-foot height. It does not carry over the walking plate-to-foot labels.
-It sums the two measured platform signals, preserves both original force/moment
-channels, and includes the unloaded platform noise without clipping. Opposite-foot
-support is zero by an explicitly recorded airborne inference, not a separate
-measurement. The `unassigned_*` noise channels are already included in the sum.
+Both feet use the same physical force platform during running. Event-specific
+marker/COP checks assign the selected foot; walking plate-to-foot labels are not
+reused. The reference is the sum of both measured platform signals, including
+unloaded-platform noise. Both original force/moment channels are retained.
+Opposite-foot support is zero by an explicit airborne inference. The diagnostic
+`unassigned_*` channels are already included in the sum and must not be added again.
 
-The profile retains 100 Hz marker information and 2000 Hz measured forces. Motion
-upsampling does not create additional measured bandwidth. Source hashes, processing,
-axis transforms, event evidence, and the shared heel/COP origin are inside the
-sealed JSON. Its loader verifies force sums, COP bookkeeping, and COM integration.
+The v2 export changes the pitch reconstruction, not the measured forces. All old
+array fields except `pitch_rad` reproduce the v1 profile exactly. Raw marker XYZ
+arrays remain as context/provenance but are not used by the angle-only controller.
 
-## Mechanical model
+## How pitch is reconstructed
 
-Let `M` be total mass, `mf` the fixture mass, and `mu = M - mf` the upper mass.
-The default fixture mass is 2 kg; the source total mass is approximately 81.93 kg.
-The force-integrated reference `Zref` represents the **total centroid**:
+User-confirmed placement:
+
+- `LHEE`, `LHEE2`, `LHEE3`: a triangle on the heel.
+- `LTOE`: on the shoe upper over the **second metatarsal head**, not the toe tip.
+- `LHLX`: hallux; it is not included in the rigid rearfoot fit.
+
+The existing Cal 101 interval 0.5-1.0 s supplies a static heel template. A proper,
+no-scale Kabsch fit maps that triangle into each running frame. The static vector
+from the heel cluster toward LTOE, projected into ground XY, defines forward.
+The transformed forward vector gives world sagittal pitch, with **+Y positive
+rotation lowering the +X toe**. Full 3D fitted rotations are retained as evidence,
+but only pitch is commanded in this rig. This is foot pitch relative to the
+ground, not anatomical ankle flexion relative to a shank.
+
+Static flat-foot standing and unchanged Cal/Trial marker placement remain explicit
+mechanical-reference assumptions. This does not independently calibrate a sole
+axis or the markers to the separate Puma last. All source hashes, proper rotations,
+fit residuals, marker positions, and assumptions are in `pitch_reference` and
+provenance. The supplied context's maximum frame RMS is about 0.625 mm; that is
+geometric consistency, not proof of anatomical attachment or absence of gap filling.
+
+The controller smooths the optical angle knots with a second-difference penalty
+(default approximate 12 Hz cutoff), then builds a **C2 natural cubic**. Position,
+velocity, and acceleration come from the same curve. Extra context keeps spline
+end conditions outside the measured window. `--pitch-cutoff 0` disables smoothing
+but retains C2 interpolation. This is offline command preparation, not a causal
+online filter or new measured bandwidth. Both raw and applied angles are plotted.
+The measured force reference is already 20 Hz filtered; the simulated force is
+not filtered to hide contact dynamics.
+
+## Mechanical ankle and vertical controller
+
+Default ankle mount in oriented shoe coordinates: **(-0.075, 0, 0.105) m**.
+Use `--ankle-mount X Y Z` to change it. It is a mechanical design choice, not an
+inferred anatomical ankle center. All shoe vertices and column anchors use this
+same transform:
 
 ```text
-M * Zref_ddot = Fz_reference + Fz_other - M*g
-zu_reference = (M*Zref - mf*zf_reference) / mu
-
-length = zu - zf
-Fleg = Fz_reference - mf*(g + zf_reference_ddot)
-       + K*(length_reference - length)
-       + B*(length_reference_dot - length_dot)
-
-mf * zf_ddot = Fshoe - Fleg - mf*g
-mu * zu_ddot = Fleg + Fz_other - mu*g
-Z = (mf*zf + mu*zu) / M
+p_world = p_ankle + R_y(pitch) * (p_shoe_local - ankle_mount)
 ```
 
-`SolverSemiImplicit` advances the native bodies. Leg forces are equal and opposite.
-They cancel from total vertical momentum. This is a **two-slider robot fixture**,
-not a free spatial human leg: the prescribed guides supply the nonvertical
-reactions. The default `K=12000 N/m` and `B=250 N s/m` are scenario settings, not
-identified human impedance.
+The fixture's 2 kg effective inertia is lumped at the ankle mount. The remaining
+mass is the upper inertial body; total source mass is about 81.93 kg. Newton's
+`SolverSemiImplicit` integrates both vertical states. Their force balance is:
 
-Measured heel motion and heel-to-toe pitch guide the fixture. A fixed heel-to-shoe
-center offset keeps COP and foot in the same X frame. A single height shift aligns
-the lowest outsole with the ground at the measured 50 N touchdown threshold.
-This is a bench registration, not an anatomical shoe fit. Optical-clock C1 Hermite
-curves provide consistent pose, velocity, and acceleration; the code does not
-differentiate piecewise-linear optical data at the solver rate.
+```text
+mf * ankle_z_ddot = Fshoe - Fleg - mf*g
+mu * upper_z_ddot = Fleg + Fother - mu*g
+COM_z = (mf*ankle_z + mu*upper_z) / (mf + mu)
+```
 
-### Initial COM conditions are assumptions
+`Fleg` is an equal-and-opposite internal generalized force. It uses measured force
+feedforward and an impedance around a **constant vertical gap**, not around measured
+marker translations. Nominal gains are K=12000 N/m and B=250 N s/m. They are rig
+settings, not identified human impedance. The force-integrated COM reference maps
+consistently to both masses; it is not imposed on their actual vertical motion.
 
-Force alone does not identify absolute COM height or entry velocity. The default
-profile uses height 1 m and vertical velocity 0 m/s at **89.9915 s**, the padded
-start, not at touchdown. This is a repeatable initial condition, not measured COM.
-It must not be interpreted as a qualified human trajectory.
+A quintic schedule fades K and B to zero over the final 40 ms before measured
+toe-off. A bounded internal release force compensates fixture gravity. Optional
+`--unload-acceleration` adds lift acceleration; the default is zero. This release
+phase is necessary to avoid a constant virtual spring continuing to press the
+shoe into the floor after stance. It is an explicit controller policy, not a
+measured lift trajectory. Changing-stiffness work and retraction work are included
+in active-source power; no released virtual-spring energy is credited to the shoe.
 
-For a separate sensitivity experiment, `--initial-vz -0.244957105` in the exporter
-approximately gives equal COM height at the start and end of this one contact.
-That is an **equal-height single-stance assumption**, not measured COM or a
-periodic gait correction. A local pelvis-marker velocity proxy gives a different
-value. Keep these scenarios in separate profiles and do not adjust measured forces
-to make them agree. An initial-condition change correctly fails the fixed-input
-shoe-comparison audit.
+The ankle track is fixed by default (`--ankle-x 0 --track-speed 0`). The upper
+fore-aft guide retains the source force-integrated COM reference. Horizontal motion
+and pitch are prescribed robot axes; guide reactions/work are explicit. This is
+a two-slider rig, not a free spatial human leg. It does not predict traction or
+braking/propulsive performance. The pitch motor is ideal: its demanded torque and
+work are recorded, but no real motor saturation or electrical-efficiency model is used.
 
-## Compare controlled shoe scenarios
+### Initial conditions remain assumptions
 
-Run the baseline before requesting comparisons:
+The source COM reference starts at height 1 m and vertical velocity 0 m/s at the
+padded start, 89.9915 s. Neither is measured COM. `--initial-vz` in the exporter
+creates a separate declared scenario. One free-fall estimate places the ankle for
+threshold touchdown using pitch, its fixed mount, and that assumed entry velocity.
+This is initialization only, not XYZ replay. Do not adjust measured forces to make
+an assumed COM trajectory close periodically.
+
+## Shoe side and winding
+
+The original artifact is not modified. `orientation.py` makes a detached in-memory
+copy. The supplied defaults explicitly interpret the baked source as right-sided
+and choose a left fixture (`--source-shoe-side right --shoe-side left`). This follows
+the read-only audit, not the artifact's misleading `*_left` label.
+
+A Y reflection transforms every bed/visual/fixture coordinate and corresponding
+neighbor direction. Triangle winding is preserved through reflection. A separate
+repair of the known inverted last winding requires exact geometry and source-hash
+matches; unknown meshes are not guessed. These transformations preserve sagittal
+normal-force mechanics, verified by native tests. Source files, material parameters,
+and original validation records stay unchanged.
+
+This resolves the fixture's explicit engineering convention and known winding
+fault, **not independent anatomical side certification**. Metadata retains that
+boundary. A Y reflection cannot repair a sagittal pitch or height error.
+
+## Compare shoe scenarios and inspect results
 
 ```bash
 uv run -m newton.examples impedance_instron --viewer null --test \
-  --output outputs/impedance_instron/baseline
+  --output outputs/impedance_instron/pitch_baseline
 uv run -m newton.examples impedance_instron --viewer null --test \
-  --shoe-stiffness-scale 0.7 --compare outputs/impedance_instron/baseline \
-  --output outputs/impedance_instron/softer
+  --shoe-stiffness-scale 0.7 --compare outputs/impedance_instron/pitch_baseline \
+  --output outputs/impedance_instron/pitch_softer
 uv run -m newton.examples impedance_instron --viewer null --test \
-  --shoe-stiffness-scale 1.3 --compare outputs/impedance_instron/baseline \
-  --output outputs/impedance_instron/stiffer
+  --shoe-stiffness-scale 1.3 --compare outputs/impedance_instron/pitch_baseline \
+  --output outputs/impedance_instron/pitch_stiffer
 ```
 
-A scale changes the artifact's shear modulus and Pasternak coupling together.
-It is a **synthetic material sensitivity**, not another identified commercial shoe.
-Geometry, loading, controller, registration, and initial state stay fixed.
+A scale changes shear modulus and Pasternak coupling, not geometry or loading.
+It is a synthetic sensitivity, not another identified commercial shoe. These are
+fixed-controller output comparisons: COM endpoints can differ, so lower actuator
+work alone is not an equal-task efficiency benefit. The report checks the profile, controller, release schedule, mount, orientation, processing,
+timestep, and initial-state settings before showing fixed-scenario deltas.
 
-Each output directory contains `trace.csv`, `summary.json`, and `report.html`.
-The offline report plots measured versus simulated loading, COP, COM response,
-and separate power channels. It checks input hashes, processed reference, runtime,
-fixture mass, controller, contact settings, timestep, and initial conditions before
-showing numerical comparison deltas. Failed or incomplete runs remain visible.
+`report.html`, `trace.csv`, and `summary.json` include forces, ankle torque, raw/applied
+pitch, free ankle/COM response, release engagement, rigid-last ground clearance,
+separate work channels, and rig energy closure. Measured COP remains in its original
+heel-origin frame and is shown as separate context, not falsely registered to the
+fixed-ankle rig. Active source work is not metabolic cost or motor electrical energy.
 
-`--mode replay` prescribes vertical motion too. Its extra vertical guide work is
-reported separately; prescribed COM movement is not a shoe benefit. In impedance
-mode both vertical states can depart from their references. With the current
-marker-proxy registration, strict replay reaches about **18.3 kN** and fails the
-engineering peak-force bound. Its saved report retains that failure. This is not
-a validated displacement-replay fixture; do not interpret those loads as human
-running forces or relax the limit to make the test pass.
+The supplied-data default completes loading and unloading without controller
+saturation or rigid-last ground penetration. Peak force is about 2.08 kN and peak
+compression about 18.9 mm: the compression is an extrapolation beyond the original
+full-foot test amplitude. Force shape and impulse are not an exact human match.
+The source shoe fit still fails peak/hysteresis gates; no performance validation
+is implied by a passing engineering example.
 
-Active source work,
-passive damper loss, track work, pitch-drive work, contact work, and rig energy
-balance are distinct. None is a metabolic-cost estimate.
+## Retained legacy and negative checks
 
-For a finer integration check, repeat with `--substeps 128` into a new directory.
-Do not treat a different timestep as a fixed-settings shoe comparison.
+The v1 loader and marker-trajectory experiment remain available:
 
-## Observed engineering checks
+```bash
+uv run -m newton.examples impedance_instron --reference-mode markers \
+  --profile outputs/impedance_instron/stance.json --viewer null --test \
+  --output outputs/impedance_instron/legacy_markers
+```
 
-The supplied default running profile gives approximately:
+Add `--mode replay` only with `--reference-mode markers` for strict XYZ replay.
+Its known ~18.3 kN overload and rigid-last ground penetration remain failures;
+do not relax the checks to make it pass. `--unload-duration 0` is a useful negative
+pitch-mode check: it leaves substantial post-toe-off load and is also unqualified.
+These are not fixed-settings shoe comparisons against the new mode.
 
-| Scenario | Peak shoe force | Peak compression | Positive active-source work |
-| --- | ---: | ---: | ---: |
-| 0.7 stiffness scale | 1.883 kN | 18.42 mm | 71.28 J |
-| Identified baseline | 1.832 kN | 13.13 mm | 75.58 J |
-| 1.3 stiffness scale | 1.992 kN | 12.06 mm | 76.27 J |
-
-All three complete the example without controller saturation. These are different
-outcomes under one fixed controller, not equal-task shoe-efficiency rankings.
-The softer case exceeds the original full-foot compression amplitude and is an
-additional extrapolation. None is independent human validation.
-
-Halving the native integration timestep changes baseline peak force by about
-0.04 N and positive active-source work by about 0.03 J. The rig's energy residual
-falls from about 0.15% to 0.06% of absolute power throughput. These are numerical
-checks for this one scenario, not broad dynamic-model validation.
-
-## Record a view and run regression tests
+## Record and test
 
 ```bash
 uv run --extra examples -m newton.examples impedance_instron \
-  --viewer gl --headless --num-frames 120 --test \
-  --record-gif outputs/impedance_instron/baseline/stance.gif \
+  --viewer gl --headless --test --num-frames 120 \
+  --record-gif outputs/impedance_instron/pitch_baseline/stance.gif \
   --screenshot docs/images/examples/example_impedance_instron.jpg
-uv run --extra dev -m unittest newton.tests.test_impedance_instron
+uv run --extra dev -m unittest newton.tests.test_impedance_pitch \
+  newton.tests.test_impedance_pitch_profile newton.tests.test_impedance_orientation \
+  newton.tests.test_impedance_instron newton.tests.test_digital_shoe
 ```
 
-The GIF plays slowly for inspection. Engineering tests cover native vertical force
-balance, reciprocal controller power, mass-consistent COM references, interpolation,
-shared COP origins, signed work, and comparison rejection. They do not validate a
-human response. The example's `test_final()` checks the real supplied-data run.
-
-## Important limits
-
-- Only normal shoe response affects the free dynamics. Measured horizontal force
-  is context, not fitted shear/traction. Fore-aft travel and pitch are prescribed.
-- The rigid last omits toe joints, arch motion, muscles, and tendons.
-- The normal-compression shoe fit has failed peak/hysteresis validation gates;
-  stride-rate tilted loading is not independently validated. See the
-  [shoe acquisition protocol](../digital_shoe/ACQUISITION_PROTOCOL.md).
-- `shoe_contact_work` is boundary work, not a closed-cycle foam hysteresis test.
-  Rig energy closure is a numerical check, not human validation.
-- The source data, footwear geometry, and derivatives are restricted to internal
-  fork use. Do not redistribute them upstream; see [asset provenance](../../ASSET_PROVENANCE.md).
+Use `--device cpu` for a CPU run and `--substeps 128` for timestep refinement.
+The tests cover supplied-data execution, no marker-XYZ feedthrough, proper heel
+rotations, C2 derivatives, native force/power balance, release, side reflection,
+source integrity, and comparison rejection. Local input tests skip when restricted
+data are absent. Generated inputs/reports/recordings stay ignored. See
+[asset provenance](../../ASSET_PROVENANCE.md) and the
+[acquisition protocol](../digital_shoe/ACQUISITION_PROTOCOL.md) before redistribution
+or stronger dynamic validation claims.

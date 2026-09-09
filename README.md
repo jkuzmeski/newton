@@ -984,8 +984,9 @@ it does not restore the branch's legacy OpenSim runtime or human-shoe pipeline.
 
 ## Impedance Instron running example
 
-Replay measured running foot motion while an impedance-controlled foot fixture
-and virtual COM load the calibrated Digital Shoe. There is no full human model.
+Drive a mechanical ankle with measured running heel-triangle pitch while vertical
+impedance couples a foot fixture, virtual COM, and calibrated Digital Shoe. Marker
+XYZ trajectories are not replayed. There is no full human model.
 
 <img width="320" height="320" src="docs/images/examples/example_impedance_instron.jpg" alt="Running foot and virtual COM impedance Instron">
 
