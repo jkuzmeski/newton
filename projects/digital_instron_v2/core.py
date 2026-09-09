@@ -47,6 +47,36 @@ CALIBRATED_MATERIAL = Material(
 
 
 @dataclass(frozen=True)
+class Surround:
+    """Whole-midsole geometry shared by the identification and the runtime.
+
+    ``driven`` marks the columns the indenter presses directly. The remaining
+    columns are real foam that deforms only through the lateral shear layer and
+    its bond to the shoe above, exactly as the live runtime treats them. Fitting
+    against a rigid zero-deflection boundary instead would identify the coupling
+    against a stiffer surround than the one that is later simulated.
+    """
+
+    driven: np.ndarray  # bool [column_count]
+    neighbors: np.ndarray  # int [column_count, 4]; -1 is a free outer edge
+    slack_m: np.ndarray  # rest thickness [column_count]
+    area_m2: float  # tributary area per column
+    spacing_m: float
+    attachment_n_m: float = 200.0  # assumed vertical bond to the shoe, not identified
+    max_strain: float = 0.9
+    sweeps: int = 250
+
+    def __post_init__(self) -> None:
+        count = len(self.slack_m)
+        if self.driven.shape != (count,) or self.neighbors.shape != (count, 4):
+            raise ValueError("surround geometry must describe the same column count")
+        if not np.any(self.driven) or self.area_m2 <= 0.0 or self.spacing_m <= 0.0:
+            raise ValueError("surround needs driven columns and positive geometry")
+        if self.attachment_n_m < 0.0 or not 0.0 < self.max_strain < 1.0 or self.sweeps < 1:
+            raise ValueError("surround relaxation settings are out of range")
+
+
+@dataclass(frozen=True)
 class Trial:
     """Measured force and matching column lengths."""
 
@@ -58,6 +88,7 @@ class Trial:
     force_n: np.ndarray
     displacement_m: np.ndarray
     compression_laplacian_m_inv: np.ndarray | None = None
+    surround: Surround | None = None
 
 
 def _hyperfoam_pressure(strain: np.ndarray, material: Material) -> np.ndarray:
@@ -97,11 +128,78 @@ def _periodic_maxwell_branch(
     return result
 
 
+def _surround_force(trial: Trial, material: Material) -> np.ndarray:
+    """Run the whole cycle on the GPU: relax the surround, then sum the reaction."""
+    import warp as wp  # noqa: PLC0415  # lazy: the identification stays importable without a device
+
+    from projects.digital_shoe.runtime import (  # noqa: PLC0415
+        FoundationParams,
+        ShoeMaterial,
+        cycle_force,
+        relax_surround,
+    )
+
+    surround = trial.surround
+    shoe = ShoeMaterial(
+        material.instantaneous_shear_modulus_pa,
+        material.hyperfoam_exponent,
+        material.equilibrium_fraction,
+        material.pasternak_n_per_m,
+        EFFECTIVE_POISSON_RATIO,
+        material.maxwell_relaxation_time_s,
+    )
+    params = FoundationParams()
+    poisson = shoe.effective_poisson_ratio
+    params.g_eq = shoe.instantaneous_shear_modulus_pa * shoe.equilibrium_fraction
+    params.alpha = shoe.hyperfoam_exponent
+    params.beta = poisson / (1.0 - 2.0 * poisson)
+    params.one_minus_two_poisson = 1.0 - 2.0 * poisson
+    params.stretch_floor = 1.0e-3
+    compression = relax_surround(
+        np.ascontiguousarray(np.maximum(trial.slack_m[None, :] - trial.lengths_m, 0.0), np.float32),
+        surround.driven,
+        surround.neighbors,
+        surround.slack_m,
+        params,
+        area_m2=surround.area_m2,
+        spacing_m=surround.spacing_m,
+        pasternak_n_per_m=material.pasternak_n_per_m,
+        attachment_n_m=surround.attachment_n_m,
+        max_strain=surround.max_strain,
+        sweeps=surround.sweeps,
+    )
+    force = wp.zeros(len(trial.dt_s), dtype=wp.float32, device=compression.device)
+    wp.launch(
+        cycle_force,
+        dim=len(surround.slack_m),
+        inputs=[
+            compression,
+            wp.array(np.ascontiguousarray(surround.slack_m, np.float32), dtype=wp.float32, device=compression.device),
+            wp.array(np.ascontiguousarray(trial.dt_s, np.float32), dtype=wp.float32, device=compression.device),
+            params,
+            float(surround.area_m2),
+            float((1.0 - material.equilibrium_fraction) / material.equilibrium_fraction),
+            float(material.maxwell_relaxation_time_s),
+            force,
+        ],
+        device=compression.device,
+    )
+    return force.numpy().astype(np.float64)
+
+
 def predict(trial: Trial, material: Material) -> np.ndarray:
-    """Predict a trial force history."""
+    """Predict a trial force history.
+
+    With a :class:`Surround` the whole midsole is modelled: the indenter drives
+    its own columns and the rest relax, so the identification and the live
+    runtime see the same geometry and contact. The measured load then equals the
+    summed unilateral ground reaction, because the shear flux cancels internally.
+    """
 
     slack = np.asarray(trial.slack_m)
     strain = np.maximum(slack[None, :] - trial.lengths_m, 0.0) / slack[None, :]
+    if trial.surround is not None:
+        return _surround_force(trial, material)
     equilibrium = _hyperfoam_pressure(strain, material)
     pressure = np.array(equilibrium, copy=True)
     maxwell_fraction = (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction
@@ -178,6 +276,9 @@ def fit_material(
         x0,
         bounds=(lower, upper),
         x_scale="jac",
+        # The GPU forward pass is float32, so the default finite-difference step
+        # sits in its rounding noise and the search stalls at the seed.
+        diff_step=1.0e-3,
         max_nfev=evaluations,
         callback=lambda intermediate: record(np.asarray(getattr(intermediate, "x", intermediate))),
     )

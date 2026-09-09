@@ -14,11 +14,13 @@ from .core import (
     EFFECTIVE_POISSON_RATIO,
     MAXWELL_RELAXATION_TIME_S,
     Material,
+    Surround,
     Trial,
     fit_material,
     metrics,
     predict,
 )
+from .dynamics import _neighbor_indices
 from .geometry import build_column_grid, load_mesh, raycast_surface, rearfoot_center, transform_mesh
 
 
@@ -121,7 +123,16 @@ def prepare_trials(
             area = grid.area_m2
         compression = np.maximum(slack[None, :] - lengths, 0.0)
         laplacian = compression_laplacian(compression, grid.uv_m[active], grid.uv_m, grid.spacing_m)
-        trials.append(Trial(source["name"], slack, area, lengths, dt, force, displacement, laplacian))
+        # Identify against the same whole-midsole geometry the runtime simulates:
+        # the indenter drives its columns and the surrounding foam relaxes.
+        surround = Surround(
+            driven=np.asarray(active, dtype=bool),
+            neighbors=_neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m),
+            slack_m=np.asarray(grid.slack_m, dtype=float),
+            area_m2=float(grid.area_m2),
+            spacing_m=float(grid.spacing_m),
+        )
+        trials.append(Trial(source["name"], slack, area, lengths, dt, force, displacement, laplacian, surround))
         displacement_by_name[source["name"]] = displacement
         uv_by_name[source["name"]] = grid.uv_m[active]
     return trials, displacement_by_name, uv_by_name
