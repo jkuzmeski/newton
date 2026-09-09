@@ -1,0 +1,1 @@
+Improve the Digital Instron showcase report with clear validation status, section navigation, readable plots, responsive layout, and expandable technical details. Rebuild existing reports with `projects.digital_shoe.report`; no refitting is needed.

@@ -10,12 +10,14 @@ import tempfile
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from projects.digital_instron_v2.export_digital_shoe import build_artifact
 from projects.digital_instron_v2.phase1 import evaluate
 from projects.digital_shoe.acquisition import validate_acquisition_manifest
 from projects.digital_shoe.artifact import load_artifact, validate_artifact
 from projects.digital_shoe.report import render_html
+from projects.digital_shoe.showcase import Example
 
 MANIFEST = Path("DigitalInstron/manifest_v2.json")
 
@@ -136,7 +138,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertEqual(first.count("data:image/gif;base64,"), 3)
         self.assertNotIn(directory, first)
         self.assertIn("3. Examples", first)
-        self.assertIn(".experiment-grid{display:block}", first)
+        self.assertIn(".experiment-grid { display: block; }", first)
         self.assertIn("An 80 kg body-weight load", first)
         self.assertIn("Blue: 0 mm", first)
         self.assertIn("Red: 20+ mm", first)
@@ -145,6 +147,36 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertIn("Pasternak lateral load spreading", first)
         self.assertLess(first.index("1. Methods"), first.index("2. Results"))
         self.assertLess(first.index("2. Results"), first.index("3. Examples"))
+
+    def test_keeps_status_visible_and_navigation_complete_without_media(self):
+        """Keep warnings above the methods and link to every report section."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "digital_shoe.json"
+            path.write_text(json.dumps(_tiny_artifact()))
+            report = render_html(load_artifact(path))
+        self.assertLess(report.index("SOME DECLARED GATES FAILED"), report.index('id="methods"'))
+        self.assertLess(report.index("synthetic only"), report.index('id="methods"'))
+        for section in ("methods", "results", "examples", "reproduce"):
+            self.assertIn(f'href="#{section}"', report)
+            self.assertEqual(report.count(f'id="{section}"'), 1)
+        self.assertIn("No recordings are embedded yet", report)
+        self.assertNotIn("@import", report)
+        self.assertIn('<details class="derivation"><summary>Model equations and assumptions</summary>', report)
+        self.assertIn("Rebuild this report only", report)
+        self.assertIn("--media-dir", report)
+
+    def test_distinguishes_response_curves_without_color(self):
+        """Give response plots dashed predictions and accessible axis labels."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "digital_shoe.json"
+            path.write_text(json.dumps(_tiny_artifact()))
+            report = render_html(load_artifact(path))
+        self.assertIn('stroke-dasharray="7 4"', report)
+        self.assertIn('aria-label="Measured and predicted force versus Compression [mm]"', report)
+        self.assertIn('aria-label="Measured and predicted force versus Time [s]"', report)
+        self.assertIn('role="region" aria-label="Held-out validation metrics"', report)
+        self.assertIn("repeat(2, minmax(0, 1fr))", report)
+        self.assertIn("@media (max-width: 760px)", report)
 
     def test_validates_physical_holdout_manifest(self):
         """Accept the planned acquisition matrix and reject leakage across splits."""
@@ -171,6 +203,26 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         roles = {item["role"] for item in artifact["provenance"]["source_files"]}
         self.assertIn("rearfoot_140ms_raw_measurement", roles)
         self.assertIn("fullfoot_185ms_raw_measurement", roles)
+
+
+class TestDigitalShoeRendering(unittest.TestCase):
+    def test_instron_renders_connected_nodes_without_midsole_surface(self):
+        """Show both spring endpoints and connectors without an opaque midsole mesh."""
+        example = MagicMock(mode="instron", sim_time=0.0, history=[], column_count=2, device="cpu")
+        with patch("projects.digital_shoe.showcase.wp.launch"):
+            Example.render(example)
+        example.viewer.log_mesh.assert_not_called()
+        example.viewer.log_lines.assert_called_once_with(
+            "digital_shoe/columns", example._fixed_bottom, example._points, example._colors, width=0.003
+        )
+        self.assertEqual(example.viewer.log_points.call_count, 2)
+        example.viewer.log_points.assert_any_call(
+            "digital_shoe/spring_bases", example._fixed_bottom, radii=0.0025, colors=example._colors
+        )
+        example.viewer.log_points.assert_any_call(
+            "digital_shoe/spring_tops", example._points, radii=0.0025, colors=example._colors
+        )
+        example.viewer.log_state.assert_called_once_with(example.state_0)
 
 
 if __name__ == "__main__":
