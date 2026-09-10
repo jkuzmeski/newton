@@ -124,7 +124,12 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         parser.close()
 
     def test_embeds_experiment_gifs_without_external_paths(self):
-        """Embed all experiment loops as deterministic data URIs in the report."""
+        """Embed all experiment loops as deterministic data URIs in the report.
+
+        The methods heading now names the two-term Ogden-Hill series the model
+        actually uses, so the pinned substring moved from "first-order Hyperfoam"
+        to "two-term Ogden-Hill (Hyperfoam)" with it.
+        """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             artifact_path = root / "digital_shoe.json"
@@ -143,7 +148,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertIn("Blue: 0 mm", first)
         self.assertIn("Red: 20+ mm", first)
         self.assertIn("Mermaid source for the method diagram", first)
-        self.assertIn("first-order Hyperfoam", first)
+        self.assertIn("two-term Ogden-Hill (Hyperfoam)", first)
         self.assertIn("Pasternak lateral load spreading", first)
         self.assertLess(first.index("1. Methods"), first.index("2. Results"))
         self.assertLess(first.index("2. Results"), first.index("3. Examples"))
@@ -197,7 +202,18 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertEqual(artifact["instron_fixtures"]["fullfoot_last"]["column_count"], 611)
         self.assertGreater(artifact["visual_meshes"]["midsole"]["vertex_count"], 7000)
         self.assertGreater(artifact["visual_meshes"]["fullfoot_last"]["vertex_count"], 7000)
-        self.assertFalse(artifact["identification"]["passed_all_declared_gates"])
+        # The export must publish the gate outcome, whatever it is. Pinning a value here
+        # made a 10-evaluation smoke fit assert a physics result: with the corrected
+        # mechanics that short fit now passes, and the real outcome is the refit artifact's.
+        gates = artifact["identification"]["gates"]
+        self.assertIsInstance(artifact["identification"]["passed_all_declared_gates"], bool)
+        for prefix in ("rearfoot", "fullfoot"):
+            for gate in ("peak_force_error", "force_rmse_relative", "hysteresis_error"):
+                self.assertIn(f"{prefix}_{gate}", gates)
+        self.assertEqual(
+            artifact["identification"]["passed_all_declared_gates"],
+            all(gate["passed"] for gate in gates.values()),
+        )
         encoded = json.dumps(artifact, sort_keys=True)
         self.assertNotIn(str(Path.cwd()), encoded)
         roles = {item["role"] for item in artifact["provenance"]["source_files"]}

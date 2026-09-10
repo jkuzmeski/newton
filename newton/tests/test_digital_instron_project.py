@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from projects.digital_instron_v2.core import Material, metrics, predict
+from projects.digital_instron_v2.core import CALIBRATED_MATERIAL, metrics, predict
 from projects.digital_instron_v2.geometry import build_column_grid, load_mesh, raycast_surface, transform_mesh
 from projects.digital_instron_v2.workflow import prepare_trials
 
@@ -162,7 +162,11 @@ class TestDigitalInstronProject(unittest.TestCase):
         midsole = load_mesh(base / config["midsole_mesh"], 0.001)
         grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
         trials, displacement, uv = prepare_trials(base, config, grid, midsole)
-        material = Material(19033.8644, 5.1303377966, 0.1055112900, 918.1319626)
+        # The shipped calibration, not a frozen copy of it: the material vector changed
+        # when the Pasternak coefficient stopped being fitted and the full-foot fixture
+        # gained its series compliance, so a hand-copied 4-vector silently means something
+        # else now.
+        material = CALIBRATED_MATERIAL
 
         for trial in trials:
             result = metrics(trial.force_n, predict(trial, material), displacement[trial.name])

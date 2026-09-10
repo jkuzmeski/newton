@@ -97,16 +97,22 @@ def _metric_rows(curves: Iterable[dict]) -> str:
 
 def _material_rows(shoe: DigitalShoe) -> str:
     labels = {
-        "instantaneous_shear_modulus_pa": ("Instantaneous shear modulus", "Pa"),
-        "hyperfoam_exponent": ("Hyperfoam exponent", "1"),
+        "instantaneous_shear_modulus_pa": ("Instantaneous shear modulus, term 1", "Pa"),
+        "hyperfoam_exponent": ("Hyperfoam exponent, term 1", "1"),
+        "instantaneous_shear_modulus_2_pa": ("Instantaneous shear modulus, term 2", "Pa"),
+        "hyperfoam_exponent_2": ("Hyperfoam exponent, term 2", "1"),
         "equilibrium_fraction": ("Equilibrium fraction", "1"),
-        "pasternak_n_per_m": ("Pasternak coupling", "N/m"),
+        "pasternak_n_per_m": ("Pasternak coupling (derived bed mean of mu_eq x t)", "N/m"),
         "effective_poisson_ratio": ("Effective Poisson ratio (fixed)", "1"),
         "maxwell_relaxation_time_s": ("Maxwell relaxation time (fitted)", "s"),
     }
     values = shoe.raw["constitutive_model"]["parameters"]
+    # A single-term artifact predates the second Ogden-Hill term and simply omits
+    # its two parameters, so a missing key is a disabled term, not an error.
     return "".join(
-        f"<tr><td>{label}</td><td>{values[key]:.6g}</td><td>{unit}</td></tr>" for key, (label, unit) in labels.items()
+        f"<tr><td>{label}</td><td>{values[key]:.6g}</td><td>{unit}</td></tr>"
+        for key, (label, unit) in labels.items()
+        if key in values
     )
 
 
@@ -134,11 +140,11 @@ def _methods_section() -> str:
 <div class="equation">c<sub>i</sub> = max(z<sub>free,i</sub> &minus; z<sub>i</sub>(q), 0), &nbsp; &epsilon;<sub>i</sub> = c<sub>i</sub>/&#8467;<sub>0,i</sub>, &nbsp; &lambda;<sub>i</sub> = max(1 &minus; &epsilon;<sub>i</sub>, &lambda;<sub>min</sub>)</div>
 <p>Here c is compression, &epsilon; is engineering compressive strain, &lambda; is the remaining thickness stretch, and &lambda;<sub>min</sub> = 0.05 prevents collapse to zero thickness. Released columns carry no tension.</p>
 
-<h3>1.2 Smooth nonlinear equilibrium: first-order Hyperfoam</h3>
-<p>A linear spring cannot reproduce the soft initial response and rapid densification of a running-shoe foam. The equilibrium network therefore uses a smooth first-order compressible Hyperfoam term.</p>
-<div class="equation">G<sub>eq</sub> = f<sub>eq</sub>G<sub>inst</sub>, &nbsp; &beta; = &nu;/(1 &minus; 2&nu;), &nbsp; J<sub>i</sub> = &lambda;<sub>i</sub><sup>(1&minus;2&nu;)</sup></div>
-<div class="equation">p<sub>eq,i</sub> = [2G<sub>eq</sub>/(&alpha;&lambda;<sub>i</sub>)] [J<sub>i</sub><sup>(&minus;&alpha;&beta;)</sup> &minus; &lambda;<sub>i</sub><sup>&alpha;</sup>]</div>
-<p>G<sub>inst</sub> sets the instantaneous stiffness, &alpha; controls nonlinear stiffening, f<sub>eq</sub> is the long-term-to-instantaneous modulus fraction, and the effective Poisson ratio &nu; is fixed at 0.30 because the current tests do not identify it independently.</p>
+<h3>1.2 Smooth nonlinear equilibrium: two-term Ogden-Hill (Hyperfoam)</h3>
+<p>A linear spring cannot reproduce the soft initial response and rapid densification of a running-shoe foam. The equilibrium network therefore uses a smooth compressible Ogden-Hill (Hyperfoam) series. One term has a single shape exponent and cannot cover both the small-strain secant and the 74&ndash;90% peak strains the two bench fixtures reach, so the series carries <em>two</em> terms. Setting the second modulus to zero recovers the earlier single-term law exactly.</p>
+<div class="equation">G<sub>eq,n</sub> = f<sub>eq</sub>G<sub>inst,n</sub>, &nbsp; &beta; = &nu;/(1 &minus; 2&nu;), &nbsp; J<sub>i</sub> = &lambda;<sub>i</sub><sup>(1&minus;2&nu;)</sup></div>
+<div class="equation">p<sub>eq,i</sub> = &Sigma;<sub>n</sub> [2G<sub>eq,n</sub>/(&alpha;<sub>n</sub>&lambda;<sub>i</sub>)] [J<sub>i</sub><sup>(&minus;&alpha;<sub>n</sub>&beta;)</sup> &minus; &lambda;<sub>i</sub><sup>&alpha;<sub>n</sub></sup>]</div>
+<p>G<sub>inst,n</sub> sets each term's stiffness, &alpha;<sub>n</sub> controls its nonlinear stiffening (either sign is admissible: a positive exponent gives a soft 1/&lambda; plateau, a negative one gives densification), and f<sub>eq</sub> is the long-term-to-instantaneous modulus fraction. Every term adds 2G<sub>eq,n</sub> to the small-strain compressive tangent whatever its exponent, so the series modulus &mu;<sub>eq</sub> is the <em>sum</em> of the term moduli; that sum is what pins the Pasternak coupling in &sect;1.4. The effective Poisson ratio &nu; is fixed at 0 because confined and unconfined compression of this foam class agree within scatter.</p>
 
 <h3>1.3 Rate dependence and hysteresis: one Maxwell memory branch</h3>
 <p>Hyperfoam alone is conservative and cannot open a load-unload loop. A generalized-Maxwell overstress q stores the minimal memory needed for rate-dependent hysteresis. The recurrence integrates exponential relaxation over each timestep.</p>
@@ -157,13 +163,13 @@ def _methods_section() -> str:
 <p>Optional normal damping and friction belong to a simulation scenario; they are not part of the four-parameter Instron fit. The Virtual Instron uses no added damping or friction. The free drop uses 5 N&middot;s/m per-column normal damping for impact stability.</p>
 
 <h3>1.6 Parameter identification and held-out test</h3>
-<div class="equation">&theta; = (G<sub>inst</sub>, &alpha;, f<sub>eq</sub>, k<sub>p</sub>), &nbsp; &theta;* = arg min<sub>&theta;</sub> &Sigma;<sub>trial,t</sub> [(F&#770;<sub>trial,t</sub>(&theta;) &minus; F<sub>trial,t</sub>)/F<sub>peak,trial</sub>]<sup>2</sup></div>
+<div class="equation">&theta; = (G<sub>inst,1</sub>, &alpha;<sub>1</sub>, f<sub>eq</sub>, &tau;, G<sub>inst,2</sub>, &alpha;<sub>2</sub>), &nbsp; &theta;* = arg min<sub>&theta;</sub> &Sigma;<sub>trial,t</sub> [(F&#770;<sub>trial,t</sub>(&theta;) &minus; F<sub>trial,t</sub>)/F<sub>peak,trial</sub>]<sup>2</sup></div>
 <p>One shared &theta; is fitted to every sample from rearfoot and full-foot cycles 90-98. Cycles 99-100 are held out. Peak force, active-region RMSE, and dissipated loop work are reported as validation metrics rather than extra fit weights. The authoritative fit uses bounded SciPy least squares; the exact-gradient Warp path is retained for future coupled design objectives.</p>
 
 <h3>1.7 Why this foundation model</h3>
 <ul>
 <li><strong>Real geometry:</strong> column thickness and engagement come from the measured shoe and fixture meshes, not a uniform slab.</li>
-<li><strong>Minimal nonlinear physics:</strong> Hyperfoam captures the J-shaped compression response without piecewise stiffness regions.</li>
+<li><strong>Minimal nonlinear physics:</strong> a two-term Hyperfoam series captures the J-shaped compression response across the full 0&ndash;90% strain range without piecewise stiffness regions.</li>
 <li><strong>Minimal memory:</strong> one Maxwell branch opens the hysteresis loop without claiming an unidentifiable relaxation spectrum.</li>
 <li><strong>Spatial transfer:</strong> Pasternak coupling corrects the strongest failure of independent Winkler columns while remaining inexpensive.</li>
 <li><strong>Runtime identity:</strong> the equations fitted in NumPy are the equations executed in Warp; no surrogate replaces the calibrated law.</li>

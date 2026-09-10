@@ -35,7 +35,7 @@ from typing import Any
 
 import numpy as np
 
-from .core import EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material, fit_material, predict
+from .core import EFFECTIVE_POISSON_RATIO, Material, fit_material, predict
 from .cycle_windows import build_cycle_window_trace, write_cycle_window_trace
 from .frame_qc import FrameConfig, infer_frame_config
 from .geometry import build_column_grid, load_mesh
@@ -112,12 +112,33 @@ def _fit_backend(
     evaluations: int,
     iterations: int,
     learning_rate: float,
+    multistart_seeds: int = 0,
 ) -> tuple[Material, dict[str, Any]]:
     """Fit one shared material on the train trials with the selected backend."""
     if backend == "scipy":
         history: list[dict[str, float]] = []
-        material = fit_material(trials, initial, evaluations, history)
-        return material, {"backend": "scipy", "accepted_iterations": max(len(history) - 1, 0)}
+        material = fit_material(trials, initial, evaluations, history, multistart_seeds=multistart_seeds)
+        # Record every start, not just the winner: with more than one start the
+        # spread of the per-start optima is the evidence for or against the
+        # objective being unimodal, which the single-start default assumes.
+        names = list(Material.__dataclass_fields__)
+        finals: dict[int, dict[str, float]] = {}
+        for row in history:
+            finals[int(row["start"])] = row
+        starts = [
+            {
+                "start": index,
+                "final_loss": float(row["loss"]),
+                "material": {name: float(row[name]) for name in names},
+            }
+            for index, row in sorted(finals.items())
+        ]
+        return material, {
+            "backend": "scipy",
+            "accepted_iterations": max(len(history) - 1, 0),
+            "multistart_seeds": int(multistart_seeds),
+            "starts": starts,
+        }
     if backend == "diff":
         from .inverse_id import fit_material_to_trials  # noqa: PLC0415  # lazy: pulls in Warp
 
@@ -170,6 +191,7 @@ def fit_train_material(
     evaluations: int = 100,
     iterations: int = 150,
     learning_rate: float = 0.03,
+    multistart_seeds: int = 0,
 ) -> tuple[Material, dict[str, Any], dict[str, Any]]:
     """Fit one shared material on the train cycles only and return the split provenance.
 
@@ -187,9 +209,15 @@ def fit_train_material(
     grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
     split = generate_split_traces(path)
     train_trials, _, _ = prepare_trials(base, config, grid, midsole, trace_paths=split["train"])
-    initial = Material(*config["fit"].values(), MAXWELL_RELAXATION_TIME_S)
+    initial = Material(*config["fit"].values())
     material, fit_info = _fit_backend(
-        train_trials, initial, backend, evaluations=evaluations, iterations=iterations, learning_rate=learning_rate
+        train_trials,
+        initial,
+        backend,
+        evaluations=evaluations,
+        iterations=iterations,
+        learning_rate=learning_rate,
+        multistart_seeds=multistart_seeds,
     )
     return material, fit_info, split
 
@@ -201,9 +229,16 @@ def evaluate(
     evaluations: int = 100,
     iterations: int = 150,
     learning_rate: float = 0.03,
+    multistart_seeds: int = 0,
     write_report: bool = True,
 ) -> dict[str, Any]:
-    """Fit on train cycles and validate on held-out cycles; return the report."""
+    """Fit on train cycles and validate on held-out cycles; return the report.
+
+    ``multistart_seeds`` forwards to
+    :func:`~projects.digital_instron_v2.core.fit_material`; it is zero by default
+    and must be raised whenever a change to the model form, objective, bounds or
+    fixtures has to be re-checked for a multimodal objective.
+    """
     path = Path(manifest_path).resolve()
     config = json.loads(path.read_text())
     base = path.parent
@@ -213,7 +248,12 @@ def evaluate(
     grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
 
     material, fit_info, split = fit_train_material(
-        path, backend=backend, evaluations=evaluations, iterations=iterations, learning_rate=learning_rate
+        path,
+        backend=backend,
+        evaluations=evaluations,
+        iterations=iterations,
+        learning_rate=learning_rate,
+        multistart_seeds=multistart_seeds,
     )
     train_trials, _, _ = prepare_trials(base, config, grid, midsole, trace_paths=split["train"])
     validate_trials, _, _ = prepare_trials(base, config, grid, midsole, trace_paths=split["validate"])
@@ -244,6 +284,8 @@ def evaluate(
             "effective_poisson_ratio": EFFECTIVE_POISSON_RATIO,
             "maxwell_relaxation_time_s": material.maxwell_relaxation_time_s,
             "state_initialization": "periodic_cycle_fixed_point",
+            "pasternak_rule": "per_column_equilibrium_shear_modulus_times_rest_thickness",
+            "fixture_specific_parameters": [],
         },
         "train_cycles": config["cycle_windows"]["train"]["cycles"],
         "validate_cycles": config["cycle_windows"]["validate"]["cycles"],
@@ -288,11 +330,13 @@ def _print_report(report: dict[str, Any]) -> None:
     print(f"\n=== Phase-1 held-out validation [{backend}] : {'PASS' if report['passed'] else 'FAIL'} ===")
     mat = report["material"]
     print(
-        "  material: G_inst={:.0f} Pa  alpha={:.3f}  eq_frac={:.4f}  pasternak={:.1f} N/m".format(
+        "  material: G_inst={:.0f} Pa  alpha={:.3f}  G_inst2={:.0f} Pa  alpha2={:.3f}  eq_frac={:.4f}  tau={:.4f} s".format(
             mat["instantaneous_shear_modulus_pa"],
             mat["hyperfoam_exponent"],
+            mat["instantaneous_shear_modulus_2_pa"],
+            mat["hyperfoam_exponent_2"],
             mat["equilibrium_fraction"],
-            mat["pasternak_n_per_m"],
+            mat["maxwell_relaxation_time_s"],
         )
     )
     header = f"  {'fixture':16s} {'peak_err':>9s} {'rmse':>8s} {'hyst_err':>9s}  pass"

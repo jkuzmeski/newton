@@ -15,6 +15,7 @@
     "constitutive_model": {
       "properties": {
         "parameters": {
+          "description": "Two-term Ogden-Hill (Hyperfoam) equilibrium series plus one Maxwell branch. instantaneous_shear_modulus_2_pa and hyperfoam_exponent_2 describe the second term and stay optional so single-term artifacts written before it remain valid; an absent second modulus is zero, which disables the term and reproduces the single-term law exactly. The series equilibrium shear modulus, which pins the Pasternak coupling, is the SUM (instantaneous_shear_modulus_pa + instantaneous_shear_modulus_2_pa) * equilibrium_fraction.",
           "required": [
             "instantaneous_shear_modulus_pa",
             "hyperfoam_exponent",

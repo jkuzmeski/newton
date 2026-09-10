@@ -107,6 +107,12 @@ def _visual_meshes(manifest: Path, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _instron_fixture(manifest: Path, fixture: str) -> dict[str, Any]:
+    """Describe the columns one bench indenter actually drives.
+
+    The foundation geometry now spans the whole midsole, so the driven mask
+    selects the fixture footprint here. ``column_bed`` remains the whole shoe and
+    a runtime recovers the untouched columns as the difference between the two.
+    """
     geometry = build_foundation_geometry(manifest, fixture)
     config = json.loads(manifest.read_text())
     source = next(item for item in config["trials"] if item["fixture"] == fixture)
@@ -114,17 +120,19 @@ def _instron_fixture(manifest: Path, fixture: str) -> dict[str, Any]:
         indenter = {"type": "circular_punch", "radius_m": float(source["indenter"]["radius_m"])}
     else:
         indenter = {"type": "baked_visual_mesh", "mesh": "fullfoot_last"}
-    count = len(geometry.slack_m)
-    carrier_anchor = np.column_stack([geometry.uv_m, geometry.surface_m])
+    driven = np.asarray(geometry.driven, dtype=bool)
+    uv = np.asarray(geometry.uv_m, dtype=np.float64)[driven]
+    count = int(driven.sum())
+    carrier_anchor = np.column_stack([uv, np.asarray(geometry.surface_m, dtype=np.float64)[driven]])
     return {
         "column_count": count,
         "indenter": indenter,
         "carrier_anchor_m": carrier_anchor.tolist(),
-        "foam_free_top_m": np.asarray(geometry.z_free_m, dtype=np.float64).tolist(),
-        "foam_bottom_m": np.asarray(geometry.z_bottom_m, dtype=np.float64).tolist(),
-        "rest_length_m": np.asarray(geometry.slack_m, dtype=np.float64).tolist(),
+        "foam_free_top_m": np.asarray(geometry.z_free_m, dtype=np.float64)[driven].tolist(),
+        "foam_bottom_m": np.asarray(geometry.z_bottom_m, dtype=np.float64)[driven].tolist(),
+        "rest_length_m": np.asarray(geometry.slack_m, dtype=np.float64)[driven].tolist(),
         "area_m2": np.full(count, geometry.area_m2, dtype=np.float64).tolist(),
-        "neighbors": np.asarray(geometry.neighbors, dtype=np.int32).tolist(),
+        "neighbors": _neighbor_indices(uv, geometry.uv_m, geometry.spacing_m).tolist(),
         "spacing_m": float(geometry.spacing_m),
     }
 
@@ -167,13 +175,19 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
     manifest = Path(manifest_path).resolve()
     config = json.loads(manifest.read_text())
     fitted = Material(**report["material"])
+    bed = _whole_column_bed(manifest, config)
+    rest_length_m = np.asarray(bed["rest_length_m"], dtype=np.float64)
+    coupling_n_per_m = fitted.coupling_n_per_m(rest_length_m)
     material = ShoeMaterial(
         fitted.instantaneous_shear_modulus_pa,
         fitted.hyperfoam_exponent,
         fitted.equilibrium_fraction,
-        fitted.pasternak_n_per_m,
+        # Reported, not fitted: the bed mean of the per-column rule k = mu_eq * t.
+        float(np.mean(coupling_n_per_m)),
         EFFECTIVE_POISSON_RATIO,
         fitted.maxwell_relaxation_time_s,
+        fitted.instantaneous_shear_modulus_2_pa,
+        fitted.hyperfoam_exponent_2,
     )
     artifact = {
         "schema_version": SCHEMA_VERSION,
@@ -189,8 +203,28 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
             "origin": "footprint_center_xy_and_lowest_outsole_z",
             "x_axis": "heel_to_toe_verified_for_this_asset",
         },
-        "constitutive_model": {"type": MODEL_TYPE, "parameters": asdict(material)},
-        "column_bed": _whole_column_bed(manifest, config),
+        "constitutive_model": {
+            "type": MODEL_TYPE,
+            "parameters": asdict(material),
+            "derived_quantities": {
+                "hyperfoam_term_count": 2,
+                "pasternak_rule": "k_i = equilibrium_shear_modulus_pa * rest_length_m[i]",
+                "pasternak_n_per_m_is_fitted": False,
+                # The SUM over both Ogden-Hill terms; every term contributes
+                # 2 mu_n to the small-strain compressive tangent.
+                "equilibrium_shear_modulus_pa": float(fitted.equilibrium_shear_modulus_pa),
+                "equilibrium_shear_modulus_term_1_pa": float(
+                    fitted.instantaneous_shear_modulus_pa * fitted.equilibrium_fraction
+                ),
+                "equilibrium_shear_modulus_term_2_pa": float(
+                    fitted.instantaneous_shear_modulus_2_pa * fitted.equilibrium_fraction
+                ),
+                "pasternak_n_per_m_min": float(np.min(coupling_n_per_m)),
+                "pasternak_n_per_m_max": float(np.max(coupling_n_per_m)),
+                "small_strain_compressive_modulus_pa": float(2.0 * fitted.equilibrium_shear_modulus_pa),
+            },
+        },
+        "column_bed": bed,
         "visual_meshes": _visual_meshes(manifest, config),
         "instron_fixtures": {
             fixture: _instron_fixture(manifest, fixture) for fixture in ("rearfoot_punch", "fullfoot_last")
@@ -209,6 +243,7 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
                 "friction_coefficient",
                 "stretch_floor",
             ],
+            "fixture_specific_parameters": [],
         },
         "validation": {
             "scope": "adjacent held-out cycles from the same approximately 0.5 s fixture protocols",
@@ -233,12 +268,24 @@ def identify_and_export(
     *,
     shoe_id: str = "puma_fast_r_nitro_elite_3_left",
     evaluations: int = 100,
+    multistart_seeds: int = 0,
 ) -> tuple[Path, Path]:
-    """Fit training cycles, evaluate held-out cycles, and write the artifact and HTML report."""
+    """Fit training cycles, evaluate held-out cycles, and write the artifact and HTML report.
+
+    ``multistart_seeds`` is zero by default: the two-term objective was measured
+    to be effectively unimodal. Raise it to re-check that assumption after any
+    change to the model form, the objective, the bounds, or the fixture set.
+    """
     manifest = Path(manifest_path).resolve()
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    report = evaluate(manifest, backend="scipy", evaluations=evaluations, write_report=False)
+    report = evaluate(
+        manifest,
+        backend="scipy",
+        evaluations=evaluations,
+        multistart_seeds=multistart_seeds,
+        write_report=False,
+    )
     artifact = build_artifact(manifest, report, shoe_id=shoe_id)
     artifact_path = output / "digital_shoe.json"
     artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
@@ -253,9 +300,22 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("DigitalInstron/digital_shoe_showcase"))
     parser.add_argument("--shoe-id", default="puma_fast_r_nitro_elite_3_left")
     parser.add_argument("--evaluations", type=int, default=100)
+    parser.add_argument(
+        "--multistart-seeds",
+        type=int,
+        default=0,
+        help=(
+            "Extra seeds from core.MULTISTART_SEEDS to descend from (0-6). Zero keeps the fit single "
+            "start; raise it to re-check that the objective is still unimodal after a model change."
+        ),
+    )
     args = parser.parse_args()
     artifact, report = identify_and_export(
-        args.manifest, args.output, shoe_id=args.shoe_id, evaluations=args.evaluations
+        args.manifest,
+        args.output,
+        shoe_id=args.shoe_id,
+        evaluations=args.evaluations,
+        multistart_seeds=args.multistart_seeds,
     )
     print(f"artifact: {artifact}")
     print(f"validation report: {report}")

@@ -35,9 +35,12 @@ from projects.digital_shoe.runtime import (
     FoundationConfig,
     FoundationParams,
     MidsoleFoundation,
+    SurroundConfig,
     foundation_apply,
     foundation_pressure,
     foundation_reset,
+    surround_relax,
+    surround_write_free_top,
 )
 
 from .core import CALIBRATED_MATERIAL, EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material
@@ -54,9 +57,12 @@ __all__ = [
     "FoundationConfig",
     "FoundationParams",
     "MidsoleFoundation",
+    "SurroundConfig",
     "foundation_apply",
     "foundation_pressure",
     "foundation_reset",
+    "surround_relax",
+    "surround_write_free_top",
 ]
 
 
@@ -65,7 +71,13 @@ __all__ = [
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class FoundationGeometry:
-    """Column bed sampled from the calibrated midsole mesh (ground plane at z=0)."""
+    """Whole-midsole column bed sampled from the calibrated mesh (ground plane at z=0).
+
+    The bed spans every column of the manifest grid, which is the geometry the
+    identification fits (:class:`projects.digital_instron_v2.core.Surround`).
+    ``driven`` marks the subset the indenter presses; the rest is real foam that
+    deforms only through the lateral shear layer and its bond to the shoe.
+    """
 
     uv_m: np.ndarray  # footprint coordinates [column_count, 2]
     slack_m: np.ndarray  # rest thickness [column_count]
@@ -76,6 +88,7 @@ class FoundationGeometry:
     surface_m: np.ndarray  # shoe-last underside height above ground at rest [column_count]
     gap0_m: np.ndarray  # initial foot-underside-to-foam-top clearance [column_count]
     neighbors: np.ndarray  # Pasternak 4-neighbour indices [column_count, 4]
+    driven: np.ndarray  # bool: the indenter presses this column [column_count]
     midsole_mesh_path: str
     z_shift_m: float  # ground offset applied to the raw mesh frame
     indenter_shift_m: float  # shift applied to the posed indenter so its contact face meets the foam top
@@ -83,12 +96,19 @@ class FoundationGeometry:
 
 
 def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoot_last") -> FoundationGeometry:
-    """Sample the calibrated midsole footprint into an elastic-foundation column bed.
+    """Sample the whole calibrated midsole into an elastic-foundation column bed.
 
     Reuses the calibration geometry pipeline: the midsole mesh is column-sampled
     on the manifest grid, and the shoe-last indenter is posed and raycast to give
     each column its initial clearance under the crosshead. Heights are shifted so
     the ground plane sits at ``z = 0``.
+
+    The bed keeps every midsole column, not only the ones the indenter touches.
+    Dropping the rest left the shear layer with no material to act on, so the
+    runtime lost the support the identification counts on. Columns the indenter
+    misses are anchored on their own foam top (``gap0 = 0``) and reported as
+    undriven, ready for the passive relaxation in
+    :class:`projects.digital_shoe.runtime.SurroundConfig`.
     """
     path = Path(manifest_path).resolve()
     config = json.loads(path.read_text())
@@ -107,28 +127,29 @@ def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoo
         indenter.get("pose_translation_m", [0.0, 0.0, 0.0]),
     )
     surface = raycast_surface(last, grid.uv_m, grid.thickness_axis, indenter["contact_side"])
-    active = np.isfinite(surface)
-    offset = np.percentile(grid.top_m[active] - surface[active], indenter["contact_percentile"])
+    driven = np.isfinite(surface)
+    offset = np.percentile(grid.top_m[driven] - surface[driven], indenter["contact_percentile"])
     indenter_shift = float(offset + indenter["height_offset_m"])
     surface = surface + indenter_shift
-    surface[active] = np.maximum(surface[active], grid.top_m[active])
+    surface[driven] = np.maximum(surface[driven], grid.top_m[driven])
+    # The crosshead never reaches these columns, so their carrier anchor is their own
+    # free foam top. The relaxation, not the carrier pose, then sets their compression.
+    surface[~driven] = grid.top_m[~driven]
 
-    uv = grid.uv_m[active]
-    slack = grid.slack_m[active]
-    top = grid.top_m[active]
-    bottom = grid.bottom_m[active]
-    surf = surface[active]
+    top = np.asarray(grid.top_m, dtype=float)
+    bottom = np.asarray(grid.bottom_m, dtype=float)
     z_shift = float(np.min(bottom))
     return FoundationGeometry(
-        uv_m=uv,
-        slack_m=slack,
+        uv_m=np.asarray(grid.uv_m, dtype=float),
+        slack_m=np.asarray(grid.slack_m, dtype=float),
         area_m2=float(grid.area_m2),
         spacing_m=grid.spacing_m,
         z_free_m=top - z_shift,
         z_bottom_m=bottom - z_shift,
-        surface_m=surf - z_shift,
-        gap0_m=surf - top,
-        neighbors=_neighbor_indices(uv, grid.uv_m, grid.spacing_m),
+        surface_m=surface - z_shift,
+        gap0_m=surface - top,
+        neighbors=_neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m),
+        driven=driven,
         midsole_mesh_path=str(base / config["midsole_mesh"]),
         z_shift_m=z_shift,
         indenter_shift_m=indenter_shift,
@@ -137,33 +158,36 @@ def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoo
 
 
 def _build_rearfoot_geometry(config: dict, base: Path, grid, source: dict, mesh_path: str) -> FoundationGeometry:
-    """Sample a flat circular-punch column bed for the rearfoot fixture.
+    """Sample the whole midsole for the rearfoot fixture and drive the punch footprint.
 
     The rearfoot test drives a rigid ``radius_m`` punch straight down onto the
     heel, so every column under the disc compresses uniformly. Anchoring each
     column top at its rest foam height (``z_free = slack``) reproduces the
     calibration's uniform-compression assumption: a carrier descent ``d`` gives
     every disc column the same compression ``d``.
+
+    The midsole outside the disc is kept and reported as undriven. Its tributary
+    area is the grid cell area, which is also the area the identification gives
+    every column of a surround trial, so the summed reaction matches the fit.
     """
     radius = float(source["indenter"]["radius_m"])
     center = rearfoot_center(
         load_mesh(base / config["midsole_mesh"], 0.001), grid, config["grid"]["rearfoot_length_fraction"]
     )
-    active = np.linalg.norm(grid.uv_m - center, axis=1) <= radius
-    uv = grid.uv_m[active]
-    slack = grid.slack_m[active]
-    count = int(np.count_nonzero(active))
-    area = float(np.pi * radius**2 / count)
+    driven = np.linalg.norm(grid.uv_m - center, axis=1) <= radius
+    slack = np.asarray(grid.slack_m, dtype=float)
+    count = len(slack)
     return FoundationGeometry(
-        uv_m=uv,
+        uv_m=np.asarray(grid.uv_m, dtype=float),
         slack_m=slack,
-        area_m2=area,
+        area_m2=float(grid.area_m2),
         spacing_m=grid.spacing_m,
         z_free_m=slack.copy(),
         z_bottom_m=np.zeros(count, dtype=np.float64),
         surface_m=slack.copy(),
         gap0_m=np.zeros(count, dtype=np.float64),
-        neighbors=_neighbor_indices(uv, grid.uv_m, grid.spacing_m),
+        neighbors=_neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m),
+        driven=driven,
         midsole_mesh_path=mesh_path,
         z_shift_m=0.0,
         indenter_shift_m=0.0,
@@ -175,8 +199,10 @@ def _neighbor_indices(uv: np.ndarray, grid_uv: np.ndarray, spacing: float) -> np
     """Return the Pasternak 4-neighbour index table for the active columns.
 
     Each of the four in-plane neighbours (-u, +u, -v, +v) is a non-negative
-    active-column index, ``-1`` for a footprint boundary (natural zero-gradient),
-    or ``-2`` for an interior gap cell that contributes no lateral coupling.
+    active-column index, ``-1`` for a footprint boundary, or ``-2`` for a midsole
+    cell outside the active set. Both negative codes are free (zero-gradient)
+    edges that carry no lateral coupling, so the shear layer redistributes load
+    without creating it. See :meth:`projects.digital_shoe.runtime.foundation_apply`.
     """
     cells = [tuple(np.rint(p / spacing).astype(int)) for p in uv]
     index = {c: i for i, c in enumerate(cells)}
@@ -203,7 +229,11 @@ def load_fitted_material(manifest_path: str | Path) -> Material:
             values["instantaneous_shear_modulus_pa"],
             values["hyperfoam_exponent"],
             values["equilibrium_fraction"],
-            values["pasternak_n_per_m"],
+            values["maxwell_relaxation_time_s"],
+            # Single-term artifacts predate the second Ogden-Hill term and leave
+            # it disabled, which reproduces their law exactly.
+            values.get("instantaneous_shear_modulus_2_pa", 0.0),
+            values.get("hyperfoam_exponent_2", 1.0),
         )
     return CALIBRATED_MATERIAL
 
