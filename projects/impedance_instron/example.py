@@ -18,7 +18,7 @@ import newton
 import newton.examples
 from projects.digital_shoe import FoundationConfig, MidsoleFoundation, load_artifact
 from projects.digital_shoe.rendering import attached_column_endpoints, column_colors
-from projects.digital_shoe.runtime import FoundationParams, _hyperfoam_pressure
+from projects.digital_shoe.runtime import SurroundConfig
 
 from .orientation import orient_shoe
 from .profile import load_profile
@@ -157,94 +157,6 @@ def _record_sample(
 
 
 @wp.kernel
-def _relax_free_columns(
-    dt: float,
-    carrier: wp.int32,
-    body_q: wp.array[wp.transform],
-    driven: wp.array[wp.int32],
-    neighbors: wp.array2d[wp.int32],
-    anchor_local: wp.array[wp.vec3],
-    rest: wp.array[wp.float32],
-    area: wp.array[wp.float32],
-    q_state: wp.array[wp.float32],
-    params: FoundationParams,
-    coupling_scale: float,
-    attachment: float,
-    max_strain: float,
-    relaxation_time: float,
-    deflection: wp.array[wp.float32],
-    deflection_out: wp.array[wp.float32],
-    rate_out: wp.array[wp.float32],
-):
-    """Balance an outer column's ground reaction against its bond to the shoe.
-
-    ``deflection`` is how far a top has been pushed up relative to the position
-    the last imposes, so the shear layer resists deformation inside the shoe.
-    With no ground load the bond returns the column to its undeformed shape and
-    it leaves the floor with the shoe.
-    """
-    i = wp.tid()
-    if driven[i] != 0:
-        deflection_out[i] = 0.0
-        rate_out[i] = 0.0
-        return
-    thickness = rest[i]
-    bottom = wp.transform_point(body_q[carrier], anchor_local[i])[2]
-    lift = deflection[i]
-    coupling = coupling_scale * params.pasternak * params.inv_h2 * area[i]
-    # The outer material is also bonded to the shoe above it, so an isolated
-    # bulge has a restoring path even when its neighbours have moved with it.
-    bond = attachment * lift
-    links = float(0.0)
-    for side in range(4):
-        j = neighbors[i, side]
-        if j >= 0:
-            bond += coupling * (lift - deflection[j])
-            links += 1.0
-    c = wp.clamp(-(bottom + lift), 0.0, max_strain * thickness)
-    # Ground reaction only. Unloaded foam cannot pull its own surface down.
-    support = wp.max(_hyperfoam_pressure(c / thickness, params) + q_state[i], 0.0) * area[i]
-    step = 0.001 * thickness
-    tangent = float(0.0)
-    if c > 0.0:
-        tangent = (
-            wp.max(_hyperfoam_pressure((c + step) / thickness, params) + q_state[i], 0.0) * area[i] - support
-        ) / step
-    # Convex local balance solved by damped Newton steps toward equilibrium.
-    stiffness = wp.max(tangent + links * coupling + attachment, 1.0e-6)
-    update = (support - bond) / stiffness * (1.0 - wp.exp(-dt / relaxation_time))
-    lift = lift + update
-    if lift < 0.0:
-        lift = 0.0  # the last drives the surface down; the bond cannot push past it
-    if -(bottom + lift) > max_strain * thickness:
-        lift = -bottom - max_strain * thickness
-    deflection_out[i] = lift
-    rate_out[i] = update / dt
-
-
-@wp.kernel
-def _write_free_geometry(
-    carrier: wp.int32,
-    body_q: wp.array[wp.transform],
-    driven: wp.array[wp.int32],
-    anchor_local: wp.array[wp.vec3],
-    deflection: wp.array[wp.float32],
-    z_free: wp.array[wp.float32],
-    bottom_world: wp.array[wp.float32],
-):
-    """Publish the free-surface offset that the shared pressure kernel consumes."""
-    i = wp.tid()
-    bottom = wp.transform_point(body_q[carrier], anchor_local[i])[2]
-    if driven[i] != 0:
-        z_free[i] = 0.0
-        bottom_world[i] = bottom
-    else:
-        # comp = z_free - world_z reproduces -(rigid_bottom_z + deflection).
-        z_free[i] = -deflection[i]
-        bottom_world[i] = bottom + deflection[i]
-
-
-@wp.kernel
 def _free_column_metrics(
     driven: wp.array[wp.int32],
     compression: wp.array[wp.float32],
@@ -378,17 +290,22 @@ def _draw_friction_columns(
     anchors: wp.array[wp.vec3],
     rest: wp.array[wp.float32],
     forces: wp.array[wp.vec3],
-    deflection: wp.array[wp.float32],
+    free_top: wp.array[wp.float32],
     ground_anchor: wp.array[wp.vec2],
     active: wp.array[wp.int32],
     bottom_out: wp.array[wp.vec3],
     top_out: wp.array[wp.vec3],
 ):
-    """Draw each column where it actually is, including a lifted outer surface."""
+    """Draw each column where it actually is, including a lifted outer surface.
+
+    The shoe carries its bed against a ground plane at ``z = 0``, so the rigid free
+    top is zero and the relaxed one the foundation publishes is exactly minus the
+    outer surface lift.
+    """
     i = wp.tid()
     bottom = wp.transform_point(body_q[0], anchors[i])
     top = wp.transform_point(body_q[0], anchors[i] + wp.vec3(0.0, 0.0, rest[i]))
-    lift = deflection[i]
+    lift = -free_top[i]
     bz = bottom[2] + lift
     tz = top[2] + lift
     # A loaded outsole cannot pass through the floor; an unloaded one leaves it.
@@ -411,6 +328,7 @@ def _record_planar_sample(
     body_qd: wp.array[wp.spatial_vector],
     body_f: wp.array[wp.spatial_vector],
     force: wp.array[wp.vec3],
+    pressed: wp.array[wp.float32],
     cop_moment: wp.array[wp.vec3],
     contact_power: wp.array[wp.float32],
     compression: wp.array[wp.float32],
@@ -430,9 +348,12 @@ def _record_planar_sample(
     f = force[0]
     torque = pitch_inertia * reference[index, 15] - wp.spatial_bottom(body_f[0])[1]
     trace[index, 0] = f[2]
+    # The moment is weighted by the pressed load, so the centroid must divide by
+    # the same quantity. Dividing by the net wrench, which also carries the pull
+    # of lifted columns, drove the reported centre of pressure off the shoe.
     trace[index, 1] = 0.0
-    if f[2] > 1.0:
-        trace[index, 1] = cop_moment[0][0] / f[2]
+    if pressed[0] > 1.0:
+        trace[index, 1] = cop_moment[0][0] / pressed[0]
     trace[index, 2] = a[2]
     trace[index, 3] = c[2]
     trace[index, 4] = vc[2]
@@ -472,6 +393,7 @@ def _record_planar_sample(
     trace[index, 37] = free_metrics[2]
     trace[index, 38] = free_metrics[3]
     trace[index, 39] = free_metrics[4]
+    trace[index, 40] = pressed[0]
 
 
 def _curve(values: np.ndarray, source_time: np.ndarray, time: np.ndarray):
@@ -660,19 +582,45 @@ class Example:
         self.state_1.body_q.assign(initial)
         self.state_1.body_qd.assign(velocity)
         self.reference_device = wp.array(self.reference, dtype=wp.float32, device=self.device)
-        self.trace_device = wp.zeros((self.sample_count, 40), dtype=wp.float32, device=self.device)
+        self.trace_device = wp.zeros((self.sample_count, 41), dtype=wp.float32, device=self.device)
         self.leg_diagnostics = wp.zeros(9, dtype=wp.float32, device=self.device)
         bed = self.shoe.column_bed
         scale = args.shoe_stiffness_scale
         material = replace(
             self.shoe.material,
             instantaneous_shear_modulus_pa=self.shoe.material.instantaneous_shear_modulus_pa * scale,
+            # Reported only; the runtime rebuilds the per-column coupling from the
+            # scaled equilibrium shear modulus, so keep the reported value in step.
             pasternak_n_per_m=self.shoe.material.pasternak_n_per_m * scale,
         )
         self.contact_config = FoundationConfig(
             friction_stiffness=args.contact_kt if self.planar else 0.0,
             friction=args.contact_kd if self.planar else 0.0,
             mu=args.friction_mu if self.planar else 0.0,
+        )
+        count = len(bed.rest_length_m)
+        driven = np.ones(count, np.int32)
+        if self.planar and args.passive_outer:
+            lookup = {tuple(np.round(point, 8)): index for index, point in enumerate(bed.anchor_bottom_m[:, :2])}
+            fixture = self.shoe.instron_fixture("fullfoot_last")
+            supported = np.array([lookup[tuple(np.round(point, 8))] for point in fixture.carrier_anchor_m[:, :2]])
+            driven[:] = 0
+            driven[supported] = 1
+        if int(count - driven.sum()) and (args.outer_relaxation <= 0.0 or not 0.0 < args.outer_max_strain < 1.0):
+            raise ValueError("Passive outer relaxation time must be positive and its strain limit inside (0, 1)")
+        # One relaxation for both projects: the same balance the Digital Instron
+        # identification sweeps over its untouched foam runs here every substep.
+        # ``carrier_bond`` is True because this shoe carries the whole bed, so an
+        # outer column top is glued under the rigid last, not a free bench surface.
+        # A massless outer surface avoids inventing an unidentified surface mass.
+        self.surround_config = SurroundConfig(
+            driven=driven,
+            attachment_n_m=args.outer_attachment,
+            max_strain=args.outer_max_strain,
+            coupling_scale=args.outer_coupling_scale,
+            sweeps=args.outer_substeps,
+            relaxation_time_s=args.outer_relaxation,
+            carrier_bond=True,
         )
         self.foundation = MidsoleFoundation(
             bed.anchor_bottom_m - self.ankle_mount,
@@ -686,25 +634,10 @@ class Example:
             self.model.body_com,
             self.contact_config,
             self.device,
+            self.surround_config,
         )
-        count = len(bed.rest_length_m)
-        driven = np.ones(count, np.int32)
-        if self.planar and args.passive_outer:
-            lookup = {tuple(np.round(point, 8)): index for index, point in enumerate(bed.anchor_bottom_m[:, :2])}
-            fixture = self.shoe.instron_fixture("fullfoot_last")
-            supported = np.array([lookup[tuple(np.round(point, 8))] for point in fixture.carrier_anchor_m[:, :2]])
-            driven[:] = 0
-            driven[supported] = 1
-        # A massless outer surface avoids inventing an unidentified surface mass.
-        self.free_columns = int(count - driven.sum())
-        if self.free_columns and (args.outer_relaxation <= 0.0 or not 0.0 < args.outer_max_strain < 1.0):
-            raise ValueError("Passive outer relaxation time must be positive and its strain limit inside (0, 1)")
-        self.driven = wp.array(driven, dtype=wp.int32, device=self.device)
-        # Deflection of an outer top above the position the last would impose.
-        self.free_top = wp.zeros(count, dtype=wp.float32, device=self.device)
-        self.free_top_next = wp.zeros_like(self.free_top)
-        self.free_velocity = wp.zeros_like(self.free_top)
-        self.bottom_world = wp.zeros_like(self.free_top)
+        self.free_columns = self.foundation.free_column_count
+        self.driven = self.foundation.driven
         self.free_metrics = wp.zeros(5, dtype=wp.float32, device=self.device)
         self.old_tangent_anchor = wp.zeros_like(self.foundation.tangent_anchor)
         self.old_tangent_active = wp.zeros_like(self.foundation.tangent_stuck)
@@ -719,9 +652,6 @@ class Example:
         self.viewer.set_model(self.model)
         center = 0.5 * (lo + hi)
         self.viewer.set_camera(*_camera((center + 0.7, -1.85, 0.95), (center, 0.0, 0.55)))
-        if self.free_columns:
-            self.free_top.zero_()
-            self.free_velocity.zero_()
         self._prescribe(0)
         self.metadata = {
             "profile_hash": hashlib.sha256(Path(args.profile).read_bytes()).hexdigest(),
@@ -1144,58 +1074,14 @@ class Example:
             device=self.device,
         )
 
-    def _relax_free_surface(self):
-        """Move outer tops with neighbour coupling and the floor, not with the last."""
-        f = self.foundation
-        for _ in range(self.args.outer_substeps):
-            wp.launch(
-                _relax_free_columns,
-                dim=f.column_count,
-                inputs=[
-                    self.sim_dt / self.args.outer_substeps,
-                    self.carrier,
-                    self.state_0.body_q,
-                    self.driven,
-                    f.neighbors,
-                    f.anchor_local,
-                    f.rest_len,
-                    f.area,
-                    f.q_state,
-                    f.params,
-                    self.args.outer_coupling_scale,
-                    self.args.outer_attachment,
-                    self.args.outer_max_strain,
-                    self.args.outer_relaxation,
-                    self.free_top,
-                    self.free_top_next,
-                    self.free_velocity,
-                ],
-                device=self.device,
-            )
-            self.free_top, self.free_top_next = self.free_top_next, self.free_top
-        wp.launch(
-            _write_free_geometry,
-            dim=f.column_count,
-            inputs=[
-                self.carrier,
-                self.state_0.body_q,
-                self.driven,
-                f.anchor_local,
-                self.free_top,
-                f.z_free,
-                self.bottom_world,
-            ],
-            device=self.device,
-        )
-
     def _sample(self, index):
         self._prescribe(index)
         self.state_0.clear_forces()
         if self.planar:
             wp.copy(self.old_tangent_anchor, self.foundation.tangent_anchor)
             wp.copy(self.old_tangent_active, self.foundation.tangent_stuck)
-        if self.free_columns:
-            self._relax_free_surface()
+        # MidsoleFoundation now relaxes the passive outer columns itself, with the same
+        # kernel the Digital Instron identification sweeps over its untouched foam.
         self.foundation.apply(self.state_0, self.sim_dt)
         if self.planar:
             wp.launch(
@@ -1226,7 +1112,7 @@ class Example:
                         self.foundation.compression,
                         self.foundation.rest_len,
                         self.foundation.column_force,
-                        self.free_velocity,
+                        self.foundation.surround_rate,
                         self.free_metrics,
                     ],
                     device=self.device,
@@ -1260,6 +1146,7 @@ class Example:
                     self.state_0.body_qd,
                     self.state_0.body_f,
                     self.foundation.resultant_force,
+                    self.foundation.pressed_force,
                     self.foundation.cop_moment,
                     self.foundation.contact_power,
                     self.foundation.max_compression,
@@ -1344,7 +1231,7 @@ class Example:
                     self.foundation.anchor_local,
                     self.foundation.rest_len,
                     self.foundation.column_force,
-                    self.free_top,
+                    self.foundation.z_free,
                     self.foundation.tangent_anchor,
                     self.foundation.tangent_stuck,
                     self.points,
@@ -1503,6 +1390,7 @@ class Example:
                         "plastic_anchor_load_fraction": float(values[32]),
                         "tangential_contact_power_w": float(values[33]),
                         "max_coulomb_utilization": float(values[34]),
+                        "pressed_force_n": float(values[40]),
                         "driven_column_force_n": float(values[35]),
                         "passive_column_force_n": float(values[36]),
                         "passive_max_strain": float(values[37]),
@@ -1667,8 +1555,12 @@ def create_parser():
     parser.add_argument(
         "--outer-attachment",
         type=float,
-        default=200.0,
-        help="Assumed vertical bond stiffness per outer column to the shoe above it [N/m]; not identified.",
+        default=0.0,
+        help=(
+            "Vertical bond stiffness per outer column to the shoe above it [N/m]. Zero by default: its "
+            "reaction never reaches the reported force or the carrier wrench, so a nonzero value is an "
+            "undeclared rigid support, not a bond."
+        ),
     )
     parser.add_argument(
         "--outer-max-strain", type=float, default=0.9, help="Passive outer compression limit as a fraction of rest."

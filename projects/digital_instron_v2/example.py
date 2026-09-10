@@ -44,6 +44,7 @@ import newton.examples
 from .dynamics import (
     FoundationConfig,
     MidsoleFoundation,
+    SurroundConfig,
     attach_coupling,
     attached_columns,
     build_foundation_geometry,
@@ -58,6 +59,24 @@ from .geometry import load_mesh, transform_mesh
 
 MANIFEST = "DigitalInstron/manifest_v2.json"
 INSTRON_CYCLES = 6  # warm-up cycles before the reported hysteresis loop
+# Passive-surround settings shared with the identification (core.Surround): the
+# assumed vertical bond of untouched foam to the shoe and its compression limit.
+# The outer bond is booked consistently by being switched off: its reaction was
+# used inside the relaxation but never reported, which made it a hidden support.
+SURROUND_ATTACHMENT_N_M = 0.0
+SURROUND_MAX_STRAIN = 0.9
+# Relaxation sweeps per substep. The compression field is warm started from the
+# previous substep, so a few sweeps track the converged quasi-static surround the
+# fit solves with 250 sweeps from zero: 32 and 128 sweeps give the same Instron
+# loop, and that loop matches core.predict to 0.1% RMS.
+SURROUND_SWEEPS = 32
+# Foam damping per column for the free-body scenarios [N.s/m]. The whole midsole
+# carries 910 columns, so a per-column dashpot that was merely stiff on the old
+# fixture subset becomes a numerically explicit wall: 8.0 N.s/m per column is
+# 7.3 kN.s/m under a 0.8 kg plate, about 65 times critical, and ``c * dt / m``
+# reaches 4.7, so the settling plate rang instead of coming to rest. 0.5 N.s/m
+# keeps real foam damping (about four times critical) with ``c * dt / m = 0.3``.
+FREE_BODY_NORMAL_DAMPING_N_S_M = 0.5
 SETTLE_PUSH_N = 4.0  # lateral load used to probe foam-shear friction [N]
 SETTLE_MASS_KG = 0.8  # midsole + representative attachment mass [kg]
 STRIDE_PERIOD_S = 0.6  # synthetic running-stride period [s]
@@ -92,7 +111,7 @@ class Example:
 
         builder = newton.ModelBuilder()
         builder.add_ground_plane()
-        anchor_local, z_free, config = self._build_mode(builder, manifest)
+        anchor_local, z_free, config, surround = self._build_mode(builder, manifest)
 
         builder.color()
         self.model = builder.finalize()
@@ -121,9 +140,9 @@ class Example:
             self.model.body_com,
             config,
             self.device,
+            surround,
         )
         self._anchor_local = wp.array(np.ascontiguousarray(anchor_local, np.float32), dtype=wp.vec3, device=self.device)
-        self._z_free = wp.array(np.ascontiguousarray(z_free, np.float32), dtype=wp.float32, device=self.device)
         self._points = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._colors = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         foam_base = np.column_stack([self.geo.uv_m[:, 0], self.geo.uv_m[:, 1], self.geo.z_bottom_m])
@@ -145,12 +164,28 @@ class Example:
 
     # -- scene construction ------------------------------------------------
     def _build_mode(self, builder, manifest):
-        """Configure the carrier body, foundation anchors, and driver for the active mode."""
+        """Configure the carrier body, foundation anchors, surround, and driver for the active mode.
+
+        Every mode runs the same whole-midsole bed through the same passive
+        surround path. The difference is which columns the carrier drives: a
+        bench indenter presses only its own footprint, while a rigid plate or a
+        shoe sole carries the whole bed, which makes the relaxation a no-op.
+        """
         geo = self.geo
         self._attached = False
         self._cx = float(geo.uv_m[:, 0].mean())
         self._cy = float(geo.uv_m[:, 1].mean())
         self._cz = float(geo.surface_m.mean())
+        rigid_bed = np.ones(self.column_count, dtype=bool)
+
+        def surround_of(driven, carrier_bond):
+            return SurroundConfig(
+                driven=driven,
+                attachment_n_m=SURROUND_ATTACHMENT_N_M,
+                max_strain=SURROUND_MAX_STRAIN,
+                sweeps=SURROUND_SWEEPS,
+                carrier_bond=carrier_bond,
+            )
 
         if self.mode == "settle":
             anchor_local = np.column_stack([geo.uv_m[:, 0], geo.uv_m[:, 1], geo.slack_m])
@@ -161,10 +196,16 @@ class Example:
                 inertia=wp.mat33(0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.01),
             )
             cfg = FoundationConfig(
-                stretch_floor=0.05, normal_damping=8.0, friction_stiffness=2.0e4, friction=10.0, mu=1.0
+                stretch_floor=0.05,
+                normal_damping=FREE_BODY_NORMAL_DAMPING_N_S_M,
+                friction_stiffness=2.0e4,
+                friction=10.0,
+                mu=1.0,
             )
             self._add_plate_visual(builder)
             self._driven = False
+            # A rigid plate spans the whole midsole, so every column rides with it.
+            surround = surround_of(rigid_bed, carrier_bond=True)
 
         elif self.mode == "stride":
             anchor_local = np.column_stack(
@@ -177,6 +218,9 @@ class Example:
             self._stride = synthetic_stride(0.014, 5.0, 0.12 * span, STRIDE_PERIOD_S)
             self._add_last_visual(builder, manifest, at_com=True)
             self._driven = True
+            # The last presses its own footprint; the midsole around it is a free shoe
+            # surface the last never touches, so it relaxes as it does during the fit.
+            surround = surround_of(geo.driven, carrier_bond=False)
 
         elif self.mode == "attached":
             # Dynamic, foot-mounted shoe. The shoe body carries the foam against the
@@ -203,7 +247,11 @@ class Example:
                 inertia=wp.mat33(0.05, 0.0, 0.0, 0.0, 0.08, 0.0, 0.0, 0.0, 0.08),
             )
             cfg = FoundationConfig(
-                stretch_floor=0.05, normal_damping=8.0, friction_stiffness=2.0e4, friction=10.0, mu=1.0
+                stretch_floor=0.05,
+                normal_damping=FREE_BODY_NORMAL_DAMPING_N_S_M,
+                friction_stiffness=2.0e4,
+                friction=10.0,
+                mu=1.0,
             )
             # The stiff foam + light shoe is numerically stiff, so integrate the attached
             # stride with finer substeps than the driven/settle scenarios (converged at 128).
@@ -219,6 +267,8 @@ class Example:
             self._build_target_trajectory()
             self._driven = False
             self._attached = True
+            # The foam is this shoe's sole, glued under the whole outsole.
+            surround = surround_of(rigid_bed, carrier_bond=True)
 
         else:  # instron
             self.mode = "instron"
@@ -231,8 +281,9 @@ class Example:
             self._depth, self._period = cyclic_displacement(time_s, disp_m)
             self._add_last_visual(builder, manifest, at_com=False)
             self._driven = True
+            surround = surround_of(geo.driven, carrier_bond=False)
 
-        return anchor_local, z_free, cfg
+        return anchor_local, z_free, cfg, surround
 
     def _add_last_visual(self, builder, manifest, at_com):
         """Attach the shoe-last indenter mesh to the carrier body for rendering."""
@@ -440,10 +491,11 @@ class Example:
             )
             self.viewer.log_lines("midsole_springs", self._points, self._foam_top, self._colors, width=0.0035)
         else:
+            # The live free top, not the rigid one, so the relaxed surround is visible.
             wp.launch(
                 column_world_positions,
                 dim=self.column_count,
-                inputs=[self.carrier, self.state_0.body_q, self._anchor_local, self._z_free, self._points],
+                inputs=[self.carrier, self.state_0.body_q, self._anchor_local, self.foundation.z_free, self._points],
                 device=self.device,
             )
             if self.mode == "instron":

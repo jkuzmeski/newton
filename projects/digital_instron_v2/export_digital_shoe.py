@@ -107,6 +107,12 @@ def _visual_meshes(manifest: Path, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _instron_fixture(manifest: Path, fixture: str) -> dict[str, Any]:
+    """Describe the columns one bench indenter actually drives.
+
+    The foundation geometry now spans the whole midsole, so the driven mask
+    selects the fixture footprint here. ``column_bed`` remains the whole shoe and
+    a runtime recovers the untouched columns as the difference between the two.
+    """
     geometry = build_foundation_geometry(manifest, fixture)
     config = json.loads(manifest.read_text())
     source = next(item for item in config["trials"] if item["fixture"] == fixture)
@@ -114,17 +120,19 @@ def _instron_fixture(manifest: Path, fixture: str) -> dict[str, Any]:
         indenter = {"type": "circular_punch", "radius_m": float(source["indenter"]["radius_m"])}
     else:
         indenter = {"type": "baked_visual_mesh", "mesh": "fullfoot_last"}
-    count = len(geometry.slack_m)
-    carrier_anchor = np.column_stack([geometry.uv_m, geometry.surface_m])
+    driven = np.asarray(geometry.driven, dtype=bool)
+    uv = np.asarray(geometry.uv_m, dtype=np.float64)[driven]
+    count = int(driven.sum())
+    carrier_anchor = np.column_stack([uv, np.asarray(geometry.surface_m, dtype=np.float64)[driven]])
     return {
         "column_count": count,
         "indenter": indenter,
         "carrier_anchor_m": carrier_anchor.tolist(),
-        "foam_free_top_m": np.asarray(geometry.z_free_m, dtype=np.float64).tolist(),
-        "foam_bottom_m": np.asarray(geometry.z_bottom_m, dtype=np.float64).tolist(),
-        "rest_length_m": np.asarray(geometry.slack_m, dtype=np.float64).tolist(),
+        "foam_free_top_m": np.asarray(geometry.z_free_m, dtype=np.float64)[driven].tolist(),
+        "foam_bottom_m": np.asarray(geometry.z_bottom_m, dtype=np.float64)[driven].tolist(),
+        "rest_length_m": np.asarray(geometry.slack_m, dtype=np.float64)[driven].tolist(),
         "area_m2": np.full(count, geometry.area_m2, dtype=np.float64).tolist(),
-        "neighbors": np.asarray(geometry.neighbors, dtype=np.int32).tolist(),
+        "neighbors": _neighbor_indices(uv, geometry.uv_m, geometry.spacing_m).tolist(),
         "spacing_m": float(geometry.spacing_m),
     }
 
@@ -167,11 +175,15 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
     manifest = Path(manifest_path).resolve()
     config = json.loads(manifest.read_text())
     fitted = Material(**report["material"])
+    bed = _whole_column_bed(manifest, config)
+    rest_length_m = np.asarray(bed["rest_length_m"], dtype=np.float64)
+    coupling_n_per_m = fitted.coupling_n_per_m(rest_length_m)
     material = ShoeMaterial(
         fitted.instantaneous_shear_modulus_pa,
         fitted.hyperfoam_exponent,
         fitted.equilibrium_fraction,
-        fitted.pasternak_n_per_m,
+        # Reported, not fitted: the bed mean of the per-column rule k = mu_eq * t.
+        float(np.mean(coupling_n_per_m)),
         EFFECTIVE_POISSON_RATIO,
         fitted.maxwell_relaxation_time_s,
     )
@@ -189,8 +201,19 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
             "origin": "footprint_center_xy_and_lowest_outsole_z",
             "x_axis": "heel_to_toe_verified_for_this_asset",
         },
-        "constitutive_model": {"type": MODEL_TYPE, "parameters": asdict(material)},
-        "column_bed": _whole_column_bed(manifest, config),
+        "constitutive_model": {
+            "type": MODEL_TYPE,
+            "parameters": asdict(material),
+            "derived_quantities": {
+                "pasternak_rule": "k_i = equilibrium_shear_modulus_pa * rest_length_m[i]",
+                "pasternak_n_per_m_is_fitted": False,
+                "equilibrium_shear_modulus_pa": float(fitted.equilibrium_shear_modulus_pa),
+                "pasternak_n_per_m_min": float(np.min(coupling_n_per_m)),
+                "pasternak_n_per_m_max": float(np.max(coupling_n_per_m)),
+                "small_strain_compressive_modulus_pa": float(2.0 * fitted.equilibrium_shear_modulus_pa),
+            },
+        },
+        "column_bed": bed,
         "visual_meshes": _visual_meshes(manifest, config),
         "instron_fixtures": {
             fixture: _instron_fixture(manifest, fixture) for fixture in ("rearfoot_punch", "fullfoot_last")
@@ -209,6 +232,7 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
                 "friction_coefficient",
                 "stretch_floor",
             ],
+            "fixture_specific_parameters": [],
         },
         "validation": {
             "scope": "adjacent held-out cycles from the same approximately 0.5 s fixture protocols",

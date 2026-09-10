@@ -100,7 +100,7 @@ def _material_rows(shoe: DigitalShoe) -> str:
         "instantaneous_shear_modulus_pa": ("Instantaneous shear modulus", "Pa"),
         "hyperfoam_exponent": ("Hyperfoam exponent", "1"),
         "equilibrium_fraction": ("Equilibrium fraction", "1"),
-        "pasternak_n_per_m": ("Pasternak coupling", "N/m"),
+        "pasternak_n_per_m": ("Pasternak coupling (derived bed mean of mu_eq x t)", "N/m"),
         "effective_poisson_ratio": ("Effective Poisson ratio (fixed)", "1"),
         "maxwell_relaxation_time_s": ("Maxwell relaxation time (fitted)", "s"),
     }

@@ -149,7 +149,7 @@ def render_figures(
         ("instantaneous_shear_modulus_pa", "G_inst [kPa]", 1.0e-3),
         ("hyperfoam_exponent", "alpha [-]", 1.0),
         ("equilibrium_fraction", "eq_fraction [-]", 1.0),
-        ("pasternak_n_per_m", "pasternak [N/m]", 1.0),
+        ("maxwell_relaxation_time_s", "tau [ms]", 1.0e3),
     ]
     fig, axes = plt.subplots(1, 4, figsize=(16, 4.2))
     for ax, (key, label, scale) in zip(axes, params, strict=True):

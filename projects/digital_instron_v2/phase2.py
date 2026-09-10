@@ -48,10 +48,16 @@ from .core import Material
 from .dynamics import (
     FoundationConfig,
     MidsoleFoundation,
+    SurroundConfig,
     build_foundation_geometry,
     cyclic_displacement,
 )
 from .validation import validate_trace_metrics
+
+# Relaxation sweeps per substep for the passive surround. The field is warm started
+# from the previous substep, so a few sweeps track the converged quasi-static bed the
+# identification solves from zero; this matches the dynamic example.
+SURROUND_SWEEPS = 32
 
 PASS_THRESHOLD = 0.10
 TRACKING_TOLERANCE_M = 5.0e-4  # servo must follow the crosshead trajectory within 0.5 mm
@@ -158,6 +164,12 @@ def run_dynamic_replay(
         model.body_com,
         FoundationConfig(stretch_floor=0.05),
         device,
+        # The bed spans the whole midsole, so the columns the indenter misses have to
+        # relax exactly as the identification relaxes them. Without this they stayed
+        # pinned at zero compression, which is the rigid hidden support the whole-bed
+        # model exists to remove, and the replay then no longer measured the same shoe
+        # that core.predict does.
+        SurroundConfig(driven=geo.driven, sweeps=SURROUND_SWEEPS),
     )
 
     def velocity(t: float, h: float = 2.0e-4) -> float:
@@ -410,8 +422,10 @@ def _print_report(report: dict[str, Any]) -> None:
     )
     mat = report["material"]
     print(
-        "  material (train-only): G_inst={:.0f} Pa  eq_frac={:.4f}  pasternak={:.1f} N/m".format(
-            mat["instantaneous_shear_modulus_pa"], mat["equilibrium_fraction"], mat["pasternak_n_per_m"]
+        "  material (train-only): G_inst={:.0f} Pa  eq_frac={:.4f}  tau={:.4f} s".format(
+            mat["instantaneous_shear_modulus_pa"],
+            mat["equilibrium_fraction"],
+            mat["maxwell_relaxation_time_s"],
         )
     )
     print(f"  {'fixture':16s} {'peak_err':>9s} {'rmse':>8s} {'hyst_err':>9s} {'track_mm':>9s} {'dF_N':>7s}  pass")

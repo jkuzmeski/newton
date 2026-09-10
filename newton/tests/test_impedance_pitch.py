@@ -28,7 +28,9 @@ def _reference_fixture():
         kinematic_rate_hz=100.0,
         unload_duration=0.04,
         unload_acceleration=25.0,
+        dynamics="vertical",
     )
+    example.planar = False
     example.mass, example.foot_mass, example.com_mass = 80.0, 2.0, 78.0
     example.gravity = 9.80665
     example.times = time
@@ -173,8 +175,14 @@ class TestPitchReference(unittest.TestCase):
     "Generate supplied-data inputs first",
 )
 class TestSuppliedPitchAnkle(unittest.TestCase):
-    def test_complete_native_stance_with_fixed_ankle_mount(self):
-        """Finish the measured running example without marker replay or ground penetration."""
+    def test_complete_native_stance_rolls_and_releases(self):
+        """Finish the measured running example with a rolling foot and a clean release.
+
+        The ankle is no longer pinned in fore-aft: planar mode integrates both
+        horizontal and vertical motion, so contact rolls the foot forward instead
+        of dragging a fixed point. Asserting a stationary ankle would re-encode
+        the defect that friction and free horizontal motion were added to remove.
+        """
         args = create_parser().parse_args(["--viewer", "null"])
         with wp.ScopedDevice("cpu"):
             example = Example(MagicMock(), args)
@@ -184,7 +192,13 @@ class TestSuppliedPitchAnkle(unittest.TestCase):
             rows = example.rows()
             self.assertEqual(example.index, example.sample_count)
             self.assertTrue(all(row["last_min_height_m"] >= -0.001 for row in rows))
-            self.assertTrue(all(row["ankle_x_m"] == 0.0 for row in rows))
+            travel = rows[-1]["ankle_x_m"] - rows[0]["ankle_x_m"]
+            self.assertGreater(travel, 0.05)
+            self.assertLess(travel, 0.5)
+            loaded = [row for row in rows if row["shoe_fz_n"] > 100.0]
+            self.assertLess(max(row["max_coulomb_utilization"] for row in loaded), 1.001)
+            self.assertGreater(rows[0]["com_ankle_dx_m"], -1.0)
+            self.assertLess(max(row["com_ankle_dx_m"] for row in rows), 0.6)
             self.assertLess(rows[-1]["shoe_fz_n"], 0.1 * example.mass * example.gravity)
             self.assertEqual(rows[-1]["impedance_gain"], 0.0)
             np.testing.assert_allclose(

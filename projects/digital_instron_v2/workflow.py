@@ -12,7 +12,6 @@ import numpy as np
 
 from .core import (
     EFFECTIVE_POISSON_RATIO,
-    MAXWELL_RELAXATION_TIME_S,
     Material,
     Surround,
     Trial,
@@ -277,7 +276,7 @@ def run(manifest_path: str | Path, evaluations: int, plots: bool = False) -> dic
     midsole = load_mesh(base / config["midsole_mesh"], 0.001)
     grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
     trials, displacement, uv = prepare_trials(base, config, grid, midsole)
-    initial = Material(*config["fit"].values(), MAXWELL_RELAXATION_TIME_S)
+    initial = Material(*config["fit"].values())
     history: list[dict[str, float]] = []
     material = fit_material(trials, initial, evaluations, history)
     report = {

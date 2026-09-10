@@ -197,7 +197,18 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertEqual(artifact["instron_fixtures"]["fullfoot_last"]["column_count"], 611)
         self.assertGreater(artifact["visual_meshes"]["midsole"]["vertex_count"], 7000)
         self.assertGreater(artifact["visual_meshes"]["fullfoot_last"]["vertex_count"], 7000)
-        self.assertFalse(artifact["identification"]["passed_all_declared_gates"])
+        # The export must publish the gate outcome, whatever it is. Pinning a value here
+        # made a 10-evaluation smoke fit assert a physics result: with the corrected
+        # mechanics that short fit now passes, and the real outcome is the refit artifact's.
+        gates = artifact["identification"]["gates"]
+        self.assertIsInstance(artifact["identification"]["passed_all_declared_gates"], bool)
+        for prefix in ("rearfoot", "fullfoot"):
+            for gate in ("peak_force_error", "force_rmse_relative", "hysteresis_error"):
+                self.assertIn(f"{prefix}_{gate}", gates)
+        self.assertEqual(
+            artifact["identification"]["passed_all_declared_gates"],
+            all(gate["passed"] for gate in gates.values()),
+        )
         encoded = json.dumps(artifact, sort_keys=True)
         self.assertNotIn(str(Path.cwd()), encoded)
         roles = {item["role"] for item in artifact["provenance"]["source_files"]}
