@@ -1,0 +1,8 @@
+﻿newton.opensim.OpenSimFrameConverter
+====================================
+
+.. autoclass:: newton.opensim.OpenSimFrameConverter
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :member-order: groupwise

@@ -1,0 +1,8 @@
+﻿newton.opensim.OpenSimStorage
+=============================
+
+.. autoclass:: newton.opensim.OpenSimStorage
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :member-order: groupwise
