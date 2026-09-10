@@ -63,8 +63,9 @@ def _probe_params(material: core.Material) -> runtime.FoundationParams:
     """Build device-side constants for the probe kernels from a fitted material."""
     params = runtime.FoundationParams()
     poisson = core.EFFECTIVE_POISSON_RATIO
-    params.g_eq = material.equilibrium_shear_modulus_pa
-    params.alpha = material.hyperfoam_exponent
+    # Both Ogden-Hill terms, through the one host helper that fills them, so the
+    # probe cannot silently collapse a two-term material onto its first term.
+    runtime.set_hyperfoam_series(params, material)
     params.beta = poisson / (1.0 - 2.0 * poisson)
     params.one_minus_two_poisson = 1.0 - 2.0 * poisson
     params.stretch_floor = 1.0e-3

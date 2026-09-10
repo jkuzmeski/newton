@@ -15,6 +15,13 @@ import warp as wp
 class ShoeMaterial:
     """Effective intact-shoe constitutive parameters used by the runtime.
 
+    The equilibrium network is a **two-term** Ogden-Hill (Abaqus Hyperfoam)
+    series, ``p_eq = sum_n 2 mu_n / (alpha_n lambda) (J^(-alpha_n beta) -
+    lambda^alpha_n)``. One first-order term cannot cover both the 0-10% secant
+    the published foam tables report and the 74-90% peak strains the bench
+    fixtures reach, so a second term is carried. ``instantaneous_shear_modulus_2_pa
+    = 0`` disables it exactly and recovers the historical single-term artifact.
+
     ``pasternak_n_per_m`` is a *reported* quantity, kept so the artifact schema
     stays readable and backward compatible. Nothing consumes it: the runtime
     derives each column's own Pasternak coefficient from the equilibrium
@@ -29,6 +36,8 @@ class ShoeMaterial:
     pasternak_n_per_m: float
     effective_poisson_ratio: float = 0.0
     maxwell_relaxation_time_s: float = 0.08
+    instantaneous_shear_modulus_2_pa: float = 0.0
+    hyperfoam_exponent_2: float = 1.0
 
     def __post_init__(self) -> None:
         values = tuple(self.__dict__.values())
@@ -36,6 +45,8 @@ class ShoeMaterial:
             raise ValueError("shoe material parameters must be finite")
         if self.instantaneous_shear_modulus_pa <= 0.0 or self.hyperfoam_exponent <= 0.0:
             raise ValueError("shear modulus and Hyperfoam exponent must be positive")
+        if self.instantaneous_shear_modulus_2_pa < 0.0:
+            raise ValueError("second Ogden-Hill shear modulus must be nonnegative")
         if not 0.0 < self.equilibrium_fraction <= 1.0:
             raise ValueError("equilibrium fraction must be in (0, 1]")
         if self.pasternak_n_per_m < 0.0:
@@ -45,13 +56,28 @@ class ShoeMaterial:
         if self.maxwell_relaxation_time_s <= 0.0:
             raise ValueError("Maxwell relaxation time must be positive")
 
+    @property
+    def equilibrium_shear_modulus_pa(self) -> float:
+        """Equilibrium Ogden-Hill shear modulus, the SUM over both terms [Pa].
+
+        ``mu_eq = (G_1 + G_2) * f_eq``. Every term of an Ogden-Hill series adds
+        ``2 mu_n`` to the small-strain compressive tangent regardless of its
+        exponent, so the series modulus is the sum and this is the quantity the
+        per-column Pasternak rule ``k_i = mu_eq * t_i`` uses.
+        """
+        return (self.instantaneous_shear_modulus_pa + self.instantaneous_shear_modulus_2_pa) * (
+            self.equilibrium_fraction
+        )
+
 
 @wp.struct
 class FoundationParams:
     """Device-side constitutive and contact constants for the column bed."""
 
-    g_eq: wp.float32  # equilibrium shear modulus G_inst * equilibrium_fraction [Pa]
-    alpha: wp.float32  # Hyperfoam exponent
+    g_eq: wp.float32  # first-term equilibrium shear modulus G_inst * equilibrium_fraction [Pa]
+    alpha: wp.float32  # first-term Hyperfoam exponent
+    g_eq2: wp.float32  # second-term equilibrium shear modulus [Pa]; zero disables the term
+    alpha2: wp.float32  # second-term Hyperfoam exponent
     beta: wp.float32  # poisson / (1 - 2 poisson)
     one_minus_two_poisson: wp.float32  # volumetric stretch exponent
     tau_s: wp.float32  # Maxwell relaxation time [s]
@@ -66,9 +92,46 @@ class FoundationParams:
     mu: wp.float32  # Coulomb friction coefficient
 
 
+# Below this exponent magnitude one Ogden-Hill term is evaluated at its
+# ``alpha -> 0`` limit ``2 mu (-beta ln J - ln lambda) / lambda`` instead of
+# through the ``0 / 0`` quotient. The singularity is removable, so the two
+# branches agree to float32 rounding at the cut, and a default-constructed
+# :class:`FoundationParams` (``g_eq2 = alpha2 = 0``) contributes exactly zero.
+HYPERFOAM_ALPHA_FLOOR = wp.constant(1.0e-3)
+
+
+@wp.func
+def _hyperfoam_term(
+    stretch: wp.float32, volume_ratio: wp.float32, mu: wp.float32, alpha: wp.float32, beta: wp.float32
+) -> wp.float32:
+    """One Ogden-Hill (Hyperfoam) uniaxial compression term [Pa].
+
+    ``2 mu / (alpha lambda) (J^(-alpha beta) - lambda^alpha)``, the single
+    transcription of the law for the whole project. Every term adds ``2 mu`` to
+    the small-strain compressive tangent whatever its exponent, so a series
+    modulus is the sum of its term moduli.
+
+    Args:
+        stretch: Remaining thickness stretch ``lambda`` [-], already floored.
+        volume_ratio: ``J = lambda^(1 - 2 nu)`` [-].
+        mu: Term shear modulus [Pa].
+        alpha: Term exponent [-]; may be negative (a densifying term) and is
+            evaluated at its removable ``alpha -> 0`` limit near zero.
+        beta: ``nu / (1 - 2 nu)`` [-].
+    """
+    if wp.abs(alpha) < HYPERFOAM_ALPHA_FLOOR:
+        return 2.0 * mu / stretch * (-beta * wp.log(volume_ratio) - wp.log(stretch))
+    return 2.0 * mu / (alpha * stretch) * (wp.pow(volume_ratio, -alpha * beta) - wp.pow(stretch, alpha))
+
+
 @wp.func
 def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
-    """Positive uniaxial compression pressure from the first-order Hyperfoam law.
+    """Positive uniaxial compression pressure from the two-term Hyperfoam law.
+
+    Sums :func:`_hyperfoam_term` over both Ogden-Hill terms. One first-order term
+    has a single shape exponent and cannot match both the 0-10% secant of the
+    published foam tables and the 74-90% peak strains the bench fixtures reach;
+    the second term restores that freedom without a second ``pow`` per term.
 
     At the measured zero effective Poisson ratio ``beta`` is zero and
     ``one_minus_two_poisson`` is one, so the volumetric factor is ``pow(x, 0)``
@@ -80,7 +143,30 @@ def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
     if stretch < p.stretch_floor:
         stretch = p.stretch_floor
     volume_ratio = wp.pow(stretch, p.one_minus_two_poisson)
-    return 2.0 * p.g_eq / (p.alpha * stretch) * (wp.pow(volume_ratio, -p.alpha * p.beta) - wp.pow(stretch, p.alpha))
+    return _hyperfoam_term(stretch, volume_ratio, p.g_eq, p.alpha, p.beta) + _hyperfoam_term(
+        stretch, volume_ratio, p.g_eq2, p.alpha2, p.beta
+    )
+
+
+def set_hyperfoam_series(params: FoundationParams, material) -> None:
+    """Write both equilibrium Ogden-Hill terms of ``material`` into ``params``.
+
+    The only place a host builds the device-side constitutive block, so a term
+    cannot be forgotten at one call site and silently drop out of one solver.
+
+    Args:
+        params: Device-side constants to fill in place.
+        material: Any material carrying ``instantaneous_shear_modulus_pa``,
+            ``hyperfoam_exponent``, ``instantaneous_shear_modulus_2_pa``,
+            ``hyperfoam_exponent_2`` and ``equilibrium_fraction``
+            (:class:`ShoeMaterial` or
+            :class:`projects.digital_instron_v2.core.Material`).
+    """
+    fraction = float(material.equilibrium_fraction)
+    params.g_eq = float(material.instantaneous_shear_modulus_pa) * fraction
+    params.alpha = float(material.hyperfoam_exponent)
+    params.g_eq2 = float(material.instantaneous_shear_modulus_2_pa) * fraction
+    params.alpha2 = float(material.hyperfoam_exponent_2)
 
 
 @wp.func
@@ -88,13 +174,14 @@ def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -
     """Pasternak coefficient of the shear layer between two columns [N/m].
 
     A Pasternak layer coefficient is ``G * t``. The shear modulus is the foam's
-    own equilibrium Ogden-Hill modulus ``mu_eq``, already carried as
-    :attr:`FoundationParams.g_eq`, and the layer thickness at the shared face is
-    the mean of the two column rest thicknesses. Averaging keeps the pair
-    conductance symmetric, so the lateral flux summed over the bed is exactly
-    zero and the layer can only move load, never create it.
+    own equilibrium Ogden-Hill modulus ``mu_eq``, which for a two-term series is
+    the *sum* :attr:`FoundationParams.g_eq` + :attr:`FoundationParams.g_eq2`, and
+    the layer thickness at the shared face is the mean of the two column rest
+    thicknesses. Averaging keeps the pair conductance symmetric, so the lateral
+    flux summed over the bed is exactly zero and the layer can only move load,
+    never create it.
     """
-    return p.g_eq * 0.5 * (t_i + t_j)
+    return (p.g_eq + p.g_eq2) * 0.5 * (t_i + t_j)
 
 
 @wp.kernel
@@ -952,8 +1039,7 @@ class MidsoleFoundation:
         self.column_count = int(len(rest_len))
 
         params = FoundationParams()
-        params.g_eq = material.instantaneous_shear_modulus_pa * material.equilibrium_fraction
-        params.alpha = material.hyperfoam_exponent
+        set_hyperfoam_series(params, material)
         poisson = float(getattr(material, "effective_poisson_ratio", 0.0))
         params.beta = poisson / (1.0 - 2.0 * poisson)
         params.one_minus_two_poisson = 1.0 - 2.0 * poisson

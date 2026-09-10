@@ -124,7 +124,12 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         parser.close()
 
     def test_embeds_experiment_gifs_without_external_paths(self):
-        """Embed all experiment loops as deterministic data URIs in the report."""
+        """Embed all experiment loops as deterministic data URIs in the report.
+
+        The methods heading now names the two-term Ogden-Hill series the model
+        actually uses, so the pinned substring moved from "first-order Hyperfoam"
+        to "two-term Ogden-Hill (Hyperfoam)" with it.
+        """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             artifact_path = root / "digital_shoe.json"
@@ -143,7 +148,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertIn("Blue: 0 mm", first)
         self.assertIn("Red: 20+ mm", first)
         self.assertIn("Mermaid source for the method diagram", first)
-        self.assertIn("first-order Hyperfoam", first)
+        self.assertIn("two-term Ogden-Hill (Hyperfoam)", first)
         self.assertIn("Pasternak lateral load spreading", first)
         self.assertLess(first.index("1. Methods"), first.index("2. Results"))
         self.assertLess(first.index("2. Results"), first.index("3. Examples"))

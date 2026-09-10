@@ -16,8 +16,8 @@ rigid-body physics.
 
 ## Calibration (`workflow.py`)
 
-Fit the shared Hyperfoam-Maxwell-Pasternak column model to the rearfoot and
-fullfoot bench cycles:
+Fit the shared two-term Hyperfoam-Maxwell-Pasternak column model to the rearfoot
+and fullfoot bench cycles:
 
 ```bash
 uv run -m projects.digital_instron_v2.workflow --manifest DigitalInstron/manifest_v2.json
@@ -31,7 +31,7 @@ the dynamic example below.
 
 `dynamics.py` turns the calibrated column bed into a live Warp force model: each
 substep every column reads its carrier-body pose, computes its through-thickness
-compression, evaluates the Hyperfoam equilibrium pressure with a real-time
+compression, evaluates the two-term Hyperfoam equilibrium pressure with a real-time
 generalized-Maxwell overstress branch and Pasternak lateral coupling, adds an
 anchored bristle (elastoplastic) Coulomb friction that holds a planted contact
 patch and saturates at `mu * fn`, and accumulates the full six-component
@@ -107,7 +107,7 @@ Three quantities that used to be fitted or hidden are now pinned or declared:
 * **Pasternak coefficient pinned to the material.** A shear layer coefficient is
   `G * t`, so each column gets `k_i = mu_eq * t_i` from
   `Material.coupling_n_per_m`, with `mu_eq` the equilibrium Ogden-Hill shear
-  modulus. Nothing is fitted for it, the face coefficient is symmetric, and the
+  modulus, which for the two-term series is the **sum** of the term moduli. Nothing is fitted for it, the face coefficient is symmetric, and the
   lateral flux therefore cancels exactly over the bed. The artifact still reports
   `pasternak_n_per_m`, now as the bed mean of that rule.
 * **The outer bond of the passive surround defaults to zero.** It used to hold
@@ -118,33 +118,110 @@ Three quantities that used to be fitted or hidden are now pinned or declared:
 
 Nothing replaced the fitted coefficient. The fit is one shared material with **no
 fixture-specific freedom**: the rearfoot punch and the full-foot last are
-described by the same four numbers, so any disagreement between the two fixtures
-stays visible in the residual instead of being absorbed by a knob.
+described by the same six numbers -- two Ogden-Hill terms plus the Maxwell
+branch -- so any disagreement between the two fixtures stays visible in the
+residual instead of being absorbed by a knob.
 
-## The shipped material does not pass its own gates
+## The shipped material passes its own gates, with two Hyperfoam terms
 
-That is the reported result, not a defect left unfixed. Fitted alone, each
-fixture is reproduced almost exactly, but they ask for different foam:
+The equilibrium network is a two-term Ogden-Hill series. One first-order term has
+a single shape exponent, and the two bench fixtures do not share a strain range:
+the rearfoot punch drives its thinnest column to 89.6% strain and the full-foot
+last reaches about 74%, while the published foam secant is measured over 0-10%.
+One term could not span that, its objective was bimodal in the exponent, and it
+failed four of six held-out gates.
 
-| fit | small-strain `E_eq` | own fixture (held out) | other fixture |
-|---|---|---|---|
-| rearfoot punch alone | 0.134 MPa | peak 0.1%, RMSE 0.6%, hysteresis 0.1% | full-foot peak +44.0% |
-| full-foot last alone | 0.341 MPa | peak 1.7%, RMSE 1.6%, hysteresis 0.2% | rearfoot peak -27.0% |
+Held-out gates, same protocol, same cycles, nothing weakened:
 
-The full-foot fixture demands a **2.54x stiffer** foam. With one shared material
-and nothing fixture-specific left to absorb that, the joint fit has to split the
-difference, and no branch of it passes: the shipped material misses the rearfoot
-peak by 15.1% and the full-foot peak by 19.4%.
+| fixture | peak force | force RMSE | loop area | one term | two terms |
+|---|---|---|---|---|---|
+| rearfoot punch | threshold 10% | | | 15.1% / 8.9% / 14.8% | **2.8% / 5.6% / 7.5%** |
+| full-foot last | threshold 10% | | | 19.4% / 12.1% / 9.8% | **5.9% / 6.4% / 8.8%** |
 
-The joint objective is also **bimodal**. A five-seed multi-start finds a soft
-branch (`mu_eq` 51.9 kPa, `alpha` 0.216, training loss 0.00641, shipped) that
-splits the error, and a stiff branch (`mu_eq` about 240 kPa, `alpha` about 11.4,
-training loss 0.00672) that reproduces the full-foot peak to 0.3% and misses the
-rearfoot by 21%. The lower training loss ships, because the objective chooses,
-not the reader.
+2 of 6 gates passed with one term. **6 of 6 pass with two.** Training loss falls
+from 0.006414 to 0.001811, a factor of 3.5.
 
-The leading candidate for the cause is the constitutive form rather than any
-fixture: the two fixtures cover very different strain ranges, and a single
-first-order Hyperfoam term cannot span them. The multi-start result is direct
-evidence, because the two branches differ almost entirely in `alpha`, the shape
-parameter. A second Hyperfoam term is the next thing to try.
+### Fitted vector
+
+| | term 1 | term 2 |
+|---|---|---|
+| instantaneous shear modulus | 267.6 kPa | 19.5 kPa |
+| equilibrium shear modulus | 176.3 kPa | 12.8 kPa |
+| exponent `alpha` | 18.077 | -0.586 |
+
+with `equilibrium_fraction` 0.6587 and `tau` 5.15 ms. Either sign of an Ogden-Hill
+exponent is admissible: a large positive exponent produces a soft `1/lambda`
+plateau and a negative one produces densification, and the fit uses one of each.
+`mu_eq` is the **sum**, 189.1 kPa, giving a small-strain compressive modulus of
+378 kPa and a per-column Pasternak coefficient of 952-8277 N/m.
+
+### Each term earns its place
+
+Term 2's share of the equilibrium pressure rises monotonically with strain:
+10.2% at 5% strain, 29.3% at 25%, 53.0% at 50%, 73.0% at the full-foot peak and
+86.1% at the rearfoot peak (`outputs/impedance_instron/refit_two_term/term_contribution.png`).
+The two terms really do divide the strain range, which is the hypothesis the
+second term was added to test.
+
+Profiling the objective in each second-term parameter, refitting everything else
+at each point, gives interior minima rather than flat valleys:
+
+| `mu_2` [kPa, instantaneous] | 0 | 4.9 | 9.7 | **19.5** | 29.2 | 39.0 | 78.0 |
+|---|---|---|---|---|---|---|---|
+| loss | 0.00711 | 0.00220 | 0.00197 | **0.00180** | 0.00186 | 0.00212 | 0.00407 |
+
+| `alpha_2` | -4.0 | -2.0 | -1.0 | **-0.586** | -0.25 | +0.25 | +2.0 |
+|---|---|---|---|---|---|---|---|
+| loss | 0.00468 | 0.00271 | 0.00193 | **0.00180** | 0.00183 | 0.00215 | 0.00392 |
+
+### What is still soft
+
+* **`alpha_1` is weakly identified.** It sits at 18.08 against a 20.0 bound.
+  Refitting with the exponent bounds widened to 40 moves it to 21.17 -- interior,
+  not against the new bound -- for a 1.2% lower loss, a 5.9% higher `mu_eq`
+  (200.3 kPa) and gates that still all pass (2.6/3.3/9.3% and 5.4/3.9/8.4%). The
+  conclusion does not depend on the bound, but the exponent's exact value does.
+* **`equilibrium_fraction` and `tau` are not separable.** Their correlation at the
+  optimum is 1.000 (column-scaled Jacobian condition number 225). Both bench
+  cycles run at one rate, so how much relaxes and how fast cannot be told apart.
+  This replaces the old `corr(G, pasternak) = 1.000` degeneracy, which is gone
+  because the Pasternak coefficient is now pinned rather than fitted.
+* **The fixtures still disagree.** Fitted alone, each is reproduced almost
+  exactly, and they still ask for different foam:
+
+  | fit | `mu_eq` | own fixture (held out) |
+  |---|---|---|
+  | rearfoot punch alone | 81.1 kPa | peak 0.04%, RMSE 0.5%, loop 0.07% |
+  | full-foot last alone | 308.1 kPa | peak 0.4%, RMSE 0.6%, loop 0.2% |
+
+  That ratio is **3.80x**, up from 2.54x with one term, and both single-fixture
+  fits push `alpha_1` onto its 20.0 bound. The per-fixture adjoints still point in
+  nearly opposite directions, with their sum 6.6% of either. The two-term form did
+  not remove the tension between the fixtures; it moved the shared compromise to a
+  place where both fixtures are inside their gates.
+
+### Multi-start is now opt-in
+
+`fit_material` runs a single start by default. The bimodality that justified a
+multi-start belonged to the one-term law. A seven-start check on the two-term law
+found five of seven seeds -- from both old basins and from the published two-term
+compression fits -- converging on the same optimum within about 4% in `mu_eq`,
+one converging on the same optimum with the two terms relabelled, and only the
+seed that starts with the second term disabled staying behind at 3.9x the loss.
+That makes unimodality an **assumption**, not a proof. Re-test it with
+`--multistart-seeds 6` whenever the constitutive form, objective, bounds or
+fixture set change; at about 0.09 s per residual evaluation the check is cheap.
+
+### Against the published foam tables
+
+McCulloch, Delp and Kuhl (arXiv:2602.12694) report 268-299 kPa compressive
+stiffness for FF LEAP and FF TURBO PLUS, and our own one-term fits to their
+compression tables give a like-for-like 205-216 kPa. Our `E = 378 kPa` sits
+**above** both, where the single-term fit at 104 kPa sat below. Two-term fits to
+those same tables give 362-380 kPa, so the like-for-like two-term comparison is
+close. Treat all of this as context, not a target: those are cut-cube specimens of
+different foams from a different manufacturer, and foam bonded in a shoe with
+curvature, skin, glue and a plate can legitimately differ from a cube. See
+`outputs/impedance_instron/refit_two_term/stress_stretch_two_term.png`, whose
+right panel shows that the published tables stop at 40% compression while the
+fixtures reach 74-90%.

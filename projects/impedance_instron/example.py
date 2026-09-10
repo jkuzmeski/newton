@@ -588,7 +588,10 @@ class Example:
         scale = args.shoe_stiffness_scale
         material = replace(
             self.shoe.material,
+            # Both Ogden-Hill terms scale together, so the scaled foam is the same
+            # shape at a different stiffness rather than a differently shaped foam.
             instantaneous_shear_modulus_pa=self.shoe.material.instantaneous_shear_modulus_pa * scale,
+            instantaneous_shear_modulus_2_pa=self.shoe.material.instantaneous_shear_modulus_2_pa * scale,
             # Reported only; the runtime rebuilds the per-column coupling from the
             # scaled equilibrium shear modulus, so keep the reported value in step.
             pasternak_n_per_m=self.shoe.material.pasternak_n_per_m * scale,

@@ -230,6 +230,10 @@ def load_fitted_material(manifest_path: str | Path) -> Material:
             values["hyperfoam_exponent"],
             values["equilibrium_fraction"],
             values["maxwell_relaxation_time_s"],
+            # Single-term artifacts predate the second Ogden-Hill term and leave
+            # it disabled, which reproduces their law exactly.
+            values.get("instantaneous_shear_modulus_2_pa", 0.0),
+            values.get("hyperfoam_exponent_2", 1.0),
         )
     return CALIBRATED_MATERIAL
 

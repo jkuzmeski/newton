@@ -63,6 +63,7 @@ from .dynamics import (
 from .dynamics_diff import (
     FRIC_MU,
     MAT_G_EQ,
+    MAT_G_EQ2,
     DifferentiableMidsoleFoundation,
     _column_normal_force,
     _pasternak_flux,
@@ -144,9 +145,10 @@ def _ground_reaction_force(
     reports the same reaction the wrench applies.
     """
     i = wp.tid()
-    g_eq = material_params[MAT_G_EQ]
+    # The shear layer follows the series modulus, the sum of both Ogden-Hill terms.
+    mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
     ci = compression[i]
-    flux = _pasternak_flux(i, compression, rest_len, neighbors, g_eq)
+    flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
 
     q_body = body_q[carrier]
     world = wp.transform_point(q_body, anchor_local[i])
@@ -186,9 +188,9 @@ def _shear_reaction_force(
     material.
     """
     i = wp.tid()
-    g_eq = material_params[MAT_G_EQ]
+    mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
     ci = compression[i]
-    flux = _pasternak_flux(i, compression, rest_len, neighbors, g_eq)
+    flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
 
     q_body = body_q[carrier]
     world = wp.transform_point(q_body, anchor_local[i])

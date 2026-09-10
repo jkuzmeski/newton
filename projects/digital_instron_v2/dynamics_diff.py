@@ -49,14 +49,15 @@ exact for the map the simulation evaluates. The identification relaxes to
 convergence instead and uses an implicit-function-theorem adjoint; see
 :class:`projects.digital_instron_v2.inverse_id.DifferentiableTrial`.
 
-The constitutive parameters that a fit would vary -- the equilibrium shear
-modulus, Hyperfoam exponent, and Maxwell overstress ratio -- are held in a
-length-3 ``requires_grad`` device array so gradients of any simulation objective
+The constitutive parameters that a fit would vary -- both Ogden-Hill term moduli
+and exponents and the Maxwell overstress ratio -- are held in a
+length-5 ``requires_grad`` device array so gradients of any simulation objective
 with respect to the foam material are available directly from
 ``material_params.grad``. The lateral shear layer is not among them: its
 coefficient is pinned to the material as ``k_i = mu_eq * t_i`` per column
 (:meth:`projects.digital_instron_v2.core.Material.coupling_n_per_m`), so it adds
-no free parameter and its gradient flows through ``g_eq``. The Coulomb friction coefficient ``mu`` is held in
+no free parameter and its gradient flows through the series modulus
+``g_eq + g_eq2``. The Coulomb friction coefficient ``mu`` is held in
 a separate length-1 ``requires_grad`` ``friction_params`` array, so a lateral- or
 shear-force objective can be differentiated with respect to friction as well
 (friction identification), independent of the constitutive fit.
@@ -70,13 +71,18 @@ from __future__ import annotations
 import numpy as np
 import warp as wp
 
+from projects.digital_shoe.runtime import _hyperfoam_term, set_hyperfoam_series
+
 from .core import EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material
 from .dynamics import FoundationConfig, FoundationParams, SurroundConfig
 
 # Indices into the differentiable ``material_params`` vector.
-MAT_G_EQ = wp.constant(0)  # equilibrium shear modulus G_inst * equilibrium_fraction [Pa]
-MAT_ALPHA = wp.constant(1)  # Hyperfoam exponent
+MAT_G_EQ = wp.constant(0)  # first-term equilibrium shear modulus G_inst * equilibrium_fraction [Pa]
+MAT_ALPHA = wp.constant(1)  # first-term Hyperfoam exponent
 MAT_OVERSTRESS = wp.constant(2)  # (1 - equilibrium_fraction) / equilibrium_fraction
+MAT_G_EQ2 = wp.constant(3)  # second-term equilibrium shear modulus [Pa]; zero disables the term
+MAT_ALPHA2 = wp.constant(4)  # second-term Hyperfoam exponent
+MAT_COUNT = 5  # length of the differentiable material vector
 
 # Index into the differentiable ``friction_params`` vector.
 FRIC_MU = wp.constant(0)  # Coulomb friction coefficient (smooth-cone bound)
@@ -84,19 +90,27 @@ FRIC_MU = wp.constant(0)  # Coulomb friction coefficient (smooth-cone bound)
 
 @wp.func
 def _hyperfoam_pressure_diff(
-    strain: wp.float32, g_eq: wp.float32, alpha: wp.float32, p: FoundationParams
+    strain: wp.float32,
+    g_eq: wp.float32,
+    alpha: wp.float32,
+    g_eq2: wp.float32,
+    alpha2: wp.float32,
+    p: FoundationParams,
 ) -> wp.float32:
-    """Positive uniaxial compression pressure from first-order Hyperfoam.
+    """Positive uniaxial compression pressure from the two-term Hyperfoam law.
 
-    Identical law to :func:`~projects.digital_instron_v2.dynamics._hyperfoam_pressure`
-    but with the differentiable modulus ``g_eq`` and exponent ``alpha`` passed as
-    scalars so gradients flow into them.
+    Identical law to :func:`~projects.digital_instron_v2.dynamics._hyperfoam_pressure`,
+    reusing its :func:`~projects.digital_shoe.runtime._hyperfoam_term` so the law
+    itself is written once, but with both differentiable term moduli and
+    exponents passed as scalars so gradients flow into them.
     """
     stretch = 1.0 - strain
     if stretch < p.stretch_floor:
         stretch = p.stretch_floor
     volume_ratio = wp.pow(stretch, p.one_minus_two_poisson)
-    return 2.0 * g_eq / (alpha * stretch) * (wp.pow(volume_ratio, -alpha * p.beta) - wp.pow(stretch, alpha))
+    return _hyperfoam_term(stretch, volume_ratio, g_eq, alpha, p.beta) + _hyperfoam_term(
+        stretch, volume_ratio, g_eq2, alpha2, p.beta
+    )
 
 
 @wp.kernel
@@ -128,6 +142,8 @@ def foundation_pressure_diff(
     g_eq = material_params[MAT_G_EQ]
     alpha = material_params[MAT_ALPHA]
     overstress = material_params[MAT_OVERSTRESS]
+    g_eq2 = material_params[MAT_G_EQ2]
+    alpha2 = material_params[MAT_ALPHA2]
 
     world = wp.transform_point(body_q[carrier], anchor_local[i])
     comp = z_free[i] - world[2]
@@ -135,7 +151,7 @@ def foundation_pressure_diff(
         comp = 0.0
     compression[i] = comp
     strain = comp / rest_len[i]
-    peq = _hyperfoam_pressure_diff(strain, g_eq, alpha, params)
+    peq = _hyperfoam_pressure_diff(strain, g_eq, alpha, g_eq2, alpha2, params)
     # The identified relaxation time travels with the material (the refit moved it far
     # from the historical 80 ms default), so read it from ``params`` as the runtime does.
     decay = wp.exp(-dt / params.tau_s)
@@ -147,17 +163,19 @@ def foundation_pressure_diff(
 
 
 @wp.func
-def _pasternak_coupling_diff(t_i: wp.float32, t_j: wp.float32, g_eq: wp.float32) -> wp.float32:
+def _pasternak_coupling_diff(t_i: wp.float32, t_j: wp.float32, mu_eq: wp.float32) -> wp.float32:
     """Pasternak coefficient of the shear layer between two columns [N/m].
 
     Differentiable transcription of
     :func:`projects.digital_shoe.runtime._pasternak_coupling`: a shear-layer
     coefficient is ``G * t``, with the foam's own equilibrium Ogden-Hill modulus
     and the mean of the two column rest thicknesses at the shared face. It takes
-    ``g_eq`` as a scalar read from the ``requires_grad`` material vector instead
-    of out of the by-value :class:`FoundationParams` struct.
+    ``mu_eq`` -- the SUM of the two term moduli,
+    ``material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]`` -- as a scalar read
+    from the ``requires_grad`` material vector instead of out of the by-value
+    :class:`FoundationParams` struct, so both terms carry a coupling gradient.
     """
-    return g_eq * 0.5 * (t_i + t_j)
+    return mu_eq * 0.5 * (t_i + t_j)
 
 
 @wp.func
@@ -166,7 +184,7 @@ def _pasternak_flux(
     compression: wp.array[wp.float32],
     rest_len: wp.array[wp.float32],
     neighbors: wp.array2d[wp.int32],
-    g_eq: wp.float32,
+    mu_eq: wp.float32,
 ) -> wp.float32:
     """Lateral shear force the neighbours pull out of one column [N].
 
@@ -187,7 +205,7 @@ def _pasternak_flux(
     for side in range(4):
         j = neighbors[i, side]
         if j >= 0:
-            flux += _pasternak_coupling_diff(rest_len[i], rest_len[j], g_eq) * (compression[j] - ci)
+            flux += _pasternak_coupling_diff(rest_len[i], rest_len[j], mu_eq) * (compression[j] - ci)
     return flux
 
 
@@ -241,6 +259,8 @@ def _surround_balance_diff(
     overstress_gain: wp.float32,
     g_eq: wp.float32,
     alpha: wp.float32,
+    g_eq2: wp.float32,
+    alpha2: wp.float32,
     params: FoundationParams,
     area: wp.float32,
     attachment: wp.float32,
@@ -262,16 +282,17 @@ def _surround_balance_diff(
     A separate function is unavoidable: the runtime reads the equilibrium modulus
     and the Hyperfoam exponent out of the by-value :class:`FoundationParams`
     struct, and Warp can only accumulate adjoints into arrays, so a
-    ``requires_grad`` material must enter as ``g_eq`` and ``alpha`` scalars read
-    from :attr:`DifferentiableMidsoleFoundation.material_params`. Putting that
+    ``requires_grad`` material must enter as the ``g_eq``, ``alpha``, ``g_eq2``
+    and ``alpha2`` scalars of both Ogden-Hill terms, read from
+    :attr:`DifferentiableMidsoleFoundation.material_params`. Putting that
     autodiff plumbing into the shipped runtime would slow every forward simulation
     down for it. The two implementations are pinned to each other by
     ``test_surround_balance_matches_runtime``; change one and change both.
     """
-    peq = _hyperfoam_pressure_diff(c / thickness, g_eq, alpha, params)
+    peq = _hyperfoam_pressure_diff(c / thickness, g_eq, alpha, g_eq2, alpha2, params)
     reaction = area * wp.max(peq + overstress_base + overstress_gain * peq, 0.0)
     step = 1.0e-3 * thickness
-    peq_ahead = _hyperfoam_pressure_diff((c + step) / thickness, g_eq, alpha, params)
+    peq_ahead = _hyperfoam_pressure_diff((c + step) / thickness, g_eq, alpha, g_eq2, alpha2, params)
     ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
     stiffness = wp.max((ahead - reaction) / step + attachment + coupling_sum, 1.0e-9)
     bond_reference = float(0.0)
@@ -319,10 +340,11 @@ def foundation_apply_diff(
     with respect to friction too.
     """
     i = wp.tid()
-    g_eq = material_params[MAT_G_EQ]
+    # The shear layer follows the series modulus, which is the sum of both terms.
+    mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
 
     ci = compression[i]
-    flux = _pasternak_flux(i, compression, rest_len, neighbors, g_eq)
+    flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
 
     q_body = body_q[carrier]
     world = wp.transform_point(q_body, anchor_local[i])
@@ -397,6 +419,9 @@ def surround_relax_diff(
     g_eq = material_params[MAT_G_EQ]
     alpha = material_params[MAT_ALPHA]
     overstress = material_params[MAT_OVERSTRESS]
+    g_eq2 = material_params[MAT_G_EQ2]
+    alpha2 = material_params[MAT_ALPHA2]
+    mu_eq = g_eq + g_eq2
 
     world = wp.transform_point(body_q[carrier], anchor_local[i])
     rigid = z_free_rigid[i] - world[2]
@@ -409,7 +434,7 @@ def surround_relax_diff(
     for side in range(4):
         j = neighbors[i, side]
         if j >= 0:
-            coupling = coupling_scale * _pasternak_coupling_diff(rest_len[i], rest_len[j], g_eq)
+            coupling = coupling_scale * _pasternak_coupling_diff(rest_len[i], rest_len[j], mu_eq)
             pull += coupling * (compression_in[j] - c)
             coupling_sum += coupling
     gain = overstress * ramp
@@ -423,6 +448,8 @@ def surround_relax_diff(
         gain,
         g_eq,
         alpha,
+        g_eq2,
+        alpha2,
         params,
         area[i],
         attachment,
@@ -533,8 +560,7 @@ class DifferentiableMidsoleFoundation:
         self.friction_smoothing = float(friction_smoothing)
 
         params = FoundationParams()
-        params.g_eq = material.instantaneous_shear_modulus_pa * material.equilibrium_fraction
-        params.alpha = material.hyperfoam_exponent
+        set_hyperfoam_series(params, material)
         params.beta = EFFECTIVE_POISSON_RATIO / (1.0 - 2.0 * EFFECTIVE_POISSON_RATIO)
         params.one_minus_two_poisson = 1.0 - 2.0 * EFFECTIVE_POISSON_RATIO
         params.tau_s = float(getattr(material, "maxwell_relaxation_time_s", MAXWELL_RELAXATION_TIME_S))
@@ -549,9 +575,9 @@ class DifferentiableMidsoleFoundation:
         params.mu = config.mu
         self.params = params
 
-        # Differentiable constitutive vector [g_eq, alpha, overstress].
+        # Differentiable constitutive vector [g_eq, alpha, overstress, g_eq2, alpha2].
         self.material_params = wp.array(
-            np.array([params.g_eq, params.alpha, params.overstress], np.float32),
+            np.array([params.g_eq, params.alpha, params.overstress, params.g_eq2, params.alpha2], np.float32),
             dtype=wp.float32,
             device=device,
             requires_grad=True,

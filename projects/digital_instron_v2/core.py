@@ -72,7 +72,17 @@ _LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Material:
-    """Reduced Hyperfoam-Maxwell foam with a material-pinned Pasternak layer.
+    """Two-term Hyperfoam-Maxwell foam with a material-pinned Pasternak layer.
+
+    The equilibrium network is an Ogden-Hill (Abaqus Hyperfoam) series with two
+    terms, ``p_eq = sum_n 2 mu_n / (alpha_n lambda) (J^(-alpha_n beta) -
+    lambda^alpha_n)``, evaluated at the measured ``beta = 0``. One first-order
+    term has a single shape exponent and cannot span the range this project
+    needs: the rearfoot punch reaches about 90% strain, the full-foot last about
+    74%, and the published foam secant is measured over 0-10%. With one term the
+    objective is bimodal in that exponent and the two fixtures pull in opposite
+    directions. Setting ``instantaneous_shear_modulus_2_pa = 0`` reproduces the
+    single-term law exactly, so the comparison against the previous fit is exact.
 
     The lateral shear layer is no longer a free parameter. A Pasternak layer
     coefficient is the shear modulus of the layer times its thickness, so every
@@ -91,12 +101,18 @@ class Material:
     hyperfoam_exponent: float
     equilibrium_fraction: float
     maxwell_relaxation_time_s: float = MAXWELL_RELAXATION_TIME_S
+    instantaneous_shear_modulus_2_pa: float = 0.0
+    hyperfoam_exponent_2: float = 1.0
 
     def __post_init__(self) -> None:
         if not np.all(np.isfinite(tuple(self.__dict__.values()))):
             raise ValueError("material parameters must be finite")
         if self.instantaneous_shear_modulus_pa <= 0.0 or self.hyperfoam_exponent <= 0.0:
             raise ValueError("shear modulus and Hyperfoam exponent must be positive")
+        # The second term is optional and its exponent may be negative (a
+        # densifying term), so only its modulus is constrained.
+        if self.instantaneous_shear_modulus_2_pa < 0.0:
+            raise ValueError("second Ogden-Hill shear modulus must be nonnegative")
         if not 0.0 < self.equilibrium_fraction <= 1.0:
             raise ValueError("equilibrium fraction must be in (0, 1]")
         if self.maxwell_relaxation_time_s <= 0.0:
@@ -104,8 +120,18 @@ class Material:
 
     @property
     def equilibrium_shear_modulus_pa(self) -> float:
-        """Equilibrium Ogden-Hill shear modulus ``mu_eq`` [Pa]."""
-        return self.instantaneous_shear_modulus_pa * self.equilibrium_fraction
+        """Equilibrium Ogden-Hill shear modulus ``mu_eq``, the SUM over both terms [Pa].
+
+        ``mu_eq = (G_1 + G_2) * f_eq``. Every term of an Ogden-Hill series
+        contributes ``2 mu_n`` to the small-strain compressive tangent whatever
+        its exponent, so the series modulus is the sum of the term moduli and not
+        the first term alone. The per-column Pasternak rule
+        :meth:`coupling_n_per_m` and the reported small-strain modulus both use
+        this sum.
+        """
+        return (self.instantaneous_shear_modulus_pa + self.instantaneous_shear_modulus_2_pa) * (
+            self.equilibrium_fraction
+        )
 
     def coupling_n_per_m(self, thickness_m: np.ndarray | float) -> np.ndarray | float:
         """Return the Pasternak coefficient of a column of this rest thickness [N/m].
@@ -125,20 +151,23 @@ class Material:
 # calibration workflow. Keep the fit seed in the manifest separate from this
 # prediction baseline.
 #
-# This material does NOT pass the declared held-out gates, and that is the
-# reported result rather than a defect to tune away. With the Poisson ratio
-# measured at zero, the shear layer pinned to the material and the outer bond
-# booked honestly, one shared material has no freedom left to reconcile the two
-# bench fixtures: the objective is bimodal, and this is its lower-loss branch,
-# which splits the error between the fixtures (rearfoot peak -15%, full-foot
-# peak +19%). The other branch (mu_eq about 240 kPa, alpha about 11.4) reproduces
-# the full-foot peak to 0.3% and misses the rearfoot by 21%. Section "What the
-# fitted vector contains" in the project README records both.
+# This material passes all six declared held-out gates (rearfoot peak 2.8%,
+# RMSE 5.6%, loop 7.5%; full-foot peak 5.9%, RMSE 6.4%, loop 8.8%), which the
+# single-term law did not: it reached 2 of 6 and split the peak error between
+# the fixtures at -15% and +19%. The reason is the strain range, not extra
+# freedom to absorb a disagreement. The rearfoot punch reaches about 90% strain
+# and the full-foot last about 74%, and one first-order term has a single shape
+# exponent for both, so its objective was bimodal (mu_eq 52 kPa with alpha 0.22
+# against mu_eq 240 kPa with alpha 11.4 at nearly equal loss). With two terms a
+# multi-start from both of those basins converges to this one optimum; see
+# ``MULTISTART_SEEDS`` and the fitted-vector section of the project README.
 CALIBRATED_MATERIAL = Material(
-    instantaneous_shear_modulus_pa=74671.42399113576,
-    hyperfoam_exponent=0.215500448269755,
-    equilibrium_fraction=0.6954171811030112,
-    maxwell_relaxation_time_s=0.005000150692608603,
+    instantaneous_shear_modulus_pa=267615.1977311966,
+    hyperfoam_exponent=18.07697643908876,
+    equilibrium_fraction=0.6586721149134733,
+    maxwell_relaxation_time_s=0.0051501095220815776,
+    instantaneous_shear_modulus_2_pa=19487.70413858932,
+    hyperfoam_exponent_2=-0.5855868486256809,
 )
 
 
@@ -196,8 +225,35 @@ class Trial:
     surround: Surround | None = None
 
 
+# Below this exponent magnitude one Ogden-Hill term is evaluated at its removable
+# ``alpha -> 0`` limit, matching
+# :data:`projects.digital_shoe.runtime.HYPERFOAM_ALPHA_FLOOR`.
+HYPERFOAM_ALPHA_FLOOR = 1.0e-3
+
+
+def _hyperfoam_term(
+    stretch: np.ndarray, volume_ratio: np.ndarray, mu_pa: float, alpha: float, beta: float
+) -> np.ndarray:
+    """Return one Ogden-Hill (Hyperfoam) uniaxial compression term [Pa].
+
+    Host twin of :func:`projects.digital_shoe.runtime._hyperfoam_term`; the two
+    are pinned together by ``test_hyperfoam_pressure_matches_reference``.
+
+    Args:
+        stretch: Remaining thickness stretch ``lambda`` [-], already floored.
+        volume_ratio: ``J = lambda^(1 - 2 nu)`` [-].
+        mu_pa: Term shear modulus [Pa].
+        alpha: Term exponent [-]; may be negative and is evaluated at its
+            removable ``alpha -> 0`` limit near zero.
+        beta: ``nu / (1 - 2 nu)`` [-].
+    """
+    if abs(alpha) < HYPERFOAM_ALPHA_FLOOR:
+        return 2.0 * mu_pa / stretch * (-beta * np.log(volume_ratio) - np.log(stretch))
+    return 2.0 * mu_pa / (alpha * stretch) * (volume_ratio ** (-alpha * beta) - stretch**alpha)
+
+
 def _hyperfoam_pressure(strain: np.ndarray, material: Material) -> np.ndarray:
-    """Return positive uniaxial compression pressure from first-order Hyperfoam."""
+    """Return positive uniaxial compression pressure from the two-term Hyperfoam law."""
 
     # The stretch floor keeps every exponentiation away from zero, so the
     # ``beta = 0`` case is the ordinary ``x ** 0 == 1`` and needs no special path.
@@ -205,9 +261,16 @@ def _hyperfoam_pressure(strain: np.ndarray, material: Material) -> np.ndarray:
     poisson = EFFECTIVE_POISSON_RATIO
     beta = poisson / (1.0 - 2.0 * poisson)
     volume_ratio = stretch ** (1.0 - 2.0 * poisson)
-    pressure = 2.0 * material.equilibrium_shear_modulus_pa / (material.hyperfoam_exponent * stretch)
-    pressure *= volume_ratio ** (-material.hyperfoam_exponent * beta) - stretch**material.hyperfoam_exponent
-    return pressure
+    fraction = material.equilibrium_fraction
+    return _hyperfoam_term(
+        stretch, volume_ratio, material.instantaneous_shear_modulus_pa * fraction, material.hyperfoam_exponent, beta
+    ) + _hyperfoam_term(
+        stretch,
+        volume_ratio,
+        material.instantaneous_shear_modulus_2_pa * fraction,
+        material.hyperfoam_exponent_2,
+        beta,
+    )
 
 
 def _periodic_maxwell_branch(
@@ -249,6 +312,7 @@ def _surround_force(trial: Trial, material: Material) -> np.ndarray:
         cycle_force,
         cycle_overstress,
         relax_surround,
+        set_hyperfoam_series,
     )
 
     surround = trial.surround
@@ -259,11 +323,12 @@ def _surround_force(trial: Trial, material: Material) -> np.ndarray:
         float(np.mean(material.coupling_n_per_m(surround.slack_m))),
         EFFECTIVE_POISSON_RATIO,
         material.maxwell_relaxation_time_s,
+        material.instantaneous_shear_modulus_2_pa,
+        material.hyperfoam_exponent_2,
     )
     params = FoundationParams()
     poisson = shoe.effective_poisson_ratio
-    params.g_eq = shoe.instantaneous_shear_modulus_pa * shoe.equilibrium_fraction
-    params.alpha = shoe.hyperfoam_exponent
+    set_hyperfoam_series(params, shoe)
     params.beta = poisson / (1.0 - 2.0 * poisson)
     params.one_minus_two_poisson = 1.0 - 2.0 * poisson
     params.stretch_floor = 1.0e-3
@@ -430,13 +495,85 @@ def _trial_residual(trial: Trial, material: Material) -> np.ndarray:
     )
 
 
+# Order matches the :class:`Material` field order: first-term shear modulus,
+# first-term exponent, equilibrium fraction, relaxation time, second-term shear
+# modulus, second-term exponent. There is no fixture-specific parameter to bound.
+#
+# The second modulus may reach zero, which turns the series back into the
+# single-term law exactly. The second exponent may be negative: an Ogden-Hill
+# series admits either sign, a positive exponent produces the soft ``1 / lambda``
+# plateau and a negative one produces densification, and the published two-term
+# fits of this foam family use one of each. Zero is inside the interval and is
+# handled by the removable limit in :func:`_hyperfoam_term`.
+FIT_LOWER_BOUNDS = (1.0e3, 0.1, 0.01, 5.0e-3, 0.0, -20.0)
+FIT_UPPER_BOUNDS = (1.0e8, 20.0, 1.0, 2.0, 1.0e8, 20.0)
+
+# Optional extra starting points, used only when a caller asks for them. They
+# cover both basins of the SINGLE-term objective -- one near ``alpha = 0.2`` with
+# ``mu_eq`` about 52 kPa and one near ``alpha = 11`` with ``mu_eq`` about 240 kPa,
+# at nearly equal training loss -- give the second term both roles (a soft
+# plateau partner and a densifying partner) in each, and add the two two-term
+# fits recovered from the published FF LEAP and FF TURBO PLUS compression tables.
+MULTISTART_SEEDS: tuple[Material, ...] = (
+    # Soft-exponent basin, densifying second term.
+    Material(74671.4, 0.2155, 0.6954, 0.0050, 15000.0, -1.0),
+    # Soft-exponent basin, plateau second term.
+    Material(74671.4, 0.2155, 0.6954, 0.0050, 150000.0, 8.0),
+    # Stiff-exponent basin, densifying second term.
+    Material(345000.0, 11.4, 0.6954, 0.0050, 30000.0, -1.5),
+    # Stiff-exponent basin, soft second term.
+    Material(345000.0, 11.4, 0.6954, 0.0050, 75000.0, 0.3),
+    # Published FF LEAP two-term compression fit, divided by the equilibrium
+    # fraction to become instantaneous moduli.
+    Material(247000.0, 8.39, 0.6954, 0.0050, 26200.0, -1.04),
+    # Published FF TURBO PLUS two-term compression fit, same conversion.
+    Material(243000.0, 5.65, 0.6954, 0.0050, 17300.0, -2.00),
+)
+
+
 def fit_material(
     trials: list[Trial],
     initial: Material,
     evaluations: int,
     history: list[dict[str, float]] | None = None,
+    starts: tuple[Material, ...] = (),
+    multistart_seeds: int = 0,
+    bounds: tuple[tuple[float, ...], tuple[float, ...]] | None = None,
 ) -> Material:
-    """Fit one material to all trials against force, loop area, and peak."""
+    """Fit one material to all trials against force, loop area, and peak.
+
+    Single start by default. A bounded least-squares descent is run from every
+    requested start and the lowest final loss wins.
+
+    Multi-start is opt-in rather than the default because the bimodality that
+    motivated it belongs to the *single-term* law, not to this one. With one term
+    the objective had two basins of nearly equal loss that differed almost
+    entirely in the shape exponent. With two terms a seven-start check found five
+    of seven seeds -- from both of those basins and from the published two-term
+    compression fits -- converging on the same optimum within about 4% in
+    ``mu_eq``, and only the seed that starts with the second term disabled stayed
+    behind, at 3.9 times the loss. Paying a sevenfold cost on every fit and every
+    test run to defend against a defect the model form removed is not justified.
+
+    That makes unimodality an assumption. It is cheap to re-test -- about 0.09 s
+    per residual evaluation warm-started -- and it MUST be re-tested with
+    ``multistart_seeds`` set whenever the constitutive form, the objective, the
+    bounds, or the fixture set changes, before the result of that change is
+    trusted.
+
+    Args:
+        trials: Measured trials to fit jointly with one shared material.
+        initial: Seed material; always used as the first start.
+        evaluations: Maximum residual evaluations per start.
+        history: Optional list that receives one row per accepted iteration of
+            every start, with a ``start`` column identifying which one.
+        starts: Explicit extra starts after ``initial``.
+        multistart_seeds: Number of :data:`MULTISTART_SEEDS` to append to
+            ``starts``; zero (the default) leaves the fit single start.
+        bounds: Lower and upper parameter bounds; defaults to
+            :data:`FIT_LOWER_BOUNDS` and :data:`FIT_UPPER_BOUNDS`. Widening them
+            is how a bound-proximity check is run.
+    """
 
     from scipy.optimize import least_squares
 
@@ -444,44 +581,56 @@ def fit_material(
         material = Material(*values)
         return np.concatenate([_trial_residual(trial, material) for trial in trials])
 
-    def record(values: np.ndarray) -> None:
-        if history is None:
-            return
-        residuals = residual(values)
-        row = {
-            "iteration": float(len(history)),
-            "loss": float(np.mean(residuals**2)),
-            **{name: float(value) for name, value in zip(Material.__dataclass_fields__, values, strict=True)},
-        }
-        offset = 0
-        for trial in trials:
-            count = len(trial.force_n) + 2
-            row[f"loss_{trial.name}"] = float(np.mean(residuals[offset : offset + count] ** 2))
-            offset += count
-        history.append(row)
+    def loss(values: np.ndarray) -> float:
+        return float(np.mean(residual(values) ** 2))
 
-    x0 = np.asarray(list(initial.__dict__.values()))
-    record(x0)
-    # Order matches Material: shear modulus, exponent, equilibrium fraction,
-    # relaxation time. There is no fixture-specific parameter to bound.
-    lower = [1.0e3, 0.1, 0.01, 5.0e-3]
-    upper = [1.0e8, 20.0, 1.0, 2.0]
-    result = least_squares(
-        residual,
-        x0,
-        bounds=(lower, upper),
-        x_scale="jac",
-        # The GPU forward pass is float32, so the default finite-difference step
-        # sits in its rounding noise and the search stalls at the seed.
-        diff_step=1.0e-3,
-        max_nfev=evaluations,
-        callback=lambda intermediate: record(np.asarray(getattr(intermediate, "x", intermediate))),
-    )
-    if history is not None and not np.array_equal(
-        result.x, [history[-1][name] for name in Material.__dataclass_fields__]
-    ):
-        record(result.x)
-    return Material(*result.x)
+    lower, upper = (FIT_LOWER_BOUNDS, FIT_UPPER_BOUNDS) if bounds is None else bounds
+    if not 0 <= multistart_seeds <= len(MULTISTART_SEEDS):
+        raise ValueError(f"multistart_seeds must be in [0, {len(MULTISTART_SEEDS)}]")
+    seeds = [initial, *starts, *MULTISTART_SEEDS[:multistart_seeds]]
+    best: np.ndarray | None = None
+    best_loss = np.inf
+    for index, seed in enumerate(seeds):
+        x0 = np.asarray(list(seed.__dict__.values()))
+
+        def record(values: np.ndarray, index: int = index) -> None:
+            if history is None:
+                return
+            residuals = residual(values)
+            row = {
+                "iteration": float(len(history)),
+                "start": float(index),
+                "loss": float(np.mean(residuals**2)),
+                **{name: float(value) for name, value in zip(Material.__dataclass_fields__, values, strict=True)},
+            }
+            offset = 0
+            for trial in trials:
+                count = len(trial.force_n) + 2
+                row[f"loss_{trial.name}"] = float(np.mean(residuals[offset : offset + count] ** 2))
+                offset += count
+            history.append(row)
+
+        record(x0)
+        result = least_squares(
+            residual,
+            x0,
+            bounds=(list(lower), list(upper)),
+            x_scale="jac",
+            # The GPU forward pass is float32, so the default finite-difference step
+            # sits in its rounding noise and the search stalls at the seed.
+            diff_step=1.0e-3,
+            max_nfev=evaluations,
+            callback=lambda intermediate: record(np.asarray(getattr(intermediate, "x", intermediate))),
+        )
+        if history is not None and not np.array_equal(
+            result.x, [history[-1][name] for name in Material.__dataclass_fields__]
+        ):
+            record(result.x)
+        final = loss(result.x)
+        _LOGGER.info("start %d/%d finished at loss %.6g", index + 1, len(seeds), final)
+        if final < best_loss:
+            best_loss, best = final, result.x
+    return Material(*best)
 
 
 def metrics(measured: np.ndarray, predicted: np.ndarray, displacement: np.ndarray) -> dict[str, float | bool]:

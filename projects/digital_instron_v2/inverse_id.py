@@ -51,7 +51,10 @@ from .core import (
 from .dynamics import FoundationParams
 from .dynamics_diff import (
     MAT_ALPHA,
+    MAT_ALPHA2,
+    MAT_COUNT,
     MAT_G_EQ,
+    MAT_G_EQ2,
     MAT_OVERSTRESS,
     _column_normal_force,
     _hyperfoam_pressure_diff,
@@ -84,9 +87,9 @@ def _accumulate_normal_force(
     quasi-static here, so there is no normal damping term.
     """
     i = wp.tid()
-    g_eq = material_params[MAT_G_EQ]
+    mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
     ci = compression[i]
-    flux = _pasternak_flux(i, compression, rest_len, neighbors, g_eq)
+    flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
     wp.atomic_add(force_hist, step, _column_normal_force(ci, base_pressure[i], area[i], flux, 0.0, 0.0))
 
 
@@ -103,8 +106,8 @@ class FitResult:
     """Outcome of a force-matching material identification.
 
     Attributes:
-        material_params: Fitted ``[g_eq, alpha, overstress]`` vector
-            ([Pa], [-], [-]).
+        material_params: Fitted ``[g_eq, alpha, overstress, g_eq2, alpha2]`` vector
+            ([Pa], [-], [-], [Pa], [-]).
         scale: Fitted dimensionless scale of each parameter relative to the
             reference used to start the fit.
         loss_history: Mean-square force residual [N^2] at each iteration.
@@ -272,7 +275,7 @@ def fit_material_to_force_curve(
             supplying the parameter scales and the fixed constitutive constants.
         geometry: Column bed geometry.
         scale0: Initial parameter scale (defaults to ones).
-        fit_mask: Optional length-3 mask selecting which parameters to optimize;
+        fit_mask: Optional length-5 mask selecting which parameters to optimize;
             zeros hold a parameter fixed at its ``scale0`` value (defaults to all
             ones). Pin the Maxwell overstress ratio here when it is measured
             separately from a stress-relaxation test -- the force-displacement
@@ -290,10 +293,10 @@ def fit_material_to_force_curve(
     target = wp.array(np.ascontiguousarray(target_force, np.float32), dtype=wp.float32, device=device)
     loss = wp.zeros(1, dtype=wp.float32, device=device, requires_grad=True)
 
-    scale = np.ones(3, np.float32) if scale0 is None else np.ascontiguousarray(scale0, np.float32).copy()
-    mask = np.ones(3, np.float64) if fit_mask is None else np.ascontiguousarray(fit_mask, np.float64)
-    m1 = np.zeros(3, np.float64)
-    m2 = np.zeros(3, np.float64)
+    scale = np.ones(MAT_COUNT, np.float32) if scale0 is None else np.ascontiguousarray(scale0, np.float32).copy()
+    mask = np.ones(MAT_COUNT, np.float64) if fit_mask is None else np.ascontiguousarray(fit_mask, np.float64)
+    m1 = np.zeros(MAT_COUNT, np.float64)
+    m2 = np.zeros(MAT_COUNT, np.float64)
     beta1, beta2, eps = 0.9, 0.999, 1.0e-8
     history = np.empty(iterations, np.float32)
 
@@ -348,9 +351,14 @@ def _trial_equilibrium_pressure(
 ):
     """Hyperfoam equilibrium pressure for every column at one measured frame."""
     i = wp.tid()
-    g_eq = material_params[MAT_G_EQ]
-    alpha = material_params[MAT_ALPHA]
-    peq_out[i] = _hyperfoam_pressure_diff(strain[frame, i], g_eq, alpha, params)
+    peq_out[i] = _hyperfoam_pressure_diff(
+        strain[frame, i],
+        material_params[MAT_G_EQ],
+        material_params[MAT_ALPHA],
+        material_params[MAT_G_EQ2],
+        material_params[MAT_ALPHA2],
+        params,
+    )
 
 
 @wp.kernel
@@ -400,7 +408,7 @@ def _trial_frame_force(
     path uses the pairwise face form instead (:func:`_surround_sweep_diff`).
     """
     i = wp.tid()
-    coupling = material_params[MAT_G_EQ] * slack[i]
+    coupling = (material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]) * slack[i]
     ground = wp.max(peq_cur[i] + q_cur[i], 0.0) - coupling * laplacian[frame, i]
     wp.atomic_add(force_hist, frame, ground * area[i])
 
@@ -452,7 +460,12 @@ def _surround_pressure_field(
     """Hyperfoam equilibrium pressure of every bed column at every frame [Pa]."""
     frame, i = wp.tid()
     peq_out[frame, i] = _hyperfoam_pressure_diff(
-        compression[frame, i] / slack[i], material_params[MAT_G_EQ], material_params[MAT_ALPHA], params
+        compression[frame, i] / slack[i],
+        material_params[MAT_G_EQ],
+        material_params[MAT_ALPHA],
+        material_params[MAT_G_EQ2],
+        material_params[MAT_ALPHA2],
+        params,
     )
 
 
@@ -533,13 +546,13 @@ def _surround_sweep_diff(
     if driven[i] != 0:
         compression_out[frame, i] = c
     else:
-        g_eq = material_params[MAT_G_EQ]
+        mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
         pull = float(0.0)
         coupling_sum = float(0.0)
         for side in range(4):
             j = neighbors[i, side]
             if j >= 0:
-                coupling = _pasternak_coupling_diff(slack[i], slack[j], g_eq)
+                coupling = _pasternak_coupling_diff(slack[i], slack[j], mu_eq)
                 pull += coupling * (compression_in[frame, j] - c)
                 coupling_sum += coupling
         compression_out[frame, i] = _surround_balance_diff(
@@ -550,8 +563,10 @@ def _surround_sweep_diff(
             slack[i],
             overstress[frame, i],
             0.0,
-            g_eq,
+            material_params[MAT_G_EQ],
             material_params[MAT_ALPHA],
+            material_params[MAT_G_EQ2],
+            material_params[MAT_ALPHA2],
             params,
             area,
             attachment,
@@ -654,18 +669,20 @@ def _scaled_square_residual(
 
 
 def _params_from_material(material: Material) -> np.ndarray:
-    """Pack a :class:`~projects.digital_instron_v2.core.Material` into ``[g_eq, alpha, overstress]``.
+    """Pack a :class:`~projects.digital_instron_v2.core.Material` into ``[g_eq, alpha, overstress, g_eq2, alpha2]``.
 
     The lateral shear layer is not in the vector: its coefficient is pinned to the
     material as ``mu_eq * t_i`` per column
     (:meth:`~projects.digital_instron_v2.core.Material.coupling_n_per_m`), so it
-    follows ``g_eq`` instead of being fitted on its own.
+    follows the series modulus ``g_eq + g_eq2`` instead of being fitted on its own.
     """
     return np.array(
         [
             material.instantaneous_shear_modulus_pa * material.equilibrium_fraction,
             material.hyperfoam_exponent,
             (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction,
+            material.instantaneous_shear_modulus_2_pa * material.equilibrium_fraction,
+            material.hyperfoam_exponent_2,
         ],
         np.float32,
     )
@@ -674,7 +691,7 @@ def _params_from_material(material: Material) -> np.ndarray:
 def _material_from_params(
     material_params: np.ndarray, relaxation_time_s: float = MAXWELL_RELAXATION_TIME_S
 ) -> Material:
-    """Unpack a ``[g_eq, alpha, overstress]`` vector back into a :class:`~projects.digital_instron_v2.core.Material`.
+    """Unpack a ``[g_eq, alpha, overstress, g_eq2, alpha2]`` vector back into a :class:`~projects.digital_instron_v2.core.Material`.
 
     The relaxation time is not part of the differentiable vector, so it is carried
     through from the reference material instead of falling back to the module
@@ -682,16 +699,18 @@ def _material_from_params(
     magnitude).
 
     Args:
-        material_params: Fitted ``[g_eq, alpha, overstress]`` vector.
+        material_params: Fitted ``[g_eq, alpha, overstress, g_eq2, alpha2]`` vector.
         relaxation_time_s: Maxwell relaxation time of the reference material [s].
     """
-    g_eq, alpha, overstress = (float(value) for value in material_params)
+    g_eq, alpha, overstress, g_eq2, alpha2 = (float(value) for value in material_params)
     equilibrium_fraction = 1.0 / (1.0 + overstress)
     return Material(
         instantaneous_shear_modulus_pa=g_eq / equilibrium_fraction,
         hyperfoam_exponent=alpha,
         equilibrium_fraction=equilibrium_fraction,
         maxwell_relaxation_time_s=relaxation_time_s,
+        instantaneous_shear_modulus_2_pa=g_eq2 / equilibrium_fraction,
+        hyperfoam_exponent_2=alpha2,
     )
 
 
@@ -701,8 +720,8 @@ class TrialFitResult:
 
     Attributes:
         material: Fitted :class:`~projects.digital_instron_v2.core.Material`.
-        material_params: Fitted ``[g_eq, alpha, overstress]`` vector
-            ([Pa], [-], [-]).
+        material_params: Fitted ``[g_eq, alpha, overstress, g_eq2, alpha2]`` vector
+            ([Pa], [-], [-], [Pa], [-]).
         scale: Fitted dimensionless scale of each parameter relative to the
             reference material used to start the fit.
         loss_history: Weighted mean-square force residual [N^2] at each iteration.
@@ -1060,6 +1079,8 @@ class DifferentiableTrial:
         material = self.material_params.numpy()
         self.params.g_eq = float(material[MAT_G_EQ])
         self.params.alpha = float(material[MAT_ALPHA])
+        self.params.g_eq2 = float(material[MAT_G_EQ2])
+        self.params.alpha2 = float(material[MAT_ALPHA2])
         fraction = float(material[MAT_OVERSTRESS])
         blend = 1.0 / (1.0 + fraction)  # = equilibrium fraction
         # Tame the same loop gain the forward blend tames, but for the adjoint
@@ -1402,7 +1423,7 @@ def fit_material_to_trials(
 
     Descends a peak-normalized joint force-matching loss with Adam, sharing one
     differentiable material vector across every trial, so every trial accumulates
-    into the same three-parameter gradient. Trials that carry a
+    into the same five-parameter gradient. Trials that carry a
     :class:`~projects.digital_instron_v2.core.Surround` contribute through the
     implicit-function-theorem adjoint of their quasi-static bed solve
     (:meth:`DifferentiableTrial.accumulate_gradient`) and are warm-started from the
@@ -1417,8 +1438,8 @@ def fit_material_to_trials(
         initial: Reference :class:`~projects.digital_instron_v2.core.Material`
             supplying the parameter scales and fixed constitutive constants.
         scale0: Initial per-parameter scale (defaults to ones).
-        fit_mask: Optional length-3 mask selecting which of
-            ``[g_eq, alpha, overstress]`` to optimize; zeros hold a
+        fit_mask: Optional length-5 mask selecting which of
+            ``[g_eq, alpha, overstress, g_eq2, alpha2]`` to optimize; zeros hold a
             parameter fixed at its ``scale0`` value.
         per_trial_weights: Optional per-trial loss weights (defaults to
             ``1 / peak_force^2`` for a peak-normalized joint fit).
@@ -1447,10 +1468,10 @@ def fit_material_to_trials(
     # gradient needs its own tape and its own adjoint fixed point.
     losses = [wp.zeros(1, dtype=wp.float32, device=device, requires_grad=True) for _ in predictors]
 
-    scale = np.ones(3, np.float32) if scale0 is None else np.ascontiguousarray(scale0, np.float32).copy()
-    mask = np.ones(3, np.float64) if fit_mask is None else np.ascontiguousarray(fit_mask, np.float64)
-    m1 = np.zeros(3, np.float64)
-    m2 = np.zeros(3, np.float64)
+    scale = np.ones(MAT_COUNT, np.float32) if scale0 is None else np.ascontiguousarray(scale0, np.float32).copy()
+    mask = np.ones(MAT_COUNT, np.float64) if fit_mask is None else np.ascontiguousarray(fit_mask, np.float64)
+    m1 = np.zeros(MAT_COUNT, np.float64)
+    m2 = np.zeros(MAT_COUNT, np.float64)
     beta1, beta2, eps = 0.9, 0.999, 1.0e-8
     history = np.empty(iterations, np.float32)
 
@@ -1507,7 +1528,7 @@ def _demo() -> None:
 
     displacement = _triangular_cycle(peak_m=0.006, samples=120)
     dt = 1.0 / 200.0  # 200 Hz Instron sampling
-    names = ["g_eq", "alpha", "overstress"]
+    names = ["g_eq", "alpha", "overstress", "g_eq2", "alpha2"]
 
     # Synthesize the "measured" load/unload curve from the true material (scale = 1).
     truth = InstronReplay(displacement, dt, material, geometry, device=device)

@@ -186,6 +186,8 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
         float(np.mean(coupling_n_per_m)),
         EFFECTIVE_POISSON_RATIO,
         fitted.maxwell_relaxation_time_s,
+        fitted.instantaneous_shear_modulus_2_pa,
+        fitted.hyperfoam_exponent_2,
     )
     artifact = {
         "schema_version": SCHEMA_VERSION,
@@ -205,9 +207,18 @@ def build_artifact(manifest_path: str | Path, report: dict[str, Any], *, shoe_id
             "type": MODEL_TYPE,
             "parameters": asdict(material),
             "derived_quantities": {
+                "hyperfoam_term_count": 2,
                 "pasternak_rule": "k_i = equilibrium_shear_modulus_pa * rest_length_m[i]",
                 "pasternak_n_per_m_is_fitted": False,
+                # The SUM over both Ogden-Hill terms; every term contributes
+                # 2 mu_n to the small-strain compressive tangent.
                 "equilibrium_shear_modulus_pa": float(fitted.equilibrium_shear_modulus_pa),
+                "equilibrium_shear_modulus_term_1_pa": float(
+                    fitted.instantaneous_shear_modulus_pa * fitted.equilibrium_fraction
+                ),
+                "equilibrium_shear_modulus_term_2_pa": float(
+                    fitted.instantaneous_shear_modulus_2_pa * fitted.equilibrium_fraction
+                ),
                 "pasternak_n_per_m_min": float(np.min(coupling_n_per_m)),
                 "pasternak_n_per_m_max": float(np.max(coupling_n_per_m)),
                 "small_strain_compressive_modulus_pa": float(2.0 * fitted.equilibrium_shear_modulus_pa),
@@ -257,12 +268,24 @@ def identify_and_export(
     *,
     shoe_id: str = "puma_fast_r_nitro_elite_3_left",
     evaluations: int = 100,
+    multistart_seeds: int = 0,
 ) -> tuple[Path, Path]:
-    """Fit training cycles, evaluate held-out cycles, and write the artifact and HTML report."""
+    """Fit training cycles, evaluate held-out cycles, and write the artifact and HTML report.
+
+    ``multistart_seeds`` is zero by default: the two-term objective was measured
+    to be effectively unimodal. Raise it to re-check that assumption after any
+    change to the model form, the objective, the bounds, or the fixture set.
+    """
     manifest = Path(manifest_path).resolve()
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    report = evaluate(manifest, backend="scipy", evaluations=evaluations, write_report=False)
+    report = evaluate(
+        manifest,
+        backend="scipy",
+        evaluations=evaluations,
+        multistart_seeds=multistart_seeds,
+        write_report=False,
+    )
     artifact = build_artifact(manifest, report, shoe_id=shoe_id)
     artifact_path = output / "digital_shoe.json"
     artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
@@ -277,9 +300,22 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("DigitalInstron/digital_shoe_showcase"))
     parser.add_argument("--shoe-id", default="puma_fast_r_nitro_elite_3_left")
     parser.add_argument("--evaluations", type=int, default=100)
+    parser.add_argument(
+        "--multistart-seeds",
+        type=int,
+        default=0,
+        help=(
+            "Extra seeds from core.MULTISTART_SEEDS to descend from (0-6). Zero keeps the fit single "
+            "start; raise it to re-check that the objective is still unimodal after a model change."
+        ),
+    )
     args = parser.parse_args()
     artifact, report = identify_and_export(
-        args.manifest, args.output, shoe_id=args.shoe_id, evaluations=args.evaluations
+        args.manifest,
+        args.output,
+        shoe_id=args.shoe_id,
+        evaluations=args.evaluations,
+        multistart_seeds=args.multistart_seeds,
     )
     print(f"artifact: {artifact}")
     print(f"validation report: {report}")
