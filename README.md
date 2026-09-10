@@ -982,6 +982,24 @@ The measurements and footwear assets are restricted to internal fork use; see
 The integration retains the current Newton-native gait and motion adapters;
 it does not restore the branch's legacy OpenSim runtime or human-shoe pipeline.
 
+## Impedance Instron running example
+
+Drive a mechanical ankle with measured running heel-triangle pitch while vertical
+impedance couples a foot fixture, virtual COM, and calibrated Digital Shoe. Marker
+XYZ trajectories are not replayed. There is no full human model.
+
+<img width="320" height="320" src="docs/images/examples/example_impedance_instron.jpg" alt="Running foot and virtual COM impedance Instron">
+
+```bash
+python -m newton.examples impedance_instron --viewer gl
+```
+
+First prepare the two local inputs as described in
+[Impedance Instron](projects/impedance_instron/README.md). That guide includes the
+verified late-running segment, headless checks, controlled shoe comparisons,
+offline reports, and the model's current limits. The source motion and shoe
+assets are for internal fork use, not upstream redistribution.
+
 ## Contributing and Development
 
 See the [contribution guidelines](https://github.com/newton-physics/newton-governance/blob/main/CONTRIBUTING.md) and the [development guide](https://newton-physics.github.io/newton/latest/guide/development.html) for instructions on how to contribute to Newton.

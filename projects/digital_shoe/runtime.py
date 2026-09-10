@@ -121,6 +121,7 @@ def foundation_apply(
     contact_power: wp.array[wp.float32],
     max_compression: wp.array[wp.float32],
     column_force: wp.array[wp.vec3],
+    pressed_force: wp.array[wp.float32],
 ):
     """Pasternak coupling, per-column wrench into ``body_f``, and force diagnostics."""
     i = wp.tid()
@@ -134,10 +135,13 @@ def foundation_apply(
             lap += ci  # natural (zero-gradient) footprint boundary
     lap *= params.inv_h2
 
-    pressure = base_pressure[i] - params.pasternak * lap
-    if pressure < 0.0:
-        pressure = 0.0
-    fn = pressure * area[i]
+    # Clamp only the unilateral ground reaction. Clamping the combined pressure
+    # would also clip the shear-layer flux and invent support under columns that
+    # carry no compression at all.
+    ground = base_pressure[i]
+    if ground < 0.0:
+        ground = 0.0
+    fn = (ground - params.pasternak * lap) * area[i]
 
     q_body = body_q[carrier]
     world = wp.transform_point(q_body, anchor_local[i])
@@ -148,8 +152,11 @@ def foundation_apply(
 
     if ci > 0.0:
         fn = fn - params.normal_damping * point_vel[2]
-    if fn < 0.0:
-        fn = 0.0
+    # A column may now transmit a small pull where the shear layer lifts it.
+    # Friction still needs a nonnegative cone, so it uses the pressed part only.
+    pressed = fn
+    if pressed < 0.0:
+        pressed = 0.0
 
     # Anchored bristle (elastoplastic) Coulomb friction: a per-column tangential
     # spring pulls the contact patch back toward a world stick point, so a planted
@@ -157,9 +164,9 @@ def foundation_apply(
     # without needing a slip velocity. When the spring force would exceed the cone
     # mu*fn it saturates and the anchor slides forward onto the cone (kinetic regime).
     p_t = wp.vec2(world[0], world[1])
-    f_max = params.mu * fn
+    f_max = params.mu * pressed
     f_tan = wp.vec2(0.0, 0.0)
-    if fn <= 0.0 or params.friction_kt <= 0.0:
+    if pressed <= 0.0 or params.friction_kt <= 0.0:
         tangent_anchor[i] = p_t
         tangent_stuck[i] = 0
     else:
@@ -177,13 +184,167 @@ def foundation_apply(
     column_force[i] = force
     wp.atomic_add(body_f, carrier, wp.spatial_vector(force, wp.cross(r, force)))
     wp.atomic_add(normal_force, 0, fn)
-    wp.atomic_add(cop_moment, 0, wp.vec3(world[0] * fn, world[1] * fn, 0.0))
+    wp.atomic_add(cop_moment, 0, wp.vec3(world[0] * pressed, world[1] * pressed, 0.0))
+    wp.atomic_add(pressed_force, 0, pressed)
     wp.atomic_add(resultant_force, 0, force)
     wp.atomic_add(resultant_moment_origin, 0, wp.cross(world, force))
     wp.atomic_add(contact_power, 0, wp.dot(force, point_vel))
     wp.atomic_max(max_compression, 0, ci)
     if ci > 0.0:
         wp.atomic_add(active_count, 0, 1)
+
+
+@wp.kernel
+def cycle_force(
+    compression: wp.array2d[wp.float32],
+    slack: wp.array[wp.float32],
+    dt_s: wp.array[wp.float32],
+    params: FoundationParams,
+    area: wp.float32,
+    fraction: wp.float32,
+    tau_s: wp.float32,
+    force_out: wp.array[wp.float32],
+):
+    """Sum one column's periodic ground reaction into every frame of a cycle.
+
+    Each thread owns a column and walks the cycle twice: the first pass finds
+    the periodic overstress state, the second accumulates force. The clamp keeps
+    the reaction unilateral, matching the live foundation.
+    """
+    i = wp.tid()
+    frames = compression.shape[0]
+    thickness = slack[i]
+    state = float(0.0)
+    decay_product = float(1.0)
+    previous = _hyperfoam_pressure(compression[frames - 1, i] / thickness, params)
+    for frame in range(frames):
+        equilibrium = _hyperfoam_pressure(compression[frame, i] / thickness, params)
+        decay = wp.exp(-dt_s[frame] / tau_s)
+        ramp = tau_s * (1.0 - decay) / dt_s[frame]
+        state = decay * state + fraction * ramp * (equilibrium - previous)
+        decay_product *= decay
+        previous = equilibrium
+    state = state / (1.0 - decay_product)
+    previous = _hyperfoam_pressure(compression[frames - 1, i] / thickness, params)
+    for frame in range(frames):
+        equilibrium = _hyperfoam_pressure(compression[frame, i] / thickness, params)
+        decay = wp.exp(-dt_s[frame] / tau_s)
+        ramp = tau_s * (1.0 - decay) / dt_s[frame]
+        state = decay * state + fraction * ramp * (equilibrium - previous)
+        previous = equilibrium
+        wp.atomic_add(force_out, frame, area * wp.max(equilibrium + state, 0.0))
+
+
+@wp.kernel
+def surround_sweep(
+    compression_in: wp.array2d[wp.float32],
+    driven: wp.array[wp.int32],
+    neighbors: wp.array2d[wp.int32],
+    slack: wp.array[wp.float32],
+    params: FoundationParams,
+    area: wp.float32,
+    coupling: wp.float32,
+    attachment: wp.float32,
+    max_strain: wp.float32,
+    compression_out: wp.array2d[wp.float32],
+):
+    """Relax one untouched column toward its own quasi-static balance.
+
+    Each thread owns one frame and one column. Driven columns pass straight
+    through, so the indenter keeps its imposed compression while the surrounding
+    foam settles against neighbour shear, its unilateral ground reaction and its
+    bond to the shoe. Frames are independent, so a whole test relaxes at once.
+    """
+    frame, i = wp.tid()
+    if driven[i] != 0:
+        compression_out[frame, i] = compression_in[frame, i]
+        return
+    c = compression_in[frame, i]
+    pull = float(0.0)
+    links = float(0.0)
+    for side in range(4):
+        j = neighbors[i, side]
+        if j >= 0:
+            pull += coupling * (compression_in[frame, j] - c)
+            links += 1.0
+    thickness = slack[i]
+    reaction = area * wp.max(_hyperfoam_pressure(c / thickness, params), 0.0)
+    step = 1.0e-3 * thickness
+    ahead = area * wp.max(_hyperfoam_pressure((c + step) / thickness, params), 0.0)
+    stiffness = wp.max((ahead - reaction) / step + attachment + links * coupling, 1.0e-9)
+    residual = reaction + attachment * c - pull
+    compression_out[frame, i] = wp.clamp(c - residual / stiffness, 0.0, max_strain * thickness)
+
+
+def relax_surround(
+    driven_compression: np.ndarray,
+    driven: np.ndarray,
+    neighbors: np.ndarray,
+    slack_m: np.ndarray,
+    params: FoundationParams,
+    *,
+    area_m2: float,
+    spacing_m: float,
+    pasternak_n_per_m: float,
+    attachment_n_m: float,
+    max_strain: float,
+    sweeps: int,
+    device=None,
+) -> np.ndarray:
+    """Return whole-midsole compression for every frame of a test.
+
+    The identification and the live runtime therefore share one contact model
+    and one geometry: the indenter drives its columns and the rest relax.
+
+    Args:
+        driven_compression: Imposed compression of the driven columns [m],
+            shape ``[frames, driven_count]``.
+        driven: Nonzero for columns the indenter drives, shape ``[column_count]``.
+        neighbors: Four in-plane neighbour indices; negative is a free edge.
+        slack_m: Rest thickness per column [m].
+        params: Device-side constitutive constants.
+        area_m2: Tributary area per column [m^2].
+        spacing_m: Column grid spacing [m].
+        pasternak_n_per_m: Identified lateral shear coupling [N/m].
+        attachment_n_m: Assumed vertical bond of untouched foam to the shoe [N/m].
+        max_strain: Compression limit as a fraction of rest thickness.
+        sweeps: Relaxation sweeps per solve.
+
+    Returns:
+        Device compression for every column and frame [m], shape
+        ``[frames, column_count]``, ready for :func:`cycle_force`.
+    """
+    driven = np.ascontiguousarray(driven, np.int32)
+    frames = len(driven_compression)
+    count = len(slack_m)
+    start = np.zeros((frames, count), np.float32)
+    start[:, driven != 0] = driven_compression
+    current = wp.array(start, dtype=wp.float32, device=device)
+    scratch = wp.zeros_like(current)
+    driven_device = wp.array(driven, dtype=wp.int32, device=device)
+    neighbor_device = wp.array(np.ascontiguousarray(neighbors, np.int32), dtype=wp.int32, device=device)
+    slack_device = wp.array(np.ascontiguousarray(slack_m, np.float32), dtype=wp.float32, device=device)
+    coupling = pasternak_n_per_m * area_m2 / spacing_m**2
+    for _ in range(max(sweeps, 0)):
+        wp.launch(
+            surround_sweep,
+            dim=(frames, count),
+            inputs=[
+                current,
+                driven_device,
+                neighbor_device,
+                slack_device,
+                params,
+                float(area_m2),
+                float(coupling),
+                float(attachment_n_m),
+                float(max_strain),
+                scratch,
+            ],
+            device=device,
+        )
+        current, scratch = scratch, current
+    return current
 
 
 @wp.kernel
@@ -198,6 +359,7 @@ def foundation_reset(
     resultant_moment_origin: wp.array[wp.vec3],
     contact_power: wp.array[wp.float32],
     max_compression: wp.array[wp.float32],
+    pressed_force: wp.array[wp.float32],
 ):
     """Zero the per-substep foundation accumulators (and optionally the carrier wrench).
 
@@ -214,6 +376,7 @@ def foundation_reset(
     resultant_moment_origin[0] = wp.vec3(0.0, 0.0, 0.0)
     contact_power[0] = 0.0
     max_compression[0] = 0.0
+    pressed_force[0] = 0.0
     if clear_body_force != 0:
         body_f[carrier] = wp.spatial_vector(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
@@ -318,6 +481,7 @@ class MidsoleFoundation:
         self.contact_power = wp.zeros(1, dtype=wp.float32, device=device)
         self.max_compression = wp.zeros(1, dtype=wp.float32, device=device)
         self.column_force = wp.zeros(m, dtype=wp.vec3, device=device)
+        self.pressed_force = wp.zeros(1, dtype=wp.float32, device=device)
 
     def reset(self) -> None:
         """Clear the viscoelastic overstress history and release the friction bristles."""
@@ -350,6 +514,7 @@ class MidsoleFoundation:
                 self.resultant_moment_origin,
                 self.contact_power,
                 self.max_compression,
+                self.pressed_force,
             ],
             device=self.device,
         )
@@ -396,6 +561,7 @@ class MidsoleFoundation:
                 self.contact_power,
                 self.max_compression,
                 self.column_force,
+                self.pressed_force,
             ],
             device=self.device,
         )
@@ -403,10 +569,12 @@ class MidsoleFoundation:
     def diagnostics(self) -> dict[str, float]:
         """Return the last substep's total normal force, center of pressure, and active count."""
         fz = float(self.normal_force.numpy()[0])
+        pressed = float(self.pressed_force.numpy()[0])
         moment = self.cop_moment.numpy()[0]
-        cop = (float(moment[0] / fz), float(moment[1] / fz)) if fz > 1.0e-9 else (0.0, 0.0)
+        cop = (float(moment[0] / pressed), float(moment[1] / pressed)) if pressed > 1.0e-9 else (0.0, 0.0)
         return {
             "normal_force_n": fz,
+            "pressed_force_n": pressed,
             "cop_x_m": cop[0],
             "cop_y_m": cop[1],
             "active_columns": int(self.active.numpy()[0]),

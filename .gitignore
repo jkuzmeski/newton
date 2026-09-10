@@ -82,3 +82,6 @@ docs/_static/viser/
 # Generated Digital Instron calibration and presentation outputs
 /DigitalInstron/processed/v2_cache/
 /DigitalInstron/digital_shoe_showcase/
+
+# Local impedance rig inputs, reports, and recordings (restricted derivatives).
+/outputs/impedance_instron/

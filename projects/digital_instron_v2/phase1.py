@@ -187,7 +187,7 @@ def fit_train_material(
     grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
     split = generate_split_traces(path)
     train_trials, _, _ = prepare_trials(base, config, grid, midsole, trace_paths=split["train"])
-    initial = Material(*config["fit"].values())
+    initial = Material(*config["fit"].values(), MAXWELL_RELAXATION_TIME_S)
     material, fit_info = _fit_backend(
         train_trials, initial, backend, evaluations=evaluations, iterations=iterations, learning_rate=learning_rate
     )
@@ -242,7 +242,7 @@ def evaluate(
         "model": {
             "type": "reduced_hyperfoam_maxwell_pasternak",
             "effective_poisson_ratio": EFFECTIVE_POISSON_RATIO,
-            "maxwell_relaxation_time_s": MAXWELL_RELAXATION_TIME_S,
+            "maxwell_relaxation_time_s": material.maxwell_relaxation_time_s,
             "state_initialization": "periodic_cycle_fixed_point",
         },
         "train_cycles": config["cycle_windows"]["train"]["cycles"],
