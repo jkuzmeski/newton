@@ -169,6 +169,153 @@ threshold touchdown using pitch, its fixed mount, and that assumed entry velocit
 This is initialization only, not XYZ replay. Do not adjust measured forces to make
 an assumed COM trajectory close periodically.
 
+## Equilibrium-point controller
+
+`--control equilibrium` replaces the scheduled impedance with a commanded
+equilibrium trajectory, in the equilibrium-point form of Hogan impedance control:
+
+```text
+f = k(t) * (L0(t) - L) + b(t) * (L0dot(t) - Ldot)
+```
+
+`L0(t)` is the equilibrium (virtual) leg length. The deviation `L0 - L` is not an
+error to be removed; it is how force is produced. Nothing else drives the leg.
+There is **no measured-force feedforward** and **no engage or release schedule**.
+The leg is unilateral, so stance ends when the command stops loading it rather
+than on a clock. `--no-leg-unilateral` restores a leg that can also pull.
+
+The damping ratio is commanded, not the raw damper: `b(t) = 2*zeta(t)*sqrt(k(t)*m_eff)`
+with `m_eff` the upper mass. Scaling `k` and `b` by a common gain, as the legacy
+schedule does, drops the damping ratio like `sqrt(gain)`; commanding `zeta`
+directly does not.
+
+Source power reduces exactly to `raw*L0dot + 0.5*kdot*e^2`, plus a term for any
+force-limit intervention: work done by moving the equilibrium point and by
+changing stiffness. The **pre-clamp** force carries the equilibrium term. Using
+the applied force misreports every limited sample and credits a released leg with
+work it never did. `newton/tests/test_impedance_equilibrium.py` checks this
+against an independently computed `P_body + dE/dt + D` in every branch.
+
+### Why the legacy reference is circular
+
+The legacy rest length comes from twice-integrated capture-trial force, so the
+equilibrium already encodes the capture shoe's own response. Driving a different
+shoe with it is circular, and it is why the tracking error drifts through stance
+and needs a fade to hide the residual. A commanded equilibrium removes that.
+
+### Solving the command
+
+`projects.impedance_instron.optimize` searches the command with CMA-ES against a
+**task-level** cost. Measured force histories are never tracked. The cost has three
+task terms and a set of rig constraints:
+
+- **Stance impulse.** The velocity change over stance, which is measured impulse
+  divided by mass. Not an absolute velocity, which would depend on the assumed
+  initial condition.
+- **Momentum history.** The same velocity change sampled at nine fractions of
+  contact, each run normalised by its own contact duration. Matching only the
+  endpoint leaves the arrival time of the impulse free; see below.
+- **Effort and dissipation.** Mean squared actuator force, plus energy dissipated
+  in the virtual damper. Effort alone penalises force magnitude, not waste.
+
+```bash
+uv run --extra examples -m projects.impedance_instron.optimize \
+  --max-evaluations 1500 --seed 7 --weight-momentum 20 --weight-dissipation 1.0 \
+  --command-output outputs/impedance_instron/command.json
+
+uv run --extra examples -m newton.examples impedance_instron --viewer gl \
+  --control equilibrium --control-params outputs/impedance_instron/command.json
+```
+
+A solved command records the knot counts it was solved at, so replaying it does not
+require repeating the knot flags. Like the profile and the shoe artifact, it is
+generated output and is not committed. The search takes roughly ten minutes on one
+GPU.
+
+### Two cost gaps found by inspecting the result
+
+Both were found by overlaying the simulated ground reaction on the measured one
+with `projects.impedance_instron.explain`, not by looking at the cost value.
+
+**Timing.** With only the total impulse and the stance duration constrained, the
+solved command delivered the right impulse at the wrong time: peak force at 75.5%
+of stance against a measured 47.0%, and a vertical force RMS error of 569 N. The
+cost never said *when* within stance the impulse arrives, and nothing else pinned
+it down. Adding the momentum-history term moved peak force to 47.4%.
+
+**Dissipation.** The effort term sees `mean(f^2)` only, so burning energy in the
+virtual damper was free. The search raised damper dissipation from 63 J at the
+analytic seed to 519 J, then to 654 J once the timing term was added. That is about
+1 kW over a 0.3 s stance, near the whole metabolic power of the subject. Adding the
+dissipation term cut it to 25 J with no loss of timing accuracy.
+
+Neither gap was a failure of the controller structure. Both were under-specified
+objectives, and the search exploited the slack exactly as it should.
+
+### One solved result, for reference
+
+Supplied running stance, 6/6/3 knots, 15 parameters, 1500 evaluations, momentum
+weight 20 and dissipation weight 1.0.
+
+| quantity | measured | solved | legacy schedule |
+| --- | --- | --- | --- |
+| time of peak vertical force [% stance] | 47.0 | 47.4 | 50.3 |
+| peak vertical force [N] | 1762.6 | 1791.9 | 1884.9 |
+| vertical force RMS error [N] | -- | 292.8 | 224.4 |
+| vertical impulse error [%] | -- | +3.2 | +5.8 |
+| COM vertical velocity RMS error [m/s] | -- | 0.249 | 0.160 |
+| damper dissipation [J] | -- | 24.8 | 74.5 |
+
+The legacy column is **given** the measured ground reaction as feedforward. The
+solved command is not, and still matches peak timing eight times more closely.
+
+What is still wrong: the impulse centroid sits at 52.7% against a measured 45.2%,
+and the force RMS and COM velocity errors remain above the legacy controller. Gross
+timing is correct; fine waveform shape is not. Nine checkpoints constrain when the
+force arrives, not its detailed profile.
+
+### On parameter count
+
+Six length knots won under the earlier, incomplete costs. Once damper dissipation is
+penalised that reverses: nine knots gives the lowest vertical force RMS error of any
+run tried, 209.5 N, below the legacy schedule's 224.5 N.
+
+| knots | dissipation term | damper [J] | peak at [% stance] | force RMS [N] |
+| --- | --- | --- | --- | --- |
+| 9/6/3 | absent | 1445.2 | 28.4 | 394.5 |
+| 9/6/3 | present | 169.6 | 51.8 | 209.5 |
+
+So the apparent degeneracy of the richer command was largely a symptom of the missing
+energy term, not a property of the knot count. **No conclusion about the intrinsic
+dimensionality of the equilibrium command is supported by these runs.**
+
+### No single command wins
+
+The solved commands trace a trade-off rather than a ranking. The 6-knot command with
+momentum weight 20 matches the time of peak force almost exactly and dissipates the
+least. The 9-knot command with momentum weight 60 tracks the force waveform and the
+COM best but undershoots the vertical impulse.
+
+| | 6/6/3, momentum 20 | 9/6/3, momentum 60 | legacy schedule |
+| --- | --- | --- | --- |
+| time of peak force [% stance], measured 47.0 | 47.4 | 51.8 | 50.3 |
+| impulse centroid [% stance], measured 45.2 | 52.7 | 49.4 | 50.1 |
+| vertical force RMS error [N] | 292.8 | 209.5 | 224.4 |
+| vertical impulse error [%] | +3.2 | -4.4 | +5.8 |
+| COM vertical velocity RMS error [m/s] | 0.249 | 0.235 | 0.160 |
+| damper dissipation [J] | 24.8 | 169.6 | 74.5 |
+
+Both beat the legacy schedule on peak timing and on impulse, and the 9-knot command
+also beats it on force RMS. The legacy column is **given** the measured ground
+reaction as feedforward; neither solved command is. No solved command yet matches the
+legacy COM velocity tracking, and none should be presented as the single answer until
+the cost weights are justified rather than chosen.
+
+**These are rig settings solved for one shoe on one measured stance, not identified
+human leg impedance and not a validated material or anatomical result.** The cost
+weights are a declared engineering choice. Cross-shoe comparison of solved commands
+is the intended use; that comparison has not been run here.
+
 ## Shoe side and winding
 
 The original artifact is not modified. `orientation.py` makes a detached in-memory
@@ -235,6 +382,31 @@ do not relax the checks to make it pass. `--unload-duration 0` is a useful negat
 pitch-mode check: it leaves substantial post-toe-off load and is also unqualified.
 These are not fixed-settings shoe comparisons against the new mode.
 
+## CUDA graph replay
+
+The rollout is launch bound: one 64-substep frame issues 1024 kernel launches and
+192 device copies, while the actual work of 910 foam columns and two rigid bodies is
+negligible. Every kernel therefore reads its sample index from a one-element device
+array, so one frame captures into a CUDA graph and replays with a single
+`wp.capture_launch`. On an RTX A6000 a complete 2881-substep stance drops from about
+6.1 s to about 0.51 s with the default controller, and from about 6.7 s to about
+0.52 s with `--control equilibrium`.
+
+```bash
+uv run --extra examples -m newton.examples impedance_instron --viewer null --no-graph
+```
+
+`--no-graph` restores the plain per-substep launches. Capture is CUDA only; a CPU run,
+or a device that refuses capture, falls back to the same plain path with a warning.
+
+Captured and uncaptured runs agree bit for bit until the shoe touches down. After
+touchdown they differ in the last bits, exactly like two uncaptured runs of the same
+build: the foundation sums its column wrench with float atomics, and the GPU summation
+order is not reproducible. This is a property of the contact accumulation, not of the
+capture. `newton/tests/test_impedance_graph.py` therefore compares the two paths over
+the contact-free part of the stance, where the whole substep sequence is exactly
+reproducible.
+
 ## Record and test
 
 ```bash
@@ -244,7 +416,8 @@ uv run --extra examples -m newton.examples impedance_instron \
   --screenshot docs/images/examples/example_impedance_instron.jpg
 uv run --extra dev -m unittest newton.tests.test_impedance_pitch \
   newton.tests.test_impedance_pitch_profile newton.tests.test_impedance_orientation \
-  newton.tests.test_impedance_instron newton.tests.test_digital_shoe
+  newton.tests.test_impedance_instron newton.tests.test_impedance_graph \
+  newton.tests.test_digital_shoe
 ```
 
 Use `--device cpu` for a CPU run and `--substeps 128` for timestep refinement.
