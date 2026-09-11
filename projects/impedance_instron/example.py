@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import math
+import warnings
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from projects.digital_shoe import FoundationConfig, MidsoleFoundation, load_arti
 from projects.digital_shoe.rendering import attached_column_endpoints, column_colors
 from projects.digital_shoe.runtime import SurroundConfig
 
+from .control import AnkleCommand, LegCommand
 from .orientation import orient_shoe
 from .profile import load_profile
 from .report import write_report
@@ -28,37 +31,70 @@ from .trajectory import TrajectoryCubic
 # Device reference columns: foot x/z, pitch, COM x/z, foot vx/vz, pitch rate,
 # COM vx/vz, foot az, left Fz, other Fz, leg reference length/rate.
 
+# Slots the leg kernels write. Shared so callers and tests cannot size the buffer
+# independently: a short buffer is an out-of-bounds write, not a clean failure.
+LEG_DIAGNOSTIC_COUNT = 11
+
+# Slots ``_apply_ankle_impedance`` writes, shared for the same reason.
+ANKLE_DIAGNOSTIC_COUNT = 8
+
+# Reference columns the ankle impedance kernel reads; see ``Example._make_ankle_command``.
+# The block starts past the widest leg-controller block so the kernel indices do not depend
+# on which leg controller filled the columns before it.
+ANKLE_COLUMN_START = 28
+ANKLE_ANGLE = ANKLE_COLUMN_START
+ANKLE_ANGLE_RATE = ANKLE_COLUMN_START + 1
+ANKLE_STIFFNESS = ANKLE_COLUMN_START + 2
+ANKLE_DAMPING = ANKLE_COLUMN_START + 3
+ANKLE_STIFFNESS_RATE = ANKLE_COLUMN_START + 4
+ANKLE_COLUMN_COUNT = ANKLE_COLUMN_START + 5
+
+# Width of the recorded substep trace. Columns 0..40 are the historical planar record and
+# keep their meaning; the ankle block is appended so an existing reader cannot shift.
+TRACE_COLUMN_COUNT = 48
+
+# Every kernel below reads its sample index from a one-element device array instead of a
+# baked launch argument, so a single CUDA graph capture of one frame replays every substep
+# of that frame and the rollout stops paying per-launch overhead.
+
+
+@wp.kernel
+def _advance_index(index: wp.array[wp.int32]):
+    """Advance the device sample counter to the substep about to be recorded."""
+    index[0] = index[0] + 1
+
 
 @wp.kernel
 def _prescribe_axes(
-    index: int,
+    index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
     replay: int,
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
 ):
     """Prescribe track and pitch axes; leave vertical states free in impedance mode."""
+    i = index[0]
     foot_z = wp.transform_get_translation(body_q[0])[2]
     com_z = wp.transform_get_translation(body_q[1])[2]
     foot_vz = wp.spatial_top(body_qd[0])[2]
     com_vz = wp.spatial_top(body_qd[1])[2]
     if replay != 0:
-        foot_z = reference[index, 1]
-        com_z = reference[index, 4]
-        foot_vz = reference[index, 6]
-        com_vz = reference[index, 9]
+        foot_z = reference[i, 1]
+        com_z = reference[i, 4]
+        foot_vz = reference[i, 6]
+        com_vz = reference[i, 9]
     body_q[0] = wp.transform(
-        wp.vec3(reference[index, 0], 0.0, foot_z),
-        wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), reference[index, 2]),
+        wp.vec3(reference[i, 0], 0.0, foot_z),
+        wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), reference[i, 2]),
     )
-    body_q[1] = wp.transform(wp.vec3(reference[index, 3], 0.0, com_z), wp.quat_identity())
-    body_qd[0] = wp.spatial_vector(wp.vec3(reference[index, 5], 0.0, foot_vz), wp.vec3(0.0, reference[index, 7], 0.0))
-    body_qd[1] = wp.spatial_vector(wp.vec3(reference[index, 8], 0.0, com_vz), wp.vec3(0.0))
+    body_q[1] = wp.transform(wp.vec3(reference[i, 3], 0.0, com_z), wp.quat_identity())
+    body_qd[0] = wp.spatial_vector(wp.vec3(reference[i, 5], 0.0, foot_vz), wp.vec3(0.0, reference[i, 7], 0.0))
+    body_qd[1] = wp.spatial_vector(wp.vec3(reference[i, 8], 0.0, com_vz), wp.vec3(0.0))
 
 
 @wp.kernel
 def _apply_leg(
-    index: int,
+    index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
     foot_mass: float,
     stiffness: float,
@@ -71,24 +107,25 @@ def _apply_leg(
     diagnostics: wp.array[wp.float32],
 ):
     """Apply equal-and-opposite leg forces and explicit opposite-foot support."""
+    i = index[0]
     length = wp.transform_get_translation(body_q[1])[2] - wp.transform_get_translation(body_q[0])[2]
     rate = wp.spatial_top(body_qd[1])[2] - wp.spatial_top(body_qd[0])[2]
-    error = length - reference[index, 13]
-    desired_rate = reference[index, 14]
+    error = length - reference[i, 13]
+    desired_rate = reference[i, 14]
     gain = float(1.0)
     gain_rate = float(0.0)
     retract_force = float(0.0)
     if reference.shape[1] >= 22:
-        gain = reference[index, 19]
-        gain_rate = reference[index, 20]
-        retract_force = reference[index, 21]
+        gain = reference[i, 19]
+        gain_rate = reference[i, 20]
+        retract_force = reference[i, 21]
     k = stiffness * gain
     b = damping * gain
-    feedforward = reference[index, 11] - foot_mass * (gravity + reference[index, 10]) - retract_force
+    feedforward = reference[i, 11] - foot_mass * (gravity + reference[i, 10]) - retract_force
     raw_force = feedforward - k * error + b * (desired_rate - rate)
     force = wp.clamp(raw_force, -force_limit, force_limit)
     wp.atomic_add(body_f, 0, wp.spatial_vector(wp.vec3(0.0, 0.0, -force), wp.vec3(0.0)))
-    wp.atomic_add(body_f, 1, wp.spatial_vector(wp.vec3(0.0, 0.0, force + reference[index, 12]), wp.vec3(0.0)))
+    wp.atomic_add(body_f, 1, wp.spatial_vector(wp.vec3(0.0, 0.0, force + reference[i, 12]), wp.vec3(0.0)))
     # Account separately for moving spring rest length, active feedforward,
     # physical damper dissipation, and any force-limit intervention.
     diagnostics[0] = force
@@ -104,7 +141,7 @@ def _apply_leg(
 
 @wp.kernel
 def _record_sample(
-    index: int,
+    index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
@@ -122,38 +159,37 @@ def _record_sample(
     trace: wp.array2d[wp.float32],
 ):
     """Record pre-integration samples at their actual evaluation time."""
+    i = index[0]
     foot_z = wp.transform_get_translation(body_q[0])[2]
     com_z = wp.transform_get_translation(body_q[1])[2]
     com_vz = wp.spatial_top(body_qd[1])[2]
     fz = force[0]
-    trace[index, 0] = fz
-    trace[index, 1] = 0.0
+    trace[i, 0] = fz
+    trace[i, 1] = 0.0
     if fz > 1.0:
-        trace[index, 1] = cop_moment[0][0] / fz
-    trace[index, 2] = foot_z
-    trace[index, 3] = com_z
-    trace[index, 4] = com_vz
-    trace[index, 5] = diagnostics[0]
-    trace[index, 6] = diagnostics[1]
-    trace[index, 7] = diagnostics[2]
+        trace[i, 1] = cop_moment[0][0] / fz
+    trace[i, 2] = foot_z
+    trace[i, 3] = com_z
+    trace[i, 4] = com_vz
+    trace[i, 5] = diagnostics[0]
+    trace[i, 6] = diagnostics[1]
+    trace[i, 7] = diagnostics[2]
     # Isotropic fixture inertia: prescribed pitch drive balances contact torque.
-    trace[index, 8] = (pitch_inertia * reference[index, 15] - wp.spatial_bottom(body_f[0])[1]) * reference[index, 7]
-    trace[index, 18] = pitch_inertia * reference[index, 15] - wp.spatial_bottom(body_f[0])[1]
-    trace[index, 9] = contact_power[0]
-    trace[index, 10] = com_mass * (gravity * com_z + 0.5 * com_vz * com_vz)
-    trace[index, 11] = compression[0]
-    trace[index, 12] = diagnostics[4]
-    trace[index, 13] = diagnostics[3]
-    trace[index, 14] = reference[index, 12] * com_vz
-    trace[index, 15] = wp.spatial_top(body_qd[0])[2]
-    trace[index, 16] = 0.0
+    trace[i, 8] = (pitch_inertia * reference[i, 15] - wp.spatial_bottom(body_f[0])[1]) * reference[i, 7]
+    trace[i, 18] = pitch_inertia * reference[i, 15] - wp.spatial_bottom(body_f[0])[1]
+    trace[i, 9] = contact_power[0]
+    trace[i, 10] = com_mass * (gravity * com_z + 0.5 * com_vz * com_vz)
+    trace[i, 11] = compression[0]
+    trace[i, 12] = diagnostics[4]
+    trace[i, 13] = diagnostics[3]
+    trace[i, 14] = reference[i, 12] * com_vz
+    trace[i, 15] = wp.spatial_top(body_qd[0])[2]
+    trace[i, 16] = 0.0
     if replay != 0:
-        foot_drive = foot_mass * (reference[index, 10] + gravity) - fz + diagnostics[0]
-        com_drive = com_mass * (reference[index, 16] + gravity) - diagnostics[0] - reference[index, 12]
-        trace[index, 16] = foot_drive * reference[index, 6] + com_drive * reference[index, 9]
-    trace[index, 17] = (
-        foot_mass * reference[index, 17] * reference[index, 5] + com_mass * reference[index, 18] * reference[index, 8]
-    )
+        foot_drive = foot_mass * (reference[i, 10] + gravity) - fz + diagnostics[0]
+        com_drive = com_mass * (reference[i, 16] + gravity) - diagnostics[0] - reference[i, 12]
+        trace[i, 16] = foot_drive * reference[i, 6] + com_drive * reference[i, 9]
+    trace[i, 17] = foot_mass * reference[i, 17] * reference[i, 5] + com_mass * reference[i, 18] * reference[i, 8]
 
 
 @wp.kernel
@@ -179,27 +215,59 @@ def _free_column_metrics(
 
 @wp.kernel
 def _constrain_planar_axes(
-    index: int,
+    index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
 ):
     """Leave both X/Z states dynamic; the external robot motor prescribes only pitch."""
+    i = index[0]
     a = wp.transform_get_translation(body_q[0])
     c = wp.transform_get_translation(body_q[1])
     va = wp.spatial_top(body_qd[0])
     vc = wp.spatial_top(body_qd[1])
-    body_q[0] = wp.transform(
-        wp.vec3(a[0], 0.0, a[2]), wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), reference[index, 2])
-    )
+    body_q[0] = wp.transform(wp.vec3(a[0], 0.0, a[2]), wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), reference[i, 2]))
     body_q[1] = wp.transform(wp.vec3(c[0], 0.0, c[2]), wp.quat_identity())
-    body_qd[0] = wp.spatial_vector(wp.vec3(va[0], 0.0, va[2]), wp.vec3(0.0, reference[index, 7], 0.0))
+    body_qd[0] = wp.spatial_vector(wp.vec3(va[0], 0.0, va[2]), wp.vec3(0.0, reference[i, 7], 0.0))
+    body_qd[1] = wp.spatial_vector(wp.vec3(vc[0], 0.0, vc[2]), wp.vec3(0.0))
+
+
+@wp.func
+def _pitch_of(rotation: wp.quat) -> float:
+    """Return the Y-axis rotation angle of a planar fixture pose [rad].
+
+    Only the Y and W components carry a planar pitch, so reading them projects
+    any accumulated out-of-plane drift away instead of propagating it.
+    """
+    return 2.0 * wp.atan2(rotation[1], rotation[3])
+
+
+@wp.kernel
+def _constrain_out_of_plane_axes(
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+):
+    """Constrain the out-of-plane axes only; pitch responds to the ankle actuator.
+
+    This is :func:`_constrain_planar_axes` with the prescribed pitch replay removed: Y
+    translation, roll and yaw are still eliminated, but the pitch angle and pitch rate are
+    integrated states driven by ``_apply_ankle_impedance`` and the contact wrench.
+    """
+    a = wp.transform_get_translation(body_q[0])
+    c = wp.transform_get_translation(body_q[1])
+    va = wp.spatial_top(body_qd[0])
+    vc = wp.spatial_top(body_qd[1])
+    pitch = _pitch_of(wp.transform_get_rotation(body_q[0]))
+    pitch_rate = wp.spatial_bottom(body_qd[0])[1]
+    body_q[0] = wp.transform(wp.vec3(a[0], 0.0, a[2]), wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), pitch))
+    body_q[1] = wp.transform(wp.vec3(c[0], 0.0, c[2]), wp.quat_identity())
+    body_qd[0] = wp.spatial_vector(wp.vec3(va[0], 0.0, va[2]), wp.vec3(0.0, pitch_rate, 0.0))
     body_qd[1] = wp.spatial_vector(wp.vec3(vc[0], 0.0, vc[2]), wp.vec3(0.0))
 
 
 @wp.kernel
 def _apply_planar_leg(
-    index: int,
+    index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
     mass: float,
     foot_mass: float,
@@ -212,20 +280,21 @@ def _apply_planar_leg(
     diagnostics: wp.array[wp.float32],
 ):
     """Couple the actual endpoints with a central axial force, not two unrelated Z sliders."""
+    i = index[0]
     r = wp.transform_get_translation(body_q[1]) - wp.transform_get_translation(body_q[0])
     length = wp.max(wp.length(r), 1.0e-6)
     n = r / length
     relative_velocity = wp.spatial_top(body_qd[1]) - wp.spatial_top(body_qd[0])
     rate = wp.dot(n, relative_velocity)
-    error = length - reference[index, 13]
-    desired_rate = reference[index, 14]
-    gain, gain_rate = reference[index, 19], reference[index, 20]
+    error = length - reference[i, 13]
+    desired_rate = reference[i, 14]
+    gain, gain_rate = reference[i, 19], reference[i, 20]
     k, b = stiffness * gain, damping * gain
-    other = wp.vec3(reference[index, 23], 0.0, reference[index, 12])
-    measured = wp.vec3(reference[index, 22], 0.0, reference[index, 11])
+    other = wp.vec3(reference[i, 23], 0.0, reference[i, 12])
+    measured = wp.vec3(reference[i, 22], 0.0, reference[i, 11])
     target = (1.0 - foot_mass / mass) * measured - (foot_mass / mass) * other
     # A single axial actuator cannot independently impose both measured force components.
-    feedforward = reference[index, 24] * wp.dot(target, n) - reference[index, 21] / wp.max(n[2], 0.25)
+    feedforward = reference[i, 24] * wp.dot(target, n) - reference[i, 21] / wp.max(n[2], 0.25)
     raw = feedforward - k * error + b * (desired_rate - rate)
     force = wp.clamp(raw, -force_limit, force_limit)
     f = force * n
@@ -244,6 +313,102 @@ def _apply_planar_leg(
     diagnostics[6] = rate
     diagnostics[7] = f[0]
     diagnostics[8] = f[2]
+
+
+@wp.kernel
+def _apply_equilibrium_leg(
+    index: wp.array[wp.int32],
+    reference: wp.array2d[wp.float32],
+    force_limit: float,
+    unilateral: int,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_f: wp.array[wp.spatial_vector],
+    diagnostics: wp.array[wp.float32],
+):
+    """Apply a Hogan equilibrium-point leg driven only by a commanded equilibrium and impedance.
+
+    The measured-force feedforward and the scheduled engage/release gains are both absent. Every
+    newton the leg produces comes from the commanded equilibrium trajectory acting through the
+    commanded impedance, so the shoe response is never cancelled by replayed capture-trial force.
+    """
+    i = index[0]
+    r = wp.transform_get_translation(body_q[1]) - wp.transform_get_translation(body_q[0])
+    length = wp.max(wp.length(r), 1.0e-6)
+    n = r / length
+    rate = wp.dot(n, wp.spatial_top(body_qd[1]) - wp.spatial_top(body_qd[0]))
+    equilibrium, equilibrium_rate = reference[i, 13], reference[i, 14]
+    k, b, k_rate = reference[i, 25], reference[i, 26], reference[i, 27]
+    error = length - equilibrium
+    slip = rate - equilibrium_rate
+    raw = -k * error - b * slip
+    limited = wp.clamp(raw, -force_limit, force_limit)
+    force = limited
+    if unilateral != 0:
+        # A leg extends against the ground; it cannot pull the shoe back down.
+        force = wp.max(limited, 0.0)
+    f = force * n
+    other = wp.vec3(reference[i, 23], 0.0, reference[i, 12])
+    wp.atomic_add(body_f, 0, wp.spatial_vector(-f, wp.vec3(0.0)))
+    wp.atomic_add(body_f, 1, wp.spatial_vector(f + other, wp.vec3(0.0)))
+    # Source power closes the ledger P_body + dE/dt + D exactly, in the clamped branches too.
+    # The equilibrium-work term carries the PRE-clamp force: substituting the applied force
+    # misreports every limited sample and credits the released leg with work it never did.
+    diagnostics[0] = force
+    diagnostics[1] = raw * equilibrium_rate + 0.5 * k_rate * error * error + (force - raw) * rate
+    diagnostics[2] = -b * slip * slip
+    diagnostics[3] = 0.5 * k * error * error
+    # Saturation and release are different events and must not share a channel: an optimizer
+    # penalizing the force limit would otherwise be penalizing the leg for letting go.
+    diagnostics[4] = float(wp.abs(limited - raw) > 1.0e-4)
+    diagnostics[5] = length
+    diagnostics[6] = rate
+    diagnostics[7] = f[0]
+    diagnostics[8] = f[2]
+    # The clipped magnitude, not just a flag, so a search can descend out of saturation.
+    diagnostics[9] = wp.abs(limited - raw)
+    diagnostics[10] = float(force != limited)
+
+
+@wp.kernel
+def _apply_ankle_impedance(
+    index: wp.array[wp.int32],
+    reference: wp.array2d[wp.float32],
+    torque_limit: float,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_f: wp.array[wp.spatial_vector],
+    diagnostics: wp.array[wp.float32],
+):
+    """Apply a Hogan equilibrium-point ankle torque about the fixture pitch axis.
+
+    The pitch degree of freedom is no longer written from a measured column. The only
+    torque the rig applies is what the commanded equilibrium angle produces through the
+    commanded rotational impedance, so the shoe can rotate under contact load.
+    """
+    i = index[0]
+    angle = _pitch_of(wp.transform_get_rotation(body_q[0]))
+    rate = wp.spatial_bottom(body_qd[0])[1]
+    equilibrium, equilibrium_rate = reference[i, ANKLE_ANGLE], reference[i, ANKLE_ANGLE_RATE]
+    k, b, k_rate = reference[i, ANKLE_STIFFNESS], reference[i, ANKLE_DAMPING], reference[i, ANKLE_STIFFNESS_RATE]
+    error = angle - equilibrium
+    slip = rate - equilibrium_rate
+    raw = -k * error - b * slip
+    torque = wp.clamp(raw, -torque_limit, torque_limit)
+    wp.atomic_add(body_f, 0, wp.spatial_vector(wp.vec3(0.0), wp.vec3(0.0, torque, 0.0)))
+    # Source power closes the ledger P_body + dE/dt + D in the clamped branch too. The
+    # equilibrium-work term carries the PRE-clamp torque: substituting the applied torque
+    # misreports every limited sample, exactly the defect the leg kernel already had.
+    diagnostics[0] = torque
+    diagnostics[1] = raw * equilibrium_rate + 0.5 * k_rate * error * error + (torque - raw) * rate
+    diagnostics[2] = -b * slip * slip
+    diagnostics[3] = 0.5 * k * error * error
+    diagnostics[4] = float(wp.abs(torque - raw) > 1.0e-4)
+    diagnostics[5] = angle
+    diagnostics[6] = rate
+    # The clipped magnitude, not just a flag, so a search can descend out of saturation.
+    # It carries torque-limit intervention alone and never doubles as a release channel.
+    diagnostics[7] = wp.abs(torque - raw)
 
 
 @wp.kernel
@@ -322,7 +487,7 @@ def _draw_friction_columns(
 
 @wp.kernel
 def _record_planar_sample(
-    index: int,
+    index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
@@ -333,67 +498,85 @@ def _record_planar_sample(
     contact_power: wp.array[wp.float32],
     compression: wp.array[wp.float32],
     diagnostics: wp.array[wp.float32],
+    ankle_diagnostics: wp.array[wp.float32],
     contact_metrics: wp.array[wp.float32],
     free_metrics: wp.array[wp.float32],
     com_mass: float,
     pitch_inertia: float,
+    ankle: int,
     gravity: float,
     trace: wp.array2d[wp.float32],
 ):
     """Record actual planar motion and friction, including all external motor work."""
+    i = index[0]
     a = wp.transform_get_translation(body_q[0])
     c = wp.transform_get_translation(body_q[1])
     va = wp.spatial_top(body_qd[0])
     vc = wp.spatial_top(body_qd[1])
     f = force[0]
-    torque = pitch_inertia * reference[index, 15] - wp.spatial_bottom(body_f[0])[1]
-    trace[index, 0] = f[2]
+    # Prescribed pitch is driven by an ideal external motor, whose torque is whatever the
+    # rigid trajectory demands; the ankle actuator instead reports the torque it applied.
+    torque = pitch_inertia * reference[i, 15] - wp.spatial_bottom(body_f[0])[1]
+    pitch_power = torque * reference[i, 7]
+    if ankle != 0:
+        torque = ankle_diagnostics[0]
+        pitch_power = ankle_diagnostics[1]
+    trace[i, 0] = f[2]
     # The moment is weighted by the pressed load, so the centroid must divide by
     # the same quantity. Dividing by the net wrench, which also carries the pull
     # of lifted columns, drove the reported centre of pressure off the shoe.
-    trace[index, 1] = 0.0
+    trace[i, 1] = 0.0
     if pressed[0] > 1.0:
-        trace[index, 1] = cop_moment[0][0] / pressed[0]
-    trace[index, 2] = a[2]
-    trace[index, 3] = c[2]
-    trace[index, 4] = vc[2]
-    trace[index, 5] = diagnostics[0]
-    trace[index, 6] = diagnostics[1]
-    trace[index, 7] = diagnostics[2]
-    trace[index, 8] = torque * reference[index, 7]
-    trace[index, 9] = contact_power[0]
-    trace[index, 10] = com_mass * (gravity * c[2] + 0.5 * vc[2] * vc[2])
-    trace[index, 11] = compression[0]
-    trace[index, 12] = diagnostics[4]
-    trace[index, 13] = diagnostics[3]
-    trace[index, 14] = reference[index, 12] * vc[2] + reference[index, 23] * vc[0]
-    trace[index, 16] = 0.0
-    trace[index, 17] = 0.0
-    trace[index, 15] = va[2]
-    trace[index, 18] = torque
-    trace[index, 19] = a[0]
-    trace[index, 20] = c[0]
-    trace[index, 21] = va[0]
-    trace[index, 22] = vc[0]
-    trace[index, 23] = f[0]
-    trace[index, 24] = f[1]
-    trace[index, 25] = diagnostics[5]
-    trace[index, 26] = diagnostics[6]
-    trace[index, 27] = diagnostics[7]
-    trace[index, 28] = diagnostics[8]
+        trace[i, 1] = cop_moment[0][0] / pressed[0]
+    trace[i, 2] = a[2]
+    trace[i, 3] = c[2]
+    trace[i, 4] = vc[2]
+    trace[i, 5] = diagnostics[0]
+    trace[i, 6] = diagnostics[1]
+    trace[i, 7] = diagnostics[2]
+    trace[i, 8] = pitch_power
+    trace[i, 9] = contact_power[0]
+    trace[i, 10] = com_mass * (gravity * c[2] + 0.5 * vc[2] * vc[2])
+    trace[i, 11] = compression[0]
+    trace[i, 12] = diagnostics[4]
+    trace[i, 13] = diagnostics[3]
+    trace[i, 14] = reference[i, 12] * vc[2] + reference[i, 23] * vc[0]
+    trace[i, 16] = diagnostics[9]
+    trace[i, 17] = diagnostics[10]
+    trace[i, 15] = va[2]
+    trace[i, 18] = torque
+    trace[i, 19] = a[0]
+    trace[i, 20] = c[0]
+    trace[i, 21] = va[0]
+    trace[i, 22] = vc[0]
+    trace[i, 23] = f[0]
+    trace[i, 24] = f[1]
+    trace[i, 25] = diagnostics[5]
+    trace[i, 26] = diagnostics[6]
+    trace[i, 27] = diagnostics[7]
+    trace[i, 28] = diagnostics[8]
     normal = wp.max(contact_metrics[0], 1.0e-9)
-    trace[index, 29] = contact_metrics[1] / normal
-    trace[index, 30] = contact_metrics[2] / normal
-    trace[index, 31] = contact_metrics[3] / normal
-    trace[index, 32] = contact_metrics[4] / normal
-    trace[index, 33] = contact_metrics[5]
-    trace[index, 34] = contact_metrics[6]
-    trace[index, 35] = free_metrics[0]
-    trace[index, 36] = free_metrics[1]
-    trace[index, 37] = free_metrics[2]
-    trace[index, 38] = free_metrics[3]
-    trace[index, 39] = free_metrics[4]
-    trace[index, 40] = pressed[0]
+    trace[i, 29] = contact_metrics[1] / normal
+    trace[i, 30] = contact_metrics[2] / normal
+    trace[i, 31] = contact_metrics[3] / normal
+    trace[i, 32] = contact_metrics[4] / normal
+    trace[i, 33] = contact_metrics[5]
+    trace[i, 34] = contact_metrics[6]
+    trace[i, 35] = free_metrics[0]
+    trace[i, 36] = free_metrics[1]
+    trace[i, 37] = free_metrics[2]
+    trace[i, 38] = free_metrics[3]
+    trace[i, 39] = free_metrics[4]
+    trace[i, 40] = pressed[0]
+    # Achieved pitch is a state, not a command, once the ankle actuator drives it.
+    trace[i, 41] = _pitch_of(wp.transform_get_rotation(body_q[0]))
+    trace[i, 42] = wp.spatial_bottom(body_qd[0])[1]
+    if ankle != 0:
+        trace[i, 43] = reference[i, ANKLE_ANGLE]
+        trace[i, 44] = ankle_diagnostics[1]
+        trace[i, 45] = ankle_diagnostics[2]
+        trace[i, 46] = ankle_diagnostics[3]
+        trace[i, 47] = ankle_diagnostics[7]
 
 
 def _curve(values: np.ndarray, source_time: np.ndarray, time: np.ndarray):
@@ -438,6 +621,15 @@ class Example:
             raise ValueError("Screenshots and GIF recording require --viewer gl")
         self.reference_mode = args.reference_mode
         self.planar = args.dynamics == "planar" and self.reference_mode == "pitch"
+        self.equilibrium = getattr(args, "control", "legacy") == "equilibrium"
+        if self.equilibrium and not self.planar:
+            raise ValueError("The equilibrium-point controller requires planar pitch dynamics")
+        self.ankle_impedance = getattr(args, "ankle_control", "prescribed") == "impedance"
+        if self.ankle_impedance:
+            if not self.planar:
+                raise ValueError("The ankle impedance controller requires planar pitch dynamics")
+            if not math.isfinite(args.ankle_torque_limit) or args.ankle_torque_limit <= 0.0:
+                raise ValueError("The ankle torque limit must be finite and positive")
         if self.reference_mode == "pitch" and args.mode != "impedance":
             raise ValueError(
                 "Pitch mode has no vertical replay trajectory; use --reference-mode markers for legacy replay"
@@ -510,14 +702,7 @@ class Example:
         self._gif_times = []
         self._captured_index = -1
         self._make_reference()
-        last_local = self.shoe.visual_mesh("fullfoot_last").vertices_m - self.ankle_mount
-        self.minimum_last_offsets = np.empty(self.sample_count)
-        for start in range(0, self.sample_count, 128):
-            angle = self.reference[start : start + 128, 2].astype(float)
-            self.minimum_last_offsets[start : start + 128] = np.min(
-                -np.sin(angle[:, None]) * last_local[None, :, 0] + np.cos(angle[:, None]) * last_local[None, :, 2],
-                axis=1,
-            )
+        self.minimum_last_offsets = self._last_offsets(self.reference[:, 2])
 
         builder = newton.ModelBuilder(gravity=wp.vec3(0.0, 0.0, -self.gravity))
         builder.add_ground_plane()
@@ -577,13 +762,26 @@ class Example:
         velocity[1, 2] = self.reference[0, 9]
         if self.planar:
             velocity = self.planar_initial_velocity.copy()
+        if self.ankle_impedance:
+            # Nothing writes pitch during the rollout any more, so the entry angle and
+            # angular rate have to be part of the declared initial state.
+            angle, angle_rate = float(self.reference[0, 2]), float(self.reference[0, 7])
+            initial[0, 3:7] = [0.0, math.sin(0.5 * angle), 0.0, math.cos(0.5 * angle)]
+            velocity[0, 4] = angle_rate
         self.state_0.body_q.assign(initial)
         self.state_0.body_qd.assign(velocity)
         self.state_1.body_q.assign(initial)
         self.state_1.body_qd.assign(velocity)
         self.reference_device = wp.array(self.reference, dtype=wp.float32, device=self.device)
-        self.trace_device = wp.zeros((self.sample_count, 41), dtype=wp.float32, device=self.device)
-        self.leg_diagnostics = wp.zeros(9, dtype=wp.float32, device=self.device)
+        # Kernels read the sample index from the device, so one captured frame replays every
+        # substep; ``self.index`` stays the host counter for loop control and array slicing.
+        self.index_device = wp.zeros(1, dtype=wp.int32, device=self.device)
+        self.graph = None
+        self.use_graph = bool(getattr(args, "graph", True)) and self.device.is_cuda
+        self.graph_status = "enabled" if self.use_graph else "disabled"
+        self.trace_device = wp.zeros((self.sample_count, TRACE_COLUMN_COUNT), dtype=wp.float32, device=self.device)
+        self.leg_diagnostics = wp.zeros(LEG_DIAGNOSTIC_COUNT, dtype=wp.float32, device=self.device)
+        self.ankle_diagnostics = wp.zeros(ANKLE_DIAGNOSTIC_COUNT, dtype=wp.float32, device=self.device)
         bed = self.shoe.column_bed
         scale = args.shoe_stiffness_scale
         material = replace(
@@ -655,7 +853,7 @@ class Example:
         self.viewer.set_model(self.model)
         center = 0.5 * (lo + hi)
         self.viewer.set_camera(*_camera((center + 0.7, -1.85, 0.95), (center, 0.0, 0.55)))
-        self._prescribe(0)
+        self._prescribe()
         self.metadata = {
             "profile_hash": hashlib.sha256(Path(args.profile).read_bytes()).hexdigest(),
             "artifact_hash": hashlib.sha256(Path(args.artifact).read_bytes()).hexdigest(),
@@ -722,13 +920,45 @@ class Example:
                 "wrench_limit": "Existing effective foundation applies its tangential wrench at virtual bottom sites, sometimes below the plane; not a calibrated real-ground ankle moment.",
             },
             "power_definition": "Active source power includes feedforward/retraction, moving spring rest length, scheduled stiffness, desired damping rate, and saturation intervention; passive damping and guide drives are separate. Not metabolic cost.",
+            "ankle_control": "impedance" if self.ankle_impedance else "prescribed",
         }
+        if self.ankle_impedance:
+            self.metadata["ankle_torque_limit_n_m"] = float(args.ankle_torque_limit)
+            self.metadata["solver"] = (
+                "newton.solvers.SolverSemiImplicit; angular_damping=0; planar X/Z and pitch are dynamic, "
+                "only out-of-plane axes are constrained"
+            )
+            self.metadata["profile_limits"].append(
+                "Ankle pitch is a commanded rotational impedance about a virtual equilibrium angle. It is neither a "
+                "measured pitch replay nor an anatomical ankle actuator model."
+            )
+
+    def _last_offsets(self, angle_rad: np.ndarray) -> np.ndarray:
+        """Return the lowest rigid-last height above the mechanical ankle for each pitch angle.
+
+        Args:
+            angle_rad: Fixture pitch angles [rad], shape [sample_count].
+        """
+        local = self.shoe.visual_mesh("fullfoot_last").vertices_m - self.ankle_mount
+        angles = np.asarray(angle_rad, dtype=float).reshape(-1)
+        offsets = np.empty(angles.size)
+        for start in range(0, angles.size, 128):
+            block = angles[start : start + 128]
+            offsets[start : start + 128] = np.min(
+                -np.sin(block[:, None]) * local[None, :, 0] + np.cos(block[:, None]) * local[None, :, 2],
+                axis=1,
+            )
+        return offsets
 
     def _make_reference(self):
         if getattr(self.args, "reference_mode", "markers") == "pitch":
             self._make_pitch_reference()
             if self.planar:
                 self._make_planar_reference()
+                if self.equilibrium:
+                    self._make_equilibrium_command()
+                if self.ankle_impedance:
+                    self._make_ankle_command()
             return
         self.reference_processing = "optical-clock C1 Hermite with analytic derivatives; legacy marker trajectory"
         source_t = np.asarray(self.profile["time_s"], dtype=float)
@@ -1055,12 +1285,188 @@ class Example:
             }
         )
 
-    def _prescribe(self, index):
+    def _make_equilibrium_command(self):
+        """Replace the derived reference and scheduled gains with a commanded equilibrium trajectory.
+
+        The legacy controller reads its rest length from twice-integrated capture-trial force, so the
+        equilibrium already encodes the capture shoe's own response. Here the equilibrium trajectory
+        and the impedance profile are declared commands instead, following the equilibrium-point form
+        of impedance control. Columns 13 and 14 keep their meaning as the equilibrium and its rate.
+        """
+        ref = self.reference.astype(np.float64)
+        knots = {
+            "length": self.args.length_knots,
+            "stiffness": self.args.stiffness_knots,
+            "damping": self.args.damping_knots,
+        }
+        document = None
+        if getattr(self.args, "control_vector", None) is None and self.args.control_params is not None:
+            document = json.loads(Path(self.args.control_params).read_text())
+            # A solved command records the resolution it was solved at, so replaying it must not
+            # depend on the caller repeating the same knot flags.
+            knots = document.get("knots", knots)
+        command = LegCommand(
+            self.times,
+            length_knots=knots["length"],
+            stiffness_knots=knots["stiffness"],
+            damping_knots=knots["damping"],
+            mass_kg=self.com_mass,
+        )
+        vector = getattr(self.args, "control_vector", None)
+        if vector is not None:
+            parameters = np.asarray(vector, dtype=float)
+            if parameters.shape != (command.size,):
+                raise ValueError(f"Supplied {parameters.shape} parameters; this rig needs {command.size}")
+            source = "in-process command vector supplied by the trajectory optimizer"
+        elif document is not None:
+            parameters = np.asarray(document["parameters"], dtype=float)
+            if parameters.shape != (command.size,):
+                raise ValueError(f"Command file holds {parameters.shape} parameters; this rig needs {command.size}")
+            source = str(self.args.control_params)
+        else:
+            parameters = command.initial(self._seed_equilibrium(ref), self.args.stiffness, self.args.damping_ratio)
+            source = "analytic seed: legacy reference length offset by the axial load a constant stiffness needs"
+        profile = command.evaluate(parameters)
+        stiffness_rate = np.gradient(profile.stiffness_n_m, self.times, edge_order=2)
+        ref[:, 13], ref[:, 14] = profile.length_m, profile.length_rate_m_s
+        # No schedule, no retraction, and no measured-force feedforward survive in this controller.
+        ref[:, 19], ref[:, 20], ref[:, 21], ref[:, 24] = 1.0, 0.0, 0.0, 0.0
+        self.reference = np.column_stack([ref, profile.stiffness_n_m, profile.damping_n_s_m, stiffness_rate]).astype(
+            np.float32
+        )
+        self.command, self.command_parameters = command, parameters
+        for retired in ("engage_duration_s", "unload_duration_s", "unload_acceleration_m_s2", "unload_policy"):
+            self.registration.pop(retired, None)
+        self.registration.update(
+            {
+                "controller": "equilibrium-point variable impedance; no measured-force feedforward and no gain schedule",
+                "leg_reference": "commanded equilibrium trajectory L0(t); NOT derived from capture-trial force integration",
+                "command_source": source,
+                "command_parameters": parameters.tolist(),
+                "length_knots": knots["length"],
+                "stiffness_knots": knots["stiffness"],
+                "damping_knots": knots["damping"],
+                "damping_effective_mass_kg": self.com_mass,
+                "damping_law": "b(t) = 2*zeta(t)*sqrt(k(t)*m_eff); the damping ratio is commanded, not the raw damper",
+                "unilateral_leg": bool(self.args.leg_unilateral),
+                "release_policy": "unilateral leg force; stance ends when the commanded equilibrium stops loading, not on a clock",
+                "stiffness_range_n_m": [
+                    float(profile.stiffness_n_m.min()),
+                    float(profile.stiffness_n_m.max()),
+                ],
+                "identified": False,
+            }
+        )
+
+    def _make_ankle_command(self):
+        """Replace the prescribed pitch replay with a commanded rotational equilibrium.
+
+        The prescribed controller writes the measured pitch and pitch rate into the fixture
+        state every substep, so contact can never rotate the shoe and the controller cannot
+        influence when the contact force arrives. Here pitch is an integrated state and the
+        only ankle torque is what the commanded equilibrium angle produces through the
+        commanded rotational impedance, exactly as the leg already works.
+
+        The default equilibrium is the measured pitch spline itself. That keeps the
+        prescribed rollout as the stiff limit of this one: as ``k_theta`` grows the achieved
+        pitch converges to the same trajectory the old kernel imposed.
+        """
+        ref = self.reference.astype(np.float64)
+        if ref.shape[1] > ANKLE_COLUMN_START:
+            raise ValueError("The leg controller already occupies the ankle reference block")
+        knots = {
+            "angle": self.args.ankle_angle_knots,
+            "stiffness": self.args.ankle_stiffness_knots,
+            "damping": self.args.ankle_damping_knots,
+        }
+        document = None
+        vector = getattr(self.args, "ankle_vector", None)
+        if vector is None and self.args.ankle_params is not None:
+            document = json.loads(Path(self.args.ankle_params).read_text())
+            knots = document.get("knots", knots)
+        command = AnkleCommand(
+            self.times,
+            angle_knots=knots["angle"],
+            stiffness_knots=knots["stiffness"],
+            damping_knots=knots["damping"],
+            inertia_kg_m2=self.pitch_inertia,
+        )
+        if vector is not None:
+            parameters = np.asarray(vector, dtype=float)
+            if parameters.shape != (command.size,):
+                raise ValueError(f"Supplied {parameters.shape} ankle parameters; this rig needs {command.size}")
+            source = "in-process ankle command vector supplied by the trajectory optimizer"
+        elif document is not None:
+            parameters = np.asarray(document["parameters"], dtype=float)
+            if parameters.shape != (command.size,):
+                raise ValueError(f"Ankle command file holds {parameters.shape} parameters; needs {command.size}")
+            source = str(self.args.ankle_params)
+        else:
+            parameters = command.initial(ref[:, 2], self.args.ankle_stiffness, self.args.ankle_damping_ratio)
+            source = "analytic seed: least-squares fit of the measured pitch spline at constant impedance"
+        profile = command.evaluate(parameters)
+        # A caller that supplies angle knots means them to be used; the seeded default keeps
+        # the measured equilibrium so the prescribed rollout stays the stiff limit.
+        solved = vector is not None or document is not None
+        equilibrium = self.args.ankle_equilibrium or ("commanded" if solved else "measured")
+        if equilibrium == "measured":
+            angle, angle_rate = ref[:, 2], ref[:, 7]
+        else:
+            angle, angle_rate = profile.angle_rad, profile.angle_rate_rad_s
+        stiffness_rate = np.gradient(profile.stiffness_nm_per_rad, self.times, edge_order=2)
+        pad = np.zeros((len(self.times), ANKLE_COLUMN_START - ref.shape[1]))
+        self.reference = np.column_stack(
+            [ref, pad, angle, angle_rate, profile.stiffness_nm_per_rad, profile.damping_nms_per_rad, stiffness_rate]
+        ).astype(np.float32)
+        self.ankle_command, self.ankle_command_parameters = command, parameters
+        self.registration.update(
+            {
+                "ankle_controller": "equilibrium-point rotational impedance; pitch is an integrated state, not a replayed column",
+                "ankle_equilibrium_source": (
+                    "measured pitch spline theta0(t); the prescribed replay is its stiff limit"
+                    if equilibrium == "measured"
+                    else "commanded equilibrium angle spline theta0(t)"
+                ),
+                "ankle_command_source": source,
+                "ankle_command_parameters": parameters.tolist(),
+                "ankle_angle_knots": knots["angle"],
+                "ankle_stiffness_knots": knots["stiffness"],
+                "ankle_damping_knots": knots["damping"],
+                "ankle_inertia_kg_m2": self.pitch_inertia,
+                "ankle_damping_law": "b_theta(t) = 2*zeta(t)*sqrt(k_theta(t)*I); the damping ratio is commanded",
+                "ankle_stiffness_range_n_m_per_rad": [
+                    float(profile.stiffness_nm_per_rad.min()),
+                    float(profile.stiffness_nm_per_rad.max()),
+                ],
+                "ankle_torque_limit_n_m": float(self.args.ankle_torque_limit),
+                "identified": False,
+            }
+        )
+
+    def _seed_equilibrium(self, ref):
+        """Offset the legacy reference length by the deflection a constant stiffness needs to carry the load."""
+        span = np.column_stack([ref[:, 3] - ref[:, 0], ref[:, 4] - ref[:, 1]])
+        axis = span / np.maximum(np.linalg.norm(span, axis=1, keepdims=True), 1.0e-9)
+        share = self.foot_mass / self.mass
+        along = (1.0 - share) * np.column_stack([ref[:, 22], ref[:, 11]]) - share * np.column_stack(
+            [ref[:, 23], ref[:, 12]]
+        )
+        return ref[:, 13] + np.sum(along * axis, axis=1) / self.args.stiffness
+
+    def _prescribe(self):
+        if self.ankle_impedance:
+            wp.launch(
+                _constrain_out_of_plane_axes,
+                dim=1,
+                inputs=[self.state_0.body_q, self.state_0.body_qd],
+                device=self.device,
+            )
+            return
         if self.planar:
             wp.launch(
                 _constrain_planar_axes,
                 dim=1,
-                inputs=[index, self.reference_device, self.state_0.body_q, self.state_0.body_qd],
+                inputs=[self.index_device, self.reference_device, self.state_0.body_q, self.state_0.body_qd],
                 device=self.device,
             )
             return
@@ -1068,7 +1474,7 @@ class Example:
             _prescribe_axes,
             dim=1,
             inputs=[
-                index,
+                self.index_device,
                 self.reference_device,
                 int(self.mode == "replay"),
                 self.state_0.body_q,
@@ -1077,8 +1483,8 @@ class Example:
             device=self.device,
         )
 
-    def _sample(self, index):
-        self._prescribe(index)
+    def _sample(self):
+        self._prescribe()
         self.state_0.clear_forces()
         if self.planar:
             wp.copy(self.old_tangent_anchor, self.foundation.tangent_anchor)
@@ -1086,12 +1492,28 @@ class Example:
         # MidsoleFoundation now relaxes the passive outer columns itself, with the same
         # kernel the Digital Instron identification sweeps over its untouched foam.
         self.foundation.apply(self.state_0, self.sim_dt)
-        if self.planar:
+        if self.planar and self.equilibrium:
+            wp.launch(
+                _apply_equilibrium_leg,
+                dim=1,
+                inputs=[
+                    self.index_device,
+                    self.reference_device,
+                    self.args.force_limit_bw * self.mass * self.gravity,
+                    int(self.args.leg_unilateral),
+                    self.state_0.body_q,
+                    self.state_0.body_qd,
+                    self.state_0.body_f,
+                    self.leg_diagnostics,
+                ],
+                device=self.device,
+            )
+        elif self.planar:
             wp.launch(
                 _apply_planar_leg,
                 dim=1,
                 inputs=[
-                    index,
+                    self.index_device,
                     self.reference_device,
                     self.mass,
                     self.foot_mass,
@@ -1105,6 +1527,22 @@ class Example:
                 ],
                 device=self.device,
             )
+        if self.ankle_impedance:
+            wp.launch(
+                _apply_ankle_impedance,
+                dim=1,
+                inputs=[
+                    self.index_device,
+                    self.reference_device,
+                    self.args.ankle_torque_limit,
+                    self.state_0.body_q,
+                    self.state_0.body_qd,
+                    self.state_0.body_f,
+                    self.ankle_diagnostics,
+                ],
+                device=self.device,
+            )
+        if self.planar:
             self.free_metrics.zero_()
             if self.free_columns:
                 wp.launch(
@@ -1143,7 +1581,7 @@ class Example:
                 _record_planar_sample,
                 dim=1,
                 inputs=[
-                    index,
+                    self.index_device,
                     self.reference_device,
                     self.state_0.body_q,
                     self.state_0.body_qd,
@@ -1154,10 +1592,12 @@ class Example:
                     self.foundation.contact_power,
                     self.foundation.max_compression,
                     self.leg_diagnostics,
+                    self.ankle_diagnostics,
                     self.contact_metrics,
                     self.free_metrics,
                     self.com_mass,
                     self.pitch_inertia,
+                    int(self.ankle_impedance),
                     self.gravity,
                     self.trace_device,
                 ],
@@ -1168,7 +1608,7 @@ class Example:
             _apply_leg,
             dim=1,
             inputs=[
-                index,
+                self.index_device,
                 self.reference_device,
                 self.foot_mass,
                 self.args.stiffness,
@@ -1186,7 +1626,7 @@ class Example:
             _record_sample,
             dim=1,
             inputs=[
-                index,
+                self.index_device,
                 self.reference_device,
                 self.state_0.body_q,
                 self.state_0.body_qd,
@@ -1206,20 +1646,64 @@ class Example:
             device=self.device,
         )
 
+    def _substep(self, final: bool = False):
+        """Integrate one substep and record the sample that follows it.
+
+        Args:
+            final: True on the last substep of a captured frame, where an odd substep count
+                has to copy instead of swap so the replayed graph keeps its recorded bindings.
+        """
+        self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
+        if final and self.args.substeps % 2:
+            self.state_0.assign(self.state_1)
+        else:
+            self.state_0, self.state_1 = self.state_1, self.state_0
+        wp.launch(_advance_index, dim=1, inputs=[self.index_device], device=self.device)
+        self._sample()
+
+    def _frame(self):
+        """Run exactly one full frame of substeps, the sequence a captured graph replays."""
+        for substep in range(self.args.substeps):
+            self._substep(final=substep == self.args.substeps - 1)
+
+    def _capture(self):
+        """Capture one frame, falling back to plain launches when the device refuses."""
+        state_0, state_1 = self.state_0, self.state_1
+        try:
+            with wp.ScopedCapture() as capture:
+                self._frame()
+            self.graph = capture.graph
+        except Exception as error:
+            # Capture records without executing, so the states are untouched; only the
+            # Python-side ping-pong of a partially recorded frame has to be undone.
+            self.state_0, self.state_1 = state_0, state_1
+            self.use_graph = False
+            self.graph_status = f"capture failed: {error}"
+            warnings.warn(f"CUDA graph capture failed, using plain launches: {error}", stacklevel=2)
+
     def step(self):
         """Advance one frame and hold toe-off without inventing a swing."""
         if self.index >= self.sample_count:
             return
         if self.index == 0:
-            self._sample(0)
+            self._sample()
             self.index = 1
         stop = min(self.index + self.args.substeps, self.sample_count)
+        if self.use_graph and stop - self.index == self.args.substeps:
+            if self.graph is None:
+                self._capture()
+            if self.graph is not None:
+                wp.capture_launch(self.graph)
+                self.index = stop
         while self.index < stop:
-            self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
-            self.state_0, self.state_1 = self.state_1, self.state_0
-            self._sample(self.index)
+            self._substep()
             self.index += 1
         self.sim_time = float(self.times[self.index - 1])
+
+    def test_post_step(self):
+        """Check that the device sample counter still tracks the host loop counter."""
+        if int(self.index_device.numpy()[0]) != self.index - 1:
+            raise AssertionError("The device sample counter and the host loop counter disagree")
 
     def render(self):
         """Show the measured track motion, dynamic COM, and actual shoe columns."""
@@ -1302,6 +1786,11 @@ class Example:
     def rows(self):
         """Download the complete substep trace once, retaining force and power peaks."""
         trace = self.trace_device.numpy()[: self.index]
+        # Pitch is a state in ankle impedance mode, so the reported angle, angular rate and
+        # rigid-last clearance must come from the achieved trace, not the reference column.
+        pitch = trace[:, 41] if self.ankle_impedance else self.reference[: self.index, 2]
+        pitch_rate = trace[:, 42] if self.ankle_impedance else self.reference[: self.index, 7]
+        offsets = self._last_offsets(pitch) if self.ankle_impedance else self.minimum_last_offsets[: self.index]
         result = []
         for i, values in enumerate(trace):
             ref = self.reference[i]
@@ -1328,21 +1817,21 @@ class Example:
                 "foot_vx_m_s": ankle_vx,
                 "foot_z_m": float(values[2]),
                 "reference_foot_z_m": float(ref[1]),
-                "pitch_rad": float(ref[2]),
+                "pitch_rad": float(pitch[i]),
                 "raw_pitch_rad": float(self.raw_pitch[i]),
-                "pitch_velocity_rad_s": float(ref[7]),
+                "pitch_velocity_rad_s": float(pitch_rate[i]),
                 "pitch_acceleration_rad_s2": float(ref[15]),
                 "ankle_torque_nm": float(values[18]),
                 "impedance_gain": float(ref[19]) if len(ref) >= 22 else 1.0,
                 "retraction_force_n": float(ref[21]) if len(ref) >= 22 else 0.0,
-                "last_min_height_m": float(values[2] + self.minimum_last_offsets[i]),
+                "last_min_height_m": float(values[2] + offsets[i]),
                 "ankle_x_m": ankle_x if self.reference_mode == "pitch" else float("nan"),
                 "ankle_z_m": float(values[2]) if self.reference_mode == "pitch" else float("nan"),
                 "shoe_origin_x_m": float(
-                    ankle_x - np.cos(ref[2]) * self.ankle_mount[0] - np.sin(ref[2]) * self.ankle_mount[2]
+                    ankle_x - np.cos(pitch[i]) * self.ankle_mount[0] - np.sin(pitch[i]) * self.ankle_mount[2]
                 ),
                 "shoe_origin_z_m": float(
-                    values[2] + np.sin(ref[2]) * self.ankle_mount[0] - np.cos(ref[2]) * self.ankle_mount[2]
+                    values[2] + np.sin(pitch[i]) * self.ankle_mount[0] - np.cos(pitch[i]) * self.ankle_mount[2]
                 ),
                 "com_x_m": float(center_x),
                 "com_vx_m_s": float(center_vx),
@@ -1375,7 +1864,7 @@ class Example:
                 + self.foot_mass * (self.gravity * float(values[2]) + 0.5 * float(values[15]) ** 2)
                 + 0.5 * self.foot_mass * ankle_vx**2
                 + 0.5 * self.com_mass * upper_vx**2
-                + 0.5 * self.pitch_inertia * float(ref[7]) ** 2,
+                + 0.5 * self.pitch_inertia * float(pitch_rate[i]) ** 2,
             }
             if self.planar:
                 row.update(
@@ -1401,6 +1890,13 @@ class Example:
                         "passive_loaded_columns": float(values[39]),
                         "com_ankle_dx_m": float(center_x - ankle_x),
                         "com_ankle_distance_m": float(np.hypot(center_x - ankle_x, center_z - float(values[2]))),
+                        "ankle_angle_rad": float(values[41]),
+                        "ankle_angle_rate_rad_s": float(values[42]),
+                        "ankle_equilibrium_rad": float(values[43]),
+                        "ankle_source_power_w": float(values[44]),
+                        "ankle_damping_power_w": float(values[45]),
+                        "ankle_spring_energy_j": float(values[46]),
+                        "ankle_torque_clipped_nm": float(values[47]),
                     }
                 )
             result.append(row)
@@ -1423,7 +1919,10 @@ class Example:
                 reasons.append(f"Shoe peak outside engineering bounds: {peak:.1f} N")
             if not 0.0 < compression < 0.05:
                 reasons.append(f"Compression outside engineering bounds: {compression:.6f} m")
-            last_height = trace[:, 2] + self.minimum_last_offsets[: self.index]
+            offsets = (
+                self._last_offsets(trace[:, 41]) if self.ankle_impedance else self.minimum_last_offsets[: self.index]
+            )
+            last_height = trace[:, 2] + offsets
             if np.min(last_height) < -0.001:
                 reasons.append(f"Rigid last penetrated ground: {1000 * np.min(last_height):.2f} mm")
             if (
@@ -1434,6 +1933,8 @@ class Example:
                 reasons.append(f"Fixture remains loaded after toe-off: {trace[-1, 0]:.1f} N")
             if np.any(trace[:, 12] != 0.0):
                 reasons.append("Controller hit its force limit")
+            if self.ankle_impedance and np.any(trace[:, 47] > 0.0):
+                reasons.append(f"Ankle actuator hit its torque limit: {float(trace[:, 47].max()):.1f} N·m clipped")
             if self.mode == "impedance" and np.max(np.abs(trace[:, 2] - self.reference[: self.index, 1])) < 1.0e-5:
                 reasons.append("Impedance foot did not depart from prescribed motion")
         if self.model.body_count != 2 or self.model.joint_count != 2:
@@ -1629,6 +2130,78 @@ def create_parser():
         default=0.0,
         help="Additional fixture lift acceleration during release [m/s^2]; default uses gravity compensation only.",
     )
+    parser.add_argument(
+        "--control",
+        choices=["legacy", "equilibrium"],
+        default="legacy",
+        help="Scheduled impedance around a force-integrated reference, or a commanded equilibrium trajectory.",
+    )
+    parser.add_argument(
+        "--control-params",
+        type=Path,
+        help="JSON command file with an optimized 'parameters' vector for --control equilibrium.",
+    )
+    parser.add_argument(
+        "--damping-ratio",
+        type=float,
+        default=0.25,
+        help="Commanded leg damping ratio for --control equilibrium; the damper follows the stiffness.",
+    )
+    parser.add_argument("--length-knots", type=int, default=6, help="Equilibrium trajectory spline knots.")
+    parser.add_argument("--stiffness-knots", type=int, default=6, help="Leg stiffness profile spline knots.")
+    parser.add_argument("--damping-knots", type=int, default=3, help="Leg damping-ratio profile spline knots.")
+    parser.add_argument(
+        "--leg-unilateral",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Restrict the commanded leg to pushing, which ends stance without a scheduled release.",
+    )
+    parser.add_argument(
+        "--ankle-control",
+        choices=["prescribed", "impedance"],
+        default="prescribed",
+        help="Replay the measured pitch onto the fixture, or drive pitch with an equilibrium-point ankle impedance.",
+    )
+    parser.add_argument(
+        "--ankle-torque-limit",
+        type=float,
+        default=400.0,
+        help=(
+            "Signed ankle actuator torque limit [N m]. The default is about 1.8x the 221 N m peak the "
+            "prescribed-pitch motor demands on this stance, so it bounds a runaway command without shaping "
+            "the nominal one."
+        ),
+    )
+    parser.add_argument(
+        "--ankle-stiffness",
+        type=float,
+        default=4000.0,
+        help="Seed ankle stiffness [N m/rad] for --ankle-control impedance.",
+    )
+    parser.add_argument(
+        "--ankle-damping-ratio",
+        type=float,
+        default=0.5,
+        help="Commanded ankle damping ratio; the ankle damper follows the ankle stiffness.",
+    )
+    parser.add_argument("--ankle-angle-knots", type=int, default=6, help="Equilibrium ankle angle spline knots.")
+    parser.add_argument("--ankle-stiffness-knots", type=int, default=6, help="Ankle stiffness profile spline knots.")
+    parser.add_argument("--ankle-damping-knots", type=int, default=3, help="Ankle damping-ratio profile spline knots.")
+    parser.add_argument(
+        "--ankle-params",
+        type=Path,
+        help="JSON command file with an optimized ankle 'parameters' vector for --ankle-control impedance.",
+    )
+    parser.add_argument(
+        "--ankle-equilibrium",
+        choices=["measured", "commanded"],
+        default=None,
+        help=(
+            "Equilibrium angle source: the measured pitch spline, which makes prescribed replay the stiff "
+            "limit of the ankle impedance, or the commanded angle spline. Defaults to the commanded spline "
+            "only when an ankle parameter vector or file is supplied."
+        ),
+    )
     parser.add_argument("--stiffness", type=float, default=12000.0, help="Virtual leg stiffness [N/m].")
     parser.add_argument("--damping", type=float, default=500.0, help="Virtual leg damping [N s/m].")
     parser.add_argument(
@@ -1651,6 +2224,12 @@ def create_parser():
         help="Lowest outsole height at measured threshold touchdown [m]; fixed across shoe comparisons.",
     )
     parser.add_argument("--substeps", type=int, default=64, help="Native solver substeps per 120 Hz display frame.")
+    parser.add_argument(
+        "--graph",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Replay one captured CUDA graph per frame instead of launching every substep; CUDA only.",
+    )
     parser.add_argument(
         "--kinematic-rate-hz",
         type=float,

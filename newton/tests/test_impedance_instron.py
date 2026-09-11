@@ -126,7 +126,7 @@ class TestImpedanceNativeControl(unittest.TestCase):
                 _apply_leg,
                 dim=1,
                 inputs=[
-                    0,
+                    wp.zeros(1, dtype=wp.int32, device="cpu"),
                     wp.array(reference, device="cpu"),
                     2.0,
                     10000.0,

@@ -135,7 +135,7 @@ class TestPitchReference(unittest.TestCase):
             _apply_leg,
             dim=1,
             inputs=[
-                0,
+                wp.zeros(1, dtype=wp.int32, device="cpu"),
                 wp.array(reference, device="cpu"),
                 2.0,
                 10000.0,
@@ -164,7 +164,8 @@ class TestPitchReference(unittest.TestCase):
         velocity = np.zeros((2, 6), np.float32)
         velocity[:, 2] = [0.3, -0.4]
         qd = wp.array(velocity, dtype=wp.spatial_vector, device="cpu")
-        wp.launch(_prescribe_axes, dim=1, inputs=[0, wp.array(reference, device="cpu"), 0, q, qd], device="cpu")
+        index = wp.zeros(1, dtype=wp.int32, device="cpu")
+        wp.launch(_prescribe_axes, dim=1, inputs=[index, wp.array(reference, device="cpu"), 0, q, qd], device="cpu")
         np.testing.assert_allclose(q.numpy()[:, 2], [0.21, 1.05], atol=1e-7)
         np.testing.assert_allclose(qd.numpy()[:, 2], [0.3, -0.4], atol=1e-7)
 
