@@ -1,0 +1,35 @@
+{
+  "scope": "Reviewed exact/renamed algorithm clones after cleanup; not an allowlist for new copies.",
+  "groups": [
+    {
+      "functions": [
+        "projects/digital_instron_v2/export_digital_shoe.py:_sha256",
+        "projects/impedance_instron/profile.py:_hash"
+      ],
+      "reason": "Chunked file hashing is deliberately self-contained in the cross-worktree profile exporter; avoid a new cross-project/runtime dependency in this cleanup."
+    },
+    {
+      "functions": [
+        "projects/impedance_instron/profile.py:_canonical",
+        "projects/impedance_instron/simple/reference.py:_canonical",
+        "projects/impedance_instron/variability.py:_canonical"
+      ],
+      "reason": "Protected canonical serialization/source-identity behavior; consolidate only with an explicit identity migration and standalone exporter contract tests."
+    },
+    {
+      "functions": [
+        "projects/impedance_instron/profile.py:_unique_object",
+        "projects/impedance_instron/simple/reference.py:_unique_object"
+      ],
+      "reason": "Protected canonical serialization/source-identity behavior; consolidate only with an explicit identity migration and standalone exporter contract tests."
+    },
+    {
+      "functions": [
+        "projects/impedance_instron/simple/policy.py:_json_hash",
+        "projects/impedance_instron/simple/rig.py:_identity"
+      ],
+      "reason": "Protected canonical serialization/source-identity behavior; consolidate only with an explicit identity migration and standalone exporter contract tests."
+    }
+  ],
+  "near_match_policy": "Near matches require semantic review. Different interpolation, work integration, serialization and boundary policies are not automatically interchangeable."
+}

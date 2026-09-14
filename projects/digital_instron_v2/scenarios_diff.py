@@ -71,6 +71,15 @@ from .dynamics_diff import (
     _legacy_smooth_friction,
     _pasternak_flux,
 )
+from .scenario_common import (
+    SURROUND_ATTACHMENT_N_M,
+    SURROUND_MAX_STRAIN,
+    SURROUND_SWEEPS,
+    attachment_pd_wrench,
+    make_surround,
+)
+from .scenario_common import quat_conjugate as _quat_inv
+from .scenario_common import quat_multiply as _quat_mul
 
 
 @wp.kernel
@@ -96,68 +105,18 @@ def _attach_pd(
     arrays instead of advancing an on-device counter, so it has no side effect and
     is safe to record on a :class:`warp.Tape`.
     """
-    target_pos = wp.transform_get_translation(target[0])
-    target_rot = wp.transform_get_rotation(target[0])
-    pos = wp.transform_get_translation(body_q[body])
-    rot = wp.transform_get_rotation(body_q[body])
-
-    e_p = target_pos - pos
-    q_err = target_rot * wp.quat_inverse(rot)
-    if q_err[3] < 0.0:
-        q_err = wp.quat(-q_err[0], -q_err[1], -q_err[2], -q_err[3])
-    e_r = 2.0 * wp.vec3(q_err[0], q_err[1], q_err[2])
-
-    v = wp.spatial_top(body_qd[body])
-    w = wp.spatial_bottom(body_qd[body])
-    tv = wp.spatial_top(target_vel[0])
-    tw = wp.spatial_bottom(target_vel[0])
-
-    force = kp_lin * e_p + kd_lin * (tv - v)
-    moment = kp_ang * e_r + kd_ang * (tw - w)
-    mag = wp.length(force)
-    if mag > max_force and mag > 1.0e-9:
-        force = force * (max_force / mag)
-    wp.atomic_add(body_f, body, wp.spatial_vector(force, moment))
-
-
-@wp.kernel
-def _ground_reaction_force(
-    carrier: wp.int32,
-    body_q: wp.array[wp.transform],
-    body_qd: wp.array[wp.spatial_vector],
-    body_com: wp.array[wp.vec3],
-    anchor_local: wp.array[wp.vec3],
-    area: wp.array[wp.float32],
-    rest_len: wp.array[wp.float32],
-    neighbors: wp.array2d[wp.int32],
-    compression: wp.array[wp.float32],
-    base_pressure: wp.array[wp.float32],
-    material_params: wp.array[wp.float32],
-    normal_damping: wp.float32,
-    substep: wp.int32,
-    grf_hist: wp.array[wp.float32],
-):
-    """Sum the vertical column ground-reaction force for one substep into ``grf_hist[substep]``.
-
-    Re-derives the normal force from the per-substep compression/pressure history
-    so the total GRF is written exactly once per substep (unlike the foundation's
-    single overwritten diagnostic), keeping every value on the loss path
-    un-aliased across the rollout. The mechanics are
-    :func:`~projects.digital_instron_v2.dynamics_diff._column_normal_force`, the
-    one differentiable transcription of the runtime contact law, so this readout
-    reports the same reaction the wrench applies.
-    """
-    i = wp.tid()
-    # The shear layer follows the series modulus, the sum of both Ogden-Hill terms.
-    mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
-    ci = compression[i]
-    flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
-
-    _world, _com_world, point_vel, _gap = contact_kinematics(
-        body_q[carrier], body_qd[carrier], body_com[carrier], anchor_local[i], 0.0, 0
+    force, moment = attachment_pd_wrench(
+        body_q[body],
+        body_qd[body],
+        target[0],
+        target_vel[0],
+        kp_lin,
+        kd_lin,
+        kp_ang,
+        kd_ang,
+        max_force,
     )
-    fn = _column_normal_force(ci, base_pressure[i], area[i], flux, normal_damping, point_vel[2])
-    wp.atomic_add(grf_hist, substep, fn)
+    wp.atomic_add(body_f, body, wp.spatial_vector(force, moment))
 
 
 @wp.kernel
@@ -234,9 +193,6 @@ def _reduce_sum(values: wp.array[wp.float32], out: wp.array[wp.float32]):
 # quasi-static surround the fit solves with 250 sweeps from zero.
 # The outer bond is booked consistently by being switched off: its reaction was
 # used inside the relaxation but never reported, which made it a hidden support.
-SURROUND_ATTACHMENT_N_M = 0.0
-SURROUND_MAX_STRAIN = 0.9
-SURROUND_SWEEPS = 32
 
 
 def default_surround(driven: np.ndarray, *, carrier_bond: bool) -> SurroundConfig:
@@ -244,32 +200,20 @@ def default_surround(driven: np.ndarray, *, carrier_bond: bool) -> SurroundConfi
 
     Args:
         driven: Nonzero where the carrier drives the column, shape ``[column_count]``.
-        carrier_bond: True when the untouched column tops are glued under the rigid
-            carrier (a shod runtime) instead of being a free shoe surface the
-            carrier never touches (a bench indenter).
+        carrier_bond: True for one-sided carrier-relative retention in a carried
+            shoe, rather than the free surface of a bench indenter. This is not
+            a literal bond of every column top to the rigid last.
 
     Returns:
         The :class:`~projects.digital_instron_v2.dynamics.SurroundConfig` the
         shipped forward model uses for the same scenario.
     """
-    return SurroundConfig(
-        driven=driven,
+    return make_surround(
+        driven,
         attachment_n_m=SURROUND_ATTACHMENT_N_M,
         max_strain=SURROUND_MAX_STRAIN,
         sweeps=SURROUND_SWEEPS,
         carrier_bond=carrier_bond,
-    )
-
-
-def _quat_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    return np.array(
-        [
-            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
-            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
-            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
-            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
-        ],
-        np.float32,
     )
 
 
@@ -323,7 +267,7 @@ def stride_trajectory(
         prev = poses[(t - 1) % substep_count]
         cur = poses[t]
         lin = (cur[:3] - prev[:3]) / dt
-        q_rel = _quat_mul(cur[3:7], np.array([-prev[3], -prev[4], -prev[5], prev[6]], np.float32))
+        q_rel = _quat_mul(cur[3:7], _quat_inv(prev[3:7]))
         if q_rel[3] < 0.0:
             q_rel = -q_rel
         velocities[t] = np.concatenate([lin, 2.0 * q_rel[:3] / dt])

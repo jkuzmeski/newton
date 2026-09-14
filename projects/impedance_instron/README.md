@@ -1,5 +1,23 @@
 # Two-stiffness impedance Instron
 
+## Project organization
+
+See the [three-project map](../README.md) for the separation between bench
+identification, shared shoe mechanics and this experiment.
+
+- **Current workflow:** `python -m projects.impedance_instron` and `simple/`.
+- **Current viewer:** `python -m newton.examples impedance_stiffness`.
+- **Shared preparation:** `profile.py`, `orientation.py`, `trajectory.py` and
+  `variability.py` remain at the root because the current reference uses them.
+- **Retired implementations:** [`legacy/`](legacy/README.md). Old root imports and
+  module commands are compatibility aliases, not duplicate controller sources.
+- **Results:** `REPORT.md` is current; `LEGACY_REPORT.md` is historical;
+  `WORKTREE_SUMMARY.md` records the cross-generation development history.
+
+No historical scores or source archives replace the current frozen experiment.
+The active source/geometry identities and checkpoint checks stay unchanged.
+
+
 **Two online controls. One kinematic tracking score.**
 
 See [WORKTREE_SUMMARY.md](WORKTREE_SUMMARY.md) for the consolidated implementation
@@ -217,9 +235,11 @@ uv run --no-sync -m unittest \
   newton.tests.test_impedance_simple_report
 ```
 
-The old six-action experiments are retired from the active workflow. Their source
-snapshot and generated runs are archived outside the project; see
-`outputs/impedance_instron/LEGACY_ARCHIVE.json`. Old source entry points remain for
-one deprecation cycle to avoid deleting existing API symbols without notice.
-They are not the implementation of this controller and their old scores are not
-comparable to the new tracking loss.
+The old six-action experiments are retired from the active workflow. Their
+maintained compatibility implementations live in `legacy/`; the old root module
+names are thin aliases. An immutable earlier source snapshot and generated runs
+are also archived outside the project, located by
+`outputs/impedance_instron/LEGACY_ARCHIVE.json`. That archive is optional historical
+evidence, not a runtime dependency. Public entry points remain through their
+deprecation window. They are not the current controller, and their scores are not
+comparable to its tracking loss.

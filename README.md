@@ -962,6 +962,9 @@ python -m newton.examples basic_viewer --viewer gl --num-frames 500 --device cpu
 
 ## Digital Instron / Digital Shoe showcase
 
+See the [shoe-project organization and command map](projects/README.md) for
+Digital Instron, Digital Shoe, and the current versus legacy impedance code.
+
 This fork includes a standalone shoe calibrated from Digital Instron measurements.
 Export the fitted artifact and HTML report, then launch the Virtual Instron:
 

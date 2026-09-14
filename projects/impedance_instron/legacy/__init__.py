@@ -1,4 +1,4 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Current two-stiffness experiment, shared preparation, and isolated legacy tools."""
+"""Retired multi-action impedance experiments, retained for compatibility."""

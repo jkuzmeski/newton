@@ -441,7 +441,7 @@ class TestOptimizerCompatibility(unittest.TestCase):
 
     def _dataclass_fields(self, name):
         """Return the field names of one dataclass in optimize.py, parsed without importing Warp."""
-        source = Path(__file__).resolve().parents[2] / "projects" / "impedance_instron" / "optimize.py"
+        source = Path(__file__).resolve().parents[2] / "projects" / "impedance_instron" / "legacy" / "optimize.py"
         tree = ast.parse(source.read_text())
         for node in tree.body:
             if isinstance(node, ast.ClassDef) and node.name == name:

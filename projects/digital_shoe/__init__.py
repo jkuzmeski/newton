@@ -3,11 +3,24 @@
 
 """Load and simulate portable Digital Shoe artifacts."""
 
-from .artifact import ColumnBed, DigitalShoe, InstronFixture, VisualMesh, load_artifact
-from .calibration import CalibrationWorkspace
-from .material import hyperfoam_pressure_numpy, maxwell_coefficients_numpy, maxwell_step_numpy
-from .provenance import physics_source_identity
-from .runtime import FoundationConfig, MidsoleFoundation, ShoeMaterial, SurroundConfig
+from importlib import import_module
+
+_EXPORT_MODULES = {
+    "CalibrationWorkspace": "calibration",
+    "ColumnBed": "artifact",
+    "DigitalShoe": "artifact",
+    "FoundationConfig": "runtime",
+    "InstronFixture": "artifact",
+    "MidsoleFoundation": "runtime",
+    "ShoeMaterial": "runtime",
+    "SurroundConfig": "runtime",
+    "VisualMesh": "artifact",
+    "hyperfoam_pressure_numpy": "material",
+    "load_artifact": "artifact",
+    "maxwell_coefficients_numpy": "material",
+    "maxwell_step_numpy": "material",
+    "physics_source_identity": "provenance",
+}
 
 __all__ = [
     "CalibrationWorkspace",
@@ -25,3 +38,18 @@ __all__ = [
     "maxwell_step_numpy",
     "physics_source_identity",
 ]
+
+
+def __getattr__(name: str) -> object:
+    """Resolve a public export without importing unrelated project tools."""
+    module = _EXPORT_MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f".{module}", __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    """Include lazy public exports in interactive package discovery."""
+    return sorted(set(globals()) | set(__all__))

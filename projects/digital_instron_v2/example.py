@@ -41,11 +41,12 @@ import warp as wp
 import newton
 import newton.examples
 from projects.digital_shoe.rendering import bench_column_endpoints_at_sites, carried_column_endpoints
+from projects.digital_shoe.rendering import camera_look_at as _look_at
 
 from .dynamics import (
     FoundationConfig,
     MidsoleFoundation,
-    SurroundConfig,
+    SurroundConfig,  # noqa: F401  # compatibility import
     attach_coupling,
     build_foundation_geometry,
     column_colors,
@@ -55,6 +56,14 @@ from .dynamics import (
     synthetic_stride,
 )
 from .geometry import load_mesh, transform_mesh
+from .scenario_common import (
+    SURROUND_ATTACHMENT_N_M,
+    SURROUND_MAX_STRAIN,
+    SURROUND_SWEEPS,
+    make_surround,
+)
+from .scenario_common import quat_conjugate as _quat_inv
+from .scenario_common import quat_multiply as _quat_mul
 
 MANIFEST = "DigitalInstron/manifest_v2.json"
 INSTRON_CYCLES = 6  # warm-up cycles before the reported hysteresis loop
@@ -62,13 +71,10 @@ INSTRON_CYCLES = 6  # warm-up cycles before the reported hysteresis loop
 # assumed vertical bond of untouched foam to the shoe and its compression limit.
 # The outer bond is booked consistently by being switched off: its reaction was
 # used inside the relaxation but never reported, which made it a hidden support.
-SURROUND_ATTACHMENT_N_M = 0.0
-SURROUND_MAX_STRAIN = 0.9
 # Relaxation sweeps per substep. The compression field is warm started from the
 # previous substep, so a few sweeps track the converged quasi-static surround the
 # fit solves with 250 sweeps from zero: 32 and 128 sweeps give the same Instron
 # loop, and that loop matches core.predict to 0.1% RMS.
-SURROUND_SWEEPS = 32
 # Foam damping per column for the free-body scenarios [N.s/m]. The whole midsole
 # carries 910 columns, so a per-column dashpot that was merely stiff on the old
 # fixture subset becomes a numerically explicit wall: 8.0 N.s/m per column is
@@ -177,8 +183,8 @@ class Example:
         rigid_bed = np.ones(self.column_count, dtype=bool)
 
         def surround_of(driven, carrier_bond):
-            return SurroundConfig(
-                driven=driven,
+            return make_surround(
+                driven,
                 attachment_n_m=SURROUND_ATTACHMENT_N_M,
                 max_strain=SURROUND_MAX_STRAIN,
                 sweeps=SURROUND_SWEEPS,
@@ -617,36 +623,8 @@ class Example:
         )
 
 
-def _quat_mul(a, b):
-    """Multiply two (x, y, z, w) quaternions."""
-    ax, ay, az, aw = a
-    bx, by, bz, bw = b
-    return np.array(
-        [
-            aw * bx + ax * bw + ay * bz - az * by,
-            aw * by - ax * bz + ay * bw + az * bx,
-            aw * bz + ax * by - ay * bx + az * bw,
-            aw * bw - ax * bx - ay * by - az * bz,
-        ],
-        dtype=np.float32,
-    )
-
-
-def _quat_inv(a):
-    """Return the inverse (conjugate) of a unit (x, y, z, w) quaternion."""
-    return np.array([-a[0], -a[1], -a[2], a[3]], dtype=np.float32)
-
-
-def _look_at(eye, target):
-    """Return (pos, pitch_deg, yaw_deg) for a Z-up camera at ``eye`` looking at ``target``."""
-    d = np.asarray(target, dtype=np.float64) - np.asarray(eye, dtype=np.float64)
-    d /= np.linalg.norm(d)
-    pitch = np.degrees(np.arcsin(d[2]))
-    yaw = np.degrees(np.arctan2(d[1], d[0]))
-    return wp.vec3(*[float(v) for v in eye]), float(pitch), float(yaw)
-
-
-if __name__ == "__main__":
+def main() -> None:
+    """Run the source-backed mechanical example with its existing CLI."""
     parser = newton.examples.create_parser()
     parser.add_argument(
         "--mode",
@@ -663,3 +641,7 @@ if __name__ == "__main__":
     )
     viewer, args = newton.examples.init(parser)
     newton.examples.run(Example(viewer, args), args)
+
+
+if __name__ == "__main__":
+    main()

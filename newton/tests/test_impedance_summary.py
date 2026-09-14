@@ -439,7 +439,7 @@ class ContactDefinitionTest(unittest.TestCase):
 
     def test_constant_matches_the_environment(self):
         """Check the page's contact fraction equals env.CONTACT_FORCE_FRACTION, its source of truth."""
-        source = Path("projects/impedance_instron/env.py").read_text(encoding="utf-8")
+        source = Path("projects/impedance_instron/legacy/env.py").read_text(encoding="utf-8")
         found = re.search(r"^CONTACT_FORCE_FRACTION\s*=\s*([0-9.eE+-]+)", source, re.M)
         self.assertIsNotNone(found, "env.py no longer defines CONTACT_FORCE_FRACTION")
         self.assertEqual(float(found.group(1)), CONTACT_FORCE_FRACTION)

@@ -5,6 +5,32 @@ SPDX-License-Identifier: Apache-2.0
 
 # Digital Instron v2
 
+## Start here
+
+Digital Instron owns source preparation, identification, validation and export.
+It calls the shared laws in Digital Shoe; it does not maintain another material
+or contact implementation. See the [three-project map](../README.md) for file
+roles and the difference between artifact flow and shared-code dependencies.
+
+```bash
+uv run --no-sync -m projects.digital_instron_v2 --help
+uv run --no-sync -m projects.digital_instron_v2 validate --help
+```
+
+| Task | Package command | Important distinction |
+|---|---|---|
+| Averaged-cycle fit | `fit` | Historical workflow; not a held-out protocol |
+| Train/held-out evaluation | `validate` | Fits on the designated training split |
+| Dynamic bench validation | `replay` | Runs the existing fitting/replay protocol |
+| Portable artifact production | `export` | Identifies and validates before exporting |
+| Mechanical demonstrations | `view` | Source-backed scene viewer |
+| Forward calibration benchmark | `profile` | Requires an explicit saved baseline |
+
+The routers retain existing tool flags, defaults and output locations. Old module
+commands remain valid. Public records and Warp definitions are not relocated;
+this is organization, not a fitter or model change.
+
+
 > **Standalone presentation:** Use `projects.digital_instron_v2.export_digital_shoe`
 > to produce a portable `digital_shoe.json`, then run the artifact-only Virtual
 > Instron, free-body drop, and rocker examples in `projects/digital_shoe`. See

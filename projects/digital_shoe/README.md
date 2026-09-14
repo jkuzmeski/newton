@@ -1,5 +1,28 @@
 # Digital Shoe
 
+## Start here
+
+Digital Shoe owns the portable artifact and shared mechanics. It does not fit
+bench data or implement an impedance controller. See the [three-project map](../README.md)
+for package boundaries, file ownership, data paths and supported commands.
+
+```bash
+uv run --no-sync -m projects.digital_shoe --help
+uv run --no-sync -m projects.digital_shoe view --mode instron --fixture rearfoot_punch --viewer gl
+```
+
+| Task | Package command |
+|---|---|
+| View artifact-only examples | `view` |
+| Rebuild the offline report | `report` |
+| Record example GIFs | `record` |
+| Validate acquisition metadata | `check-acquisition` |
+
+Append `--help` to a command for its existing options. The old `.showcase`,
+`.report`, `.record_gifs` and `.acquisition` module commands remain supported.
+Runtime/material/contact files and report resources retain their locations.
+
+
 `projects.digital_shoe` is the path-independent runtime and presentation layer
 for an intact shoe identified from mechanical test data. It does not depend on
 gait, C3D, OpenSim, or a human model.
@@ -14,7 +37,7 @@ new rates, temperatures, impacts, or shoes.
 
 ## Architecture
 
-The dependency points in one direction:
+The portable artifact flows from identification to consumption:
 
 ```text
 projects.digital_instron_v2 (data, geometry, fitting)

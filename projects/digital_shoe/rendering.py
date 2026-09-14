@@ -3,6 +3,7 @@
 
 """Device-side helpers for compression-coloured Digital Shoe rendering."""
 
+import numpy as np
 import warp as wp
 
 
@@ -185,3 +186,20 @@ def column_colors(compression: wp.array[wp.float32], reference_m: wp.float32, co
     else:
         blend = 3.0 * value - 2.0
         colors[i] = wp.vec3(1.0, 1.0 - blend, 0.0)
+
+
+def camera_look_at(eye, target) -> tuple[wp.vec3, float, float]:
+    """Return camera position, pitch and yaw for a Z-up view.
+
+    Args:
+        eye: World camera position [m], three coordinates.
+        target: World look-at position [m], three coordinates.
+
+    Returns:
+        Camera position [m] and pitch/yaw [degrees].
+    """
+    direction = np.asarray(target, dtype=np.float64) - np.asarray(eye, dtype=np.float64)
+    direction /= np.linalg.norm(direction)
+    pitch = np.degrees(np.arcsin(direction[2]))
+    yaw = np.degrees(np.arctan2(direction[1], direction[0]))
+    return wp.vec3(*[float(value) for value in eye]), float(pitch), float(yaw)

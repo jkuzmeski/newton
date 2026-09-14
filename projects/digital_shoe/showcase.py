@@ -13,6 +13,7 @@ import warp as wp
 
 import newton
 import newton.examples
+from projects.digital_shoe.rendering import camera_look_at as _look_at
 
 from .artifact import load_artifact
 from .rendering import bench_column_endpoints, carried_column_endpoints, column_colors
@@ -73,14 +74,6 @@ def _accumulate_frame_compression(
     if value > frame_compression[i]:
         frame_compression[i] = value
     wp.atomic_max(frame_max_compression, 0, value)
-
-
-def _look_at(eye, target):
-    delta = np.asarray(target, dtype=np.float64) - np.asarray(eye, dtype=np.float64)
-    delta /= np.linalg.norm(delta)
-    pitch = np.degrees(np.arcsin(delta[2]))
-    yaw = np.degrees(np.arctan2(delta[1], delta[0]))
-    return wp.vec3(*[float(value) for value in eye]), float(pitch), float(yaw)
 
 
 class Example:
@@ -630,7 +623,8 @@ class Example:
         print(f"[digital shoe / rocker] peak {force.max():.0f} N; COP travelled {1000 * travel:.0f} mm")
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Run the artifact-only scenes and save recordings after the simulation."""
     parser = newton.examples.create_parser()
     parser.add_argument("--artifact", type=Path, default=Path(DEFAULT_ARTIFACT))
     parser.add_argument("--mode", choices=["instron", "drop", "rocker"], default="instron")
@@ -645,3 +639,7 @@ if __name__ == "__main__":
     example = Example(viewer, args)
     newton.examples.run(example, args)
     example.save_gif()
+
+
+if __name__ == "__main__":
+    main()

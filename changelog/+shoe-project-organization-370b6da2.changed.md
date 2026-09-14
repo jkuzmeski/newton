@@ -1,0 +1,1 @@
+Organize retired impedance implementations under legacy/ while retaining old import and command aliases. Add lightweight package command menus and project navigation, share duplicate presentation/scenario/legacy helpers, and add a reviewed duplicate-function check without changing the two-term material or active experiment.

@@ -54,6 +54,7 @@ from projects.digital_shoe.runtime import (
 
 from .core import CALIBRATED_MATERIAL, EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material
 from .geometry import build_column_grid, load_mesh, raycast_surface, rearfoot_center, transform_mesh
+from .scenario_common import attachment_pd_wrench
 
 POISSON = wp.constant(EFFECTIVE_POISSON_RATIO)
 TAU_S = wp.constant(MAXWELL_RELAXATION_TIME_S)
@@ -352,28 +353,17 @@ def attach_coupling(
     idx = counter[0] % period
     target = target_traj[idx]
     target_vel = target_vel_traj[idx]
-    pos = wp.transform_get_translation(body_q[body])
-    rot = wp.transform_get_rotation(body_q[body])
-    target_pos = wp.transform_get_translation(target)
-    target_rot = wp.transform_get_rotation(target)
-
-    e_p = target_pos - pos
-    q_err = target_rot * wp.quat_inverse(rot)
-    if q_err[3] < 0.0:
-        q_err = wp.quat(-q_err[0], -q_err[1], -q_err[2], -q_err[3])
-    e_r = 2.0 * wp.vec3(q_err[0], q_err[1], q_err[2])
-
-    v = wp.spatial_top(body_qd[body])
-    w = wp.spatial_bottom(body_qd[body])
-    tv = wp.spatial_top(target_vel)
-    tw = wp.spatial_bottom(target_vel)
-
-    force = kp_lin * e_p + kd_lin * (tv - v)
-    moment = kp_ang * e_r + kd_ang * (tw - w)
-
-    mag = wp.length(force)
-    if mag > max_force and mag > 1.0e-9:
-        force = force * (max_force / mag)
+    force, moment = attachment_pd_wrench(
+        body_q[body],
+        body_qd[body],
+        target,
+        target_vel,
+        kp_lin,
+        kd_lin,
+        kp_ang,
+        kd_ang,
+        max_force,
+    )
 
     wp.atomic_add(body_f, body, wp.spatial_vector(force, moment))
     out_force[0] = wp.length(force)

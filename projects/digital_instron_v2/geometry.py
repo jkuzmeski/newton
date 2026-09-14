@@ -28,6 +28,26 @@ class ColumnGrid:
         return self.top_m - self.bottom_m
 
 
+def _rotation_xyz(rotation_deg) -> np.ndarray:
+    """Return the existing XYZ Euler rotation matrix from angles [degrees]."""
+    roll, pitch, yaw = np.deg2rad(rotation_deg)
+    rx = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
+    ry = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
+    rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
+    return rz @ ry @ rx
+
+
+def _positive_rays(mesh, uv_m: np.ndarray, thickness_axis: int) -> tuple[np.ndarray, np.ndarray]:
+    """Place rays [m] below the mesh and point them along the positive thickness axis."""
+    plane_axes = [axis for axis in range(3) if axis != thickness_axis]
+    origins = np.zeros((len(uv_m), 3))
+    origins[:, plane_axes] = uv_m
+    origins[:, thickness_axis] = mesh.bounds[0, thickness_axis] - 0.01
+    directions = np.zeros_like(origins)
+    directions[:, thickness_axis] = 1.0
+    return origins, directions
+
+
 def load_mesh(
     path: str | Path,
     scale: float = 1.0,
@@ -48,11 +68,7 @@ def load_mesh(
     mesh.vertices[:, :2] -= (np.min(mesh.vertices[:, :2], axis=0) + np.max(mesh.vertices[:, :2], axis=0)) / 2.0
     mesh.vertices[:, 2] -= np.min(mesh.vertices[:, 2])
     if rotation_deg is not None:
-        roll, pitch, yaw = np.deg2rad(rotation_deg)
-        rx = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
-        ry = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
-        rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
-        mesh.vertices = mesh.vertices @ (rz @ ry @ rx).T
+        mesh.vertices = mesh.vertices @ _rotation_xyz(rotation_deg).T
         mesh.vertices[:, :2] -= (np.min(mesh.vertices[:, :2], axis=0) + np.max(mesh.vertices[:, :2], axis=0)) / 2.0
         mesh.vertices[:, 2] -= np.min(mesh.vertices[:, 2])
     if crop_height_m is not None:
@@ -70,11 +86,7 @@ def transform_mesh(
 ) -> None:
     """Apply an XYZ rotation about the canonical origin followed by translation."""
 
-    roll, pitch, yaw = np.deg2rad(rotation_deg)
-    rx = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
-    ry = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
-    rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
-    mesh.vertices = mesh.vertices @ (rz @ ry @ rx).T + np.asarray(translation_m, dtype=np.float64)
+    mesh.vertices = mesh.vertices @ _rotation_xyz(rotation_deg).T + np.asarray(translation_m, dtype=np.float64)
 
 
 def raycast(
@@ -85,12 +97,7 @@ def raycast(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return first and last mesh intersections at each footprint point."""
 
-    plane_axes = [axis for axis in range(3) if axis != thickness_axis]
-    origins = np.zeros((len(uv_m), 3))
-    origins[:, plane_axes] = uv_m
-    origins[:, thickness_axis] = mesh.bounds[0, thickness_axis] - 0.01
-    directions = np.zeros_like(origins)
-    directions[:, thickness_axis] = 1.0
+    origins, directions = _positive_rays(mesh, uv_m, thickness_axis)
     locations, rays, triangles = mesh.ray.intersects_location(origins, directions, multiple_hits=True)
     coordinate = locations[:, thickness_axis]
     bottom = np.full(len(uv_m), np.inf)
@@ -126,12 +133,7 @@ def raycast_surface(
     if side not in {"near", "far"}:
         raise ValueError("side must be 'near' or 'far'")
 
-    plane_axes = [axis for axis in range(3) if axis != thickness_axis]
-    origins = np.zeros((len(uv_m), 3))
-    origins[:, plane_axes] = uv_m
-    origins[:, thickness_axis] = mesh.bounds[0, thickness_axis] - 0.01
-    directions = np.zeros_like(origins)
-    directions[:, thickness_axis] = 1.0
+    origins, directions = _positive_rays(mesh, uv_m, thickness_axis)
     locations, rays, _ = mesh.ray.intersects_location(origins, directions, multiple_hits=True)
     surface = np.full(len(uv_m), np.inf if side == "near" else -np.inf)
     update = np.minimum.at if side == "near" else np.maximum.at
