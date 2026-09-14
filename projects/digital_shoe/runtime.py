@@ -11,6 +11,27 @@ from dataclasses import dataclass
 import numpy as np
 import warp as wp
 
+from .contact import (
+    bristle_step,
+    contact_kinematics,
+    contact_wrench,
+    normal_reaction,
+    pasternak_coupling,
+    pasternak_flux,
+    surround_balance,
+)
+from .contact import cone_viscous_scale as _cone_viscous_scale  # noqa: F401  # compatibility export
+from .material import (
+    HYPERFOAM_ALPHA_FLOOR,  # noqa: F401  # compatibility export
+    hyperfoam_pressure,
+    maxwell_coefficients,
+    maxwell_coefficients_numpy,
+    maxwell_step,
+)
+from .material import (
+    ogden_hill_term as _hyperfoam_term,  # noqa: F401  # compatibility export
+)
+
 
 @dataclass(frozen=True)
 class ShoeMaterial:
@@ -93,38 +114,6 @@ class FoundationParams:
     mu: wp.float32  # Coulomb friction coefficient
 
 
-# Below this exponent magnitude one Ogden-Hill term is evaluated at its
-# ``alpha -> 0`` limit ``2 mu (-beta ln J - ln lambda) / lambda`` instead of
-# through the ``0 / 0`` quotient. The singularity is removable, so the two
-# branches agree to float32 rounding at the cut, and a default-constructed
-# :class:`FoundationParams` (``g_eq2 = alpha2 = 0``) contributes exactly zero.
-HYPERFOAM_ALPHA_FLOOR = wp.constant(1.0e-3)
-
-
-@wp.func
-def _hyperfoam_term(
-    stretch: wp.float32, volume_ratio: wp.float32, mu: wp.float32, alpha: wp.float32, beta: wp.float32
-) -> wp.float32:
-    """One Ogden-Hill (Hyperfoam) uniaxial compression term [Pa].
-
-    ``2 mu / (alpha lambda) (J^(-alpha beta) - lambda^alpha)``, the single
-    transcription of the law for the whole project. Every term adds ``2 mu`` to
-    the small-strain compressive tangent whatever its exponent, so a series
-    modulus is the sum of its term moduli.
-
-    Args:
-        stretch: Remaining thickness stretch ``lambda`` [-], already floored.
-        volume_ratio: ``J = lambda^(1 - 2 nu)`` [-].
-        mu: Term shear modulus [Pa].
-        alpha: Term exponent [-]; may be negative (a densifying term) and is
-            evaluated at its removable ``alpha -> 0`` limit near zero.
-        beta: ``nu / (1 - 2 nu)`` [-].
-    """
-    if wp.abs(alpha) < HYPERFOAM_ALPHA_FLOOR:
-        return 2.0 * mu / stretch * (-beta * wp.log(volume_ratio) - wp.log(stretch))
-    return 2.0 * mu / (alpha * stretch) * (wp.pow(volume_ratio, -alpha * beta) - wp.pow(stretch, alpha))
-
-
 @wp.func
 def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
     """Positive uniaxial compression pressure from the two-term Hyperfoam law.
@@ -140,12 +129,8 @@ def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
     needs no special case; the stretch floor is what keeps it away from
     ``pow(0, 0)``.
     """
-    stretch = 1.0 - strain
-    if stretch < p.stretch_floor:
-        stretch = p.stretch_floor
-    volume_ratio = wp.pow(stretch, p.one_minus_two_poisson)
-    return _hyperfoam_term(stretch, volume_ratio, p.g_eq, p.alpha, p.beta) + _hyperfoam_term(
-        stretch, volume_ratio, p.g_eq2, p.alpha2, p.beta
+    return hyperfoam_pressure(
+        strain, p.g_eq, p.alpha, p.g_eq2, p.alpha2, p.beta, p.one_minus_two_poisson, p.stretch_floor
     )
 
 
@@ -213,7 +198,7 @@ def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -
     flux summed over the bed is exactly zero and the layer can only move load,
     never create it.
     """
-    return (p.g_eq + p.g_eq2) * 0.5 * (t_i + t_j)
+    return pasternak_coupling(t_i, t_j, p.g_eq + p.g_eq2)
 
 
 @wp.kernel
@@ -250,33 +235,91 @@ def foundation_pressure(
     compression[i] = comp
     strain = comp / rest_len[column]
     peq = _hyperfoam_pressure(strain, p)
-    decay = wp.exp(-dt / p.tau_s)
-    ramp = p.tau_s * (1.0 - decay) / dt
-    qn = decay * q_state[i] + p.overstress * ramp * (peq - peq_prev[i])
+    decay, ramp = maxwell_coefficients(dt, p.tau_s)
+    qn = maxwell_step(q_state[i], peq, peq_prev[i], p.overstress, decay, ramp)
     q_state[i] = qn
     peq_prev[i] = peq
     base_pressure[i] = peq + qn
 
 
 @wp.func
-def _cone_viscous_scale(f_elastic: wp.vec2, f_viscous: wp.vec2, f_max: wp.float32) -> wp.float32:
-    """Largest fraction of a viscous force that keeps the total tangential force inside the cone.
+def _foundation_column_forces(
+    i: wp.int32,
+    carrier: wp.array[wp.int32],
+    column_count: wp.int32,
+    dt: wp.float32,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    anchor_local: wp.array[wp.vec3],
+    area: wp.array[wp.float32],
+    rest_len: wp.array[wp.float32],
+    neighbors: wp.array2d[wp.int32],
+    compression: wp.array[wp.float32],
+    base_pressure: wp.array[wp.float32],
+    tangent_anchor: wp.array[wp.vec2],
+    tangent_stuck: wp.array[wp.int32],
+    tangent_dwell: wp.array[wp.float32],
+    friction_kt: wp.array[wp.float32],
+    friction_kv: wp.array[wp.float32],
+    params: wp.array[FoundationParams],
+    column_force: wp.array[wp.vec3],
+    column_pressed: wp.array[wp.float32],
+    ground_plane: wp.int32,
+    ground_height: wp.float32,
+) -> tuple[wp.vec3, wp.vec3]:
+    """Compute signed carrier transfer and, when requested, the external plane traction."""
+    world_index = i // column_count
+    base = world_index * column_count
+    column = i - base
+    p = params[world_index]
+    ci = compression[i]
+    flux = pasternak_flux(column, base, compression, rest_len, neighbors, p.g_eq + p.g_eq2)
 
-    The elastic part is already on or inside the cone after the radial return, so scaling
-    only the viscous part keeps the Coulomb bound strict while the retained fraction still
-    opposes the slip velocity (the pair stays dissipative).
-    """
-    a = wp.dot(f_viscous, f_viscous)
-    if a <= 1.0e-18:
-        return 0.0
-    b = 2.0 * wp.dot(f_elastic, f_viscous)
-    c = wp.dot(f_elastic, f_elastic) - f_max * f_max
-    if c > 0.0:
-        c = 0.0
-    disc = b * b - 4.0 * a * c
-    if disc <= 0.0:
-        return 0.0
-    return wp.clamp((-b + wp.sqrt(disc)) / (2.0 * a), 0.0, 1.0)
+    body = carrier[world_index]
+    point, _com_world, point_vel, gap = contact_kinematics(
+        body_q[body], body_qd[body], body_com[body], anchor_local[column], ground_height, ground_plane
+    )
+    reaction = normal_reaction(
+        ci,
+        base_pressure[i],
+        area[column],
+        p.normal_damping,
+        point_vel[2],
+        gap,
+        ground_plane,
+    )
+    # The shear-layer flux stays unclamped: it redistributes load between columns and
+    # clipping it per column would invent net support under uncompressed foam.
+    fn = reaction - flux
+    transfer_pressed = fn
+    if transfer_pressed < 0.0:
+        transfer_pressed = 0.0
+    pressed = transfer_pressed
+    if ground_plane != 0:
+        pressed = reaction
+
+    f_tan, next_anchor, next_stuck, next_dwell = bristle_step(
+        wp.vec2(point[0], point[1]),
+        wp.vec2(point_vel[0], point_vel[1]),
+        dt,
+        pressed,
+        friction_kt[column],
+        friction_kv[column],
+        p.mu,
+        p.friction_viscous_ratio,
+        p.friction_release_dwell_s,
+        tangent_anchor[i],
+        tangent_stuck[i],
+        tangent_dwell[i],
+    )
+    tangent_anchor[i] = next_anchor
+    tangent_stuck[i] = next_stuck
+    tangent_dwell[i] = next_dwell
+
+    column_force[i] = wp.vec3(f_tan[0], f_tan[1], fn)
+    column_pressed[i] = transfer_pressed
+    return wp.vec3(f_tan[0], f_tan[1], reaction), point
 
 
 @wp.kernel
@@ -302,121 +345,132 @@ def foundation_apply(
     column_force: wp.array[wp.vec3],
     column_pressed: wp.array[wp.float32],
 ):
-    """Pasternak coupling and the per-column contact force the reduction then sums.
+    """Evaluate the legacy generic foundation at its nominal carrier anchors.
 
-    Launched over ``world_count * column_count`` threads. Per-column state is
-    tiled per world, the per-column constants (including ``neighbors``) are
-    shared, the constitutive constants are per world, and every neighbour lookup
-    is offset by the world's own tile base, so the Pasternak layer can never reach
-    across a world boundary.
+    This exported kernel retains its original signature and transfer-traction
+    convention. :func:`foundation_apply_ground` opts into external plane contact.
+    Both paths share the same material, shear transfer and bristle law.
+    """
+    _foundation_column_forces(
+        wp.tid(),
+        carrier,
+        column_count,
+        dt,
+        body_q,
+        body_qd,
+        body_com,
+        anchor_local,
+        area,
+        rest_len,
+        neighbors,
+        compression,
+        base_pressure,
+        tangent_anchor,
+        tangent_stuck,
+        tangent_dwell,
+        friction_kt,
+        friction_kv,
+        params,
+        column_force,
+        column_pressed,
+        0,
+        0.0,
+    )
 
-    The kernel writes per column and reduces nothing: :func:`foundation_partial` and
-    :func:`foundation_finalize` sum the bed afterwards. Accumulating here with
-    ``wp.atomic_add`` made every column of a world contend for one address and cost
-    96% of this kernel's run time at 64 worlds (measured), besides making the totals
-    irreproducible run to run. See :class:`MidsoleFoundation`.
+
+@wp.kernel
+def foundation_apply_ground(
+    carrier: wp.array[wp.int32],
+    column_count: wp.int32,
+    dt: wp.float32,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    anchor_local: wp.array[wp.vec3],
+    area: wp.array[wp.float32],
+    rest_len: wp.array[wp.float32],
+    neighbors: wp.array2d[wp.int32],
+    compression: wp.array[wp.float32],
+    base_pressure: wp.array[wp.float32],
+    tangent_anchor: wp.array[wp.vec2],
+    tangent_stuck: wp.array[wp.int32],
+    tangent_dwell: wp.array[wp.float32],
+    friction_kt: wp.array[wp.float32],
+    friction_kv: wp.array[wp.float32],
+    params: wp.array[FoundationParams],
+    column_force: wp.array[wp.vec3],
+    column_pressed: wp.array[wp.float32],
+    ground_height: wp.float32,
+    ground_force: wp.array[wp.vec3],
+    contact_point: wp.array[wp.vec3],
+):
+    """Write external plane traction separately from signed internal load transfer.
+
+    Each world owns a tile of column state. Neighbor indices are shared and
+    offset within that tile, so neither forces nor histories cross worlds.
+    These arrays are reduced in a fixed order rather than atomically per column.
     """
     i = wp.tid()
-    world_index = i // column_count
-    base = world_index * column_count
-    column = i - base
-    p = params[world_index]
-    ci = compression[i]
-    # Pairwise shear flux with the material-pinned coefficient of every face. On
-    # the square grid the tributary area is the spacing squared, so the discrete
-    # Pasternak force ``-G_p A lap(c)`` is exactly this sum of face terms, and
-    # writing it pairwise makes the bed total cancel to the last bit.
-    #
-    # Every missing neighbour is a free (zero-gradient) edge, whether it lies
-    # outside the midsole or is simply not in the active set, so it contributes
-    # nothing. Holding one at zero compression instead would make it a rigid
-    # hidden support: the shear layer would lean on it and create load rather
-    # than only spreading it.
-    flux = float(0.0)
-    for side in range(4):
-        j = neighbors[column, side]
-        if j >= 0:
-            flux += _pasternak_coupling(rest_len[column], rest_len[j], p) * (compression[base + j] - ci)
+    force, point = _foundation_column_forces(
+        i,
+        carrier,
+        column_count,
+        dt,
+        body_q,
+        body_qd,
+        body_com,
+        anchor_local,
+        area,
+        rest_len,
+        neighbors,
+        compression,
+        base_pressure,
+        tangent_anchor,
+        tangent_stuck,
+        tangent_dwell,
+        friction_kt,
+        friction_kv,
+        params,
+        column_force,
+        column_pressed,
+        1,
+        ground_height,
+    )
+    ground_force[i] = force
+    contact_point[i] = point
 
-    # Clamp the foam pressure itself: the springs cannot pull.
-    ground = base_pressure[i]
-    if ground < 0.0:
-        ground = 0.0
 
-    body = carrier[world_index]
-    q_body = body_q[body]
-    world = wp.transform_point(q_body, anchor_local[column])
-    com_world = wp.transform_point(q_body, body_com[body])
-    r = world - com_world
-    vel = body_qd[body]
-    point_vel = wp.spatial_top(vel) + wp.cross(wp.spatial_bottom(vel), r)
-
-    # Kelvin-Voigt ground reaction, kept unilateral: neither the foam spring nor its
-    # dashpot may pull the outsole back down. Clamping only the spring let the dashpot
-    # invert on rebound, which sucked the settling midsole back into the ground and turned
-    # contact into a sticky bouncer instead of an equilibrium.
-    reaction = ground * area[column]
-    if ci > 0.0:
-        reaction = reaction - p.normal_damping * point_vel[2]
-    if reaction < 0.0:
-        reaction = 0.0
-    # The shear-layer flux stays unclamped: it redistributes load between columns and
-    # clipping it per column would invent net support under uncompressed foam.
-    fn = reaction - flux
-    # Unilateral Pasternak base pressure. A column that the shear layer lifts transmits a
-    # small pull, so the friction cone and the centre of pressure use the pressed part.
-    pressed = fn
-    if pressed < 0.0:
-        pressed = 0.0
-
-    # Anchored bristle (elastoplastic) Coulomb friction: a per-column tangential
-    # spring pulls the contact patch back toward a world stick point, so a planted
-    # patch holds (static regime, zero drift) and carries braking/propulsion shear
-    # without needing a slip velocity. When the spring force would exceed the cone
-    # mu*fn the elastic trial saturates and the anchor slides onto the cone (kinetic
-    # regime). Only the elastic trial enters that return map: a dashpot inside it
-    # would fire the plastic update on columns that are merely moving fast, which
-    # erases the elastic memory of a still-gripping bristle.
-    p_t = wp.vec2(world[0], world[1])
-    v_tan = wp.vec2(point_vel[0], point_vel[1])
-    kt = friction_kt[column]
-    kv = friction_kv[column]
-    f_max = p.mu * pressed
-    f_tan = wp.vec2(0.0, 0.0)
-    if pressed <= 0.0 or kt <= 0.0:
-        # Hold the stick point through short normal dropouts. Perimeter columns chatter
-        # in and out of contact at the substep rate; discarding the elastic state on that
-        # chatter is a numerical release, not a physical one. Re-entry stays bounded
-        # because the cone still scales with fn.
-        dwell = tangent_dwell[i] + dt
-        if kt <= 0.0 or tangent_stuck[i] == 0 or dwell > p.friction_release_dwell_s:
-            tangent_anchor[i] = p_t
-            tangent_stuck[i] = 0
-            dwell = 0.0
-        tangent_dwell[i] = dwell
-    else:
-        tangent_dwell[i] = 0.0
-        if tangent_stuck[i] == 0:
-            tangent_anchor[i] = p_t  # fresh contact: seat with no pre-stretch
-            tangent_stuck[i] = 1
-        # Evaluate the elastic trial at the end-of-step position, so the stiff stick mode
-        # is damped like a backward-Euler step instead of ringing at the substep rate.
-        p_next = p_t + v_tan * dt
-        f_elastic = -kt * (p_next - tangent_anchor[i])
-        mag = wp.length(f_elastic)
-        if mag > f_max:
-            f_elastic = f_elastic * (f_max / wp.max(mag, 1.0e-12))
-            tangent_anchor[i] = p_next + f_elastic / kt  # radial return on the elastic trial
-        f_tan = f_elastic
-        speed = wp.length(v_tan)
-        if kv > 0.0 and speed > 1.0e-12:
-            # Viscous term outside the return map, capped well below the cone so it can
-            # regularize presliding without setting the direction of a sliding column.
-            viscous = -v_tan * (wp.min(kv * speed, p.friction_viscous_ratio * f_max) / speed)
-            f_tan = f_elastic + viscous * _cone_viscous_scale(f_elastic, viscous, f_max)
-
-    column_force[i] = wp.vec3(f_tan[0], f_tan[1], fn)
-    column_pressed[i] = pressed
+@wp.func
+def _cycle_overstress_column(
+    i: wp.int32,
+    compression: wp.array2d[wp.float32],
+    slack: wp.array[wp.float32],
+    dt_s: wp.array[wp.float32],
+    params: FoundationParams,
+    fraction: wp.float32,
+    tau_s: wp.float32,
+    overstress_out: wp.array2d[wp.float32],
+):
+    """Evaluate the shared periodic Maxwell recurrence for one column."""
+    frames = compression.shape[0]
+    thickness = slack[i]
+    state = float(0.0)
+    decay_product = float(1.0)
+    previous = _hyperfoam_pressure(compression[frames - 1, i] / thickness, params)
+    for frame in range(frames):
+        equilibrium = _hyperfoam_pressure(compression[frame, i] / thickness, params)
+        decay, ramp = maxwell_coefficients(dt_s[frame], tau_s)
+        state = maxwell_step(state, equilibrium, previous, fraction, decay, ramp)
+        decay_product *= decay
+        previous = equilibrium
+    state = state / (1.0 - decay_product)
+    previous = _hyperfoam_pressure(compression[frames - 1, i] / thickness, params)
+    for frame in range(frames):
+        equilibrium = _hyperfoam_pressure(compression[frame, i] / thickness, params)
+        decay, ramp = maxwell_coefficients(dt_s[frame], tau_s)
+        state = maxwell_step(state, equilibrium, previous, fraction, decay, ramp)
+        previous = equilibrium
+        overstress_out[frame, i] = state
 
 
 @wp.kernel
@@ -436,28 +490,25 @@ def cycle_overstress(
     and :func:`cycle_force` then share this overstress, so the relaxed surround
     balances the same load the summed reaction later reports.
     """
-    i = wp.tid()
-    frames = compression.shape[0]
-    thickness = slack[i]
-    state = float(0.0)
-    decay_product = float(1.0)
-    previous = _hyperfoam_pressure(compression[frames - 1, i] / thickness, params)
-    for frame in range(frames):
-        equilibrium = _hyperfoam_pressure(compression[frame, i] / thickness, params)
-        decay = wp.exp(-dt_s[frame] / tau_s)
-        ramp = tau_s * (1.0 - decay) / dt_s[frame]
-        state = decay * state + fraction * ramp * (equilibrium - previous)
-        decay_product *= decay
-        previous = equilibrium
-    state = state / (1.0 - decay_product)
-    previous = _hyperfoam_pressure(compression[frames - 1, i] / thickness, params)
-    for frame in range(frames):
-        equilibrium = _hyperfoam_pressure(compression[frame, i] / thickness, params)
-        decay = wp.exp(-dt_s[frame] / tau_s)
-        ramp = tau_s * (1.0 - decay) / dt_s[frame]
-        state = decay * state + fraction * ramp * (equilibrium - previous)
-        previous = equilibrium
-        overstress_out[frame, i] = state
+    _cycle_overstress_column(wp.tid(), compression, slack, dt_s, params, fraction, tau_s, overstress_out)
+
+
+@wp.func
+def _cycle_force_frame(
+    frame: wp.int32,
+    compression: wp.array2d[wp.float32],
+    overstress: wp.array2d[wp.float32],
+    slack: wp.array[wp.float32],
+    params: FoundationParams,
+    area: wp.float32,
+) -> wp.float32:
+    """Sum one cycle frame in the shared deterministic column order [N]."""
+    # A fixed column order makes repeated identification independent of atomic scheduling.
+    total = float(0.0)
+    for i in range(compression.shape[1]):
+        equilibrium = _hyperfoam_pressure(compression[frame, i] / slack[i], params)
+        total += normal_reaction(compression[frame, i], equilibrium + overstress[frame, i], area, 0.0, 0.0, 0.0, 0)
+    return total
 
 
 @wp.kernel
@@ -475,10 +526,10 @@ def cycle_force(
     the clamp keeps the reaction unilateral, and the shear flux cancels
     internally, so the sum is the load an Instron would measure.
     """
-    frame, i = wp.tid()
-    thickness = slack[i]
-    equilibrium = _hyperfoam_pressure(compression[frame, i] / thickness, params)
-    wp.atomic_add(force_out, frame, area * wp.max(equilibrium + overstress[frame, i], 0.0))
+    frame, lane = wp.tid()
+    if lane != 0:
+        return
+    force_out[frame] += _cycle_force_frame(frame, compression, overstress, slack, params, area)
 
 
 @wp.func
@@ -515,9 +566,10 @@ def _surround_balance(
     * ``carrier_bond == 0``: the column top is a free shoe surface the carrier
       never touches. Callers pass ``rigid = 0``, which is the bench-fixture
       surround of the identification.
-    * ``carrier_bond != 0``: the column top is glued under the rigid carrier, so
-      the foam cannot compress past the carrier-imposed value (it would have to
-      peel off the shoe) and any bond is unstretched there.
+    * ``carrier_bond != 0``: passive compression is bounded above by nonnegative
+      nominal carrier penetration. This one-sided bound carries the free
+      surround with the shoe; it does not glue each passive top to the rigid
+      carrier or solve independent endpoint positions.
 
     The Maxwell overstress the column will carry once the step is taken is
     ``overstress_base + overstress_gain * p_eq(c)``, so a relaxation that moves
@@ -543,26 +595,79 @@ def _surround_balance(
         attachment: Vertical bond stiffness to the shoe [N/m], normally zero.
         max_strain: Compression limit as a fraction of rest thickness.
         relaxation: Fraction of the Newton step taken, ``1`` for quasi-static.
-        carrier_bond: Nonzero when the column top rides with the carrier.
+        carrier_bond: Nonzero to bound passive compression by carrier penetration.
 
     Returns:
         The updated column compression [m].
     """
-    peq = _hyperfoam_pressure(c / thickness, params)
-    reaction = area * wp.max(peq + overstress_base + overstress_gain * peq, 0.0)
-    step = 1.0e-3 * thickness
-    peq_ahead = _hyperfoam_pressure((c + step) / thickness, params)
-    ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
-    stiffness = wp.max((ahead - reaction) / step + attachment + coupling_sum, 1.0e-9)
-    # A free bench surface is bonded in the undeformed shoe; a glued top is bonded where
-    # the carrier holds it and cannot be compressed past that without peeling off.
-    bond_reference = float(0.0)
-    upper = max_strain * thickness
-    if carrier_bond != 0:
-        bond_reference = rigid
-        upper = wp.clamp(rigid, 0.0, upper)
-    residual = reaction + attachment * (c - bond_reference) - pull
-    return wp.clamp(c - relaxation * residual / stiffness, 0.0, upper)
+    return surround_balance(
+        c,
+        rigid,
+        pull,
+        coupling_sum,
+        thickness,
+        overstress_base,
+        overstress_gain,
+        params.g_eq,
+        params.alpha,
+        params.g_eq2,
+        params.alpha2,
+        params.beta,
+        params.one_minus_two_poisson,
+        params.stretch_floor,
+        area,
+        attachment,
+        max_strain,
+        relaxation,
+        carrier_bond,
+    )
+
+
+@wp.func
+def _surround_sweep_cell(
+    frame: wp.int32,
+    i: wp.int32,
+    compression_in: wp.array2d[wp.float32],
+    overstress: wp.array2d[wp.float32],
+    driven: wp.array[wp.int32],
+    neighbors: wp.array2d[wp.int32],
+    slack: wp.array[wp.float32],
+    params: FoundationParams,
+    area: wp.float32,
+    coupling_scale: wp.float32,
+    attachment: wp.float32,
+    max_strain: wp.float32,
+    relaxation: wp.float32,
+    compression_out: wp.array2d[wp.float32],
+):
+    """Apply the shared whole-cycle surround step to one frame and column."""
+    if driven[i] != 0:
+        compression_out[frame, i] = compression_in[frame, i]
+        return
+    c = compression_in[frame, i]
+    pull = float(0.0)
+    coupling_sum = float(0.0)
+    for side in range(4):
+        j = neighbors[i, side]
+        if j >= 0:
+            coupling = coupling_scale * _pasternak_coupling(slack[i], slack[j], params)
+            pull += coupling * (compression_in[frame, j] - c)
+            coupling_sum += coupling
+    compression_out[frame, i] = _surround_balance(
+        c,
+        0.0,
+        pull,
+        coupling_sum,
+        slack[i],
+        overstress[frame, i],
+        0.0,
+        params,
+        area,
+        attachment,
+        max_strain,
+        relaxation,
+        0,
+    )
 
 
 @wp.kernel
@@ -600,32 +705,21 @@ def surround_sweep(
     over-relaxation, which reaches the same fixed point in fewer sweeps.
     """
     frame, i = wp.tid()
-    if driven[i] != 0:
-        compression_out[frame, i] = compression_in[frame, i]
-        return
-    c = compression_in[frame, i]
-    pull = float(0.0)
-    coupling_sum = float(0.0)
-    for side in range(4):
-        j = neighbors[i, side]
-        if j >= 0:
-            coupling = coupling_scale * _pasternak_coupling(slack[i], slack[j], params)
-            pull += coupling * (compression_in[frame, j] - c)
-            coupling_sum += coupling
-    compression_out[frame, i] = _surround_balance(
-        c,
-        0.0,
-        pull,
-        coupling_sum,
-        slack[i],
-        overstress[frame, i],
-        0.0,
+    _surround_sweep_cell(
+        frame,
+        i,
+        compression_in,
+        overstress,
+        driven,
+        neighbors,
+        slack,
         params,
         area,
+        coupling_scale,
         attachment,
         max_strain,
         relaxation,
-        0,
+        compression_out,
     )
 
 
@@ -797,14 +891,12 @@ def relax_surround(
     The identification and the live runtime therefore share one contact model
     and one geometry: the indenter drives its columns and the rest relax.
 
-    The sweep count is a cap, not a schedule. ``tolerance_m`` stops the solve on
-    the *extrapolated remaining error* rather than on the raw update: the damped
-    Jacobi sweep contracts geometrically, so an update of ``u`` with a measured
-    per-interval decay ``q`` still has about ``u q / (1 - q)`` of travel left,
-    and stopping on ``u`` alone would report convergence a factor ``1 / (1 - q)``
-    too early. Together with ``initial`` this is what makes a fit affordable: the
-    bed barely moves between finite-difference evaluations, so a warm-started
-    solve needs a few sweeps where a cold one needs thousands.
+    The sweep count is a cap, not a schedule. ``tolerance_m`` uses the legacy
+    interval-ratio estimate ``u q / (1 - q)``, where ``u`` is a last-sweep update
+    and ``q`` is the ratio between sampled updates. Because samples may be many
+    sweeps apart, this is not a certified remaining-error bound. It is retained
+    unchanged for execution compatibility. ``initial`` warms the compression
+    field; callers must qualify numerical convergence separately.
 
     Args:
         driven_compression: Imposed compression of the driven columns [m],
@@ -927,6 +1019,82 @@ def relax_surround(
 FOUNDATION_REDUCTION_GROUPS = 16
 
 
+@wp.func
+def _foundation_partial(
+    tid: wp.int32,
+    carrier: wp.array[wp.int32],
+    column_count: wp.int32,
+    group_count: wp.int32,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    anchor_local: wp.array[wp.vec3],
+    compression: wp.array[wp.float32],
+    column_force: wp.array[wp.vec3],
+    column_pressed: wp.array[wp.float32],
+    part_force: wp.array[wp.vec3],
+    part_torque: wp.array[wp.vec3],
+    part_moment: wp.array[wp.vec3],
+    part_cop: wp.array[wp.vec3],
+    part_normal: wp.array[wp.float32],
+    part_pressed: wp.array[wp.float32],
+    part_power: wp.array[wp.float32],
+    part_max: wp.array[wp.float32],
+    part_active: wp.array[wp.int32],
+    ground_plane: wp.int32,
+    contact_point: wp.array[wp.vec3],
+) -> None:
+    """Reduce one fixed-order group using either nominal anchors or external plane points."""
+    world_index = tid // group_count
+    group = tid - world_index * group_count
+    base = world_index * column_count
+    body = carrier[world_index]
+    q_body = body_q[body]
+    com_world = wp.transform_point(q_body, body_com[body])
+    vel = body_qd[body]
+
+    force_sum = wp.vec3(0.0, 0.0, 0.0)
+    torque_sum = wp.vec3(0.0, 0.0, 0.0)
+    moment_sum = wp.vec3(0.0, 0.0, 0.0)
+    cop_sum = wp.vec3(0.0, 0.0, 0.0)
+    normal_sum = float(0.0)
+    pressed_sum = float(0.0)
+    power_sum = float(0.0)
+    max_comp = float(0.0)
+    active = int(0)
+    for column in range(group, column_count, group_count):
+        i = base + column
+        force = column_force[i]
+        pressed = column_pressed[i]
+        world = wp.vec3(0.0, 0.0, 0.0)
+        if ground_plane != 0:
+            world = contact_point[i]
+            pressed = force[2]
+        else:
+            world = wp.transform_point(q_body, anchor_local[column])
+        torque, moment, power = contact_wrench(world, force, com_world, vel)
+        force_sum += force
+        torque_sum += torque
+        moment_sum += moment
+        cop_sum += wp.vec3(world[0] * pressed, world[1] * pressed, 0.0)
+        normal_sum += force[2]
+        pressed_sum += pressed
+        power_sum += power
+        ci = compression[i]
+        max_comp = wp.max(max_comp, ci)
+        if ci > 0.0:
+            active += 1
+    part_force[tid] = force_sum
+    part_torque[tid] = torque_sum
+    part_moment[tid] = moment_sum
+    part_cop[tid] = cop_sum
+    part_normal[tid] = normal_sum
+    part_pressed[tid] = pressed_sum
+    part_power[tid] = power_sum
+    part_max[tid] = max_comp
+    part_active[tid] = active
+
+
 @wp.kernel
 def foundation_partial(
     carrier: wp.array[wp.int32],
@@ -949,65 +1117,91 @@ def foundation_partial(
     part_max: wp.array[wp.float32],
     part_active: wp.array[wp.int32],
 ):
-    """Sum one strided slice of a world's columns into that group's partial accumulators.
+    """Sum legacy transfer tractions at nominal anchors in a deterministic fixed order.
 
-    Group ``g`` owns columns ``g, g + group_count, ...`` of its own world, so the slices
-    partition the tile and neighbouring threads read neighbouring columns. Every sum is
-    therefore over a fixed set in a fixed order, which is what makes the reduction
-    reproducible run to run where the previous ``wp.atomic_add`` contention was not.
-
-    The per-column terms are recomputed from the pose rather than stored: a transform
-    and a cross product are far cheaper than the global traffic of a second vector per
-    column, and they are the same float32 expressions :func:`foundation_apply` used, so
-    the reduction sums exactly the terms the atomics used to sum.
+    Group ``g`` owns columns ``g, g + group_count, ...`` within one world.
+    The exported signature and default reduction convention stay unchanged.
     """
-    tid = wp.tid()
-    world_index = tid // group_count
-    group = tid - world_index * group_count
-    base = world_index * column_count
-    body = carrier[world_index]
-    q_body = body_q[body]
-    com_world = wp.transform_point(q_body, body_com[body])
-    vel = body_qd[body]
-    top = wp.spatial_top(vel)
-    bottom = wp.spatial_bottom(vel)
+    _foundation_partial(
+        wp.tid(),
+        carrier,
+        column_count,
+        group_count,
+        body_q,
+        body_qd,
+        body_com,
+        anchor_local,
+        compression,
+        column_force,
+        column_pressed,
+        part_force,
+        part_torque,
+        part_moment,
+        part_cop,
+        part_normal,
+        part_pressed,
+        part_power,
+        part_max,
+        part_active,
+        0,
+        anchor_local,
+    )
 
-    force_sum = wp.vec3(0.0, 0.0, 0.0)
-    torque_sum = wp.vec3(0.0, 0.0, 0.0)
-    moment_sum = wp.vec3(0.0, 0.0, 0.0)
-    cop_sum = wp.vec3(0.0, 0.0, 0.0)
-    normal_sum = float(0.0)
-    pressed_sum = float(0.0)
-    power_sum = float(0.0)
-    max_comp = float(0.0)
-    active = int(0)
-    for column in range(group, column_count, group_count):
-        i = base + column
-        force = column_force[i]
-        pressed = column_pressed[i]
-        world = wp.transform_point(q_body, anchor_local[column])
-        r = world - com_world
-        point_vel = top + wp.cross(bottom, r)
-        force_sum += force
-        torque_sum += wp.cross(r, force)
-        moment_sum += wp.cross(world, force)
-        cop_sum += wp.vec3(world[0] * pressed, world[1] * pressed, 0.0)
-        normal_sum += force[2]
-        pressed_sum += pressed
-        power_sum += wp.dot(force, point_vel)
-        ci = compression[i]
-        max_comp = wp.max(max_comp, ci)
-        if ci > 0.0:
-            active += 1
-    part_force[tid] = force_sum
-    part_torque[tid] = torque_sum
-    part_moment[tid] = moment_sum
-    part_cop[tid] = cop_sum
-    part_normal[tid] = normal_sum
-    part_pressed[tid] = pressed_sum
-    part_power[tid] = power_sum
-    part_max[tid] = max_comp
-    part_active[tid] = active
+
+@wp.kernel
+def foundation_partial_ground(
+    carrier: wp.array[wp.int32],
+    column_count: wp.int32,
+    group_count: wp.int32,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    contact_point: wp.array[wp.vec3],
+    compression: wp.array[wp.float32],
+    ground_force: wp.array[wp.vec3],
+    column_pressed: wp.array[wp.float32],
+    part_force: wp.array[wp.vec3],
+    part_torque: wp.array[wp.vec3],
+    part_moment: wp.array[wp.vec3],
+    part_cop: wp.array[wp.vec3],
+    part_normal: wp.array[wp.float32],
+    part_pressed: wp.array[wp.float32],
+    part_power: wp.array[wp.float32],
+    part_max: wp.array[wp.float32],
+    part_active: wp.array[wp.int32],
+):
+    """Transfer the complete external ground wrench through the massless attached shoe.
+
+    Internal Pasternak forces cancel in total force, but their separated vertical
+    tractions alone do not cancel in moment. Reducing external forces at their
+    ground points includes the equivalent transfer couple without inventing a
+    separate support. Friction, carrier torque and rigid-wrench power use this
+    same contact-height lever arm.
+    """
+    _foundation_partial(
+        wp.tid(),
+        carrier,
+        column_count,
+        group_count,
+        body_q,
+        body_qd,
+        body_com,
+        contact_point,
+        compression,
+        ground_force,
+        column_pressed,
+        part_force,
+        part_torque,
+        part_moment,
+        part_cop,
+        part_normal,
+        part_pressed,
+        part_power,
+        part_max,
+        part_active,
+        1,
+        contact_point,
+    )
 
 
 @wp.kernel
@@ -1140,6 +1334,23 @@ class FoundationConfig:
     ``friction_viscous_ratio`` caps the viscous force at ``gamma * mu * fn`` outside the
     radial return, and ``friction_release_dwell_s`` keeps the stick point alive through
     normal dropouts shorter than the dwell.
+
+    ``ground_height_m`` opts into a horizontal external contact plane [m]. In this
+    mode ``anchor_local`` denotes nominal bottom points of a massless attached
+    shoe and the initial ``z_free`` is the plane height. Friction capacity is
+    ``mu * R`` for the unilateral ground reaction ``R``, not signed load transfer.
+    Ground forces act at the nominal bottom's world XY projected onto the plane;
+    their complete wrench reaches the carrier. A separated nominal bottom carries
+    no ground force, even when the Maxwell history is nonzero. The constitutive
+    and passive-relaxation states still follow the same material update. All
+    initial ``z_free`` values must equal the plane height at device precision.
+    A surround with passive columns requires ``carrier_bond=True`` so the
+    relaxation cannot load nominal bottoms that are separated from the plane.
+
+    ``None`` retains the generic bench convention: ``anchor_local`` can denote
+    carrier/indenter top points, ``z_free`` is the uncompressed foam top, and
+    transfer tractions are reduced at nominal anchors. Do not infer a ground
+    plane from ``z_free`` in that convention.
     """
 
     stretch_floor: float = 0.05
@@ -1151,8 +1362,13 @@ class FoundationConfig:
     friction_viscous_ratio: float = 0.2
     friction_release_dwell_s: float = 0.0005
     mu: float = 0.0
+    ground_height_m: float | None = None
 
     def __post_init__(self) -> None:
+        if self.ground_height_m is not None and (
+            not np.isfinite(self.ground_height_m) or abs(self.ground_height_m) > float(np.finfo(np.float32).max)
+        ):
+            raise ValueError("ground_height_m must be finite in float32 or None")
         negative = (
             self.friction_stiffness < 0.0
             or self.friction < 0.0
@@ -1188,10 +1404,12 @@ class SurroundConfig:
         relaxation_time_s: First-order lag toward the local balance [s]. Zero
             takes the full Newton step, which is the quasi-static solve the
             identification uses.
-        carrier_bond: True when the untouched column tops are glued under the
-            rigid carrier (a shod runtime) instead of being a free shoe surface
-            the carrier never touches (the bench fixture). See
-            :func:`_surround_balance`.
+        carrier_bond: Bound passive compression between zero and nonnegative
+            nominal carrier penetration. The free surround is carried laterally
+            by the shoe, not glued at each top to the rigid last. This scalar
+            constraint does not solve independent endpoint geometry or a
+            separate flight shape-recovery mode. False keeps the bench's free
+            surround. See :func:`_surround_balance`.
     """
 
     driven: np.ndarray
@@ -1224,6 +1442,7 @@ class MidsoleFoundation:
     **Array layout.** Per-column *state* is tiled: world ``w`` owns
     ``[w * column_count : (w + 1) * column_count]`` of
     :attr:`compression`, :attr:`base_pressure`, :attr:`column_force`,
+    :attr:`column_pressed`, :attr:`ground_force`, :attr:`contact_point`,
     :attr:`z_free`, ``q_state``, ``peq_prev``, :attr:`tangent_anchor`,
     :attr:`tangent_stuck`, ``tangent_dwell`` and the surround fields. Per-column
     *constants* are **shared**, i.e. kept at length ``column_count`` and indexed
@@ -1239,15 +1458,28 @@ class MidsoleFoundation:
     live in :attr:`world_params`, one :class:`FoundationParams` block per world;
     :meth:`set_world_material` rewrites one world's block.
 
-    With the default ``world_count = 1`` every array keeps its old length and
-    every kernel does the same arithmetic on the same values in the same order, so
-    the results are bit-identical to the single-world, single-material runtime.
+    ``column_force`` is signed load transfer [N], with vertical component
+    ``R - neighbor_flux``. ``column_pressed`` remains its positive vertical part.
+    Neither is local ground pressure. With ``config.ground_height_m`` set,
+    ``ground_force`` holds external friction and nonnegative ``R`` [N], and
+    ``contact_point`` holds the corresponding projected plane point [m], including
+    potential points for unloaded columns. These two arrays stay zero in generic
+    mode. Plane-mode resultants, COP and ``pressed_force`` use external ground
+    reactions, not the transfer diagnostics. ``contact_power`` is the carrier's
+    rigid-wrench power [W], using its velocity field at those same points; it
+    does not include independent foam deformation or stored bristle-energy rates.
+
+    With default ground settings and ``world_count = 1`` the existing arrays keep
+    their old lengths and arithmetic, reproducing the single-world generic runtime.
 
     Args:
         anchor_local: Column attachment points in the carrier body frame [m],
-            shape ``[column_count, 3]``.
-        z_free: World height of each uncompressed foam column top [m], shape
-            ``[column_count]``; tiled over the worlds internally.
+            shape ``[column_count, 3]``. Use nominal bottom points when
+            ``config.ground_height_m`` is set.
+        z_free: World height of each uncompressed foam column top in generic
+            mode, or the ground-plane height for bottom-anchor mode [m], shape
+            ``[column_count]``; tiled over the worlds internally. Passive columns
+            publish effective pressure references here, not geometric endpoints.
         rest_len: Column rest thickness [m], shape ``[column_count]``.
         area: Tributary area per column [m^2], shape ``[column_count]``.
         neighbors: Pasternak 4-neighbour indices, shape ``[column_count, 4]``.
@@ -1285,6 +1517,12 @@ class MidsoleFoundation:
         world_count: int = 1,
     ) -> None:
         config = config or FoundationConfig()
+        self.ground_height_m = config.ground_height_m
+        if self.ground_height_m is not None:
+            if not np.all(np.asarray(z_free, dtype=np.float32) == np.float32(self.ground_height_m)):
+                raise ValueError("initial z_free must equal ground_height_m in ground-plane mode")
+            if surround is not None and not surround.carrier_bond and np.any(surround.driven == 0):
+                raise ValueError("ground-plane passive columns require surround.carrier_bond=True")
         self.device = device
         self.world_count = int(world_count)
         if self.world_count < 1:
@@ -1361,10 +1599,14 @@ class MidsoleFoundation:
         self.resultant_moment_origin = wp.zeros(w, dtype=wp.vec3, device=device)
         self.contact_power = wp.zeros(w, dtype=wp.float32, device=device)
         self.max_compression = wp.zeros(w, dtype=wp.float32, device=device)
+        # Signed transfer traction [N]: (ground friction x/y, R - neighbor flux).
+        # Its normal component is not a local ground reaction and must not be clamped.
         self.column_force = wp.zeros(n, dtype=wp.vec3, device=device)
-        # Pressed (unilateral) part of each column's normal load [N], the only term of
-        # the reduction that cannot be recomputed from the pose and the column force.
+        # Positive transfer traction [N], retained for legacy consumers in both modes.
         self.column_pressed = wp.zeros(n, dtype=wp.float32, device=device)
+        # External traction [N] and world plane points [m], populated only in plane mode.
+        self.ground_force = wp.zeros(n, dtype=wp.vec3, device=device)
+        self.contact_point = wp.zeros(n, dtype=wp.vec3, device=device)
         self.pressed_force = wp.zeros(w, dtype=wp.float32, device=device)
         # Deterministic two-pass reduction of the bed. Groups partition each world's
         # columns by stride, so the partial sums are over fixed sets in a fixed order.
@@ -1392,6 +1634,7 @@ class MidsoleFoundation:
 
         self.surround = surround
         self.free_column_count = 0
+        self.driven = wp.full(m, 1, dtype=wp.int32, device=device)
         if surround is not None:
             if len(surround.driven) != m:
                 raise ValueError("the surround mask must cover every column")
@@ -1414,6 +1657,8 @@ class MidsoleFoundation:
         self.peq_prev.zero_()
         self.tangent_stuck.zero_()
         self.tangent_dwell.zero_()
+        self.ground_force.zero_()
+        self.contact_point.zero_()
         if self.free_column_count:
             self.surround_compression.zero_()
             self.surround_scratch.zero_()
@@ -1470,9 +1715,9 @@ class MidsoleFoundation:
         decay = np.empty(self.world_count, np.float32)
         gain = np.empty(self.world_count, np.float32)
         for index, block in enumerate(self.world_blocks):
-            world_decay = float(np.exp(-dt / block.tau_s))
+            world_decay, ramp = maxwell_coefficients_numpy(dt, block.tau_s)
             decay[index] = world_decay
-            gain[index] = float(block.overstress * block.tau_s * (1.0 - world_decay) / dt)
+            gain[index] = float(block.overstress * ramp)
         self.surround_decay.assign(decay)
         self.surround_gain.assign(gain)
         self._surround_dt_s = float(dt)
@@ -1598,8 +1843,10 @@ class MidsoleFoundation:
             ],
             device=self.device,
         )
+        plane_contact = self.ground_height_m is not None
+        ground_inputs = [float(self.ground_height_m), self.ground_force, self.contact_point] if plane_contact else []
         wp.launch(
-            foundation_apply,
+            foundation_apply_ground if plane_contact else foundation_apply,
             dim=self.world_count * self.column_count,
             inputs=[
                 self.carrier,
@@ -1622,11 +1869,12 @@ class MidsoleFoundation:
                 self.world_params,
                 self.column_force,
                 self.column_pressed,
+                *ground_inputs,
             ],
             device=self.device,
         )
         wp.launch(
-            foundation_partial,
+            foundation_partial_ground if plane_contact else foundation_partial,
             dim=self.world_count * self.reduction_groups,
             inputs=[
                 self.carrier,
@@ -1635,9 +1883,9 @@ class MidsoleFoundation:
                 state.body_q,
                 state.body_qd,
                 self.body_com,
-                self.anchor_local,
+                self.contact_point if plane_contact else self.anchor_local,
                 self.compression,
-                self.column_force,
+                self.ground_force if plane_contact else self.column_force,
                 self.column_pressed,
                 self.partial_force,
                 self.partial_torque,

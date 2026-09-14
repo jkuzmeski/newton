@@ -1,0 +1,1 @@
+Separate the historical momentum/work report from the current two-stiffness report. Keep legacy figures and numerical tables out of unrelated report documents and require provenance-qualified archived inputs for historical replay checks.

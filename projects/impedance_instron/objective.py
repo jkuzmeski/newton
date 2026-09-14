@@ -88,6 +88,10 @@ class RolloutLike(Protocol):
     momentum_vz_m_s: list[float]
     positive_work_j: float
     negative_work_j: float
+    # Optional: absent on rollouts recorded before the ankle actuator was charged, read with getattr
+    # and defaulted to zero so those records still score rather than becoming NaN.
+    ankle_positive_work_j: float
+    ankle_negative_work_j: float
 
 
 @dataclass
@@ -165,6 +169,8 @@ class Objective:
         body_weight_n: Body weight [N] used to normalize force violations.
         penetration_allowance_m: Rigid-last clearance [m] that may be lost before penetration counts.
         compression_bounds_m: Allowed peak foam compression range [m] as ``(minimum, maximum)``.
+        charge_ankle: Charge the ankle pitch actuator's work alongside the leg's. Set False only to
+            reproduce values recorded before the ankle was charged.
         residual_fraction: Fraction of body weight of end-of-rollout load that still counts as released.
         off_task_base: Value floor [-] of tier 2; every on-task value is strictly below it.
         infeasible_base: Value floor [-] of tier 1; every feasible value is strictly below it.
@@ -177,6 +183,7 @@ class Objective:
         tolerances: Tolerances | None = None,
         positive_efficiency: float = 0.25,
         negative_efficiency: float = 1.20,
+        charge_ankle: bool = True,
         body_weight_n: float = DEFAULT_BODY_WEIGHT_N,
         penetration_allowance_m: float = 0.001,
         compression_bounds_m: tuple[float, float] = (0.001, 0.045),
@@ -187,6 +194,7 @@ class Objective:
     ):
         if positive_efficiency <= 0.0 or negative_efficiency <= 0.0:
             raise ValueError("Muscle work efficiencies must be positive")
+        self.charge_ankle = bool(charge_ankle)
         if not off_task_base < infeasible_base:
             raise ValueError("The infeasible base must sit above the off-task base")
         if tier_ceiling >= off_task_base:
@@ -203,17 +211,48 @@ class Objective:
         self.infeasible_base = float(infeasible_base)
         self.tier_ceiling = float(tier_ceiling)
 
-    def work_proxy_j(self, rollout: RolloutLike) -> float:
-        """Return the tier 3 muscle-efficiency work proxy [J] of the leg actuator.
-
-        Positive and negative actuator work are charged at different efficiencies because a leg pays
-        much less for absorbing energy than for producing it. The result is a work demand on a
-        lumped virtual actuator; it is not a metabolic rate and must not be reported as one.
-        """
-        positive, negative = rollout.positive_work_j, rollout.negative_work_j
+    def _charge(self, positive: float, negative: float) -> float:
+        """Charge one actuator's positive and negative work at their separate efficiencies."""
         if not _finite(positive, negative):
             return float("nan")
         return abs(float(positive)) / self.positive_efficiency + abs(float(negative)) / self.negative_efficiency
+
+    def leg_work_proxy_j(self, rollout: RolloutLike) -> float:
+        """Return the work proxy [J] of the axial leg actuator alone."""
+        return self._charge(rollout.positive_work_j, rollout.negative_work_j)
+
+    def ankle_work_proxy_j(self, rollout: RolloutLike) -> float:
+        """Return the work proxy [J] of the ankle pitch actuator alone, zero when it is not reported."""
+        positive = getattr(rollout, "ankle_positive_work_j", 0.0)
+        negative = getattr(rollout, "ankle_negative_work_j", 0.0)
+        if positive is None or negative is None:
+            return 0.0
+        return self._charge(positive, negative)
+
+    def work_proxy_j(self, rollout: RolloutLike) -> float:
+        """Return the tier 3 muscle-efficiency work proxy [J] of BOTH rig actuators.
+
+        Positive and negative actuator work are charged at different efficiencies because a leg pays
+        much less for absorbing energy than for producing it. The result is a work demand on lumped
+        virtual actuators; it is not a metabolic rate and must not be reported as one.
+
+        The ankle pitch actuator is charged alongside the leg. Leaving it free is not a neutral
+        simplification: an uncharged actuator is a resource the search will spend without limit, the
+        same failure that let virtual damper dissipation grow 4.8x above the analytic seed while the
+        cost still fell. It applies to prescribed pitch too, where the replay motor does whatever
+        work the trajectory demands and was historically never charged.
+
+        Consequence for comparisons: work proxies recorded before the ankle was charged are LEG ONLY
+        and are not comparable with values from this method. :meth:`leg_work_proxy_j` reproduces the
+        old quantity when continuity with those numbers is needed.
+        """
+        leg = self.leg_work_proxy_j(rollout)
+        if not self.charge_ankle:
+            return leg
+        ankle = self.ankle_work_proxy_j(rollout)
+        if not _finite(leg, ankle):
+            return float("nan")
+        return leg + ankle
 
     def violations(self, rollout: RolloutLike) -> dict[str, float]:
         """Return the tier 1 violations, each normalized by its own limit, empty when feasible."""

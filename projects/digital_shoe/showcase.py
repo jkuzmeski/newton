@@ -15,11 +15,13 @@ import newton
 import newton.examples
 
 from .artifact import load_artifact
-from .rendering import attached_column_endpoints, column_colors, column_world_positions
-from .runtime import FoundationConfig, MidsoleFoundation
+from .rendering import bench_column_endpoints, carried_column_endpoints, column_colors
+from .runtime import FoundationConfig, MidsoleFoundation, SurroundConfig
 
 DEFAULT_ARTIFACT = "DigitalInstron/digital_shoe_showcase/digital_shoe.json"
 INSTRON_WARMUP_CYCLES = 6
+# Doubling these warm-started sweeps changes either frozen-fixture curve by less than 0.1% of peak.
+INSTRON_SURROUND_SWEEPS = 32
 
 
 @wp.kernel
@@ -106,6 +108,7 @@ class Example:
             raise ValueError("GIF width, FPS, and stride must be positive")
         self._gif_frames = []
 
+        self.surround_config = None
         builder = newton.ModelBuilder()
         builder.add_ground_plane()
         if self.mode == "instron":
@@ -144,10 +147,9 @@ class Example:
             self.model.body_com,
             self.foundation_config,
             self.device,
+            self.surround_config,
         )
         self.column_count = len(rest)
-        self._anchor = wp.array(np.ascontiguousarray(anchor, np.float32), dtype=wp.vec3, device=self.device)
-        self._rest = wp.array(np.ascontiguousarray(rest, np.float32), dtype=wp.float32, device=self.device)
         self._points = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._tops = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._colors = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
@@ -155,8 +157,7 @@ class Example:
         self._frame_max_compression = wp.zeros(1, dtype=wp.float32, device=self.device)
         self._fixed_bottom = None
         if self.mode == "instron":
-            fixture = self.shoe.instron_fixture(self.fixture_name)
-            fixed = np.column_stack([fixture.carrier_anchor_m[:, :2], fixture.foam_bottom_m])
+            fixed = np.column_stack([anchor[:, :2], free_top - rest])
             self._fixed_bottom = wp.array(np.ascontiguousarray(fixed, np.float32), dtype=wp.vec3, device=self.device)
         self._peak_force = wp.zeros(1, dtype=wp.float32, device=self.device)
         self._peak_compression = wp.zeros(1, dtype=wp.float32, device=self.device)
@@ -192,10 +193,12 @@ class Example:
             return
         fixture_data = self.shoe.raw["instron_fixtures"][self.fixture_name]
         radius = float(fixture_data["indenter"]["radius_m"])
-        top = float(np.max(self.shoe.instron_fixture(self.fixture_name).carrier_anchor_m[:, 2]))
+        points = self._fixture_visual_anchor_m
+        center = 0.5 * (np.min(points[:, :2], axis=0) + np.max(points[:, :2], axis=0))
+        top = float(np.max(points[:, 2]))
         builder.add_shape_cylinder(
             self.carrier,
-            xform=wp.transform(wp.vec3(0.0, 0.0, top + 0.005), wp.quat_identity()),
+            xform=wp.transform(wp.vec3(float(center[0]), float(center[1]), top + 0.005), wp.quat_identity()),
             radius=radius,
             half_height=0.005,
             cfg=newton.ModelBuilder.ShapeConfig(density=0.0, has_shape_collision=False),
@@ -204,24 +207,52 @@ class Example:
         )
 
     def _build_instron(self, builder):
+        """Recover the full bench bed and the fixture-only kinematic drive."""
         fixture = self.shoe.instron_fixture(self.fixture_name)
         curve = next(curve for curve in self.shoe.validation["curves"] if curve["fixture"] == self.fixture_name)
         self._cycle_time = np.asarray(curve["time_s"], dtype=np.float64)
         self._cycle_depth = np.asarray(curve["displacement_m"], dtype=np.float64)
         self._measured_force = np.asarray(curve["measured_force_n"], dtype=np.float64)
+        self._predicted_force = np.asarray(curve["predicted_force_n"], dtype=np.float64)
         self._expected_peak_force_n = float(curve["metrics"]["simulated_peak_force_n"])
         self._period = float(self._cycle_time[-1] - self._cycle_time[0])
         self.carrier = builder.add_body(mass=1.0, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)))
+        # Keep the untouched foam: deleting it cuts the identified shear layer at the indenter rim.
+        bed = self.shoe.column_bed
+        lookup = {tuple(np.round(point, 8)): index for index, point in enumerate(bed.anchor_bottom_m[:, :2])}
+        try:
+            supported = np.array([lookup[tuple(np.round(point, 8))] for point in fixture.carrier_anchor_m[:, :2]])
+        except KeyError as error:
+            raise ValueError("The Instron fixture must map onto the whole-shoe column bed") from error
+        if len(np.unique(supported)) != len(supported):
+            raise ValueError("The Instron fixture maps more than once onto a bed column")
+        if not np.allclose(fixture.rest_length_m, bed.rest_length_m[supported], rtol=1.0e-6, atol=1.0e-9):
+            raise ValueError("The Instron fixture and whole bed must share column rest lengths")
+        bottom = bed.anchor_bottom_m[:, 2]
+        free_top = bottom + bed.rest_length_m
+        anchor = np.column_stack([bed.anchor_bottom_m[:, :2], free_top])
+        # Old punch artifacts use zero-bottom column datums. Shift both ends,
+        # not the rest length, so vertical compression and fixture gaps are unchanged.
+        datum_shift = bottom[supported] - fixture.foam_bottom_m
+        anchor[supported] = fixture.carrier_anchor_m
+        anchor[supported, 2] += datum_shift
+        free_top[supported] = fixture.foam_free_top_m + datum_shift
+        if not np.allclose(free_top, bottom + bed.rest_length_m, rtol=1.0e-6, atol=1.0e-9):
+            raise ValueError("The fixture and whole bed must share the same uncompressed shoe surface")
+        self._fixture_visual_anchor_m = anchor[supported].copy()
         self._add_instron_indenter_visual(builder)
-        self.foundation_config = FoundationConfig(stretch_floor=0.05)
-        return (
-            fixture.carrier_anchor_m,
-            fixture.foam_free_top_m,
-            fixture.rest_length_m,
-            fixture.area_m2,
-            fixture.neighbors,
-            fixture.spacing_m,
+        driven = np.zeros(len(bed.rest_length_m), dtype=np.int32)
+        driven[supported] = 1
+        self.surround_config = SurroundConfig(
+            driven=driven,
+            attachment_n_m=0.0,
+            sweeps=INSTRON_SURROUND_SWEEPS,
+            relaxation_time_s=0.0,
+            carrier_bond=False,
         )
+        # Bench anchors are indenter tops, not outsole sites on an external plane.
+        self.foundation_config = FoundationConfig(stretch_floor=0.05)
+        return anchor, free_top, bed.rest_length_m, bed.area_m2, bed.neighbors, bed.spacing_m
 
     def _build_drop(self, builder, args):
         bed = self.shoe.column_bed
@@ -252,7 +283,7 @@ class Example:
             label="free_body_weight_drop",
         )
         self._add_fullfoot_last_visual(builder, label="free_drop_shoe_last")
-        self.foundation_config = FoundationConfig(stretch_floor=0.05, normal_damping=5.0)
+        self.foundation_config = FoundationConfig(stretch_floor=0.05, normal_damping=5.0, ground_height_m=0.0)
         return (
             bed.anchor_bottom_m,
             np.zeros(len(bed.rest_length_m)),
@@ -266,7 +297,7 @@ class Example:
         bed = self.shoe.column_bed
         self._rocker_period = 1.2
         self.carrier = builder.add_body(mass=1.0, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)))
-        self.foundation_config = FoundationConfig(stretch_floor=0.05)
+        self.foundation_config = FoundationConfig(stretch_floor=0.05, ground_height_m=0.0)
         return (
             bed.anchor_bottom_m,
             np.zeros(len(bed.rest_length_m)),
@@ -403,21 +434,30 @@ class Example:
         )
         if self.mode == "instron":
             wp.launch(
-                column_world_positions,
+                bench_column_endpoints,
                 dim=self.column_count,
-                inputs=[self.carrier, self.state_0.body_q, self._anchor, self._points],
+                inputs=[
+                    self._fixed_bottom,
+                    self.foundation.rest_len,
+                    self.foundation.compression,
+                    self._tops,
+                    self._points,
+                ],
                 device=self.device,
             )
             self.viewer.log_lines("digital_shoe/columns", self._fixed_bottom, self._points, self._colors, width=0.003)
         else:
             wp.launch(
-                attached_column_endpoints,
+                carried_column_endpoints,
                 dim=self.column_count,
                 inputs=[
                     self.carrier,
                     self.state_0.body_q,
-                    self._anchor,
-                    self._rest,
+                    self.foundation.anchor_local,
+                    self.foundation.rest_len,
+                    self.foundation.compression,
+                    self.foundation.driven,
+                    self.foundation.ground_height_m,
                     self._points,
                     self._tops,
                 ],
@@ -548,9 +588,19 @@ class Example:
         relative_error = abs(peak - self._expected_peak_force_n) / self._expected_peak_force_n
         if relative_error >= 0.03:
             raise AssertionError(f"runtime peak differs from the exported prediction by {100.0 * relative_error:.1f}%")
+        # Forces precede the final clock increment; compare the warmed cycle at that exact phase.
+        force_time = np.asarray([entry["time_s"] - self.sim_dt for entry in self.history])
+        last_cycle = force_time >= force_time[-1] - self._period
+        expected = np.interp(force_time[last_cycle] % self._period, self._cycle_time, self._predicted_force)
+        curve_error = float(np.sqrt(np.mean((force[last_cycle] - expected) ** 2)) / self._expected_peak_force_n)
+        if curve_error >= 0.03:
+            raise AssertionError(
+                f"runtime curve differs from the exported prediction by {100.0 * curve_error:.2f}% NRMSE"
+            )
         print(
             f"[digital shoe / instron] peak {peak:.0f} N "
-            f"(exported prediction {self._expected_peak_force_n:.0f} N); artifact {self.shoe.shoe_id}"
+            f"(exported prediction {self._expected_peak_force_n:.0f} N); "
+            f"curve NRMSE {100.0 * curve_error:.3f}%; artifact {self.shoe.shoe_id}"
         )
 
     def _test_drop(self, force: np.ndarray) -> None:

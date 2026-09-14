@@ -7,6 +7,13 @@ The offline exporter calls the source worktree's public C3D adapters in that
 worktree's own uv environment. The portable loader needs no gait code or C3D.
 The default pitch fits a calibrated heel triangle; the legacy marker-line proxy
 is still available. Neither mode establishes a measured sole or Puma-shoe frame.
+
+``--pelvis-markers`` adds one optional block of measured pelvis markers on their
+own optical clock, which raises the schema to ``impedance_stance_3``. It carries
+no new processing: the markers are the same decoded C3D positions, kept beside
+the stance they belong to so an independent optical height can be compared with
+the force-integrated COM surrogate. Profiles written without the option keep the
+previous schema and load unchanged.
 """
 
 from __future__ import annotations
@@ -25,7 +32,10 @@ import numpy as np
 
 LEGACY_SCHEMA = "impedance_stance_1"
 SCHEMA = "impedance_stance_2"
+PELVIS_SCHEMA = "impedance_stance_3"
 PITCH_METHOD = "heel_cluster_kabsch_static_ground_forward"
+PELVIS_METHOD = "measured_pelvis_marker_centroid_on_optical_clock"
+PELVIS_MARKERS = ("LASI", "RASI", "LPSI", "RPSI")
 PITCH_FORMULA = "unwrap(-atan2((R @ static_forward)_z, (R @ static_forward)_x)); world +Y toe-down"
 PITCH_CONTEXT_S = 0.15
 FIT_RMS_LIMIT_M = 0.002
@@ -166,6 +176,70 @@ def _pitch_from_rotations(rotation: np.ndarray, forward: np.ndarray) -> np.ndarr
     if np.any(np.linalg.norm(direction[:, (0, 2)], axis=1) < 0.1):
         raise ValueError("heel forward vector has degenerate world sagittal projection")
     return np.unwrap(-np.arctan2(direction[:, 2], direction[:, 0]))
+
+
+def _pelvis_pair_statistics(positions: np.ndarray) -> dict:
+    """Measure how rigid the pelvis marker cloud stayed, as a soft-tissue-artefact indicator."""
+    count = positions.shape[1]
+    pairs, means, deviations, spans = [], [], [], []
+    for first in range(count):
+        for second in range(first + 1, count):
+            distance = np.linalg.norm(positions[:, first] - positions[:, second], axis=1)
+            pairs.append([first, second])
+            means.append(float(distance.mean()))
+            deviations.append(float(distance.std(ddof=1)))
+            spans.append(float(np.ptp(distance)))
+    return {
+        "kind": "inter-marker distance of a cluster that would be constant on a rigid segment",
+        "pairs": pairs,
+        "mean_m": means,
+        "sd_m": deviations,
+        "range_m": spans,
+        "limitations": "a small spread bounds relative marker motion only; it cannot separate skin "
+        "motion from true pelvis deformation, and it says nothing about marker-to-bone offset",
+    }
+
+
+def _build_pelvis_reference(markers, times: np.ndarray, names: tuple[str, ...]) -> dict:
+    """Carry the measured pelvis markers on their own optical clock, with derivative context.
+
+    The exported window keeps the same 0.15 s of optical context as the pitch knots at each end, so
+    a velocity at the first or last loaded sample is a measured central difference rather than an
+    extrapolation.
+    """
+    if markers.rate != 100.0:
+        raise ValueError("pelvis export requires original 100 Hz optical inputs")
+    if len(set(names)) != len(names) or len(names) < 3:
+        raise ValueError("pelvis export requires at least three distinct marker labels")
+    first = int(np.searchsorted(markers.times, times[0] - PITCH_CONTEXT_S, side="right")) - 1
+    last = int(np.searchsorted(markers.times, times[-1] + PITCH_CONTEXT_S, side="left"))
+    if first < 0 or last >= len(markers.times):
+        raise ValueError("Trial cannot provide the required 0.15 s pelvis context at each end")
+    selection = slice(first, last + 1)
+    try:
+        indices = [markers.marker_names.index(name) for name in names]
+    except ValueError as error:
+        raise ValueError(f"pelvis markers {names} are not all present in this C3D") from error
+    if not np.all(markers.valid[selection][:, indices]):
+        raise ValueError("pelvis export requires valid measured markers at every knot; no gap filling")
+    positions = np.asarray(markers.positions[selection][:, indices], dtype=float)
+    if not np.all(np.isfinite(positions)):
+        raise ValueError("pelvis markers must be finite at every exported knot")
+    return {
+        "method": PELVIS_METHOD,
+        "marker_names": list(names),
+        "source_rate_hz": float(markers.rate),
+        "knot_time_s": (markers.times[selection] - times[0]).tolist(),
+        "position_m": positions.tolist(),
+        "centroid_m": positions.mean(axis=1).tolist(),
+        "frame": "Newton lab axes; Z is absolute height above the Z=0 platform plane; X is the "
+        "treadmill-fixed laboratory axis BEFORE the virtual belt translation, so fore-aft position "
+        "is not overground travel and only velocity relative to the belt is meaningful",
+        "quality": _pelvis_pair_statistics(positions),
+        "limitations": "skin-mounted pelvis markers are not the whole-body centre of mass and not a "
+        "bone landmark; arm and leg swing move the true COM relative to the pelvis within a stride, "
+        "and prior gap filling inside the source C3D cannot be excluded by this exporter",
+    }
 
 
 def _pitch_kinematics(prefix: str) -> dict:
@@ -327,6 +401,53 @@ def _validate_pitch_reference(result: dict, values: dict) -> None:
         raise ValueError("pitch quality must retain measured residuals and explicit unvalidated limits")
 
 
+def _validate_pelvis_reference(result: dict, values: dict) -> None:
+    """Check the v3 pelvis block is the measured marker cloud on the original optical clock."""
+    ref = result["pelvis_reference"]
+    expected = {
+        "method",
+        "marker_names",
+        "source_rate_hz",
+        "knot_time_s",
+        "position_m",
+        "centroid_m",
+        "frame",
+        "quality",
+        "limitations",
+    }
+    if not isinstance(ref, dict) or set(ref) != expected or ref["method"] != PELVIS_METHOD:
+        raise ValueError("invalid pelvis_reference fields or method")
+    names = ref["marker_names"]
+    if (
+        not isinstance(names, list)
+        or len(names) < 3
+        or len(set(names)) != len(names)
+        or any(not isinstance(name, str) or not name.strip() for name in names)
+    ):
+        raise ValueError("pelvis markers must be at least three distinct labels")
+    rate = _number(ref["source_rate_hz"], "pelvis source rate")
+    if rate != _number(result["pitch_reference"]["source_rate_hz"], "pitch source rate"):
+        raise ValueError("pelvis and pitch must share the original optical clock")
+    knot_list = ref["knot_time_s"]
+    if not isinstance(knot_list, list) or len(knot_list) < 4:
+        raise ValueError("pelvis requires original optical knots with outer context")
+    count = len(knot_list)
+    knots = _finite_array(knot_list, (count,), "pelvis knot clock")
+    absolute = knots + values["source_time_s"][0]
+    if not np.allclose(np.diff(knots), 1 / rate, rtol=0, atol=1e-10) or not np.allclose(
+        absolute * rate, np.rint(absolute * rate), rtol=0, atol=1e-7
+    ):
+        raise ValueError("pelvis knots must retain the original optical clock, not analog-grid resampling")
+    if knots[0] > -PITCH_CONTEXT_S + 1e-10 or knots[-1] < values["time_s"][-1] + PITCH_CONTEXT_S - 1e-10:
+        raise ValueError("pelvis knots require at least 0.15 s context before and after the padded profile")
+    positions = _finite_array(ref["position_m"], (count, len(names), 3), "pelvis marker positions")
+    centroid = _finite_array(ref["centroid_m"], (count, 3), "pelvis centroid")
+    if not np.allclose(centroid, positions.mean(axis=1), rtol=0, atol=1e-12):
+        raise ValueError("pelvis centroid must be the unweighted mean of the exported markers")
+    if ref["quality"] != _pelvis_pair_statistics(positions):
+        raise ValueError("pelvis rigidity statistics disagree with the exported markers")
+
+
 def _pitch_quality(rms: np.ndarray, maximum: np.ndarray, min_area: float) -> dict:
     return {
         "passed": True,
@@ -348,7 +469,8 @@ def load_profile(path: str | Path) -> dict:
     """Verify a portable running profile and return its JSON object.
 
     Args:
-        path: Sealed ``impedance_stance_1`` or ``impedance_stance_2`` JSON file.
+        path: Sealed ``impedance_stance_1``, ``impedance_stance_2`` or ``impedance_stance_3``
+            JSON file. The third schema is the second plus the measured pelvis markers.
 
     Raises:
         ValueError: If schema, seal, arrays, source attribution, or physics
@@ -366,9 +488,11 @@ def load_profile(path: str | Path) -> dict:
         "seal",
     }
     schema = result.get("schema_version")
-    if schema == SCHEMA:
+    if schema in (SCHEMA, PELVIS_SCHEMA):
         required.add("pitch_reference")
-    if set(result) != required or schema not in (LEGACY_SCHEMA, SCHEMA):
+    if schema == PELVIS_SCHEMA:
+        required.add("pelvis_reference")
+    if set(result) != required or schema not in (LEGACY_SCHEMA, SCHEMA, PELVIS_SCHEMA):
         raise ValueError("unsupported profile fields or schema")
     if result["coordinate_system"] != COORDINATES or result["side"] not in ("left", "right"):
         raise ValueError("invalid coordinate system or side")
@@ -474,8 +598,10 @@ def load_profile(path: str | Path) -> dict:
             v, values[f"reference_com_v{axis}_m_s"], rtol=0, atol=1e-9
         ):
             raise ValueError("COM surrogate is not the declared measured-force integration")
-    if schema == SCHEMA:
+    if schema in (SCHEMA, PELVIS_SCHEMA):
         _validate_pitch_reference(result, values)
+    if schema == PELVIS_SCHEMA:
+        _validate_pelvis_reference(result, values)
     return result
 
 
@@ -719,6 +845,12 @@ def _extract(config: dict) -> None:
     if use_heel_cluster:
         pitch_reference = _build_pitch_reference(markers, calibration, ts, config["side"])
         pitch = np.interp(relative, pitch_reference["knot_time_s"], pitch_reference["pitch_rad"])
+    pelvis_names = tuple(config.get("pelvis_markers") or ())
+    pelvis_reference = None
+    if pelvis_names:
+        if not use_heel_cluster:
+            raise ValueError("the pelvis block extends the heel-cluster schema; legacy pitch cannot carry it")
+        pelvis_reference = _build_pelvis_reference(markers, ts, pelvis_names)
     cop_x = np.zeros(len(ts))
     cop_x[reference_loaded] = -summed_moment[reference_loaded, 1] / reference[reference_loaded, 2]
     cop_x += displacement - heel[0, 0]
@@ -821,7 +953,11 @@ def _extract(config: dict) -> None:
         provenance["kinematics"] = _pitch_kinematics(prefix)
         provenance["acquisition"] = ACQUISITION_FACTS.copy()
     result = {
-        "schema_version": SCHEMA if use_heel_cluster else LEGACY_SCHEMA,
+        "schema_version": PELVIS_SCHEMA
+        if pelvis_reference is not None
+        else SCHEMA
+        if use_heel_cluster
+        else LEGACY_SCHEMA,
         "coordinate_system": COORDINATES,
         "mass_kg": float(mass),
         "side": config["side"],
@@ -849,6 +985,8 @@ def _extract(config: dict) -> None:
     }
     if pitch_reference is not None:
         result["pitch_reference"] = pitch_reference
+    if pelvis_reference is not None:
+        result["pelvis_reference"] = pelvis_reference
     for name, path in source_paths.items():
         if _hash(path) != sources[name]["sha256"]:
             raise ValueError(f"source changed during export: {name}")
@@ -874,6 +1012,12 @@ def main() -> None:
         default="heel-cluster",
         help="Heel-cluster v2 with assumed flat reference (default), or legacy v1 HEE-to-TOE line",
     )
+    parser.add_argument(
+        "--pelvis-markers",
+        default="",
+        help="Comma-separated pelvis marker labels to carry as measured optical context, for "
+        f"example {','.join(PELVIS_MARKERS)}; empty keeps the heel-cluster schema unchanged",
+    )
     parser.add_argument("--treadmill-log", default="tm0001.txt")
     parser.add_argument(
         "--window-start", type=float, required=True, help="Explicit classification-window start on source C3D clock [s]"
@@ -896,6 +1040,7 @@ def main() -> None:
     args.output = args.output.resolve()
     config = vars(args).copy()
     del config["source_worktree"]
+    config["pelvis_markers"] = [name.strip() for name in args.pelvis_markers.split(",") if name.strip()]
     config["output"] = str(args.output)
     if args.output.exists():
         parser.error("output already exists; choose a new path to preserve the previous sealed artifact")

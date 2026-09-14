@@ -1,79 +1,56 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Differentiable elastic-foundation midsole for gradient-based simulation.
+"""Tape-safe adapter for the shared Hyperfoam-Maxwell-Pasternak contact model.
 
-This is the autodiff-ready sibling of :mod:`projects.digital_instron_v2.dynamics`.
-It exposes the same calibrated Hyperfoam-Maxwell-Pasternak column bed as a live
-Warp force model, but re-shaped so the whole per-substep force integration can be
-recorded on a :class:`warp.Tape` and differentiated end to end.
+The constitutive expressions live in :mod:`projects.digital_shoe.material`.
+Normal contact, lateral coupling, anchored bristle friction, and force-to-wrench
+mechanics live in :mod:`projects.digital_shoe.contact`. The live runtime and this
+adapter call those same functions. Material parameters enter as array elements
+so Warp can accumulate their gradients.
 
-The *mechanics* are not re-derived here. The column bed clamps only its unilateral
-ground reaction and then adds the (signed) Pasternak shear flux, treats every
-missing neighbour as a free zero-gradient edge, and relaxes the columns the
-carrier does not drive against the same balance the identification and the live
-runtime relax them against -- see
-:func:`projects.digital_shoe.runtime.foundation_apply` and
-:func:`projects.digital_shoe.runtime._surround_balance`. Only three structural
-changes make that model differentiable, and each one is forced by autodiff:
+This adapter owns separate pressure, Maxwell, bristle, and force buffers for each
+substep. No state on the loss path is overwritten during a rollout. Integer
+contact flags select the same branches as the live model; derivatives are
+piecewise derivatives away from contact, stick/slip, and release transitions.
+There is no smooth-friction replacement in :class:`DifferentiableMidsoleFoundation`.
 
-* **Tape-safe viscoelastic recurrence.** The forward
-  :func:`~projects.digital_instron_v2.dynamics.foundation_pressure` updates the
-  generalized-Maxwell overstress state *in place* (``q_state[i] = qn``), which
-  aliases the same array across substeps and is unsafe to differentiate. Here
-  :func:`foundation_pressure_diff` takes the previous substep's state as a
-  read-only input and writes the next substep's state into a *separate* array, so
-  every buffer on the loss path is written exactly once per rollout.
-
-* **Cone-respecting smooth Coulomb friction.** The forward model's anchored
-  bristle friction switches on an integer stick/slip flag, which has no useful
-  gradient. :func:`foundation_apply_diff` instead uses
-  :func:`warp.smooth_normalize` (the pseudo-Huber smoothed direction), giving a
-  friction force ``-mu * fn * v_tan / sqrt(delta^2 + |v_tan|^2)`` that is smooth
-  through zero relative velocity and never exceeds the cone ``mu * fn``.
-
-* **Material read from an array.** Warp accumulates adjoints into arrays, so the
-  fitted parameters cannot travel inside the by-value ``FoundationParams`` struct
-  the runtime kernels read. :func:`_surround_balance_diff` and
-  :func:`surround_relax_diff` are therefore separate transcriptions of
-  :func:`projects.digital_shoe.runtime._surround_balance` and
-  :func:`projects.digital_shoe.runtime.surround_relax`; the balance formula still
-  lives in exactly one place per side and
-  ``test_surround_balance_matches_runtime`` pins the two together. Adding the
-  autodiff plumbing to the shipped runtime instead would slow every forward
-  simulation down for it.
-
-The live surround is a fixed, warm-started number of damped sweeps per substep, so
-this module differentiates straight *through* the sweeps -- that derivative is
-exact for the map the simulation evaluates. The identification relaxes to
-convergence instead and uses an implicit-function-theorem adjoint; see
+The live surround uses fixed, warm-started damped sweeps. This module differentiates
+through those sweeps, giving the derivative of the map the simulation evaluates.
+Identification instead solves to convergence and uses an implicit adjoint; see
 :class:`projects.digital_instron_v2.inverse_id.DifferentiableTrial`.
 
-The constitutive parameters that a fit would vary -- both Ogden-Hill term moduli
-and exponents and the Maxwell overstress ratio -- are held in a
-length-5 ``requires_grad`` device array so gradients of any simulation objective
-with respect to the foam material are available directly from
-``material_params.grad``. The lateral shear layer is not among them: its
-coefficient is pinned to the material as ``k_i = mu_eq * t_i`` per column
-(:meth:`projects.digital_instron_v2.core.Material.coupling_n_per_m`), so it adds
-no free parameter and its gradient flows through the series modulus
-``g_eq + g_eq2``. The Coulomb friction coefficient ``mu`` is held in
-a separate length-1 ``requires_grad`` ``friction_params`` array, so a lateral- or
-shear-force objective can be differentiated with respect to friction as well
-(friction identification), independent of the constitutive fit.
-
-See :mod:`projects.digital_instron_v2.dynamics` for the (faster, forward-only)
-production force model and the geometry/calibration helpers reused here.
+The length-five material vector is ``[g_eq, alpha, overstress, g_eq2, alpha2]``.
+Pasternak coupling follows the sum of both equilibrium moduli and adds no fitted
+parameter. The length-one friction vector contains the Coulomb coefficient.
+Both vectors retain their existing public layout.
 """
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import warp as wp
 
-from projects.digital_shoe.runtime import _hyperfoam_term, set_hyperfoam_series
+from projects.digital_shoe.contact import (
+    bristle_step,
+    contact_kinematics,
+    contact_wrench,
+    normal_reaction,
+    pasternak_coupling,
+    pasternak_flux,
+    surround_balance,
+)
+from projects.digital_shoe.material import (
+    hyperfoam_pressure,
+    maxwell_coefficients,
+    maxwell_coefficients_numpy,
+    maxwell_step,
+)
+from projects.digital_shoe.runtime import set_material_block
 
-from .core import EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material
+from .core import Material
 from .dynamics import FoundationConfig, FoundationParams, SurroundConfig
 
 # Indices into the differentiable ``material_params`` vector.
@@ -85,7 +62,7 @@ MAT_ALPHA2 = wp.constant(4)  # second-term Hyperfoam exponent
 MAT_COUNT = 5  # length of the differentiable material vector
 
 # Index into the differentiable ``friction_params`` vector.
-FRIC_MU = wp.constant(0)  # Coulomb friction coefficient (smooth-cone bound)
+FRIC_MU = wp.constant(0)  # Coulomb friction coefficient (bristle cone bound)
 
 
 @wp.func
@@ -97,20 +74,8 @@ def _hyperfoam_pressure_diff(
     alpha2: wp.float32,
     p: FoundationParams,
 ) -> wp.float32:
-    """Positive uniaxial compression pressure from the two-term Hyperfoam law.
-
-    Identical law to :func:`~projects.digital_instron_v2.dynamics._hyperfoam_pressure`,
-    reusing its :func:`~projects.digital_shoe.runtime._hyperfoam_term` so the law
-    itself is written once, but with both differentiable term moduli and
-    exponents passed as scalars so gradients flow into them.
-    """
-    stretch = 1.0 - strain
-    if stretch < p.stretch_floor:
-        stretch = p.stretch_floor
-    volume_ratio = wp.pow(stretch, p.one_minus_two_poisson)
-    return _hyperfoam_term(stretch, volume_ratio, g_eq, alpha, p.beta) + _hyperfoam_term(
-        stretch, volume_ratio, g_eq2, alpha2, p.beta
-    )
+    """Adapt the shared Hyperfoam law to the legacy differentiable signature."""
+    return hyperfoam_pressure(strain, g_eq, alpha, g_eq2, alpha2, p.beta, p.one_minus_two_poisson, p.stretch_floor)
 
 
 @wp.kernel
@@ -154,9 +119,8 @@ def foundation_pressure_diff(
     peq = _hyperfoam_pressure_diff(strain, g_eq, alpha, g_eq2, alpha2, params)
     # The identified relaxation time travels with the material (the refit moved it far
     # from the historical 80 ms default), so read it from ``params`` as the runtime does.
-    decay = wp.exp(-dt / params.tau_s)
-    ramp = params.tau_s * (1.0 - decay) / dt
-    qn = decay * q_prev[i] + overstress * ramp * (peq - peq_prev[i])
+    decay, ramp = maxwell_coefficients(dt, params.tau_s)
+    qn = maxwell_step(q_prev[i], peq, peq_prev[i], overstress, decay, ramp)
     q_out[i] = qn
     peq_out[i] = peq
     base_pressure[i] = peq + qn
@@ -164,18 +128,8 @@ def foundation_pressure_diff(
 
 @wp.func
 def _pasternak_coupling_diff(t_i: wp.float32, t_j: wp.float32, mu_eq: wp.float32) -> wp.float32:
-    """Pasternak coefficient of the shear layer between two columns [N/m].
-
-    Differentiable transcription of
-    :func:`projects.digital_shoe.runtime._pasternak_coupling`: a shear-layer
-    coefficient is ``G * t``, with the foam's own equilibrium Ogden-Hill modulus
-    and the mean of the two column rest thicknesses at the shared face. It takes
-    ``mu_eq`` -- the SUM of the two term moduli,
-    ``material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]`` -- as a scalar read
-    from the ``requires_grad`` material vector instead of out of the by-value
-    :class:`FoundationParams` struct, so both terms carry a coupling gradient.
-    """
-    return mu_eq * 0.5 * (t_i + t_j)
+    """Adapt the shared symmetric face coefficient to the legacy signature [N/m]."""
+    return pasternak_coupling(t_i, t_j, mu_eq)
 
 
 @wp.func
@@ -200,13 +154,7 @@ def _pasternak_flux(
     zero compression instead would make it a rigid hidden support that the shear
     layer leans on, which creates load instead of only spreading it.
     """
-    ci = compression[i]
-    flux = float(0.0)
-    for side in range(4):
-        j = neighbors[i, side]
-        if j >= 0:
-            flux += _pasternak_coupling_diff(rest_len[i], rest_len[j], mu_eq) * (compression[j] - ci)
-    return flux
+    return pasternak_flux(i, 0, compression, rest_len, neighbors, mu_eq)
 
 
 @wp.func
@@ -218,34 +166,12 @@ def _column_normal_force(
     normal_damping: wp.float32,
     vz: wp.float32,
 ) -> wp.float32:
-    """Unilateral column ground reaction minus the (signed) shear-layer flux [N].
+    """Return legacy bench transfer force: shared unilateral reaction minus flux [N].
 
-    One differentiable transcription of the normal-force path of
-    :func:`projects.digital_shoe.runtime.foundation_apply`, so the whole
-    differentiable path shares the runtime's contact mechanics:
-
-    * The foam spring and its Kelvin-Voigt dashpot are clamped *together* and
-      only against the ground: neither may pull the outsole back down.
-    * The Pasternak shear flux is subtracted afterwards and stays unclamped. It
-      redistributes load between columns and sums to zero over a free-edged bed,
-      so clamping the combined pressure (the previous behaviour here) both clipped
-      the flux and invented support under uncompressed foam.
-
-    Args:
-        ci: Column compression [m].
-        base_pressure_i: Foam equilibrium pressure plus Maxwell overstress [Pa].
-        area_i: Tributary area of the column [m^2].
-        flux: Neighbour shear pulled out of this column [N], from
-            :func:`_pasternak_flux`.
-        normal_damping: Per-column Kelvin-Voigt normal damping [N.s/m].
-        vz: Vertical velocity of the column anchor [m/s].
+    The signed Pasternak flux redistributes load and must not be clamped. This
+    quantity is not the local external ground reaction when a plane is declared.
     """
-    reaction = wp.max(base_pressure_i, 0.0) * area_i
-    if ci > 0.0:
-        reaction = reaction - normal_damping * vz
-    if reaction < 0.0:
-        reaction = 0.0
-    return reaction - flux
+    return normal_reaction(ci, base_pressure_i, area_i, normal_damping, vz, 0.0, 0) - flux
 
 
 @wp.func
@@ -268,40 +194,42 @@ def _surround_balance_diff(
     relaxation: wp.float32,
     carrier_bond: wp.int32,
 ) -> wp.float32:
-    """Differentiable transcription of :func:`projects.digital_shoe.runtime._surround_balance`.
+    """Adapt the shared surround balance to differentiable array-read material terms."""
+    return surround_balance(
+        c,
+        rigid,
+        pull,
+        coupling_sum,
+        thickness,
+        overstress_base,
+        overstress_gain,
+        g_eq,
+        alpha,
+        g_eq2,
+        alpha2,
+        params.beta,
+        params.one_minus_two_poisson,
+        params.stretch_floor,
+        area,
+        attachment,
+        max_strain,
+        relaxation,
+        carrier_bond,
+    )
 
-    One damped Newton step of an undriven column toward its local balance: its own
-    unilateral ground reaction (equilibrium pressure plus the overstress the step
-    itself produces), the Pasternak shear ``pull = sum_j k_ij (c_j - c)`` [N] from
-    its neighbours with ``coupling_sum = sum_j k_ij`` [N/m] as the shear part of
-    the local tangent, and the vertical bond to the shoe above. See the runtime
-    function for the meaning of every argument and of ``carrier_bond``; this is
-    the same formula, so the identification, the shipped runtime, and the
-    differentiable path settle untouched foam identically.
 
-    A separate function is unavoidable: the runtime reads the equilibrium modulus
-    and the Hyperfoam exponent out of the by-value :class:`FoundationParams`
-    struct, and Warp can only accumulate adjoints into arrays, so a
-    ``requires_grad`` material must enter as the ``g_eq``, ``alpha``, ``g_eq2``
-    and ``alpha2`` scalars of both Ogden-Hill terms, read from
-    :attr:`DifferentiableMidsoleFoundation.material_params`. Putting that
-    autodiff plumbing into the shipped runtime would slow every forward simulation
-    down for it. The two implementations are pinned to each other by
-    ``test_surround_balance_matches_runtime``; change one and change both.
+# Deprecated compatibility only. Active adapters call the shared bristle law.
+@wp.func
+def _legacy_smooth_friction(velocity: wp.vec2, pressed: wp.float32, mu: wp.float32, smoothing: wp.float32) -> wp.vec2:
+    """Preserve the old stateless raw-kernel law until its deprecation ends.
+
+    No active foundation or scenario calls this helper. The public kernel cannot
+    carry a timestep or bristle history without changing its launch signature.
     """
-    peq = _hyperfoam_pressure_diff(c / thickness, g_eq, alpha, g_eq2, alpha2, params)
-    reaction = area * wp.max(peq + overstress_base + overstress_gain * peq, 0.0)
-    step = 1.0e-3 * thickness
-    peq_ahead = _hyperfoam_pressure_diff((c + step) / thickness, g_eq, alpha, g_eq2, alpha2, params)
-    ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
-    stiffness = wp.max((ahead - reaction) / step + attachment + coupling_sum, 1.0e-9)
-    bond_reference = float(0.0)
-    upper = max_strain * thickness
-    if carrier_bond != 0:
-        bond_reference = rigid
-        upper = wp.clamp(rigid, 0.0, upper)
-    residual = reaction + attachment * (c - bond_reference) - pull
-    return wp.clamp(c - relaxation * residual / stiffness, 0.0, upper)
+    force = wp.vec2(0.0, 0.0)
+    if pressed > 0.0 and mu > 0.0:
+        force = -mu * pressed * wp.smooth_normalize(velocity, smoothing)
+    return force
 
 
 @wp.kernel
@@ -326,18 +254,12 @@ def foundation_apply_diff(
     pressed_force: wp.array[wp.float32],
     active_count: wp.array[wp.int32],
 ):
-    """Pasternak coupling, per-column wrench into ``body_f``, and force diagnostics.
+    """Deprecated stateless kernel; use foundation_apply_bristle_diff.
 
-    Matches the normal-force path of
-    :func:`~projects.digital_instron_v2.dynamics.foundation_apply` (pairwise
-    Pasternak flux, pressure floor, Kelvin-Voigt normal damping) but replaces the
-    non-differentiable anchored bristle friction with a smooth, cone-respecting
-    Coulomb law built on :func:`warp.smooth_normalize`. The shear-layer
-    coefficient is pinned to the material, so it follows the equilibrium modulus
-    read from the differentiable ``material_params`` vector and the per-column
-    rest thickness; the friction coefficient ``mu`` comes from the differentiable
-    ``friction_params`` vector, so a lateral-force objective can be differentiated
-    with respect to friction too.
+    The old smooth-friction behavior is retained only for compatibility until
+    this raw kernel's deprecation ends. Its signature cannot carry a timestep or
+    bristle history. :class:`DifferentiableMidsoleFoundation` never calls this
+    path. Normal contact, material, kinematics and wrench use the shared helpers.
     """
     i = wp.tid()
     # The shear layer follows the series modulus, which is the sum of both terms.
@@ -346,31 +268,108 @@ def foundation_apply_diff(
     ci = compression[i]
     flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
 
-    q_body = body_q[carrier]
-    world = wp.transform_point(q_body, anchor_local[i])
-    com_world = wp.transform_point(q_body, body_com[carrier])
-    r = world - com_world
     vel = body_qd[carrier]
-    point_vel = wp.spatial_top(vel) + wp.cross(wp.spatial_bottom(vel), r)
+    world, com_world, point_vel, _gap = contact_kinematics(
+        body_q[carrier], vel, body_com[carrier], anchor_local[i], 0.0, 0
+    )
 
     fn = _column_normal_force(ci, base_pressure[i], area[i], flux, params.normal_damping, point_vel[2])
     # A column the shear layer lifts transmits a small pull, so the friction cone and
     # the centre of pressure use the pressed part only, as the runtime does.
     pressed = wp.max(fn, 0.0)
 
-    # Cone-respecting smooth Coulomb friction: ft = -mu * fn * smooth_normalize(v_tan).
-    # smooth_normalize(v, delta) = v / sqrt(delta^2 + |v|^2) has magnitude < 1, so the
-    # tangential force is bounded by the cone mu * fn and is smooth through v_tan = 0.
-    mu = friction_params[FRIC_MU]
-    f_tan = wp.vec2(0.0, 0.0)
-    if pressed > 0.0 and mu > 0.0:
-        v_tan = wp.vec2(point_vel[0], point_vel[1])
-        f_tan = -mu * pressed * wp.smooth_normalize(v_tan, friction_smoothing)
+    f_tan = _legacy_smooth_friction(
+        wp.vec2(point_vel[0], point_vel[1]), pressed, friction_params[FRIC_MU], friction_smoothing
+    )
 
     force = wp.vec3(f_tan[0], f_tan[1], fn)
-    wp.atomic_add(body_f, carrier, wp.spatial_vector(force, wp.cross(r, force)))
+    torque, _moment, _power = contact_wrench(world, force, com_world, vel)
+    wp.atomic_add(body_f, carrier, wp.spatial_vector(force, torque))
     wp.atomic_add(normal_force, 0, fn)
     wp.atomic_add(cop_moment, 0, wp.vec3(world[0] * pressed, world[1] * pressed, 0.0))
+    wp.atomic_add(pressed_force, 0, pressed)
+    if ci > 0.0:
+        wp.atomic_add(active_count, 0, 1)
+
+
+@wp.kernel
+def foundation_apply_bristle_diff(
+    carrier: wp.int32,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    anchor_local: wp.array[wp.vec3],
+    area: wp.array[wp.float32],
+    rest_len: wp.array[wp.float32],
+    neighbors: wp.array2d[wp.int32],
+    compression: wp.array[wp.float32],
+    base_pressure: wp.array[wp.float32],
+    params: FoundationParams,
+    material_params: wp.array[wp.float32],
+    friction_params: wp.array[wp.float32],
+    dt: wp.float32,
+    ground_height: wp.float32,
+    ground_plane: wp.int32,
+    friction_kt: wp.array[wp.float32],
+    friction_kv: wp.array[wp.float32],
+    anchor_prev: wp.array[wp.vec2],
+    stuck_prev: wp.array[wp.int32],
+    dwell_prev: wp.array[wp.float32],
+    anchor_out: wp.array[wp.vec2],
+    stuck_out: wp.array[wp.int32],
+    dwell_out: wp.array[wp.float32],
+    force_out: wp.array[wp.vec3],
+    ground_force_out: wp.array[wp.vec3],
+    body_f: wp.array[wp.spatial_vector],
+    normal_force: wp.array[wp.float32],
+    cop_moment: wp.array[wp.vec3],
+    pressed_force: wp.array[wp.float32],
+    active_count: wp.array[wp.int32],
+):
+    """Apply the shared bristle contact law with separate per-substep history buffers.
+
+    Integer contact flags select the same stick/slip branches as the live model.
+    Tape gradients are piecewise derivatives away from those branch transitions.
+    ``force_out`` records signed transfer traction; ``ground_force_out`` records
+    external support. Their meanings match the live foundation in both modes.
+    """
+    i = wp.tid()
+    mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
+    ci = compression[i]
+    flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
+    vel = body_qd[carrier]
+    point, com_world, point_vel, gap = contact_kinematics(
+        body_q[carrier], vel, body_com[carrier], anchor_local[i], ground_height, ground_plane
+    )
+    reaction = normal_reaction(ci, base_pressure[i], area[i], params.normal_damping, point_vel[2], gap, ground_plane)
+    fn = reaction - flux
+    if ground_plane != 0:
+        fn = reaction
+    pressed = wp.max(fn, 0.0)
+    f_tan, anchor, stuck, dwell = bristle_step(
+        wp.vec2(point[0], point[1]),
+        wp.vec2(point_vel[0], point_vel[1]),
+        dt,
+        pressed,
+        friction_kt[i],
+        friction_kv[i],
+        friction_params[FRIC_MU],
+        params.friction_viscous_ratio,
+        params.friction_release_dwell_s,
+        anchor_prev[i],
+        stuck_prev[i],
+        dwell_prev[i],
+    )
+    anchor_out[i] = anchor
+    stuck_out[i] = stuck
+    dwell_out[i] = dwell
+    force_out[i] = wp.vec3(f_tan[0], f_tan[1], reaction - flux)
+    ground_force_out[i] = wp.vec3(f_tan[0], f_tan[1], reaction)
+    force = wp.vec3(f_tan[0], f_tan[1], fn)
+    torque, _moment, _power = contact_wrench(point, force, com_world, vel)
+    wp.atomic_add(body_f, carrier, wp.spatial_vector(force, torque))
+    wp.atomic_add(normal_force, 0, fn)
+    wp.atomic_add(cop_moment, 0, wp.vec3(point[0] * pressed, point[1] * pressed, 0.0))
     wp.atomic_add(pressed_force, 0, pressed)
     if ci > 0.0:
         wp.atomic_add(active_count, 0, 1)
@@ -493,9 +492,13 @@ class DifferentiableMidsoleFoundation:
     ping-pongs a single set of buffers for speed, this variant keeps a separate
     compression/pressure/overstress history for each of ``num_substeps`` substeps
     so the whole rollout can be recorded on one :class:`warp.Tape` and
-    differentiated. Drive it exactly like the forward model, but pass the current
-    substep index so the correct history slot and the previous overstress state
-    are used::
+    differentiated. ``column_force[t]`` holds signed transfer traction [N].
+    ``ground_force[t]`` holds unilateral external support plus friction [N].
+    ``applied_force`` selects the former for bench-top coordinates and the latter
+    for a declared ground plane. These quantities must not be interchanged.
+
+    Drive it like the forward model, but pass the current substep index so the
+    correct history slot and previous state are used::
 
         foundation = DifferentiableMidsoleFoundation(..., num_substeps=N)
         tape = wp.Tape()
@@ -524,8 +527,8 @@ class DifferentiableMidsoleFoundation:
         body_com: Model center-of-mass array (``model.body_com``).
         num_substeps: Number of substeps in one differentiated rollout.
         config: Dynamic :class:`~projects.digital_instron_v2.dynamics.FoundationConfig`.
-        friction_smoothing: Tangential velocity smoothing scale for the smooth
-            Coulomb friction [m/s].
+        friction_smoothing: Deprecated and ignored. The shared anchored bristle
+            law replaces smooth Coulomb friction.
         device: Warp device (must match the carrier state's device).
         surround: Optional
             :class:`~projects.digital_instron_v2.dynamics.SurroundConfig` letting
@@ -552,6 +555,18 @@ class DifferentiableMidsoleFoundation:
         surround: SurroundConfig | None = None,
     ) -> None:
         config = config or FoundationConfig()
+        self.ground_height_m = config.ground_height_m
+        if self.ground_height_m is not None:
+            if not np.all(np.asarray(z_free, dtype=np.float32) == np.float32(self.ground_height_m)):
+                raise ValueError("initial z_free must equal ground_height_m in ground-plane mode")
+            if surround is not None and not surround.carrier_bond and np.any(surround.driven == 0):
+                raise ValueError("ground-plane passive columns require surround.carrier_bond=True")
+        if friction_smoothing != 0.05:
+            warnings.warn(
+                "friction_smoothing is deprecated and ignored; the differentiable foundation uses the shared bristle law",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.device = device
         self.carrier = int(carrier_body)
         self.body_com = body_com
@@ -560,11 +575,7 @@ class DifferentiableMidsoleFoundation:
         self.friction_smoothing = float(friction_smoothing)
 
         params = FoundationParams()
-        set_hyperfoam_series(params, material)
-        params.beta = EFFECTIVE_POISSON_RATIO / (1.0 - 2.0 * EFFECTIVE_POISSON_RATIO)
-        params.one_minus_two_poisson = 1.0 - 2.0 * EFFECTIVE_POISSON_RATIO
-        params.tau_s = float(getattr(material, "maxwell_relaxation_time_s", MAXWELL_RELAXATION_TIME_S))
-        params.overstress = (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction
+        set_material_block(params, material)
         # Grid geometry only: the shear-layer coefficient is pinned per column to
         # ``mu_eq * t_i`` and no longer scales with the spacing.
         params.inv_h2 = 1.0 / spacing_m**2
@@ -572,6 +583,8 @@ class DifferentiableMidsoleFoundation:
         params.normal_damping = config.normal_damping
         params.friction_kt = config.friction_stiffness
         params.friction_kv = config.friction
+        params.friction_viscous_ratio = config.friction_viscous_ratio
+        params.friction_release_dwell_s = config.friction_release_dwell_s
         params.mu = config.mu
         self.params = params
 
@@ -591,6 +604,24 @@ class DifferentiableMidsoleFoundation:
         )
 
         m = self.column_count
+        area_m2 = np.ascontiguousarray(area, np.float64).reshape(-1)
+        mean_area = float(area_m2.mean())
+        if mean_area <= 0.0:
+            raise ValueError("column tributary areas must be positive")
+        self.friction_stiffness_per_area_n_m3 = float(
+            config.friction_stiffness_per_area or config.friction_stiffness / mean_area
+        )
+        self.friction_damping_per_area_n_s_m3 = float(config.friction_damping_per_area or config.friction / mean_area)
+        self.friction_kt = wp.array(
+            np.ascontiguousarray(self.friction_stiffness_per_area_n_m3 * area_m2, np.float32),
+            dtype=wp.float32,
+            device=device,
+        )
+        self.friction_kv = wp.array(
+            np.ascontiguousarray(self.friction_damping_per_area_n_s_m3 * area_m2, np.float32),
+            dtype=wp.float32,
+            device=device,
+        )
         self.anchor_local = wp.array(np.ascontiguousarray(anchor_local, np.float32), dtype=wp.vec3, device=device)
         self.z_free = wp.array(np.ascontiguousarray(z_free, np.float32), dtype=wp.float32, device=device)
         self.rest_len = wp.array(np.ascontiguousarray(rest_len, np.float32), dtype=wp.float32, device=device)
@@ -608,6 +639,21 @@ class DifferentiableMidsoleFoundation:
         # Fixed zero initial overstress state (substep 0 reads these).
         self.q_init = grad_zeros()
         self.peq_init = grad_zeros()
+        self.tangent_anchor_init = wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True)
+        self.tangent_stuck_init = wp.zeros(m, dtype=wp.int32, device=device)
+        self.tangent_dwell_init = grad_zeros()
+        self.tangent_anchor = [
+            wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True) for _ in range(self.num_substeps)
+        ]
+        self.tangent_stuck = [wp.zeros(m, dtype=wp.int32, device=device) for _ in range(self.num_substeps)]
+        self.tangent_dwell = [grad_zeros() for _ in range(self.num_substeps)]
+        self.column_force = [
+            wp.zeros(m, dtype=wp.vec3, device=device, requires_grad=True) for _ in range(self.num_substeps)
+        ]
+        self.ground_force = [
+            wp.zeros(m, dtype=wp.vec3, device=device, requires_grad=True) for _ in range(self.num_substeps)
+        ]
+        self.applied_force = self.column_force if self.ground_height_m is None else self.ground_force
 
         # Passive surround: one relaxed compression field per sweep and per substep, plus
         # the free-surface height each substep's pressure kernel reads, so a whole rollout
@@ -669,8 +715,8 @@ class DifferentiableMidsoleFoundation:
         sub_dt = dt / sweeps
         tau = float(cfg.relaxation_time_s)
         relaxation = 1.0 if tau <= 0.0 else 1.0 - float(np.exp(-sub_dt / tau))
-        decay = float(np.exp(-dt / self.params.tau_s))
-        ramp = float(self.params.tau_s * (1.0 - decay) / dt)
+        decay, ramp = maxwell_coefficients_numpy(dt, self.params.tau_s)
+        decay, ramp = float(decay), float(ramp)
         inputs = [
             self.carrier,
             state.body_q,
@@ -762,7 +808,7 @@ class DifferentiableMidsoleFoundation:
             device=self.device,
         )
         wp.launch(
-            foundation_apply_diff,
+            foundation_apply_bristle_diff,
             dim=self.column_count,
             inputs=[
                 self.carrier,
@@ -778,7 +824,19 @@ class DifferentiableMidsoleFoundation:
                 self.params,
                 self.material_params,
                 self.friction_params,
-                self.friction_smoothing,
+                dt,
+                float(self.ground_height_m or 0.0),
+                int(self.ground_height_m is not None),
+                self.friction_kt,
+                self.friction_kv,
+                self.tangent_anchor_init if t == 0 else self.tangent_anchor[t - 1],
+                self.tangent_stuck_init if t == 0 else self.tangent_stuck[t - 1],
+                self.tangent_dwell_init if t == 0 else self.tangent_dwell[t - 1],
+                self.tangent_anchor[t],
+                self.tangent_stuck[t],
+                self.tangent_dwell[t],
+                self.column_force[t],
+                self.ground_force[t],
                 state.body_f,
                 self.normal_force,
                 self.cop_moment,
@@ -796,6 +854,10 @@ class DifferentiableMidsoleFoundation:
             buf.grad.zero_()
         self.q_init.grad.zero_()
         self.peq_init.grad.zero_()
+        self.tangent_anchor_init.grad.zero_()
+        self.tangent_dwell_init.grad.zero_()
+        for buf in (*self.tangent_anchor, *self.tangent_dwell, *self.column_force, *self.ground_force):
+            buf.grad.zero_()
         if self.free_column_count:
             self.surround_init.grad.zero_()
             for sweeps in self.surround_compression:

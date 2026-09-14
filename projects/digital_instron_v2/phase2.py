@@ -151,6 +151,7 @@ def run_dynamic_replay(
     control = model.control()
     newton.eval_fk(model, model.joint_q, model.joint_qd, state_0)
 
+    # Indenter-top anchors retain the bench datum, not the carried-outsole plane convention.
     anchor_local = np.column_stack([geo.uv_m[:, 0], geo.uv_m[:, 1], geo.surface_m])
     foundation = MidsoleFoundation(
         anchor_local,

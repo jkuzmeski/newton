@@ -1,0 +1,1 @@
+Fix passive-column flight rendering in the impedance stiffness example. Separate external ground pressure, friction and contact-surface wrench from internal neighbor load transfer in the declared ground-plane foundation path. Require explicit source-update consent to re-evaluate old policies with changed physics.

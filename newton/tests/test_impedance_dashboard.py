@@ -18,14 +18,18 @@ from projects.impedance_instron.dashboard import (
     MAX_POINTS,
     create_server,
     downsample,
+    eval_groups,
     load_runs,
     parse_evaluation,
     parse_frozen,
     parse_iteration,
     parse_log,
+    parse_selection,
     plot,
+    refresh_url,
     render,
     render_directory,
+    run_colors,
 )
 
 ITERATION_LINE = (
@@ -38,7 +42,8 @@ EVAL_LINE = (
     "excursion_impulse=0.000 excursion_momentum=1.190 violation_total=0.000 eval_return=-84.085 "
     "peak_fz_n=1791.923 peak_fz_ref_n=1762.554 peak_time_pct=47.352 peak_time_ref_pct=46.954 "
     "fz_rms_n=292.760 impulse_err_pct=3.189 com_vz_rms=0.249 com_z_rms_mm=41.516 contact_ms=308.073 "
-    "peak_compression_mm=20.744 trace=outputs/impedance_instron/policy_v5.eval.npz"
+    "peak_compression_mm=20.744 trace=outputs/impedance_instron/policy_v5.eval.npz "
+    "artifact=digital_shoe-c2e5666d"
 )
 SHORT_EVAL_LINE = EVAL_LINE[: EVAL_LINE.index(" peak_fz_n=")]
 NOISE = (
@@ -54,7 +59,7 @@ NOISE = (
 _NONFINITE = re.compile(r"\b(nan|-?inf|infinity)\b", re.IGNORECASE)
 
 
-def _eval_line(iteration, *, on_task=1, objective="12.500", momentum="0.000", trace=None):
+def _eval_line(iteration, *, on_task=1, objective="12.500", momentum="0.000", trace=None, artifact=None):
     """Build one deterministic-evaluation record in the pinned log format."""
     line = (
         f"eval iteration={iteration} objective_j={objective} feasible=1 on_task={on_task} "
@@ -63,18 +68,24 @@ def _eval_line(iteration, *, on_task=1, objective="12.500", momentum="0.000", tr
         f"peak_time_pct=47.352 peak_time_ref_pct=46.954 fz_rms_n=292.760 impulse_err_pct=3.189 "
         f"com_vz_rms=0.249 com_z_rms_mm=41.516 contact_ms=308.073 peak_compression_mm=20.744"
     )
-    return f"{line} trace={trace}" if trace is not None else line
+    if trace is not None:
+        line = f"{line} trace={trace}"
+    if artifact is not None:
+        line = f"{line} artifact={artifact}"
+    return line
 
 
-def _write_trace(path, *, iteration=30, samples=400):
+def _write_trace(path, *, iteration=30, samples=400, artifact=None, reference_scale=1.0):
     """Write a synthetic evaluation trace archive using the documented schema."""
     time_s = np.linspace(0.0, 0.4, samples)
     shape = np.sin(np.pi * np.clip((time_s - 0.05) / 0.3, 0.0, 1.0)) ** 2
+    extra = {} if artifact is None else {"artifact": np.asarray(artifact)}
     np.savez_compressed(
         path,
+        **extra,
         time_s=time_s,
         shoe_fz_n=1800.0 * shape,
-        reference_fz_n=1760.0 * shape,
+        reference_fz_n=1760.0 * reference_scale * shape,
         shoe_fx_n=-200.0 * np.gradient(shape),
         reference_fx_n=-190.0 * np.gradient(shape),
         com_z_m=1.0 - 0.05 * shape,
@@ -92,7 +103,9 @@ def _write_trace(path, *, iteration=30, samples=400):
     return path
 
 
-def _log_text(iterations, *, frozen=None, noise=True, evaluate=0, on_task=1, objective="12.500", trace=None):
+def _log_text(
+    iterations, *, frozen=None, noise=True, evaluate=0, on_task=1, objective="12.500", trace=None, artifacts=None
+):
     """Build a synthetic training log with optional noise, eval records and a frozen line."""
     lines = list(NOISE) if noise else []
     for index in iterations:
@@ -103,7 +116,12 @@ def _log_text(iterations, *, frozen=None, noise=True, evaluate=0, on_task=1, obj
         )
         if evaluate and index % evaluate == 0:
             momentum = "0.000" if on_task else "1.190"
-            lines.append(_eval_line(index, on_task=on_task, objective=objective, momentum=momentum, trace=trace))
+            artifact = artifacts[(index // evaluate - 1) % len(artifacts)] if artifacts else None
+            lines.append(
+                _eval_line(
+                    index, on_task=on_task, objective=objective, momentum=momentum, trace=trace, artifact=artifact
+                )
+            )
     if frozen is not None:
         lines.append(frozen)
     return "\n".join(lines) + "\n"
@@ -276,7 +294,7 @@ class TestRuns(unittest.TestCase):
             root = Path(directory)
             (root / "train_v1.log").write_text(_log_text(range(1, 31)))
             page = render_directory(root, refresh=7)
-            self.assertIn('<meta http-equiv="refresh" content="7">', page)
+            self.assertIn('<meta http-equiv="refresh" content="7; url=/">', page)
             self.assertNotIn("<script", page)
             self.assertNotIn("http://cdn", page)
             for title in (
@@ -293,7 +311,7 @@ class TestRuns(unittest.TestCase):
             # Without eval records only the training-health charts draw.
             self.assertEqual(len(_svg_fragments(page)), 7)
             self.assertEqual(page.count("No samples yet."), 10)
-            self.assertIn("No waveforms yet.", page)
+            self.assertIn("No waveforms for the current selection.", page)
 
     def test_empty_directory_renders_a_page(self):
         """Render a readable page when the directory holds no training logs."""
@@ -474,9 +492,9 @@ class TestWaveforms(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             page = self._render_with_trace(root)
-            self.assertIn("Waveforms: run v9", page)
-            self.assertIn("evaluation at iteration 30", page)
-            self.assertNotIn("No waveforms yet.", page)
+            self.assertIn("Waveforms: 1 run overlaid", page)
+            self.assertIn("v9 at iteration 30", page)
+            self.assertNotIn("No waveforms for the current selection.", page)
             for title in (
                 "Vertical ground reaction force",
                 "Fore-aft ground reaction force",
@@ -487,9 +505,9 @@ class TestWaveforms(unittest.TestCase):
                 "Commanded damping ratio",
             ):
                 self.assertIn(title, page)
-            waveforms = page[page.index("Waveforms: run v9") : page.index("Physical evaluation metrics")]
-            self.assertIn("v9 simulated", waveforms)
-            self.assertIn("v9 measured", waveforms)
+            waveforms = page[page.index("Waveforms:") : page.index("Physical evaluation metrics")]
+            self.assertIn("<title>v9</title>", waveforms)
+            self.assertIn("<title>measured</title>", waveforms)
             self.assertIn("v9 commanded L0", waveforms)
             self.assertIn(">contact start<", waveforms)
             self.assertIn(">contact end<", waveforms)
@@ -507,7 +525,7 @@ class TestWaveforms(unittest.TestCase):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 page = self._render_with_trace(root, write=case is not None, corrupt=case)
-                self.assertIn("No waveforms yet.", page)
+                self.assertIn("No waveforms for the current selection.", page)
                 self.assertIn("Physical evaluation metrics", page)
                 self.assertIn("</html>", page)
                 self.assertIsNone(_NONFINITE.search(page))
@@ -522,7 +540,7 @@ class TestWaveforms(unittest.TestCase):
             )
             runs = load_runs(root)
             self.assertIsNotNone(runs[0].trace)
-            self.assertIn("Waveforms: run v9", render(runs, root))
+            self.assertIn("Waveforms: 1 run overlaid", render(runs, root))
 
     def test_physical_charts_and_table_report_measured_errors(self):
         """Draw measured reference lines and report the physical errors in the table."""
@@ -560,11 +578,450 @@ class TestWaveforms(unittest.TestCase):
             runs = load_runs(root)
             self.assertIsNone(runs[0].trace)
             page = render(runs, root)
-            self.assertIn("No waveforms yet.", page)
+            self.assertIn("No waveforms for the current selection.", page)
             physical = page[page.index("Physical evaluation metrics") : page.index("Task excursions")]
             self.assertEqual(len(_svg_fragments(physical)), 8)
             self.assertIn("\u2014", page)  # The contact-duration error needs a measured trace.
             self.assertIsNone(_NONFINITE.search(page))
+
+
+class TestMaterialToken(unittest.TestCase):
+    """Verify the optional artifact material token and its presentation."""
+
+    REAL_LINE = (
+        "eval iteration=400 objective_j=77.400 feasible=1 on_task=0 excursion_duration=0.000 "
+        "excursion_impulse=0.000 excursion_momentum=1.190 violation_total=0.000 eval_return=-27.407 "
+        "peak_fz_n=1050.000 peak_fz_ref_n=1000.000 peak_time_pct=50.000 peak_time_ref_pct=50.000 "
+        "fz_rms_n=35.482 impulse_err_pct=5.000 com_vz_rms=0.100 com_z_rms_mm=9.854 contact_ms=138.000 "
+        "peak_compression_mm=12.000 trace=/path/policy_ankle_v2_digital_shoe-c2e5666d.eval.npz "
+        "artifact=digital_shoe-c2e5666d"
+    )
+
+    def test_parse_line_with_artifact_token(self):
+        """Parse the trailing artifact token and keep every earlier field."""
+        record = parse_evaluation(self.REAL_LINE)
+        self.assertIsNotNone(record)
+        self.assertEqual(record["artifact"], "digital_shoe-c2e5666d")
+        self.assertEqual(record["trace"], "/path/policy_ankle_v2_digital_shoe-c2e5666d.eval.npz")
+        self.assertEqual(record["iteration"], 400.0)
+        self.assertAlmostEqual(record["eval_return"], -27.407)
+        self.assertAlmostEqual(record["peak_fz_n"], 1050.0)
+        self.assertAlmostEqual(record["contact_ms"], 138.0)
+        self.assertAlmostEqual(record["peak_compression_mm"], 12.0)
+
+    def test_artifact_token_is_optional(self):
+        """Parse a record without the token and report no material for it."""
+        record = parse_evaluation(EVAL_LINE[: EVAL_LINE.index(" artifact=")])
+        self.assertIsNotNone(record)
+        self.assertNotIn("artifact", record)
+        self.assertIsNone(parse_evaluation(self.REAL_LINE + " artifact=other"))  # A duplicate key is malformed.
+        empty = parse_evaluation(self.REAL_LINE.replace("artifact=digital_shoe-c2e5666d", "artifact="))
+        self.assertIsNotNone(empty)
+        self.assertNotIn("artifact", empty)
+
+    def test_logs_without_the_token_are_unchanged(self):
+        """Keep the old presentation for a log that carries no material token."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "train_v9.log").write_text(_log_text(range(1, 31), evaluate=10))
+            runs = load_runs(root)
+            self.assertEqual(runs[0].materials, [None])
+            self.assertIsNone(runs[0].material)
+            page = render(runs, root)
+            self.assertNotIn("sweep:", page)
+            self.assertNotIn("material <code>", page)
+            self.assertIn("<th>Shoe material</th>", page)
+            self.assertIsNone(_NONFINITE.search(page))
+
+    def test_single_material_is_named_in_the_table_and_legend(self):
+        """Name the material of a single-material run in the table and legend."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "train_v9.log").write_text(
+                _log_text(range(1, 31), evaluate=10, artifacts=["digital_shoe-c2e5666d"])
+            )
+            runs = load_runs(root)
+            self.assertEqual(runs[0].materials, ["digital_shoe-c2e5666d"])
+            page = render(runs, root)
+            self.assertIn("<code>digital_shoe-c2e5666d</code>", page)
+            self.assertIn("material <code>digital_shoe-c2e5666d</code>", page)
+            self.assertNotIn("sweep:", page)
+
+    def test_material_sweep_is_grouped_not_collapsed(self):
+        """Draw one curve per material token and mark the log as a sweep."""
+        tokens = ["shoe-aaaa1111", "shoe-bbbb2222", "shoe-cccc3333"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "train_v9.log").write_text(_log_text(range(1, 61), evaluate=5, artifacts=tokens))
+            runs = load_runs(root)
+            self.assertEqual(runs[0].materials, tokens)
+            groups = eval_groups(runs)
+            self.assertEqual([group.token for group in groups], tokens)
+            self.assertEqual([group.label for group in groups], [f"v9 [{token}]" for token in tokens])
+            self.assertEqual(len({group.color for group in groups}), 3)
+            self.assertEqual(sum(len(group.records) for group in groups), 12)
+            page = render(runs, root)
+            self.assertIn("sweep: 3 materials", page)
+            objective = page[page.index("Work objective") : page.index("Training health")]
+            for token in tokens:
+                self.assertIn(f"v9 [{token}]", objective)
+            self.assertEqual(len(re.findall(r'fill="none" stroke="#', objective)), 3)
+            for fragment in _svg_fragments(page):
+                ElementTree.fromstring(fragment)
+
+    def test_waveform_heading_names_the_material(self):
+        """Name the material in the waveform heading and flag a stale archive."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trace = root / "policy_v9.eval.npz"
+            _write_trace(trace, artifact="shoe-aaaa1111")
+            (root / "train_v9.log").write_text(
+                _log_text(range(1, 31), evaluate=10, trace=str(trace), artifacts=["shoe-aaaa1111"])
+            )
+            page = render_directory(root)
+            self.assertIn("Waveforms: 1 run overlaid", page)
+            self.assertIn("v9 [shoe-aaaa1111] at iteration 30", page)
+            self.assertNotIn("may be stale", page)
+
+    def test_stale_archive_token_is_reported(self):
+        """Warn when the archive token differs from the logged material token."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trace = root / "policy_v9.eval.npz"
+            _write_trace(trace, artifact="shoe-old00000")
+            (root / "train_v9.log").write_text(
+                _log_text(range(1, 31), evaluate=10, trace=str(trace), artifacts=["shoe-new11111"])
+            )
+            page = render_directory(root)
+            self.assertIn("may be stale", page)
+            self.assertIn("shoe-old00000", page)
+
+    def test_archive_token_is_used_when_the_log_has_none(self):
+        """Fall back to the archive token when the log line carries no material."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            trace = root / "policy_v9.eval.npz"
+            _write_trace(trace, artifact="shoe-aaaa1111")
+            (root / "train_v9.log").write_text(_log_text(range(1, 31), evaluate=10, trace=str(trace)))
+            runs = load_runs(root)
+            self.assertEqual(runs[0].trace["artifact"], "shoe-aaaa1111")
+            self.assertIn("v9 [shoe-aaaa1111] at iteration 30", render(runs, root))
+
+
+class TestSelection(unittest.TestCase):
+    """Verify server-side run and material selection through the query string."""
+
+    TOKENS = ("shoe-aaaa1111", "shoe-bbbb2222")
+
+    def _directory(self, root):
+        """Write three runs, two of them carrying different material tokens."""
+        (root / "train_v1.log").write_text(_log_text(range(1, 21), evaluate=5, artifacts=[self.TOKENS[0]]))
+        (root / "train_v2.log").write_text(_log_text(range(1, 21), evaluate=5, artifacts=[self.TOKENS[1]]))
+        (root / "train_v3.log").write_text(_log_text(range(1, 21), evaluate=5, artifacts=list(self.TOKENS)))
+        return load_runs(root)
+
+    def _rows(self, page):
+        """Return the run names listed in the summary table body."""
+        body = page[page.index("<tbody>") : page.index("</tbody>")]
+        return re.findall(r'<i class="swatch"[^>]*></i>([\w.\-]+)</th>', body)
+
+    def test_parse_selection_reads_only_known_keys(self):
+        """Read run and material values and ignore junk keys, blanks and duplicates."""
+        selection = parse_selection("?run=a&run=b&run=a&material=m1&sort=x&run=")
+        self.assertEqual(selection.runs, ("a", "b"))
+        self.assertEqual(selection.materials, ("m1",))
+        self.assertTrue(selection.active)
+        self.assertFalse(parse_selection("").active)
+        self.assertFalse(parse_selection("?").active)
+        self.assertEqual(parse_selection("nonsense").runs, ())
+
+    def test_no_query_shows_every_run(self):
+        """Render every run, exactly as an unfiltered page did before selection existed."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._directory(root)
+            plain, empty_query = render(runs, root), render(runs, root, query="")
+            self.assertEqual(len(plain), len(empty_query))
+            self.assertEqual(self._rows(plain), ["v1", "v2", "v3"])
+            self.assertIn("Showing 3 of 3 runs", plain)
+            self.assertIn("Showing all 3 runs", plain)
+            self.assertNotIn("Filtered view", plain)
+            health = plain[plain.index("Training health") :]
+            self.assertEqual(len(re.findall(r'fill="none" stroke="#', health)), 24)  # 3 runs, 7 charts, 2 return lines.
+
+    def test_single_run_filter(self):
+        """Draw only the requested run and say which runs are hidden."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._directory(root)
+            page = render(runs, root, query="run=v2")
+            self.assertEqual(self._rows(page), ["v2"])
+            self.assertIn("Showing 1 of 3 runs", page)
+            self.assertIn("Filtered view: showing 1 of 3 runs.", page)
+            self.assertIn("Hidden: v1, v3.", page)
+            self.assertIn("2 run rows are hidden", page)
+            health = page[page.index("Training health") :]
+            self.assertEqual(len(re.findall(r'fill="none" stroke="#', health)), 8)
+            self.assertNotIn("v1 mean", page)
+            self.assertNotIn("v3 mean", page)
+
+    def test_runs_and_material_filters_combine(self):
+        """Combine a two-run selection with a material filter using AND."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._directory(root)
+            page = render(runs, root, query=f"run=v1&run=v3&material={self.TOKENS[0]}")
+            self.assertEqual(self._rows(page), ["v1", "v3"])  # v2 fails the run filter.
+            self.assertIn(f"Material filter: {self.TOKENS[0]}.", page)
+            objective = page[page.index("Work objective") : page.index("Training health")]
+            self.assertIn(f"v3 [{self.TOKENS[0]}]", objective)
+            self.assertNotIn(f"v3 [{self.TOKENS[1]}]", objective)
+            # The material filter alone keeps every run that ran that foam.
+            material_only = render(runs, root, query=f"material={self.TOKENS[1]}")
+            self.assertEqual(self._rows(material_only), ["v2", "v3"])
+
+    def test_refresh_url_preserves_the_selection(self):
+        """Keep the active query string in the meta refresh target."""
+        self.assertEqual(refresh_url(parse_selection("")), "/")
+        selection = parse_selection("run=v1&run=v2&material=shoe-aaaa1111")
+        self.assertEqual(refresh_url(selection), "/?run=v1&run=v2&material=shoe-aaaa1111")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._directory(root)
+            page = render(runs, root, refresh=10, query="run=v1&run=v2")
+            self.assertIn('<meta http-equiv="refresh" content="10; url=/?run=v1&amp;run=v2">', page)
+            single = render(runs, root, refresh=7, query="run=v2")
+            self.assertIn('<meta http-equiv="refresh" content="7; url=/?run=v2">', single)
+            self.assertIn('<meta http-equiv="refresh" content="10; url=/">', render(runs, root))
+
+    def test_unknown_names_are_ignored(self):
+        """Ignore a stale run name instead of failing the request."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._directory(root)
+            page = render(runs, root, query="run=v1&run=deleted_run")
+            self.assertEqual(self._rows(page), ["v1"])
+            self.assertIn("Showing 1 of 3 runs", page)
+
+    def test_empty_selection_still_offers_the_form(self):
+        """Render a readable page with the form when nothing matches."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._directory(root)
+            for query in ("run=__none__", "run=ghost", "material=shoe-zzzz9999"):
+                with self.subTest(query=query):
+                    page = render(runs, root, query=query)
+                    self.assertIn("No runs match this selection", page)
+                    self.assertIn('<form method="get" class="filter">', page)
+                    self.assertIn('<a href="/">all runs</a>', page)
+                    self.assertIn("Showing 0 of 3 runs", page)
+                    self.assertIn("</html>", page)
+                    self.assertIsNone(_NONFINITE.search(page))
+
+    def test_form_lists_every_run_with_its_checked_state(self):
+        """Offer one checkbox per run and per material, ticking the active ones."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._directory(root)
+            page = render(runs, root, query=f"run=v2&material={self.TOKENS[1]}")
+            for name in ("v1", "v2", "v3"):
+                self.assertIn(f'<input type="checkbox" name="run" value="{name}"', page)
+            self.assertIn('<input type="checkbox" name="run" value="v2" checked>', page)
+            self.assertIn('<input type="checkbox" name="run" value="v1">', page)
+            for token in self.TOKENS:
+                self.assertIn(f'<input type="checkbox" name="material" value="{token}"', page)
+            self.assertIn(f'<input type="checkbox" name="material" value="{self.TOKENS[1]}" checked>', page)
+            self.assertIn('<a href="/?run=__none__">none</a>', page)
+
+    def test_handler_applies_the_query_string(self):
+        """Filter over HTTP and keep the query in the served refresh tag."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._directory(root)
+            server = create_server(root, host="127.0.0.1", port=0, refresh=10)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            try:
+                base = f"http://127.0.0.1:{server.server_address[1]}/"
+                with opener.open(base + "?run=v1&run=v3", timeout=10) as response:
+                    page = response.read().decode("utf-8")
+                self.assertIn('<meta http-equiv="refresh" content="10; url=/?run=v1&amp;run=v3">', page)
+                self.assertEqual(self._rows(page), ["v1", "v3"])
+                with opener.open(base, timeout=10) as response:
+                    self.assertIn("Showing 3 of 3 runs", response.read().decode("utf-8"))
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=10)
+
+
+class TestWaveformOverlay(unittest.TestCase):
+    """Verify the single overlaid waveform block."""
+
+    def _runs(self, root, *, names=("v1", "v2"), samples=(400, 400), iterations=(30, 30), reference_scale=(1.0, 1.0)):
+        """Write one log and archive per run, then load the runs."""
+        for name, count, iteration, scale in zip(names, samples, iterations, reference_scale, strict=True):
+            trace = root / f"policy_{name}.eval.npz"
+            _write_trace(trace, iteration=iteration, samples=count, reference_scale=scale)
+            (root / f"train_{name}.log").write_text(
+                _log_text(range(1, iteration + 1), evaluate=max(iteration // 3, 1), trace=str(trace))
+            )
+        return load_runs(root)
+
+    def _waveforms(self, page):
+        """Slice out the waveform article of a rendered page."""
+        return page[page.index("<h2>Waveforms") : page.index("Physical evaluation metrics")]
+
+    def _panel(self, page, title):
+        """Slice out one waveform panel by title."""
+        section = self._waveforms(page)
+        start = section.index(f"<h3>{title} ")
+        return section[start : section.index("</section>", start)]
+
+    def test_one_block_holds_every_run(self):
+        """Render one waveform block with seven panels, whatever the run count."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._runs(
+                root,
+                names=("v1", "v2", "v3"),
+                samples=(400, 400, 400),
+                iterations=(30, 60, 90),
+                reference_scale=(1.0, 1.0, 1.0),
+            )
+            page = render(runs, root)
+            self.assertEqual(page.count("<h2>Waveforms"), 1)
+            self.assertEqual(len(_svg_fragments(self._waveforms(page))), 7)
+            self.assertIn("Waveforms: 3 runs overlaid", page)
+
+    def test_each_panel_overlays_every_run_with_one_reference(self):
+        """Draw one curve per run and a single shared measured reference."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            page = render(
+                self._runs(
+                    root,
+                    names=("v1", "v2", "v3"),
+                    samples=(400, 400, 400),
+                    iterations=(30, 30, 30),
+                    reference_scale=(1.0, 1.0, 1.0),
+                ),
+                root,
+            )
+            panel = self._panel(page, "Vertical ground reaction force")
+            self.assertEqual(len(re.findall(r'fill="none" stroke="#', panel)), 4)  # Three runs plus one reference.
+            self.assertEqual(panel.count("<title>measured</title>"), 1)
+            for name in ("v1", "v2", "v3"):
+                self.assertIn(f"<title>{name}</title>", panel)
+
+    def test_curve_colours_match_the_other_charts(self):
+        """Use the same colour for a run in the waveforms, the table and the training charts."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._runs(root)
+            page = render(runs, root)
+            colors = run_colors(runs)
+            panel = self._panel(page, "Vertical ground reaction force")
+            health = page[page.index("Training health") :]
+            for name in ("v1", "v2"):
+                color = colors[name]
+                self.assertIn(f'stroke="{color}" stroke-width="2"><title>{name}</title>', panel)
+                self.assertIn(f'stroke="{color}" stroke-width="2"><title>{name}</title>', health)
+                self.assertIn(f'<i class="swatch" style="background:{color}"></i>{name}</th>', page)
+
+    def test_coarse_archive_stays_dashed_with_marked_samples(self):
+        """Keep a coarse trace dashed and marked inside the overlay."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._runs(
+                root, names=("coarse", "full"), samples=(46, 2881), iterations=(30, 30), reference_scale=(1.0, 1.0)
+            )
+            page = render(runs, root)
+            panel = self._panel(page, "Vertical ground reaction force")
+            colors = run_colors(runs)
+            self.assertIn(f'stroke="{colors["coarse"]}" stroke-width="2" stroke-dasharray="2 3"', panel)
+            self.assertIn(f'fill="{colors["coarse"]}" stroke="none"><title>coarse samples</title>', panel)
+            self.assertIn(f'stroke="{colors["full"]}" stroke-width="2"><title>full</title>', panel)
+            self.assertNotIn(f'fill="{colors["full"]}" stroke="none"', panel)
+            self.assertIn("dashed with its samples marked", page)
+
+    def test_empty_case_renders_one_message(self):
+        """Say once that the selection has no waveforms, not once per run."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("v1", "v2", "v3"):
+                (root / f"train_{name}.log").write_text(_log_text(range(1, 21), evaluate=5))
+            page = render(load_runs(root), root)
+            self.assertEqual(page.count("No waveforms for the current selection."), 1)
+            self.assertEqual(len(_svg_fragments(self._waveforms(page))), 0)
+
+    def test_header_names_the_runs_and_their_iterations(self):
+        """Name every drawn run and the evaluation iteration it came from."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            page = render(
+                self._runs(
+                    root, names=("v1", "v2"), samples=(400, 400), iterations=(30, 90), reference_scale=(1.0, 1.0)
+                ),
+                root,
+            )
+            self.assertIn("v1 at iteration 30", page)
+            self.assertIn("v2 at iteration 90", page)
+            self.assertIn("per cent of the contact window", page)
+            self.assertIn("CONTACT_FORCE_FRACTION = 0.02", page)
+
+    def test_disagreeing_references_are_reported(self):
+        """Warn when selected runs were scored against different measured references."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._runs(
+                root, names=("v1", "v2"), samples=(400, 400), iterations=(30, 30), reference_scale=(1.0, 1.5)
+            )
+            page = render(runs, root)
+            self.assertIn("Selected runs carry different measured references", page)
+            self.assertIn("Vertical ground reaction force: v2", page)
+        with tempfile.TemporaryDirectory() as directory:
+            agreeing = Path(directory)
+            page = render(
+                self._runs(
+                    agreeing, names=("v1", "v2"), samples=(400, 400), iterations=(30, 30), reference_scale=(1.0, 1.0)
+                ),
+                agreeing,
+            )
+            self.assertNotIn("different measured references", self._waveforms(page))
+
+    def test_coarse_archive_is_not_reported_as_disagreeing(self):
+        """Ignore a sparse archive in the reference check, since it only misses peaks."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._runs(
+                root,
+                names=("coarse", "full"),
+                samples=(46, 2881),
+                iterations=(30, 30),
+                reference_scale=(1.0, 1.0),
+            )
+            page = render(runs, root)
+            self.assertNotIn("different measured references", page)
+
+    def test_overlay_follows_the_selection(self):
+        """Draw only the selected runs in the overlay."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = self._runs(
+                root,
+                names=("v1", "v2", "v3"),
+                samples=(400, 400, 400),
+                iterations=(30, 30, 30),
+                reference_scale=(1.0, 1.0, 1.0),
+            )
+            page = render(runs, root, query="run=v2")
+            self.assertIn("Waveforms: 1 run overlaid", page)
+            panel = self._panel(page, "Vertical ground reaction force")
+            self.assertEqual(len(re.findall(r'fill="none" stroke="#', panel)), 2)  # One run plus the reference.
+            self.assertIn("<title>v2</title>", panel)
+            self.assertNotIn("<title>v1</title>", panel)
 
 
 class TestServer(unittest.TestCase):
@@ -587,7 +1044,7 @@ class TestServer(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertIn("Impedance Instron training", page)
                 self.assertIn("v1", page)
-                self.assertIn('content="5"', page)
+                self.assertIn('content="5; url=/"', page)
                 with self.assertRaises(urllib.error.HTTPError):
                     opener.open(url + "missing", timeout=10)
             finally:

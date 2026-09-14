@@ -59,6 +59,8 @@ class FakeRollout:
     momentum_vz_m_s: list[float] = field(default_factory=lambda: [0.1 * i for i in range(CHECKPOINTS)])
     positive_work_j: float = 100.0
     negative_work_j: float = -60.0
+    ankle_positive_work_j: float = 0.0
+    ankle_negative_work_j: float = 0.0
 
 
 #: Tolerances pinned for the behaviour tests. They are deliberately NOT the shipped defaults: these

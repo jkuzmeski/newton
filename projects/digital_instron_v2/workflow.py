@@ -38,28 +38,12 @@ def compression_laplacian(
 ) -> np.ndarray:
     """Return the lateral compression Laplacian with natural outer boundaries."""
 
-    cells = [tuple(np.rint(point / spacing_m).astype(int)) for point in uv_m]
-    trial_index = {cell: index for index, cell in enumerate(cells)}
-    full_cells = {tuple(np.rint(point / spacing_m).astype(int)) for point in grid_uv_m}
-    neighbors = np.zeros((compression_m.shape[1], 4), dtype=np.int32)
-    neighbor_is_trial = np.zeros_like(neighbors, dtype=bool)
-    neighbor_is_boundary = np.zeros_like(neighbors, dtype=bool)
-    for index, (u, v) in enumerate(cells):
-        for side, (du, dv) in enumerate(((-1, 0), (1, 0), (0, -1), (0, 1))):
-            cell = (u + du, v + dv)
-            if cell in trial_index:
-                neighbors[index, side] = trial_index[cell]
-                neighbor_is_trial[index, side] = True
-            elif cell not in full_cells:
-                neighbor_is_boundary[index, side] = True
-
-    neighbor_compression = np.zeros((len(compression_m), compression_m.shape[1], 4))
+    neighbors = _neighbor_indices(uv_m, grid_uv_m, spacing_m)
+    laplacian = np.zeros_like(compression_m, dtype=float)
     for side in range(4):
-        active = neighbor_is_trial[:, side]
-        neighbor_compression[:, active, side] = compression_m[:, neighbors[active, side]]
-        boundary = neighbor_is_boundary[:, side]
-        neighbor_compression[:, boundary, side] = compression_m[:, boundary]
-    return (np.sum(neighbor_compression, axis=2) - 4.0 * compression_m) / spacing_m**2
+        valid = neighbors[:, side] >= 0
+        laplacian[:, valid] += compression_m[:, neighbors[valid, side]] - compression_m[:, valid]
+    return laplacian / spacing_m**2
 
 
 def prepare_trials(
@@ -120,8 +104,6 @@ def prepare_trials(
             slack = grid.slack_m[active]
             lengths = np.maximum(top - grid.bottom_m[active], 0.0)
             area = grid.area_m2
-        compression = np.maximum(slack[None, :] - lengths, 0.0)
-        laplacian = compression_laplacian(compression, grid.uv_m[active], grid.uv_m, grid.spacing_m)
         # Identify against the same whole-midsole geometry the runtime simulates:
         # the indenter drives its columns and the surrounding foam relaxes.
         surround = Surround(
@@ -131,7 +113,7 @@ def prepare_trials(
             area_m2=float(grid.area_m2),
             spacing_m=float(grid.spacing_m),
         )
-        trials.append(Trial(source["name"], slack, area, lengths, dt, force, displacement, laplacian, surround))
+        trials.append(Trial(source["name"], slack, area, lengths, dt, force, displacement, surround=surround))
         displacement_by_name[source["name"]] = displacement
         uv_by_name[source["name"]] = grid.uv_m[active]
     return trials, displacement_by_name, uv_by_name

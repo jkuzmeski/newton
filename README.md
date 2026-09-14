@@ -982,23 +982,24 @@ The measurements and footwear assets are restricted to internal fork use; see
 The integration retains the current Newton-native gait and motion adapters;
 it does not restore the branch's legacy OpenSim runtime or human-shoe pipeline.
 
-## Impedance Instron running example
+## Two-stiffness impedance Instron
 
-Drive a mechanical ankle with measured running heel-triangle pitch while vertical
-impedance couples a foot fixture, virtual COM, and calibrated Digital Shoe. Marker
-XYZ trajectories are not replayed. There is no full human model.
+Use a frozen offline inverse-dynamics equilibrium trace and two online stiffness
+controls to follow measured pelvis-centroid height and foot pitch. Ground-reaction
+force and actuator work are evaluation outputs, not reward terms. This is a
+reduced mechanical rig, not a full human model.
 
-<img width="320" height="320" src="docs/images/examples/example_impedance_instron.jpg" alt="Running foot and virtual COM impedance Instron">
+<img width="320" height="320" src="docs/images/examples/example_impedance_stiffness.jpg" alt="Two-stiffness rig with measured pelvis-height target">
 
 ```bash
-python -m newton.examples impedance_instron --viewer gl
+python -m newton.examples impedance_stiffness --viewer gl
 ```
 
-First prepare the two local inputs as described in
-[Impedance Instron](projects/impedance_instron/README.md). That guide includes the
-verified late-running segment, headless checks, controlled shoe comparisons,
-offline reports, and the model's current limits. The source motion and shoe
-assets are for internal fork use, not upstream redistribution.
+Prepare the local inputs and frozen reference with the
+[Impedance Instron](projects/impedance_instron/README.md) workflow. It provides
+headless checks, training, frozen material comparisons and offline reports.
+The old `impedance_instron` example is deprecated. Source motion and shoe assets
+remain for internal fork use, not upstream redistribution.
 
 ## Contributing and Development
 

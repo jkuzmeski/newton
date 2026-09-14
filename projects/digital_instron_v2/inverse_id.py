@@ -33,9 +33,12 @@ from pathlib import Path
 import numpy as np
 import warp as wp
 
+from projects.digital_shoe.contact import normal_reaction
+from projects.digital_shoe.material import maxwell_coefficients_numpy, maxwell_increment_step, maxwell_step
+from projects.digital_shoe.runtime import set_material_block
+
 from . import dynamics, workflow
 from .core import (
-    EFFECTIVE_POISSON_RATIO,
     HYSTERESIS_WEIGHT,
     MAXWELL_RELAXATION_TIME_S,
     PEAK_WEIGHT,
@@ -154,11 +157,7 @@ class InstronReplay:
 
         params = FoundationParams()
         self.reference = _params_from_material(material)
-        params.beta = dynamics.EFFECTIVE_POISSON_RATIO / (1.0 - 2.0 * dynamics.EFFECTIVE_POISSON_RATIO)
-        params.one_minus_two_poisson = 1.0 - 2.0 * dynamics.EFFECTIVE_POISSON_RATIO
-        # The relaxation time is identified with the rest of the material, so it travels
-        # with it instead of sitting at the historical module default.
-        params.tau_s = float(getattr(material, "maxwell_relaxation_time_s", MAXWELL_RELAXATION_TIME_S))
+        set_material_block(params, material)
         params.inv_h2 = 1.0 / geo.spacing_m**2
         params.stretch_floor = 0.05
         self.params = params
@@ -374,7 +373,7 @@ def _trial_maxwell_step(
     """One tape-safe linear-overstress recurrence step (writes ``q_out`` from ``q_prev``)."""
     i = wp.tid()
     overstress = material_params[MAT_OVERSTRESS]
-    q_out[i] = decay * q_prev[i] + overstress * ramp * (peq_cur[i] - peq_prev[i])
+    q_out[i] = maxwell_step(q_prev[i], peq_cur[i], peq_prev[i], overstress, decay, ramp)
 
 
 @wp.kernel
@@ -408,9 +407,9 @@ def _trial_frame_force(
     path uses the pairwise face form instead (:func:`_surround_sweep_diff`).
     """
     i = wp.tid()
-    coupling = (material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]) * slack[i]
-    ground = wp.max(peq_cur[i] + q_cur[i], 0.0) - coupling * laplacian[frame, i]
-    wp.atomic_add(force_hist, frame, ground * area[i])
+    coupling = _pasternak_coupling_diff(slack[i], slack[i], material_params[MAT_G_EQ] + material_params[MAT_G_EQ2])
+    reaction = normal_reaction(0.0, peq_cur[i] + q_cur[i], area[i], 0.0, 0.0, 0.0, 0)
+    wp.atomic_add(force_hist, frame, reaction - coupling * laplacian[frame, i] * area[i])
 
 
 @wp.kernel
@@ -509,10 +508,10 @@ def _surround_cycle_overstress(
     fraction = material_params[MAT_OVERSTRESS]
     state = float(0.0)
     for frame in range(frames):
-        state = decay[frame] * state + fraction * ramp[frame] * increment[frame, i]
+        state = maxwell_increment_step(state, increment[frame, i], fraction, decay[frame], ramp[frame])
     state = state * fixed_point_gain
     for frame in range(frames):
-        state = decay[frame] * state + fraction * ramp[frame] * increment[frame, i]
+        state = maxwell_increment_step(state, increment[frame, i], fraction, decay[frame], ramp[frame])
         overstress_out[frame, i] = state
 
 
@@ -589,8 +588,12 @@ def _surround_cycle_force(
     clamp keeps the reaction unilateral and the shear flux cancels internally, so
     this sum is the load the Instron measures.
     """
-    frame, i = wp.tid()
-    wp.atomic_add(force_out, frame, area * wp.max(peq[frame, i] + overstress[frame, i], 0.0))
+    frame, lane = wp.tid()
+    if lane == 0:
+        total = float(0.0)
+        for i in range(peq.shape[1]):
+            total += normal_reaction(0.0, peq[frame, i] + overstress[frame, i], area, 0.0, 0.0, 0.0, 0)
+        wp.atomic_add(force_out, frame, total)
 
 
 @wp.kernel
@@ -813,15 +816,12 @@ class DifferentiableTrial:
         dt = np.full(self.frame_count, float(dt), np.float64) if np.isscalar(dt) else np.asarray(dt, np.float64)
         self.dt_s = dt
         self.tau_s = float(getattr(material, "maxwell_relaxation_time_s", MAXWELL_RELAXATION_TIME_S))
-        decay = np.exp(-dt / self.tau_s)
+        decay, self.ramp = maxwell_coefficients_numpy(dt, self.tau_s)
         self.decay = decay
-        self.ramp = self.tau_s * (1.0 - decay) / dt
         self.fixed_point_gain = float(1.0 / (1.0 - float(np.prod(decay))))
 
         params = FoundationParams()
-        params.beta = EFFECTIVE_POISSON_RATIO / (1.0 - 2.0 * EFFECTIVE_POISSON_RATIO)
-        params.one_minus_two_poisson = 1.0 - 2.0 * EFFECTIVE_POISSON_RATIO
-        params.tau_s = self.tau_s
+        set_material_block(params, material)
         params.stretch_floor = 1.0e-3  # match core.predict's stretch clamp
         self.params = params
 

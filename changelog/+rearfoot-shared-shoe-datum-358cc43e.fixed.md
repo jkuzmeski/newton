@@ -1,0 +1,1 @@
+Keep the rearfoot punch on the same mesh-derived shoe geometry as the full-foot fixture. Rebase legacy zero-bottom fixture coordinates without changing calibrated vertical shortening, preserve outsole curvature in exports and rendering, and place the punch visual over its heel footprint.

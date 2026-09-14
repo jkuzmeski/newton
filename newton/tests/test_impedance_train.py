@@ -13,11 +13,14 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import re
 import tempfile
 import unittest
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -50,6 +53,9 @@ class ToyEnv:
     STATE_DIM = 3
     """Width of the random part of the observation."""
 
+    ANKLE_CHANNELS = 3
+    """Ankle observation entries appended when an ankle command is supplied."""
+
     def __init__(
         self,
         num_worlds: int,
@@ -59,6 +65,9 @@ class ToyEnv:
         shape_reward: bool = True,
         ragged: bool = False,
         verdict: Verdict | None = None,
+        ankle: np.ndarray | None = None,
+        artifact: str | None = None,
+        material=None,
     ):
         """Mirror the signature of the real environment.
 
@@ -72,11 +81,26 @@ class ToyEnv:
                 trainer's synchronized-episode assertion.
             verdict: Scored outcome attached to every world on the done frame,
                 as the rig does; ``None`` leaves the terminal info bare.
+            ankle: Ankle command vector. As in the rig, supplying one widens the
+                action and appends ankle channels to the observation, so the
+                vector reaches both the policy input and the reward.
+            artifact: Shoe artifact path the environment reports, as the rig
+                reports it through ``env.args.artifact``.
+            material: Shoe material dataclass the environment reports.
         """
         self.num_worlds = int(num_worlds)
         self.seed = int(seed)
         self.ragged = bool(ragged)
         self.verdict = verdict
+        self.args = SimpleNamespace(artifact=artifact)
+        self.material = material
+        self.ankle = None if ankle is None else np.asarray(ankle, dtype=np.float64)
+        self.ankle_enabled = self.ankle is not None
+        self._channels = (
+            np.zeros(self.ANKLE_CHANNELS, dtype=np.float32)
+            if self.ankle is None
+            else np.asarray(self.ankle, dtype=np.float32)[: self.ANKLE_CHANNELS]
+        )
         self.materials: list | None = None
         self._frame = 0
         self._rng = np.random.default_rng(self.seed)
@@ -84,18 +108,27 @@ class ToyEnv:
 
     @property
     def observation_dim(self) -> int:
-        """Observation width: the random state plus the episode phase."""
-        return self.STATE_DIM + 1
+        """Observation width: the random state, the phase, and any ankle channels."""
+        return self.STATE_DIM + 1 + (self.ANKLE_CHANNELS if self.ankle_enabled else 0)
 
     def _observation(self) -> np.ndarray:
         """Return the current observation, shape [num_worlds, obs]."""
         phase = np.full((self.num_worlds, 1), self._frame / EPISODE_FRAMES, dtype=np.float32)
-        return np.concatenate([self._state, phase], axis=1)
+        parts = [self._state, phase]
+        if self.ankle_enabled:
+            parts.append(np.tile(self._channels, (self.num_worlds, 1)))
+        return np.concatenate(parts, axis=1)
+
+    def _target(self) -> np.ndarray:
+        """Return the optimal action of the current state, shape [worlds, act]."""
+        if not self.ankle_enabled:
+            return TOY_GAIN * self._state
+        return TOY_GAIN * np.concatenate([self._state, np.tile(self._channels, (self.num_worlds, 1))], axis=1)
 
     @property
     def action_dim(self) -> int:
-        """Action width of the residual impedance command."""
-        return 3
+        """Action width of the residual impedance command, six with an ankle."""
+        return 3 + (self.ANKLE_CHANNELS if self.ankle_enabled else 0)
 
     @property
     def episode_frames(self) -> int:
@@ -116,7 +149,7 @@ class ToyEnv:
             actions: Residual actions, shape [num_worlds, 3].
         """
         actions = np.asarray(actions, dtype=np.float32)
-        target = TOY_GAIN * self._state
+        target = self._target()
         reward = -np.sum((actions - target) ** 2, axis=1).astype(np.float32)
         self._frame += 1
         done = np.zeros(self.num_worlds, dtype=bool)
@@ -260,6 +293,14 @@ class RigToyEnv(ToyEnv):
         }
 
 
+@dataclass
+class ToyMaterial:
+    """Stand-in for the shoe material the environment reports."""
+
+    shear_modulus_pa: float
+    """Instantaneous shear modulus [Pa]."""
+
+
 def _rig_window() -> tuple[np.ndarray, np.ndarray]:
     """Return the thresholded contact indices and the toy's half-sine shape.
 
@@ -297,17 +338,41 @@ def _toy_config(**overrides):
     return train_module.PPOConfig(**settings)
 
 
-def _toy_trainer(verdict: Verdict | None = None, env_class=None, **overrides):
+def _toy_trainer(
+    verdict: Verdict | None = None,
+    env_class=None,
+    ankle: np.ndarray | None = None,
+    artifact: str | None = None,
+    material=None,
+    **overrides,
+):
     """Build a trainer over the toy environment.
 
     Args:
         verdict: Scored outcome the environment attaches on the done frame.
         env_class: Environment class to instantiate; defaults to :class:`ToyEnv`.
+        ankle: Ankle command vector; ``None`` keeps the three-residual action.
+        artifact: Shoe artifact path the environment reports.
+        material: Shoe material the environment reports.
         **overrides: Configuration fields to replace.
     """
     config = _toy_config(**overrides)
-    env = (env_class or ToyEnv)(config.num_worlds, seed=config.seed, verdict=verdict)
-    return train_module.PPOTrainer(env, config, np.arange(15, dtype=float), {"shoe": "toy"})
+    env = (env_class or ToyEnv)(
+        config.num_worlds,
+        seed=config.seed,
+        verdict=verdict,
+        ankle=ankle,
+        artifact=artifact,
+        material=material,
+    )
+    return train_module.PPOTrainer(
+        env,
+        config,
+        np.arange(15, dtype=float),
+        {"shoe": "toy"},
+        ankle=ankle,
+        ankle_source="none" if ankle is None else "seed",
+    )
 
 
 class TestGeneralizedAdvantage(unittest.TestCase):
@@ -693,7 +758,8 @@ EVAL_LINE = re.compile(
     rf"com_z_rms_mm=(?P<com_z_rms_mm>{_FLOAT}) "
     rf"contact_ms=(?P<contact_ms>{_FLOAT}) "
     rf"peak_compression_mm=(?P<peak_compression_mm>{_FLOAT}) "
-    r"trace=(?P<trace>\S+)$"
+    r"trace=(?P<trace>\S+) "
+    r"artifact=(?P<artifact>\S+)$"
 )
 
 """Strict reader of the evaluation record, as a downstream parser must see it."""
@@ -877,17 +943,37 @@ class TestEvaluationPhysics(unittest.TestCase):
         self.assertAlmostEqual(metrics["peak_compression_mm"], 1.0e3 * RIG_PEAK_COMPRESSION_M, places=6)
         self.assertIsNotNone(waveform)
 
-    def test_waveform_samples_frame_boundaries(self):
-        """Sample the waveforms once per frame boundary, 46 points for 45 frames."""
-        _, waveform = train_module.evaluation_physics(RigToyEnv(1))
+    def test_waveform_keeps_substep_resolution(self):
+        """Store every substep, not one sample per frame.
+
+        A frame-boundary archive turns the steep but orderly unloading ramp
+        into a single step of several hundred newtons, which reads as a contact
+        instability that the substep trace does not show.
+        """
+        env = RigToyEnv(1)
+        _, waveform = train_module.evaluation_physics(env)
+        samples = EPISODE_FRAMES * RIG_SUBSTEPS + 1
+        self.assertGreater(samples, EPISODE_FRAMES + 1)
         for key in train_module.WAVEFORM_KEYS:
             self.assertIn(key, waveform)
-            self.assertEqual(waveform[key].shape, (EPISODE_FRAMES + 1,), key)
+            self.assertEqual(waveform[key].shape, (samples,), key)
+            self.assertEqual(waveform[key].dtype, np.float32, key)
         self.assertEqual(waveform["contact_start_s"].shape, ())
-        self.assertAlmostEqual(float(waveform["contact_start_s"]), 0.021, places=9)
-        self.assertAlmostEqual(float(waveform["contact_end_s"]), 0.159, places=9)
+        self.assertAlmostEqual(float(waveform["contact_start_s"]), 0.021, places=6)
+        self.assertAlmostEqual(float(waveform["contact_end_s"]), 0.159, places=6)
+        self.assertAlmostEqual(float(waveform["substep_dt_s"]), RIG_STEP_S, places=12)
+        self.assertEqual(int(waveform["stride"]), 1)
         np.testing.assert_allclose(waveform["stiffness_n_m"], 20000.0)
         np.testing.assert_allclose(waveform["damping_ratio"], 0.6)
+
+    def test_waveform_stride_thins_the_archive(self):
+        """Store one sample per stride, keeping the first and the last substep."""
+        env = RigToyEnv(1)
+        _, waveform = train_module.evaluation_physics(env, stride=RIG_SUBSTEPS)
+        self.assertEqual(waveform["time_s"].shape, (EPISODE_FRAMES + 1,))
+        self.assertEqual(int(waveform["stride"]), RIG_SUBSTEPS)
+        self.assertAlmostEqual(float(waveform["time_s"][0]), 0.0, places=9)
+        self.assertAlmostEqual(float(waveform["time_s"][-1]), float(env.times[-1]), places=6)
 
     def test_line_reports_every_physical_key(self):
         """Emit the physical metrics in the pinned order with the trace path."""
@@ -915,25 +1001,78 @@ class TestEvaluationPhysics(unittest.TestCase):
             self.assertGreater(float(match["com_z_rms_mm"]), 0.0)
             self.assertAlmostEqual(float(match["contact_ms"]), 138.0, places=3)
             self.assertAlmostEqual(float(match["peak_compression_mm"]), 12.0, places=3)
-            self.assertEqual(match["trace"], str(output.with_suffix(".eval.npz")))
+            expected = train_module.waveform_path(
+                train_module.frozen_output_path(output, None, train_module.material_identity(trainer.env))
+            )
+            self.assertEqual(match["trace"], str(expected))
             self.assertEqual(trainer.eval_history[-1]["trace"], match["trace"])
+            self.assertEqual(match["artifact"], train_module.material_identity(trainer.env))
 
     def test_waveform_file_round_trips(self):
-        """Write one npz per run whose arrays reload with consistent lengths."""
-        trainer = _toy_trainer(env_class=RigToyEnv, num_worlds=2, iterations=2, eval_interval=1)
+        """Write one npz per fixed-shoe run whose arrays reload consistently."""
+        trainer = _toy_trainer(
+            env_class=RigToyEnv,
+            num_worlds=2,
+            iterations=2,
+            eval_interval=1,
+            artifact="shoes/soft_foam.json",
+            material=ToyMaterial(1.0),
+        )
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "policy.pt"
             with contextlib.redirect_stdout(io.StringIO()):
                 trainer.train(output=output)
-            path = train_module.waveform_path(output)
+            token = train_module.material_identity(trainer.env)
+            path = train_module.waveform_path(train_module.frozen_output_path(output, None, token))
             self.assertTrue(path.exists())
-            self.assertEqual(sorted(p.name for p in Path(folder).glob("*.npz")), ["policy.eval.npz"])
+            # Two evaluations of one shoe rewrite one archive; nothing accrues.
+            self.assertEqual(sorted(p.name for p in Path(folder).glob("*.npz")), [f"policy_{token}.eval.npz"])
             with np.load(path) as stored:
                 lengths = {key: stored[key].shape[0] for key in train_module.WAVEFORM_KEYS}
-                self.assertEqual(set(lengths.values()), {EPISODE_FRAMES + 1})
+                self.assertEqual(set(lengths.values()), {EPISODE_FRAMES * RIG_SUBSTEPS + 1})
+                self.assertAlmostEqual(float(stored["substep_dt_s"]), RIG_STEP_S, places=12)
                 self.assertEqual(int(stored["iteration"]), 2, "the file holds the latest evaluation")
                 np.testing.assert_allclose(stored["time_s"][0], 0.0)
                 self.assertTrue(np.all(np.isfinite(stored["reference_fz_n"])))
+
+    def test_a_material_change_writes_its_own_archive(self):
+        """Keep one archive per foam when the material changes during a run.
+
+        The token is recomputed every evaluation, so a randomized run cannot
+        leave a single overwritten archive whose waveforms silently belong to
+        whichever foam was evaluated last.
+        """
+        trainer = _toy_trainer(
+            env_class=RigToyEnv,
+            num_worlds=2,
+            iterations=1,
+            eval_interval=1,
+            artifact="shoes/soft_foam.json",
+            material=ToyMaterial(1.0),
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            output = root / "policy.pt"
+            with contextlib.redirect_stdout(io.StringIO()):
+                trainer.train(output=output)
+            first = trainer.eval_history[-1]["trace"]
+            # Read only after the write is confirmed: a swallowed filesystem
+            # error would otherwise surface as a FileNotFoundError from this
+            # test rather than as a failure naming the missing archive.
+            self.assertNotEqual(first, "none", "the first material's archive was not written")
+            soft = Path(first).read_bytes()
+            # The rig re-materializes a world without touching the artifact
+            # path, which is the case the shared archive name could not express.
+            trainer.env.material = ToyMaterial(3.0)
+            with contextlib.redirect_stdout(io.StringIO()):
+                trainer.train(iterations=1, output=output)
+            second = trainer.eval_history[-1]["trace"]
+            self.assertNotEqual(second, "none", "the second material's archive was not written")
+            self.assertNotEqual(first, second)
+            self.assertNotEqual(trainer.eval_history[0]["artifact"], trainer.eval_history[1]["artifact"])
+            self.assertEqual(Path(first).read_bytes(), soft, "the first material's archive must survive")
+            self.assertTrue(Path(second).exists())
+            self.assertEqual(len(sorted(root.glob("*.eval.npz"))), 2)
 
     def test_unwritable_trace_reports_none(self):
         """Report trace=none instead of raising when the file cannot be written."""
@@ -942,12 +1081,21 @@ class TestEvaluationPhysics(unittest.TestCase):
             output = Path(folder) / "policy.pt"
             # A directory where the waveform file belongs blocks only that write,
             # so the checkpoint still succeeds and the run must continue.
-            train_module.waveform_path(output).mkdir()
-            with contextlib.redirect_stdout(io.StringIO()) as captured:
+            blocked = train_module.frozen_output_path(output, None, train_module.material_identity(trainer.env))
+            archive = train_module.waveform_path(blocked)
+            archive.mkdir()
+            with (
+                contextlib.redirect_stdout(io.StringIO()) as captured,
+                contextlib.redirect_stderr(io.StringIO()) as warned,
+            ):
                 trainer.train(output=output)
             match = EVAL_LINE.match(_eval_lines(captured.getvalue())[0])
             self.assertIsNotNone(match)
             self.assertEqual(match["trace"], "none")
+            # The reason must reach the operator: a sweep that loses its
+            # waveforms silently looks like a result rather than a failure.
+            self.assertIn(str(archive), warned.getvalue())
+            self.assertIn("IsADirectoryError", warned.getvalue())
             self.assertAlmostEqual(float(match["peak_fz_n"]), RIG_PEAK_FZ_N, places=3)
 
     def test_environment_without_a_trace_reports_nan(self):
@@ -957,6 +1105,267 @@ class TestEvaluationPhysics(unittest.TestCase):
         self.assertEqual(sorted(metrics), sorted(train_module.PHYSICAL_METRICS))
         self.assertTrue(all(np.isnan(value) for value in metrics.values()))
         self.assertEqual(train_module.write_waveform(waveform, "unused.pt", 1), "none")
+
+
+ANKLE_VECTOR = np.linspace(-0.2, 0.3, 21)
+"""Toy ankle command: twelve angle knots, six stiffness knots, three damping knots."""
+
+
+@unittest.skipUnless(_HAS_TORCH, "torch not installed")
+class TestAnkleMode(unittest.TestCase):
+    """Check the ankle residuals and the ankle nominal they act around."""
+
+    def test_ankle_off_keeps_three_residuals(self):
+        """Leave the action, the observation, and the checkpoint unchanged without an ankle."""
+        trainer = _toy_trainer(num_worlds=4)
+        self.assertEqual(trainer.spec.action_dim, 3)
+        self.assertEqual(trainer.spec.observation_dim, 4)
+        checkpoint = trainer.checkpoint()
+        self.assertIsNone(checkpoint["ankle"])
+        self.assertEqual(checkpoint["ankle_source"], "none")
+        self.assertIsNone(train_module.FrozenPolicy(checkpoint).ankle)
+
+    def test_ankle_on_widens_the_action_and_stores_its_nominal(self):
+        """Give the policy six residuals and store the ankle command with them."""
+        trainer = _toy_trainer(ankle=ANKLE_VECTOR, num_worlds=4)
+        self.assertEqual(trainer.spec.action_dim, 6)
+        self.assertEqual(trainer.spec.observation_dim, 7)
+        checkpoint = trainer.checkpoint()
+        self.assertEqual(len(checkpoint["ankle"]), ANKLE_VECTOR.size)
+        self.assertEqual(checkpoint["ankle_source"], "seed")
+        np.testing.assert_allclose(checkpoint["ankle"], ANKLE_VECTOR, rtol=0.0, atol=0.0)
+
+    def test_ankle_checkpoint_round_trips(self):
+        """Reproduce identical six-wide deterministic actions from the file alone."""
+        trainer = _toy_trainer(ankle=ANKLE_VECTOR, num_worlds=4)
+        trainer.step_iteration()
+        width = trainer.spec.observation_dim
+        observations = np.random.default_rng(5).standard_normal((7, width)).astype(np.float32)
+        with trainer.torch.no_grad():
+            expected = trainer.policy(trainer._tensor(trainer.normalizer.normalize(observations))).cpu().numpy()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "policy.pt"
+            trainer.save(path)
+            policy = train_module.load_policy(path)
+        self.assertEqual(policy.spec.action_dim, 6)
+        np.testing.assert_allclose(policy.ankle, ANKLE_VECTOR, rtol=0.0, atol=0.0)
+        self.assertEqual(policy.ankle_source, "seed")
+        actions = policy.act(observations)
+        self.assertEqual(actions.shape, (7, 6))
+        np.testing.assert_allclose(actions, expected, rtol=0.0, atol=0.0)
+
+    def test_stripped_ankle_nominal_changes_the_deployed_actions(self):
+        """Show the ankle nominal is load-bearing for the deployed controller.
+
+        The ankle command reaches the policy through the environment, exactly as
+        it does in the rig, so a checkpoint reloaded without it drives a
+        different controller under the same weights.
+        """
+        trainer = _toy_trainer(ankle=ANKLE_VECTOR, num_worlds=2)
+        trainer.step_iteration()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "policy.pt"
+            trainer.save(path)
+            policy = train_module.load_policy(path)
+            checkpoint = trainer.torch.load(path, map_location="cpu", weights_only=False)
+        restored = policy.act(ToyEnv(2, ankle=policy.ankle).reset())
+        default = policy.act(ToyEnv(2, ankle=np.zeros_like(policy.ankle)).reset())
+        difference = float(np.abs(restored - default).max())
+        self.assertGreater(difference, 1.0e-6, "losing the ankle nominal must change the deployed actions")
+        stripped = dict(checkpoint)
+        stripped["ankle"] = None
+        naive = train_module.FrozenPolicy(stripped)
+        self.assertIsNone(naive.ankle)
+        # Without the vector the deployed rig is the prescribed-pitch one, whose
+        # observation is too narrow for these weights: the loss is loud.
+        with self.assertRaises(ValueError):
+            naive.act(ToyEnv(2, ankle=naive.ankle).reset())
+
+    def test_checkpoint_without_an_ankle_key_loads_as_prescribed_pitch(self):
+        """Read a checkpoint written before the ankle existed as prescribed pitch."""
+        trainer = _toy_trainer(num_worlds=2)
+        checkpoint = trainer.checkpoint()
+        del checkpoint["ankle"]
+        del checkpoint["ankle_source"]
+        policy = train_module.FrozenPolicy(checkpoint)
+        self.assertIsNone(policy.ankle)
+        self.assertEqual(policy.ankle_source, "none")
+
+    def test_deployment_rebuilds_the_ankle_environment_from_the_checkpoint(self):
+        """Reconstruct the six-residual environment from the file, with no flags.
+
+        This is the ``--eval-only`` rule: :func:`main` sets ``args.ankle`` from
+        ``policy.ankle`` and clears ``--ankle-params`` before it builds the
+        environment, so only the checkpoint decides the controller.
+        """
+        trainer = _toy_trainer(ankle=ANKLE_VECTOR, num_worlds=3)
+        trainer.step_iteration()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "policy.pt"
+            trainer.save(path)
+            policy = train_module.load_policy(path)
+        env = ToyEnv(3, ankle=policy.ankle)
+        self.assertEqual(env.action_dim, policy.spec.action_dim)
+        self.assertEqual(env.observation_dim, policy.spec.observation_dim)
+        returns = train_module.evaluate_policy(policy, env, episodes=1)
+        self.assertEqual(returns.shape, (3,))
+        self.assertTrue(np.all(np.isfinite(returns)))
+
+    def test_ankle_trainer_learns_a_six_wide_action(self):
+        """Improve the toy return with six residuals, not only with three."""
+        trainer = _toy_trainer(ankle=ANKLE_VECTOR, num_worlds=8, iterations=15, eval_interval=0)
+        with contextlib.redirect_stdout(io.StringIO()):
+            reports = trainer.train()
+        self.assertEqual(trainer.collect().actions.shape[-1], 6)
+        self.assertGreater(reports[-1].return_mean, reports[0].return_mean)
+
+    @unittest.skipUnless(_HAS_ONNX, "onnx not installed")
+    def test_onnx_export_carries_the_six_wide_action(self):
+        """Export an ONNX graph whose output width follows the ankle action."""
+        from newton.examples.robot.onnx_policy_utils import validate_policy_io_shapes  # noqa: PLC0415
+
+        trainer = _toy_trainer(ankle=ANKLE_VECTOR, num_worlds=2)
+        trainer.step_iteration()
+        with tempfile.TemporaryDirectory() as folder:
+            checkpoint = Path(folder) / "policy.pt"
+            trainer.save(checkpoint)
+            policy = train_module.load_policy(checkpoint)
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=DeprecationWarning)
+                exported = train_module.export_onnx(policy, Path(folder) / "policy.onnx")
+            self.assertIsNotNone(exported)
+            validate_policy_io_shapes(
+                str(exported),
+                train_module.ONNX_INPUT_NAME,
+                train_module.ONNX_OUTPUT_NAME,
+                obs_width=7,
+                action_width=6,
+                context="impedance ankle policy export",
+            )
+
+
+@unittest.skipUnless(_HAS_TORCH, "torch not installed")
+class TestFrozenEvaluation(unittest.TestCase):
+    """Check the diagnostics a frozen policy produces on a new material."""
+
+    def _frozen(self, folder: Path):
+        """Train one iteration and return the frozen policy from its file.
+
+        Args:
+            folder: Directory the checkpoint is written to.
+        """
+        trainer = _toy_trainer(env_class=RigToyEnv, num_worlds=2)
+        trainer.step_iteration()
+        path = folder / "policy_v2.pt"
+        trainer.save(path)
+        return train_module.load_policy(path), path
+
+    def _env(self, artifact: str, modulus: float, verdict: Verdict | None = None):
+        """Build a rig-shaped environment that names its shoe.
+
+        Args:
+            artifact: Artifact path the environment reports.
+            modulus: Shear modulus distinguishing the material.
+            verdict: Scored outcome reported on the done frame.
+        """
+        return RigToyEnv(2, artifact=artifact, material=ToyMaterial(modulus), verdict=verdict)
+
+    def test_frozen_evaluation_writes_a_record_and_an_archive(self):
+        """Emit the record line and the substep archive, not only a return."""
+        verdict = Verdict(True, False, 1.5, 77.4, {}, {"momentum": 1.19})
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            policy, checkpoint = self._frozen(root)
+            env = self._env("shoes/soft_foam.json", 1.0, verdict)
+            artifact = train_module.material_identity(env)
+            base = train_module.frozen_output_path(checkpoint, None, artifact)
+            returns, record = train_module.evaluate_frozen(policy, env, episodes=1, output=base, iteration=7)
+            match = EVAL_LINE.match(record.line())
+            self.assertIsNotNone(match, record.line())
+            self.assertEqual(match["artifact"], artifact)
+            self.assertTrue(artifact.startswith("soft_foam-"), artifact)
+            self.assertEqual(int(match["iteration"]), 7)
+            self.assertAlmostEqual(float(match["objective_j"]), 77.4, places=3)
+            self.assertAlmostEqual(float(match["peak_fz_n"]), RIG_PEAK_FZ_N, places=3)
+            self.assertEqual(returns.shape, (2,))
+            archive = train_module.waveform_path(base)
+            self.assertEqual(record.trace, str(archive))
+            self.assertTrue(archive.exists())
+            with np.load(archive) as stored:
+                self.assertEqual(str(stored["artifact"]), artifact)
+                self.assertEqual(stored["shoe_fz_n"].shape, (EPISODE_FRAMES * RIG_SUBSTEPS + 1,))
+                self.assertEqual(int(stored["iteration"]), 7)
+            written = train_module.write_record(record, base)
+            self.assertEqual(written, str(base.with_suffix(".eval.json")))
+            document = json.loads(Path(written).read_text())
+            self.assertEqual(document["artifact"], artifact)
+            self.assertEqual(document["trace"], str(archive))
+
+    def test_two_materials_do_not_overwrite_each_other(self):
+        """Keep one archive per material when a frozen policy is redeployed."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            policy, checkpoint = self._frozen(root)
+            paths, tokens = [], []
+            for artifact_path, modulus in (("shoes/soft_foam.json", 1.0), ("shoes/stiff_foam.json", 3.0)):
+                env = self._env(artifact_path, modulus)
+                token = train_module.material_identity(env)
+                base = train_module.frozen_output_path(checkpoint, None, token)
+                _, record = train_module.evaluate_frozen(policy, env, episodes=1, output=base)
+                train_module.write_record(record, base)
+                paths.append(train_module.waveform_path(base))
+                tokens.append(token)
+            self.assertNotEqual(paths[0], paths[1])
+            self.assertNotEqual(tokens[0], tokens[1])
+            for path, token in zip(paths, tokens, strict=True):
+                self.assertTrue(path.exists(), path)
+                with np.load(path) as stored:
+                    self.assertEqual(str(stored["artifact"]), token, "an archive must name its own shoe")
+            self.assertEqual(len(sorted(root.glob("*.eval.npz"))), 2)
+            self.assertEqual(len(sorted(root.glob("*.eval.json"))), 2)
+
+    def test_eval_output_overrides_the_default_base(self):
+        """Honour an explicit base path instead of the checkpoint-derived one."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            policy, checkpoint = self._frozen(root)
+            chosen = root / "materials" / "run_17"
+            base = train_module.frozen_output_path(checkpoint, chosen, "ignored-token")
+            self.assertEqual(base, chosen)
+            _, record = train_module.evaluate_frozen(policy, self._env("shoes/soft_foam.json", 1.0), output=base)
+            self.assertEqual(record.trace, str(chosen.with_suffix(".eval.npz")))
+            self.assertTrue(Path(record.trace).exists())
+
+    def test_material_identity_names_the_shoe(self):
+        """Separate materials by their parameters, not only by their path."""
+        soft = train_module.material_identity(self._env("shoes/foam.json", 1.0))
+        stiff = train_module.material_identity(self._env("shoes/foam.json", 3.0))
+        self.assertTrue(soft.startswith("foam-") and stiff.startswith("foam-"))
+        self.assertNotEqual(soft, stiff, "a stiffness change must change the token")
+        self.assertEqual(train_module.material_identity(ToyEnv(2)), "unknown")
+        self.assertNotIn(" ", train_module.material_identity(self._env("a b/soft foam.json", 1.0)))
+
+    def test_return_reporting_is_unchanged(self):
+        """Report the same returns a plain evaluation reports."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            policy, _ = self._frozen(root)
+            plain = train_module.evaluate_policy(policy, self._env("shoes/soft_foam.json", 1.0), episodes=2)
+            recorded, record = train_module.evaluate_frozen(
+                policy, self._env("shoes/soft_foam.json", 1.0), episodes=2, output=root / "base"
+            )
+            np.testing.assert_allclose(recorded, plain, rtol=0.0, atol=0.0)
+            self.assertEqual(recorded.shape, (4,))
+            np.testing.assert_allclose(record.eval_return, plain[0], rtol=0.0, atol=1.0e-6)
+
+    def test_missing_output_still_records(self):
+        """Emit a record with trace=none when no base path is given."""
+        with tempfile.TemporaryDirectory() as folder:
+            policy, _ = self._frozen(Path(folder))
+            _, record = train_module.evaluate_frozen(policy, self._env("shoes/soft_foam.json", 1.0))
+            self.assertEqual(record.trace, "none")
+            self.assertTrue(record.artifact.startswith("soft_foam-"))
+            self.assertEqual(train_module.write_record(record, None), "none")
 
 
 if __name__ == "__main__":

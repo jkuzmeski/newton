@@ -14,6 +14,60 @@ Identify one shoe-level effective viscoelastic midsole model from intact Digital
 Instron bench tests, then exercise that calibrated model in live Newton
 rigid-body physics.
 
+## Shared mechanics implementation
+
+`projects.digital_shoe` is the home of the material and contact laws used here:
+
+| Module | Owns |
+|---|---|
+| `digital_shoe.material` | Ogden–Hill pressure and Maxwell recurrence, one expression source for NumPy and Warp |
+| `digital_shoe.contact` | Unilateral reaction, symmetric Pasternak coupling, passive balance, anchored bristle contact, contact points and wrench mapping |
+| `digital_shoe.runtime` | Batched mutable-state stepping and periodic-cycle adapters |
+| `digital_shoe.rendering` | Bench endpoints and carried-shoe endpoints, including passive lift-off |
+| `dynamics_diff` / `inverse_id` | Tape-safe history storage, rollout/periodic scheduling and optimization—not another material law |
+
+The NumPy material functions and their compiled Warp counterparts share the same
+Python function bodies. Fitting retains float64 vectorization; GPU simulation and
+material/state gradients use those expressions through Warp. Shared-source tests
+check this directly in addition to checking values and finite-difference gradients.
+
+The active differentiable foundation now uses the **same anchored bristle law**
+as the forward foundation. Integer stick/slip flags select the same branches;
+float histories use separate per-substep buffers so Tape does not overwrite its
+inputs. Derivatives are piecewise and are checked away from branch transitions.
+The former `friction_smoothing` option is deprecated for this class. The old raw
+`foundation_apply_diff` kernel remains a deprecated compatibility surface; active
+rollouts do not call its historical smooth-friction approximation.
+
+Boundary conditions remain explicit:
+
+- **Bench:** imposed top/indenter positions relative to the rest foam-top datum.
+  The readout is transferred indenter reaction. The full-bed fit includes passive
+  neighboring material outside the fixture footprint.
+- **Carried shoe:** nominal outsole anchors and an explicit ground plane. Local
+  nonnegative ground pressure determines friction and the complete external
+  ground force/moment. Signed internal transfer remains a separate diagnostic.
+
+The portable drop/rocker, dynamic attached shoe, and impedance rigs use the
+carried-shoe path. Prescribed bench and rolling-indenter tests keep their top
+boundary. These are coordinate/loading adapters, not different constitutive laws.
+Do not interpret top-indenter transfer traction as a local external ground patch.
+
+Cycle-force evaluation now reduces each frame in a fixed column order rather
+than depending on atomic scheduling. This removes that source of noise in the
+forward fit objective. It does not promise bitwise optimizer or reverse-mode
+reproducibility across hardware or software versions.
+
+The active whole-bed workflow no longer builds the unused fixture-subset
+Laplacian. Old callers supplying it are deprecated in favor of `Trial.surround`;
+a precomputed unweighted Laplacian cannot recover symmetric variable-thickness
+face forces. Existing public material classes and import paths remain available.
+No fitted data or material parameters are changed by this consolidation.
+
+The audited upper-last seating limitation remains: a projected support footprint
+is not a solved last/insole contact interface. Sharing the law does not validate
+that separate geometry approximation.
+
 ## Calibration (`workflow.py`)
 
 Fit the shared two-term Hyperfoam-Maxwell-Pasternak column model to the rearfoot
@@ -27,17 +81,50 @@ The fitted parameters are cached at
 `DigitalInstron/processed/v2_cache/digital_instron_material.json` and consumed by
 the dynamic example below.
 
+### GPU-resident forward calibration
+
+`core.predict()` now prepares one `digital_shoe.CalibrationWorkspace` per trial,
+device, thread and stream. The workspace retains static geometry, driven
+compression, Maxwell fields and scratch storage on the device. Input-content
+signatures invalidate cached work if a trial array is edited; weak references
+release storage when the trial leaves scope.
+
+Each material evaluation uploads only small parameter blocks. Full-field Maxwell
+blending and compression-change reductions run in Warp. Repeated 25-sweep blocks
+use CUDA graphs; CPU execution and remainder blocks use the same shared kernels
+eagerly. No compression or overstress field is copied to NumPy inside the solve.
+Only scalar convergence checks and the final force curve return to the host.
+
+The two-term material law, six fitted parameter meanings, bounded SciPy optimizer,
+force/peak/hysteresis objective, sweep caps, tolerances and warm-start policy are
+unchanged. In particular, this execution change deliberately preserves the
+legacy interval-ratio stopping estimate; it does **not** certify or repair its
+remaining-error estimate. The separate differentiable/adjoint fitter is not
+converted to a new optimizer by this change.
+
+The normal fitting commands automatically use the resident forward path. A
+reusable paired benchmark accepts an explicit saved pre-change `core.py`:
+
+```bash
+uv run --no-sync -m projects.digital_instron_v2.profile_calibration \
+  --baseline-core outputs/impedance_instron/gpu_forward_calibration/before/projects/digital_instron_v2/core.py \
+  --repeats 3 --fit-evaluations 5 \
+  --output outputs/impedance_instron/gpu_forward_calibration/profile
+```
+
+This reads the existing cycles 90–98 split and starts both paths from the same
+current two-term artifact. It reports force parity, actual per-trial evaluation
+counts, startup separately from warm timings, graph/launch counts and D2H bytes.
+Short fitted candidates are diagnostic output only; no artifact or checkpoint
+is overwritten. Use the same machine and idle GPU for a speed comparison.
+
 ## Dynamic midsole example (`example.py`)
 
-`dynamics.py` turns the calibrated column bed into a live Warp force model: each
-substep every column reads its carrier-body pose, computes its through-thickness
-compression, evaluates the two-term Hyperfoam equilibrium pressure with a real-time
-generalized-Maxwell overstress branch and Pasternak lateral coupling, adds an
-anchored bristle (elastoplastic) Coulomb friction that holds a planted contact
-patch and saturates at `mu * fn`, and accumulates the full six-component
-ground-reaction wrench (normal, tangential shear, and the resultant moment that
-carries the center of pressure) into `newton.State.body_f`. Four scenarios share
-the same foundation:
+`dynamics.py` provides geometry and compatibility imports for the shared
+`digital_shoe.runtime.MidsoleFoundation`. Every substep uses the common material,
+passive balance and anchored contact law. The boundary adapter determines whether
+`newton.State.body_f` receives transferred indenter traction or the complete
+external ground wrench of a carried shoe. Four scenarios share this foundation:
 
 ```bash
 # Displacement-controlled digital Instron: squish the midsole between a
@@ -48,8 +135,8 @@ uv run -m projects.digital_instron_v2.example --mode instron
 # a sub-cone lateral load is held by the anchored stick-slip foam friction.
 uv run -m projects.digital_instron_v2.example --mode settle
 
-# Synthetic running stride that rolls a foot heel-to-toe over the foundation,
-# producing a ground-reaction force profile and a migrating center of pressure.
+# Prescribed rolling indenter: read its reaction force and load-center motion.
+# This retains the bench top-coordinate convention, not a carried outsole.
 uv run -m projects.digital_instron_v2.example --mode stride
 
 # Fully dynamic, foot-mounted shoe with mass and inertia. A damped bilateral

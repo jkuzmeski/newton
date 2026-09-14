@@ -32,6 +32,58 @@ topology, coordinate semantics, held-out curves, metrics, and source hashes. It
 contains no absolute file paths. The runtime never falls back to hidden
 parameters when loading a named shoe.
 
+## Full-bed Instron replay
+
+The Virtual Instron now retains the entire exported bed for either fixture, not
+only the directly pressed subset. The full-foot fixture drives 611 of the 910
+columns; the rearfoot punch drives 62. The remainder relaxes through the same
+neighbor and material law used during identification. Bench rendering uses the
+solved compression of every column.
+
+Both fixtures use the same mesh-derived outsole heights, rest top and shoe
+orientation. Old rearfoot exports with zero-bottom column datums are rebased by
+shifting the fixture anchor and free top together onto the intrinsic bed. Rest
+lengths, loading patches and uniform rearfoot shortening remain unchanged. This
+is not a new gap-aware contact solve against the flat punch visual.
+
+Both fixture replays check the warmed force waveform at the force-evaluation
+time, not the later display clock. The passive solve uses 32 quasi-static sweeps
+per substep; a 32/64-sweep check on the retained artifact changed the force curve
+by less than 0.1% of peak. This is a numerical replay check, not new experimental
+validation or a material refit.
+
+```bash
+uv run --no-sync -m projects.digital_shoe.showcase --mode instron \
+  --fixture fullfoot_last --viewer gl
+uv run --no-sync -m projects.digital_shoe.showcase --mode instron \
+  --fixture rearfoot_punch --viewer gl
+```
+
+Use `--viewer null --num-frames 180 --test` for either fixture's headless replay.
+
+## One shared law
+
+This package owns the mechanics used by Digital Instron and the impedance rigs.
+`material.py` defines one set of Ogden–Hill/Maxwell expressions for both vectorized
+NumPy fitting and compiled Warp simulation/autodiff. `contact.py` defines the
+unilateral support, symmetric neighbor coupling, passive balance and anchored
+bristle law. `runtime.py` and the differentiable adapters differ in state storage,
+not in their active material or friction equations.
+
+`rendering.py` reconstructs shared bench and carried-shoe endpoint geometry. It
+does not interpret a pressure reference or a friction anchor as a material-point
+displacement. The carried passive surround follows the shoe during flight.
+
+A bench indenter and a carried shoe require different geometric boundary inputs.
+Only a carried outsole opts into `FoundationConfig.ground_height_m`; its external
+ground force, friction capacity, COP and full wrench then use actual plane
+contact points. Bench top anchors retain their own reference datum and report
+indenter load transfer. The material and contact primitives remain shared.
+
+See `CONSOLIDATION.md` and `projects/digital_instron_v2/README.md` for the adapter
+map, compatibility notes and validation commands. Source identities used by the
+impedance checkpoint include the runtime **and** shared material/contact modules.
+
 ## Identify and export
 
 From the repository root:
@@ -168,7 +220,13 @@ uv run -m projects.digital_shoe.acquisition path/to/acquisition_manifest.json
 
 ## Tests
 
+The shared-law tests check source identity, float64 host precision, CPU/CUDA
+values and derivatives, contact histories, and retention of the full bench bed.
+
 ```bash
+uv run --no-sync -m unittest newton.tests.test_digital_shoe_material \
+  newton.tests.test_digital_shoe_shared_contact newton.tests.test_digital_shoe_consumers
+uv run --no-sync -m unittest newton.tests.test_digital_instron_diff
 uv run --extra dev -m unittest newton.tests.test_digital_shoe
 uv run --extra dev -m unittest newton.tests.test_digital_instron_core
 uv run --extra dev -m unittest newton.tests.test_digital_instron_dynamics

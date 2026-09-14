@@ -19,9 +19,10 @@ _ARTIFACT = Path("DigitalInstron/digital_shoe_showcase/digital_shoe.json")
 _CONTACT_COLUMNS = [0, 9, 11]
 
 # Substep samples to run. No budget is a multiple of its substep count, so every comparison
-# ends with an uncaptured partial frame, and each stops before its own touchdown; the
-# equilibrium controller drops the shoe onto the ground earlier than the legacy schedule.
-_SAMPLES, _EQUILIBRIUM_SAMPLES, _ODD_SAMPLES = 300, 120, 30
+# ends with an uncaptured partial frame, and every budget now runs well past its own touchdown:
+# sample 342 for the legacy schedule, 147 for the equilibrium controller, which drops the shoe
+# earlier, and 37 for the seven substep frame, whose samples are an order of magnitude coarser.
+_SAMPLES, _EQUILIBRIUM_SAMPLES, _ODD_SAMPLES = 600, 400, 120
 
 
 def _cuda_device() -> str | None:
@@ -54,15 +55,22 @@ def _rollout(device: str, graph: bool, samples: int, extra: tuple[str, ...] = ()
 class TestImpedanceGraphCapture(unittest.TestCase):
     """Compare a captured rollout against the plain per-substep launches it replaces.
 
-    The foundation sums its column wrench with float atomics, whose GPU summation order is
-    not reproducible between launches, so two identical uncaptured rollouts already differ
-    in the last bits once the shoe touches down. Each comparison therefore stops before
-    contact, where the whole substep sequence is exactly reproducible and any mismatch is
-    the capture itself: a stale sample index, a swapped state binding, or a missing launch.
+    Every comparison now runs through touchdown and into loading, which is where a capture
+    bug would actually hide: a stale sample index, a swapped state binding or a missing
+    launch shows up once contact makes consecutive substeps differ.
+
+    Running there took two fixed-order reductions. The foundation sums its per-world totals
+    in a fixed order (:func:`projects.digital_shoe.runtime.foundation_partial`), and this
+    example's own contact and passive-region diagnostics do the same through
+    ``_contact_motion_partial`` and ``_free_column_partial`` in
+    :mod:`projects.impedance_instron.example`. While those two still used ``wp.atomic_add``
+    over ~910 columns, captured and uncaptured traces differed by 1.2e-3 N on an 865 N peak
+    (1.4e-6 relative) even though the final ``body_q`` was already identical, so the window
+    had to stop short of contact.
     """
 
     def assert_same_rollout(self, samples: int, extra: tuple[str, ...] = ()):
-        """Assert captured and uncaptured rollouts agree bit for bit over a contact-free window.
+        """Assert captured and uncaptured rollouts agree bit for bit through contact.
 
         Args:
             samples: Substep samples both rollouts run.
@@ -75,7 +83,12 @@ class TestImpedanceGraphCapture(unittest.TestCase):
         self.assertTrue(captured.use_graph, captured.graph_status)
         self.assertIsNotNone(captured.graph)
         trace = plain.trace_device.numpy()[:samples]
-        self.assertEqual(float(np.abs(trace[:, _CONTACT_COLUMNS]).max()), 0.0)
+        # The window is worthless if it never loads the shoe, so require real contact rather
+        # than the absence of it: a peak above a quarter of body weight and measurable
+        # compression mean the comparison is running where capture bugs live.
+        self.assertGreater(float(trace[:, 0].max()), 0.25 * plain.mass * plain.gravity)
+        self.assertGreater(float(trace[:, 11].max()), 1.0e-3)
+        self.assertGreater(float(np.abs(trace[:, 9]).max()), 0.0)
         np.testing.assert_array_equal(captured.trace_device.numpy()[:samples], trace)
         np.testing.assert_array_equal(captured.state_0.body_q.numpy(), plain.state_0.body_q.numpy())
         np.testing.assert_array_equal(captured.state_0.body_qd.numpy(), plain.state_0.body_qd.numpy())
@@ -89,6 +102,25 @@ class TestImpedanceGraphCapture(unittest.TestCase):
     def test_captured_frames_reproduce_the_equilibrium_controller(self):
         """Replay the equilibrium-point rollout, whose leg kernel reads other reference columns."""
         self.assert_same_rollout(_EQUILIBRIUM_SAMPLES, ("--control", "equilibrium"))
+
+    def test_captured_frames_reproduce_the_ankle_impedance_controller(self):
+        """Replay the free-pitch rollout, whose fixture rotation is an integrated state."""
+        self.assert_same_rollout(_SAMPLES, ("--ankle-control", "impedance"))
+
+    def test_repeated_rollouts_are_bit_identical_through_contact(self):
+        """Reproduce the whole trace of an uncaptured rollout by running it again.
+
+        Capture can only be compared against a reference that is itself reproducible. While
+        the diagnostics used atomics, two identical uncaptured rollouts already differed by
+        1.2e-3 N once the shoe was loaded, so any capture comparison through contact was
+        measuring that instead. This asserts the reference is exact first.
+        """
+        device = _cuda_device()
+        first = _rollout(device, False, _SAMPLES)
+        second = _rollout(device, False, _SAMPLES)
+        trace = first.trace_device.numpy()[:_SAMPLES]
+        self.assertGreater(float(trace[:, 0].max()), 0.25 * first.mass * first.gravity)
+        np.testing.assert_array_equal(second.trace_device.numpy()[:_SAMPLES], trace)
 
     def test_odd_substep_count_replays_without_swapping_bindings(self):
         """Reproduce the rollout when a frame holds an odd number of substeps.

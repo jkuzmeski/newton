@@ -1,0 +1,1 @@
+Add the `impedance_stiffness` example and a two-output impedance workflow with frozen offline inverse-dynamics equilibria, measured pelvis-height and foot-pitch tracking, and material-only frozen-policy evaluation.

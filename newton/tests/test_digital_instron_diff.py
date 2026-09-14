@@ -180,15 +180,55 @@ class TestDifferentiableFoundationGradients(unittest.TestCase):
         rel = np.linalg.norm(analytic - numeric) / (np.linalg.norm(numeric) + 1.0e-30)
         self.assertLess(rel, 1.0e-2)
 
-    def test_smooth_friction_respects_cone_and_is_differentiable(self):
-        """Verify the smooth Coulomb friction stays inside the cone and has a finite-difference-matching gradient.
+    def test_deprecated_raw_kernel_preserves_smooth_friction(self):
+        """Keep the old raw-kernel behavior without routing the active class through it."""
+        device = wp.get_preferred_device()
+        drop = _Drop(device, num_substeps=1, config=FoundationConfig(mu=0.6))
+        drop.set_initial(-0.004, vx=0.03)
+        state = drop.states[0]
+        foundation = drop.foundation
+        foundation.apply(state, 0, drop.dt)
+        self.assertEqual(float(state.body_f.numpy()[0, 0]), 0.0)
+        pressed = np.maximum(foundation.column_force[0].numpy()[:, 2], 0.0).sum()
+        state.body_f.zero_()
+        wp.launch(
+            dynamics_diff.foundation_apply_diff,
+            dim=foundation.column_count,
+            inputs=[
+                foundation.carrier,
+                state.body_q,
+                state.body_qd,
+                foundation.body_com,
+                foundation.anchor_local,
+                foundation.area,
+                foundation.rest_len,
+                foundation.neighbors,
+                foundation.compression[0],
+                foundation.base_pressure[0],
+                foundation.params,
+                foundation.material_params,
+                foundation.friction_params,
+                foundation.friction_smoothing,
+                state.body_f,
+                foundation.normal_force,
+                foundation.cop_moment,
+                foundation.pressed_force,
+                foundation.active,
+            ],
+            device=device,
+        )
+        expected = -0.6 * pressed * 0.03 / np.sqrt(0.03**2 + 0.05**2)
+        self.assertAlmostEqual(float(state.body_f.numpy()[0, 0]) / expected, 1.0, places=5)
+
+    def test_bristle_friction_respects_cone_and_is_differentiable(self):
+        """Verify the shared bristle law respects the cone and matches finite differences.
 
         A single substep with a planted, laterally sliding contact patch must
         produce a tangential force that opposes motion, is bounded by ``mu * fn``,
         and whose sensitivity to the slip velocity matches a central difference.
         """
         device = wp.get_preferred_device()
-        config = FoundationConfig(normal_damping=5.0, mu=0.6)
+        config = FoundationConfig(normal_damping=5.0, friction_stiffness=1.0e4, mu=0.6)
         drop = _Drop(device, num_substeps=1, config=config)
 
         out = wp.zeros(1, dtype=wp.float32, device=device, requires_grad=True)
@@ -643,7 +683,7 @@ class TestMeasuredTrialForceMatching(unittest.TestCase):
 
 class TestDifferentiableGaitScenarios(unittest.TestCase):
     @staticmethod
-    def _press_driver(device, nsteps=160):
+    def _press_driver(device, nsteps=160, config=None):
         geo = dynamics.build_foundation_geometry(MANIFEST)
         material = dynamics.load_fitted_material(MANIFEST)
         center = geo.uv_m.mean(axis=0)
@@ -652,7 +692,9 @@ class TestDifferentiableGaitScenarios(unittest.TestCase):
         targets = np.tile(pose, (nsteps, 1))
         velocities = np.zeros((nsteps, 6), np.float32)
         dt = (1.0 / 60.0) / 128.0
-        return scenarios_diff.DifferentiableAttached(geo, material, targets, velocities, dt, device=device)
+        return scenarios_diff.DifferentiableAttached(
+            geo, material, targets, velocities, dt, config=config, device=device
+        )
 
     def test_stride_reproduces_shipped_forward_model(self):
         """Reproduce the shipped MidsoleFoundation GRF over a kinematic heel-to-toe stride to float32 noise.
@@ -712,9 +754,8 @@ class TestDifferentiableGaitScenarios(unittest.TestCase):
 
         Drives the shoe with a constant target pose so the contact patch stays
         engaged for the whole rollout; the gradient through the PD upper, the
-        semi-implicit solver, and the smooth-friction foundation then matches a
-        central difference (a stride roll would cross contact make/break events
-        where the correct subgradient differs from a finite difference).
+        semi-implicit solver, and shared bristle foundation matches a central
+        difference away from contact and bristle branch transitions.
         """
         device = wp.get_preferred_device()
         driver = self._press_driver(device, nsteps=160)
@@ -744,10 +785,28 @@ class TestDifferentiableGaitScenarios(unittest.TestCase):
         driver.material_params.assign(base.astype(np.float32))
         self.assertLess(abs(analytic - numeric) / (abs(numeric) + 1.0e-30), 2.0e-2)
 
+    def test_attached_uses_external_ground_with_supplied_config(self):
+        """Use the fixed external plane without discarding supplied contact settings."""
+        config = FoundationConfig(normal_damping=3.25, friction_stiffness=6000.0, friction=0.8, mu=0.4)
+        driver = self._press_driver(wp.get_preferred_device(), nsteps=32, config=config)
+        self.assertIsNone(config.ground_height_m)
+        self.assertEqual(driver.config.ground_height_m, 0.0)
+        self.assertEqual(driver.config.normal_damping, config.normal_damping)
+        self.assertEqual(driver.config.friction_stiffness, config.friction_stiffness)
+        self.assertEqual(driver.config.mu, config.mu)
+        self.assertIs(driver.foundation.applied_force, driver.foundation.ground_force)
+        force = driver.forward().numpy()
+        reference = driver.reference_grf()
+        np.testing.assert_allclose(force, reference, rtol=2.0e-5, atol=1.0e-3)
+        with self.assertRaisesRegex(ValueError, "ground plane is fixed at zero"):
+            self._press_driver(wp.get_preferred_device(), nsteps=1, config=FoundationConfig(ground_height_m=0.1))
+
     def test_attached_forward_produces_valid_grf(self):
         """A fully dynamic attached press yields a finite, non-negative GRF with active contact."""
         device = wp.get_preferred_device()
         driver = self._press_driver(device, nsteps=96)
+        self.assertEqual(driver.foundation.ground_height_m, 0.0)
+        self.assertIs(driver.foundation.applied_force, driver.foundation.ground_force)
         grf = driver.forward().numpy()
         self.assertTrue(np.all(np.isfinite(grf)))
         self.assertGreaterEqual(float(np.min(grf)), 0.0)
@@ -797,9 +856,9 @@ class TestDifferentiableFriction(unittest.TestCase):
     def test_slide_recovers_friction_coefficient(self):
         """Recover the Coulomb friction coefficient from a lateral-force target using the analytic gradient.
 
-        The smooth-friction drag is exactly linear in ``mu`` at fixed kinematics, so
-        a single gradient-informed step from a wrong guess recovers the coefficient
-        that reproduces a measured drag impulse.
+        The bristle drag is piecewise linear in ``mu`` at fixed kinematics.
+        Re-evaluate its gradient as the stick/slip active set changes instead of
+        assuming the obsolete smooth surrogate's globally linear response.
         """
         device = wp.get_preferred_device()
         geo = dynamics.build_foundation_geometry(MANIFEST)
@@ -812,16 +871,19 @@ class TestDifferentiableFriction(unittest.TestCase):
 
         slide.friction_params.assign(np.array([mu_ref * 0.4], np.float32))
         loss = wp.zeros(1, dtype=wp.float32, device=device, requires_grad=True)
-        slide.zero_grad()
-        loss.zero_()
-        tape = wp.Tape()
-        with tape:
-            shear = slide.forward()
-            wp.launch(scenarios_diff._drag_impulse, dim=slide.substep_count, inputs=[shear, loss], device=device)
-        tape.backward(loss)
-        sensitivity = float(slide.friction_params.grad.numpy()[0])  # d(drag)/d(mu), constant
-        drag_guess = float(loss.numpy()[0])
-        recovered = float(slide.friction_params.numpy()[0]) + (target - drag_guess) / sensitivity
+        for _ in range(4):
+            slide.zero_grad()
+            loss.zero_()
+            tape = wp.Tape()
+            with tape:
+                shear = slide.forward()
+                wp.launch(scenarios_diff._drag_impulse, dim=slide.substep_count, inputs=[shear, loss], device=device)
+            tape.backward(loss)
+            sensitivity = float(slide.friction_params.grad.numpy()[0])
+            self.assertGreater(sensitivity, 0.0)
+            drag_guess = float(loss.numpy()[0])
+            recovered = float(slide.friction_params.numpy()[0]) + (target - drag_guess) / sensitivity
+            slide.friction_params.assign(np.array([recovered], np.float32))
         self.assertLess(abs(recovered - mu_ref) / mu_ref, 5.0e-3)
 
     def test_attached_records_lateral_shear(self):
@@ -848,6 +910,157 @@ class TestDifferentiableFriction(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(shear)))
         self.assertGreater(float(np.max(np.abs(shear))), 1.0)
         self.assertEqual(float(attached.friction_params.numpy()[0]), attached.config.mu)
+
+
+@wp.kernel
+def _column_drag(force: wp.array[wp.vec3], loss: wp.array[float]):
+    """Accumulate streamwise drag from tape-safe per-column force history."""
+    wp.atomic_add(loss, 0, -force[wp.tid()][0])
+
+
+class TestSharedBristleParity(unittest.TestCase):
+    """Pin the tape-safe adapter to live contact state and piecewise derivatives."""
+
+    def _make(self, device, plane, speed=0.5, kt=2.0e4, release_dwell=0.004, height_offset=0.0007):
+        """Build a nonuniform bed with load, flight, re-entry and nonzero Poisson ratio."""
+        n = 10
+        material = runtime.ShoeMaterial(
+            instantaneous_shear_modulus_pa=8.0e4,
+            hyperfoam_exponent=3.0,
+            equilibrium_fraction=0.65,
+            pasternak_n_per_m=0.0,
+            effective_poisson_ratio=0.1,
+            maxwell_relaxation_time_s=0.017,
+        )
+        cfg = FoundationConfig(
+            mu=0.55,
+            normal_damping=0.2,
+            friction_stiffness=kt,
+            friction=0.7,
+            friction_release_dwell_s=release_dwell,
+            ground_height_m=0.0 if plane else None,
+        )
+        rest = np.array([0.02, 0.025], np.float32)
+        anchor = np.array([[-0.02, 0.01, 0], [0.015, -0.01, 0]], np.float32)
+        if not plane:
+            anchor[:, 2] = rest
+        anchor[1, 2] += height_offset
+        zfree = np.zeros(2, np.float32) if plane else rest
+        com = wp.array([wp.vec3(0, 0, 0.01)], dtype=wp.vec3, device=device)
+        args = (
+            anchor,
+            zfree,
+            rest,
+            np.array([2.5e-5, 3.5e-5], np.float32),
+            np.array([[1, -1, -1, -1], [0, -1, -1, -1]], np.int32),
+            0.005,
+            material,
+            0,
+            com,
+        )
+        live = runtime.MidsoleFoundation(*args, config=cfg, device=device)
+        diff = DifferentiableMidsoleFoundation(*args, num_substeps=n, config=cfg, device=device)
+        states = []
+        for t in range(n):
+            z = -0.003
+            if t in (4, 5):
+                z = 0.001
+            q = np.array([[speed * t * 0.001, 0, z, 0, 0, 0, 1]], np.float32)
+            vel = np.array([[speed, 0, 0, 0.0, 0.2, 0.0]], np.float32)
+            states.append(
+                scenarios_diff._State(
+                    body_q=wp.array(q, dtype=wp.transform, device=device, requires_grad=True),
+                    body_qd=wp.array(vel, dtype=wp.spatial_vector, device=device, requires_grad=True),
+                    body_f=wp.zeros(1, dtype=wp.spatial_vector, device=device, requires_grad=True),
+                )
+            )
+        return live, diff, states
+
+    def test_forward_parity(self):
+        """Match live wrench, material state and bristle history on both devices."""
+        for device in ["cpu", *wp.get_cuda_devices()]:
+            for plane in (False, True):
+                live, diff, states = self._make(device, plane)
+                for t, s in enumerate(states):
+                    live.apply(s, 0.001)
+                    expected = s.body_f.numpy()
+                    s.body_f.zero_()
+                    diff.apply(s, t, 0.001)
+                    np.testing.assert_allclose(s.body_f.numpy(), expected, rtol=2e-6, atol=1e-6)
+                    np.testing.assert_allclose(
+                        diff.column_force[t].numpy(), live.column_force.numpy(), rtol=2e-6, atol=1e-6
+                    )
+                    if plane:
+                        self.assertIs(diff.applied_force, diff.ground_force)
+                        np.testing.assert_allclose(
+                            diff.ground_force[t].numpy(), live.ground_force.numpy(), rtol=2e-6, atol=1e-6
+                        )
+                        if t == 0:
+                            self.assertGreater(
+                                float(np.max(np.abs(diff.column_force[t].numpy() - diff.ground_force[t].numpy()))),
+                                0.1,
+                            )
+                    else:
+                        self.assertIs(diff.applied_force, diff.column_force)
+                    np.testing.assert_allclose(diff.q_state[t].numpy(), live.q_state.numpy(), rtol=2e-6, atol=1e-5)
+                    np.testing.assert_allclose(
+                        diff.tangent_anchor[t].numpy(), live.tangent_anchor.numpy(), rtol=2e-6, atol=1e-8
+                    )
+                    np.testing.assert_array_equal(diff.tangent_stuck[t].numpy(), live.tangent_stuck.numpy())
+                    np.testing.assert_allclose(
+                        diff.tangent_dwell[t].numpy(), live.tangent_dwell.numpy(), rtol=0, atol=1e-9
+                    )
+
+    def test_stick_and_release_history(self):
+        """Match sticking, delayed release and fresh re-entry with separate tape history."""
+        for device in ["cpu", *wp.get_cuda_devices()]:
+            for plane in (False, True):
+                live, diff, states = self._make(
+                    device, plane, speed=0.0001, kt=100.0, release_dwell=0.001, height_offset=0.00001
+                )
+                for t, state in enumerate(states):
+                    live.apply(state, 0.001)
+                    expected = state.body_f.numpy()
+                    state.body_f.zero_()
+                    diff.apply(state, t, 0.001)
+                    np.testing.assert_allclose(state.body_f.numpy(), expected, rtol=2e-6, atol=1e-6)
+                    np.testing.assert_array_equal(diff.tangent_stuck[t].numpy(), live.tangent_stuck.numpy())
+                    np.testing.assert_allclose(
+                        diff.tangent_anchor[t].numpy(), live.tangent_anchor.numpy(), rtol=2e-6, atol=1e-8
+                    )
+                np.testing.assert_array_equal(diff.tangent_anchor[3].numpy(), diff.tangent_anchor[0].numpy())
+                np.testing.assert_array_equal(diff.tangent_stuck[4].numpy(), np.ones(2, np.int32))
+                np.testing.assert_array_equal(diff.tangent_stuck[5].numpy(), np.zeros(2, np.int32))
+                np.testing.assert_array_equal(diff.tangent_stuck[6].numpy(), np.ones(2, np.int32))
+
+    def test_mu_gradient(self):
+        """Match multi-step piecewise Coulomb coefficient gradients to central differences."""
+        for device in ["cpu", *wp.get_cuda_devices()]:
+            _live, diff, states = self._make(device, True)
+            loss = wp.zeros(1, dtype=float, device=device, requires_grad=True)
+
+            def forward(loss=loss, states=states, diff=diff, device=device):
+                loss.zero_()
+                for t, s in enumerate(states):
+                    s.body_f.zero_()
+                    diff.apply(s, t, 0.001)
+                    wp.launch(_column_drag, dim=2, inputs=[diff.applied_force[t], loss], device=device)
+                return float(loss.numpy()[0])
+
+            tape = wp.Tape()
+            with tape:
+                forward()
+            tape.backward(loss)
+            analytic = float(diff.friction_params.grad.numpy()[0])
+            mu = 0.55
+            h = mu * 1e-3
+            diff.friction_params.assign(np.array([mu + h], np.float32))
+            hi = forward()
+            diff.friction_params.assign(np.array([mu - h], np.float32))
+            lo = forward()
+            numeric = (hi - lo) / (2 * h)
+            self.assertGreater(analytic, 0)
+            self.assertLess(abs(analytic - numeric) / abs(numeric), 0.003)
 
 
 class TestSharedContactMechanics(unittest.TestCase):

@@ -19,7 +19,7 @@ import warp as wp
 import newton
 import newton.examples
 from projects.digital_shoe import FoundationConfig, MidsoleFoundation, load_artifact
-from projects.digital_shoe.rendering import attached_column_endpoints, column_colors
+from projects.digital_shoe.rendering import carried_column_endpoints, column_colors
 from projects.digital_shoe.runtime import SurroundConfig
 
 from .control import AnkleCommand, LegCommand
@@ -52,6 +52,22 @@ ANKLE_COLUMN_COUNT = ANKLE_COLUMN_START + 5
 # Width of the recorded substep trace. Columns 0..40 are the historical planar record and
 # keep their meaning; the ankle block is appended so an existing reader cannot shift.
 TRACE_COLUMN_COUNT = 48
+
+# Slots the contact and passive-region reductions publish. Shared with their partial buffers
+# so a kernel cannot write past a differently sized array.
+FREE_METRIC_COUNT = 5
+CONTACT_METRIC_COUNT = 7
+
+# Per-column terms the reduction folds: the passive-region block followed by the contact block.
+COLUMN_TERM_COUNT = FREE_METRIC_COUNT + CONTACT_METRIC_COUNT
+
+# Lanes the column fold uses. G trades the width of the lane fold against the length of the
+# final one: each lane sums column_count/G terms, and each slot thread then sums G partials.
+# Measured on this 910-column rig by replaying a captured launch sequence, microseconds per
+# substep for the whole three-pass reduction: 16 = 12.8, 32 = 11.5, 64 = 9.8, 128 = 12.3,
+# 256 = 15.9. The atomic version it replaces cost 48.9 us, of which 35.5 us was the two
+# metric buffer memsets that writing the result outright removes.
+METRIC_GROUP_COUNT = 64
 
 # Every kernel below reads its sample index from a one-element device array instead of a
 # baked launch argument, so a single CUDA graph capture of one frame replays every substep
@@ -193,24 +209,149 @@ def _record_sample(
 
 
 @wp.kernel
-def _free_column_metrics(
+def _column_metrics_columns(
+    dt: float,
+    mu: float,
+    passive: int,
     driven: wp.array[wp.int32],
     compression: wp.array[wp.float32],
     rest: wp.array[wp.float32],
+    surround_rate: wp.array[wp.float32],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    anchors: wp.array[wp.vec3],
     forces: wp.array[wp.vec3],
-    velocity: wp.array[wp.float32],
-    metrics: wp.array[wp.float32],
+    contact_points: wp.array[wp.vec3],
+    old_anchor: wp.array[wp.vec2],
+    old_active: wp.array[wp.int32],
+    ground_anchor: wp.array[wp.vec2],
+    active: wp.array[wp.int32],
+    terms: wp.array2d[wp.float32],
 ):
-    """Summarize the passive outer region without hiding its extremes."""
-    i = wp.tid()
-    if driven[i] != 0:
-        wp.atomic_add(metrics, 0, forces[i][2])
-        return
-    wp.atomic_add(metrics, 1, forces[i][2])
-    wp.atomic_max(metrics, 2, compression[i] / rest[i])
-    wp.atomic_max(metrics, 3, wp.abs(velocity[i]))
-    if forces[i][2] > 0.01:
-        wp.atomic_add(metrics, 4, 1.0)
+    """Evaluate both column diagnostics one column per thread, without summing anything.
+
+    Atomics make a GPU sum depend on completion order, which left the recorded diagnostics
+    irreproducible while the simulated state was already exact. Splitting evaluation from
+    summation keeps this pass as wide as the old atomic kernel and leaves the ordering to
+    the two folds below.
+
+    Load shares and cone utilization use external ground traction, not signed
+    internal transfer. The nominal outsole material-point speed stays distinct
+    from the velocity at the projected plane point used by the contact wrench.
+    Tangential power uses the latter so it agrees with the runtime energy balance.
+    """
+    column = wp.tid()
+    f = forces[column]
+    driven_force = float(0.0)
+    passive_force = float(0.0)
+    strain = float(0.0)
+    surface_speed = float(0.0)
+    loaded = float(0.0)
+    if driven[column] != 0:
+        driven_force = f[2]
+    else:
+        passive_force = f[2]
+        if passive != 0:
+            strain = compression[column] / rest[column]
+            surface_speed = wp.abs(surround_rate[column])
+            if f[2] > 0.01:
+                loaded = 1.0
+    normal = float(0.0)
+    speed_load = float(0.0)
+    drift_load = float(0.0)
+    shear_load = float(0.0)
+    plastic_load = float(0.0)
+    tangential_power = float(0.0)
+    utilization = float(0.0)
+    if f[2] > 0.01:
+        p = wp.transform_point(body_q[0], anchors[column])
+        r = p - wp.transform_get_translation(body_q[0])
+        v = wp.spatial_top(body_qd[0]) + wp.cross(wp.spatial_bottom(body_qd[0]), r)
+        speed = wp.length(wp.vec2(v[0], v[1]))
+        drift, extension = float(0.0), float(0.0)
+        if active[column] != 0:
+            extension = wp.length(wp.vec2(p[0], p[1]) - ground_anchor[column])
+            if old_active[column] != 0:
+                drift = wp.length(ground_anchor[column] - old_anchor[column]) / dt
+        normal = f[2]
+        speed_load = f[2] * speed
+        drift_load = f[2] * drift
+        shear_load = f[2] * extension
+        if drift > 0.001:
+            plastic_load = f[2]
+        contact_r = contact_points[column] - wp.transform_get_translation(body_q[0])
+        contact_v = wp.spatial_top(body_qd[0]) + wp.cross(wp.spatial_bottom(body_qd[0]), contact_r)
+        tangential_power = f[0] * contact_v[0] + f[1] * contact_v[1]
+        if mu > 0.0:
+            utilization = wp.length(wp.vec2(f[0], f[1])) / (mu * f[2])
+    terms[column, 0] = driven_force
+    terms[column, 1] = passive_force
+    terms[column, 2] = strain
+    terms[column, 3] = surface_speed
+    terms[column, 4] = loaded
+    terms[column, 5] = normal
+    terms[column, 6] = speed_load
+    terms[column, 7] = drift_load
+    terms[column, 8] = shear_load
+    terms[column, 9] = plastic_load
+    terms[column, 10] = tangential_power
+    terms[column, 11] = utilization
+
+
+@wp.func
+def _term_is_extreme(slot: int) -> int:
+    """Return nonzero for the term slots that are extremes rather than sums.
+
+    Peak passive strain, peak passive surface speed and peak Coulomb utilization are maxima,
+    which are order independent; every other slot is a sum, which is not.
+    """
+    return int(slot == 2) + int(slot == 3) + int(slot == COLUMN_TERM_COUNT - 1)
+
+
+@wp.kernel
+def _column_metrics_partial(terms: wp.array2d[wp.float32], partials: wp.array2d[wp.float32]):
+    """Fold the per-column terms into one partial per lane and slot, in a fixed order.
+
+    Lane g walks columns g, g+G, g+2G, ..., so every lane folds a fixed set in a fixed order
+    and neighbouring lanes stay on neighbouring columns. Slots are folded in parallel rather
+    than in a loop, which keeps this pass wide instead of latency bound.
+    """
+    group, slot = wp.tid()
+    extreme = _term_is_extreme(slot)
+    total = float(0.0)
+    for column in range(group, terms.shape[0], METRIC_GROUP_COUNT):
+        if extreme != 0:
+            total = wp.max(total, terms[column, slot])
+        else:
+            total += terms[column, slot]
+    partials[group, slot] = total
+
+
+@wp.kernel
+def _column_metrics_finalize(
+    partials: wp.array2d[wp.float32],
+    free_metrics: wp.array[wp.float32],
+    contact_metrics: wp.array[wp.float32],
+):
+    """Summarize the passive outer region and separate contact speed, shear and drift.
+
+    One thread per slot folds the lane partials in index order and writes the result rather
+    than accumulating into it, so the metrics are the same bits on every run and no substep
+    needs a zeroing pass. A single thread folding every slot in turn is a chain of dependent
+    global loads and measured five times slower than this.
+    """
+    slot = wp.tid()
+    extreme = _term_is_extreme(slot)
+    total = float(0.0)
+    for group in range(METRIC_GROUP_COUNT):
+        if extreme != 0:
+            total = wp.max(total, partials[group, slot])
+        else:
+            total += partials[group, slot]
+    if slot < FREE_METRIC_COUNT:
+        free_metrics[slot] = total
+    else:
+        contact_metrics[slot - FREE_METRIC_COUNT] = total
 
 
 @wp.kernel
@@ -412,80 +553,6 @@ def _apply_ankle_impedance(
 
 
 @wp.kernel
-def _contact_motion_metrics(
-    dt: float,
-    mu: float,
-    body_q: wp.array[wp.transform],
-    body_qd: wp.array[wp.spatial_vector],
-    anchors: wp.array[wp.vec3],
-    forces: wp.array[wp.vec3],
-    old_anchor: wp.array[wp.vec2],
-    old_active: wp.array[wp.int32],
-    ground_anchor: wp.array[wp.vec2],
-    active: wp.array[wp.int32],
-    metrics: wp.array[wp.float32],
-):
-    """Separate material-point speed, elastic shear, and plastic-anchor drift."""
-    i = wp.tid()
-    f = forces[i]
-    if f[2] > 0.01:
-        p = wp.transform_point(body_q[0], anchors[i])
-        r = p - wp.transform_get_translation(body_q[0])
-        v = wp.spatial_top(body_qd[0]) + wp.cross(wp.spatial_bottom(body_qd[0]), r)
-        speed = wp.length(wp.vec2(v[0], v[1]))
-        drift, extension = float(0.0), float(0.0)
-        if active[i] != 0:
-            extension = wp.length(wp.vec2(p[0], p[1]) - ground_anchor[i])
-            if old_active[i] != 0:
-                drift = wp.length(ground_anchor[i] - old_anchor[i]) / dt
-        wp.atomic_add(metrics, 0, f[2])
-        wp.atomic_add(metrics, 1, f[2] * speed)
-        wp.atomic_add(metrics, 2, f[2] * drift)
-        wp.atomic_add(metrics, 3, f[2] * extension)
-        if drift > 0.001:
-            wp.atomic_add(metrics, 4, f[2])
-        wp.atomic_add(metrics, 5, f[0] * v[0] + f[1] * v[1])
-        if mu > 0.0:
-            wp.atomic_max(metrics, 6, wp.length(wp.vec2(f[0], f[1])) / (mu * f[2]))
-
-
-@wp.kernel
-def _draw_friction_columns(
-    body_q: wp.array[wp.transform],
-    anchors: wp.array[wp.vec3],
-    rest: wp.array[wp.float32],
-    forces: wp.array[wp.vec3],
-    free_top: wp.array[wp.float32],
-    ground_anchor: wp.array[wp.vec2],
-    active: wp.array[wp.int32],
-    bottom_out: wp.array[wp.vec3],
-    top_out: wp.array[wp.vec3],
-):
-    """Draw each column where it actually is, including a lifted outer surface.
-
-    The shoe carries its bed against a ground plane at ``z = 0``, so the rigid free
-    top is zero and the relaxed one the foundation publishes is exactly minus the
-    outer surface lift.
-    """
-    i = wp.tid()
-    bottom = wp.transform_point(body_q[0], anchors[i])
-    top = wp.transform_point(body_q[0], anchors[i] + wp.vec3(0.0, 0.0, rest[i]))
-    lift = -free_top[i]
-    bz = bottom[2] + lift
-    tz = top[2] + lift
-    # A loaded outsole cannot pass through the floor; an unloaded one leaves it.
-    if bz < 0.0:
-        bz = 0.0
-    if tz < bz:
-        tz = bz
-    if forces[i][2] > 0.01 and active[i] != 0:
-        bottom_out[i] = wp.vec3(ground_anchor[i][0], ground_anchor[i][1], bz)
-    else:
-        bottom_out[i] = wp.vec3(bottom[0], bottom[1], bz)
-    top_out[i] = wp.vec3(top[0], top[1], tz)
-
-
-@wp.kernel
 def _record_planar_sample(
     index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
@@ -522,9 +589,8 @@ def _record_planar_sample(
         torque = ankle_diagnostics[0]
         pitch_power = ankle_diagnostics[1]
     trace[i, 0] = f[2]
-    # The moment is weighted by the pressed load, so the centroid must divide by
-    # the same quantity. Dividing by the net wrench, which also carries the pull
-    # of lifted columns, drove the reported centre of pressure off the shoe.
+    # In plane mode both arrays use nonnegative external ground load, not
+    # positive internal transfer traction from the compatibility column buffer.
     trace[i, 1] = 0.0
     if pressed[0] > 1.0:
         trace[i, 1] = cop_moment[0][0] / pressed[0]
@@ -798,6 +864,7 @@ class Example:
             friction_stiffness=args.contact_kt if self.planar else 0.0,
             friction=args.contact_kd if self.planar else 0.0,
             mu=args.friction_mu if self.planar else 0.0,
+            ground_height_m=0.0,
         )
         count = len(bed.rest_length_m)
         driven = np.ones(count, np.int32)
@@ -839,10 +906,14 @@ class Example:
         )
         self.free_columns = self.foundation.free_column_count
         self.driven = self.foundation.driven
-        self.free_metrics = wp.zeros(5, dtype=wp.float32, device=self.device)
+        # The reductions write their outputs rather than accumulating into them, so no substep
+        # needs a zeroing pass; these buffers only have to exist.
+        self.free_metrics = wp.zeros(FREE_METRIC_COUNT, dtype=wp.float32, device=self.device)
         self.old_tangent_anchor = wp.zeros_like(self.foundation.tangent_anchor)
         self.old_tangent_active = wp.zeros_like(self.foundation.tangent_stuck)
-        self.contact_metrics = wp.zeros(7, dtype=wp.float32, device=self.device)
+        self.contact_metrics = wp.zeros(CONTACT_METRIC_COUNT, dtype=wp.float32, device=self.device)
+        self.column_terms = wp.zeros((len(bed.rest_length_m), COLUMN_TERM_COUNT), dtype=wp.float32, device=self.device)
+        self.metric_partials = wp.zeros((METRIC_GROUP_COUNT, COLUMN_TERM_COUNT), dtype=wp.float32, device=self.device)
         self.points = wp.zeros(len(bed.rest_length_m), dtype=wp.vec3, device=self.device)
         self.tops = wp.zeros_like(self.points)
         self.colors = wp.zeros_like(self.points)
@@ -915,9 +986,11 @@ class Example:
                 "stiffness_n_m_per_column": self.contact_config.friction_stiffness,
                 "damping_n_s_m_per_column": self.contact_config.friction,
                 "identified": False,
-                "rendering": "Ground points are bristle reference anchors, not a no-slip constraint.",
+                "contact_load": "Contact load shares, pressed_force_n, COP and Coulomb utilization use external ground reaction, not signed internal column transfer.",
+                "tangential_power": "Ground friction dotted with rigid-carrier velocity at the projected plane point; distinct from nominal outsole material-point speed.",
+                "rendering": "Column endpoints follow the current carrier pose and passive compression, not bristle reference anchors.",
                 "slip_metric": "Material-point speed, elastic shear and plastic-anchor drift are distinct; contact initialization is not classified as drift.",
-                "wrench_limit": "Existing effective foundation applies its tangential wrench at virtual bottom sites, sometimes below the plane; not a calibrated real-ground ankle moment.",
+                "wrench_limit": "The external ground wrench acts at nominal outsole XY projected onto z=0. Friction and the upper interface remain assumed, not calibrated ankle mechanics.",
             },
             "power_definition": "Active source power includes feedforward/retraction, moving spring rest length, scheduled stiffness, desired damping rate, and saturation intervention; passive damping and guide drives are separate. Not metabolic cost.",
             "ankle_control": "impedance" if self.ankle_impedance else "prescribed",
@@ -1543,38 +1616,42 @@ class Example:
                 device=self.device,
             )
         if self.planar:
-            self.free_metrics.zero_()
-            if self.free_columns:
-                wp.launch(
-                    _free_column_metrics,
-                    dim=self.foundation.column_count,
-                    inputs=[
-                        self.driven,
-                        self.foundation.compression,
-                        self.foundation.rest_len,
-                        self.foundation.column_force,
-                        self.foundation.surround_rate,
-                        self.free_metrics,
-                    ],
-                    device=self.device,
-                )
-            self.contact_metrics.zero_()
+            # Both column diagnostics walk the same columns, so one wide evaluation pass feeds
+            # one fixed-order fold. Evaluation stays as parallel as the atomic kernels were.
             wp.launch(
-                _contact_motion_metrics,
+                _column_metrics_columns,
                 dim=self.foundation.column_count,
                 inputs=[
                     self.sim_dt,
                     self.args.friction_mu,
+                    int(bool(self.free_columns)),
+                    self.driven,
+                    self.foundation.compression,
+                    self.foundation.rest_len,
+                    self.foundation.surround_rate,
                     self.state_0.body_q,
                     self.state_0.body_qd,
                     self.foundation.anchor_local,
-                    self.foundation.column_force,
+                    self.foundation.ground_force,
+                    self.foundation.contact_point,
                     self.old_tangent_anchor,
                     self.old_tangent_active,
                     self.foundation.tangent_anchor,
                     self.foundation.tangent_stuck,
-                    self.contact_metrics,
+                    self.column_terms,
                 ],
+                device=self.device,
+            )
+            wp.launch(
+                _column_metrics_partial,
+                dim=(METRIC_GROUP_COUNT, COLUMN_TERM_COUNT),
+                inputs=[self.column_terms, self.metric_partials],
+                device=self.device,
+            )
+            wp.launch(
+                _column_metrics_finalize,
+                dim=COLUMN_TERM_COUNT,
+                inputs=[self.metric_partials, self.free_metrics, self.contact_metrics],
                 device=self.device,
             )
             wp.launch(
@@ -1709,37 +1786,22 @@ class Example:
         """Show the measured track motion, dynamic COM, and actual shoe columns."""
         self.viewer.begin_frame(self.sim_time)
         self.viewer.log_state(self.state_0)
-        if self.planar:
-            wp.launch(
-                _draw_friction_columns,
-                dim=self.foundation.column_count,
-                inputs=[
-                    self.state_0.body_q,
-                    self.foundation.anchor_local,
-                    self.foundation.rest_len,
-                    self.foundation.column_force,
-                    self.foundation.z_free,
-                    self.foundation.tangent_anchor,
-                    self.foundation.tangent_stuck,
-                    self.points,
-                    self.tops,
-                ],
-                device=self.device,
-            )
-        else:
-            wp.launch(
-                attached_column_endpoints,
-                dim=self.foundation.column_count,
-                inputs=[
-                    self.carrier,
-                    self.state_0.body_q,
-                    self.foundation.anchor_local,
-                    self.foundation.rest_len,
-                    self.points,
-                    self.tops,
-                ],
-                device=self.device,
-            )
+        wp.launch(
+            carried_column_endpoints,
+            dim=self.foundation.column_count,
+            inputs=[
+                self.carrier,
+                self.state_0.body_q,
+                self.foundation.anchor_local,
+                self.foundation.rest_len,
+                self.foundation.compression,
+                self.foundation.driven,
+                self.foundation.ground_height_m,
+                self.points,
+                self.tops,
+            ],
+            device=self.device,
+        )
         wp.launch(
             column_colors,
             dim=self.foundation.column_count,
@@ -2245,6 +2307,14 @@ def create_parser():
 
 def main():
     """Run the reusable example through Newton's normal viewer interface."""
+    import warnings  # noqa: PLC0415 - warn only when the legacy command is invoked
+
+    warnings.warn(
+        "This legacy impedance experiment is deprecated. Use "
+        "python -m projects.impedance_instron --help for the two-stiffness workflow.",
+        FutureWarning,
+        stacklevel=2,
+    )
     viewer, args = newton.examples.init(create_parser())
     example = Example(viewer, args)
     try:

@@ -6,6 +6,65 @@
 import warp as wp
 
 
+@wp.func
+def bench_column_segment(bottom: wp.vec3, rest: float, compression: float) -> tuple[wp.vec3, wp.vec3]:
+    """Return bench endpoints from fixed vertical support and solved shortening [m]."""
+    length = wp.max(rest - wp.max(compression, 0.0), 0.0)
+    return bottom, bottom + wp.vec3(0.0, 0.0, length)
+
+
+@wp.kernel
+def bench_column_endpoints_at_sites(
+    carrier: int,
+    body_q: wp.array[wp.transform],
+    anchors: wp.array[wp.vec3],
+    fixed_bottom: wp.array[wp.vec3],
+    rest: wp.array[float],
+    compression: wp.array[float],
+    bottoms: wp.array[wp.vec3],
+    tops: wp.array[wp.vec3],
+):
+    """Draw bench columns at their nominal top-site XY and fixed base elevations."""
+    i = wp.tid()
+    world = wp.transform_point(body_q[carrier], anchors[i])
+    base = wp.vec3(world[0], world[1], fixed_bottom[i][2])
+    bottom, top = bench_column_segment(base, rest[i], compression[i])
+    bottoms[i] = bottom
+    tops[i] = top
+
+
+@wp.kernel
+def bench_column_endpoints(
+    fixed_bottom: wp.array[wp.vec3],
+    rest: wp.array[float],
+    compression: wp.array[float],
+    bottoms: wp.array[wp.vec3],
+    tops: wp.array[wp.vec3],
+):
+    """Draw the solved full bench bed, including unloaded and passive columns [m]."""
+    i = wp.tid()
+    bottom, top = bench_column_segment(fixed_bottom[i], rest[i], compression[i])
+    bottoms[i] = bottom
+    tops[i] = top
+
+
+@wp.kernel
+def bench_column_top_points(
+    carrier: wp.int32,
+    body_q: wp.array[wp.transform],
+    anchor_local: wp.array[wp.vec3],
+    z_free: wp.array[wp.float32],
+    out_points: wp.array[wp.vec3],
+):
+    """Draw bench foam tops beneath the imposed indenter, not a carried outsole."""
+    i = wp.tid()
+    world = wp.transform_point(body_q[carrier], anchor_local[i])
+    top = z_free[i]
+    if world[2] < top:
+        top = world[2]
+    out_points[i] = wp.vec3(world[0], world[1], top)
+
+
 @wp.kernel
 def column_world_positions(
     carrier: wp.int32,
@@ -16,6 +75,53 @@ def column_world_positions(
     """Transform shoe-local column anchors to world positions."""
     i = wp.tid()
     points[i] = wp.transform_point(body_q[carrier], anchor_local[i])
+
+
+@wp.func
+def carried_column_segment(
+    transform: wp.transform,
+    anchor: wp.vec3,
+    rest: float,
+    compression: float,
+    driven: int,
+    ground_height: float,
+) -> tuple[wp.vec3, wp.vec3]:
+    """Reconstruct non-extending carrier-relative endpoints [m].
+
+    Only free surround retreats relative to the carrier. The pressure proxy and
+    friction reference anchor are not geometric displacements. Using current
+    penetration bounds also handles a render pose one integration step ahead of
+    the force history without advancing that history.
+    """
+    bottom = wp.transform_point(transform, anchor)
+    top = wp.transform_point(transform, anchor + wp.vec3(0.0, 0.0, rest))
+    retreat = float(0.0)
+    if driven == 0:
+        penetration = wp.max(ground_height - bottom[2], 0.0)
+        retreat = penetration - wp.clamp(compression, 0.0, penetration)
+    return (
+        wp.vec3(bottom[0], bottom[1], wp.max(bottom[2] + retreat, ground_height)),
+        wp.vec3(top[0], top[1], wp.max(top[2] + retreat, ground_height)),
+    )
+
+
+@wp.kernel
+def carried_column_endpoints(
+    carrier: int,
+    body_q: wp.array[wp.transform],
+    anchors: wp.array[wp.vec3],
+    rest: wp.array[float],
+    compression: wp.array[float],
+    driven: wp.array[int],
+    ground_height: float,
+    bottoms: wp.array[wp.vec3],
+    tops: wp.array[wp.vec3],
+):
+    """Draw one carried shoe with its passive relative deformation and ground plane."""
+    i = wp.tid()
+    bottom, top = carried_column_segment(body_q[carrier], anchors[i], rest[i], compression[i], driven[i], ground_height)
+    bottoms[i] = bottom
+    tops[i] = top
 
 
 @wp.kernel
@@ -29,15 +135,9 @@ def attached_column_endpoints(
 ):
     """Transform attached columns and clamp their outsole ends to the ground."""
     i = wp.tid()
-    transform = body_q[carrier]
-    bottom = wp.transform_point(transform, anchor_bottom[i])
-    top = wp.transform_point(transform, anchor_bottom[i] + wp.vec3(0.0, 0.0, rest_length[i]))
-    bottom_z = wp.max(bottom[2], 0.0)
-    top_z = wp.max(top[2], 0.0)
-    if top_z < bottom_z:
-        bottom_z = top_z
-    bottom_out[i] = wp.vec3(bottom[0], bottom[1], bottom_z)
-    top_out[i] = wp.vec3(top[0], top[1], top_z)
+    bottom, top = carried_column_segment(body_q[carrier], anchor_bottom[i], rest_length[i], 0.0, 1, 0.0)
+    bottom_out[i] = bottom
+    top_out[i] = top
 
 
 @wp.kernel

@@ -21,7 +21,7 @@ differentiated with respect to the foam material:
   mass and inertia, held to the prescribed foot trajectory by a damped PD upper
   and integrated by :class:`~newton.solvers.SolverSemiImplicit`. The GRF is
   differentiated through the whole rigid-body loop -- contact, PD actuation, and
-  smooth Coulomb friction -- which the quasi-static
+  anchored bristle friction -- which the quasi-static
   :func:`~projects.digital_instron_v2.core.predict` cannot do.
 
 * :class:`DifferentiableSlide` -- a *kinematic* constant-velocity lateral drag at
@@ -35,21 +35,23 @@ Both dynamic drivers also record the per-substep net lateral shear on the tape
 (``self.friction_params``), so friction identification composes with the foam
 material fit.
 
-Both drivers use a per-substep, write-once GRF-accumulation kernel
-(:func:`_ground_reaction_force`) rather than the foundation's single overwritten
-``normal_force`` diagnostic, and the attached driver uses a counter-free PD
-kernel (:func:`_attach_pd`), so nothing on the loss path is aliased across
-substeps. The gradient is *exact* while contact is continuous; where columns
-enter or leave contact during the roll it is a valid subgradient that a finite
-difference will not match at the make/break event.
+The drivers reduce the foundation's write-once per-substep force history instead
+of evaluating another contact law or reading an overwritten diagnostic. The
+attached driver also uses a counter-free PD kernel (:func:`_attach_pd`). The
+gradient is piecewise exact away from contact and bristle branch transitions.
+At a transition, the tape differentiates the selected branch; a finite difference
+that changes branches need not agree.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 import numpy as np
 import warp as wp
 
 import newton
+from projects.digital_shoe.contact import contact_kinematics
 
 from .dynamics import (
     FoundationConfig,
@@ -66,6 +68,7 @@ from .dynamics_diff import (
     MAT_G_EQ2,
     DifferentiableMidsoleFoundation,
     _column_normal_force,
+    _legacy_smooth_friction,
     _pasternak_flux,
 )
 
@@ -150,12 +153,9 @@ def _ground_reaction_force(
     ci = compression[i]
     flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
 
-    q_body = body_q[carrier]
-    world = wp.transform_point(q_body, anchor_local[i])
-    com_world = wp.transform_point(q_body, body_com[carrier])
-    r = world - com_world
-    vel = body_qd[carrier]
-    point_vel = wp.spatial_top(vel) + wp.cross(wp.spatial_bottom(vel), r)
+    _world, _com_world, point_vel, _gap = contact_kinematics(
+        body_q[carrier], body_qd[carrier], body_com[carrier], anchor_local[i], 0.0, 0
+    )
     fn = _column_normal_force(ci, base_pressure[i], area[i], flux, normal_damping, point_vel[2])
     wp.atomic_add(grf_hist, substep, fn)
 
@@ -179,33 +179,40 @@ def _shear_reaction_force(
     substep: wp.int32,
     shear_hist: wp.array[wp.vec2],
 ):
-    """Sum the net lateral (smooth-Coulomb) shear force for one substep into ``shear_hist[substep]``.
+    """Preserve the deprecated stateless shear readout signature.
 
-    Re-derives the same normal force as :func:`_ground_reaction_force` and applies
-    the differentiable smooth-friction law ``ft = -mu * fn * smooth_normalize(v_tan)``
-    to its pressed part, so the accumulated horizontal drag is a differentiable
-    function of the friction coefficient (identification) as well as the foam
-    material.
+    The old smooth-friction behavior remains only during deprecation. Active
+    scenarios reduce the shared bristle force history with
+    :func:`_record_shear_force` and never call this compatibility kernel.
     """
     i = wp.tid()
     mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
     ci = compression[i]
     flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
 
-    q_body = body_q[carrier]
-    world = wp.transform_point(q_body, anchor_local[i])
-    com_world = wp.transform_point(q_body, body_com[carrier])
-    r = world - com_world
-    vel = body_qd[carrier]
-    point_vel = wp.spatial_top(vel) + wp.cross(wp.spatial_bottom(vel), r)
+    _world, _com_world, point_vel, _gap = contact_kinematics(
+        body_q[carrier], body_qd[carrier], body_com[carrier], anchor_local[i], 0.0, 0
+    )
     fn = _column_normal_force(ci, base_pressure[i], area[i], flux, normal_damping, point_vel[2])
     pressed = wp.max(fn, 0.0)
 
-    mu = friction_params[FRIC_MU]
-    if pressed > 0.0 and mu > 0.0:
-        v_tan = wp.vec2(point_vel[0], point_vel[1])
-        f_tan = -mu * pressed * wp.smooth_normalize(v_tan, friction_smoothing)
-        wp.atomic_add(shear_hist, substep, f_tan)
+    f_tan = _legacy_smooth_friction(
+        wp.vec2(point_vel[0], point_vel[1]), pressed, friction_params[FRIC_MU], friction_smoothing
+    )
+    wp.atomic_add(shear_hist, substep, f_tan)
+
+
+@wp.kernel
+def _record_normal_force(column_force: wp.array[wp.vec3], substep: wp.int32, grf_hist: wp.array[wp.float32]):
+    """Reduce the applied force history without evaluating another contact law."""
+    wp.atomic_add(grf_hist, substep, column_force[wp.tid()][2])
+
+
+@wp.kernel
+def _record_shear_force(column_force: wp.array[wp.vec3], substep: wp.int32, shear_hist: wp.array[wp.vec2]):
+    """Reduce the applied bristle shear history on the tape."""
+    force = column_force[wp.tid()]
+    wp.atomic_add(shear_hist, substep, wp.vec2(force[0], force[1]))
 
 
 @wp.kernel
@@ -326,10 +333,11 @@ def stride_trajectory(
 class DifferentiableStride:
     """Differentiable kinematic heel-to-toe stride over the foam bed.
 
-    Prescribes the carrier pose at every substep (no solver) and accumulates the
-    per-substep ground-reaction force as a differentiable function of the foam
-    ``material_params``. The GRF reproduces the shipped forward model
-    (:class:`~projects.digital_instron_v2.dynamics.MidsoleFoundation`) exactly.
+    Prescribes top-anchor indenter poses and accumulates the vertical indenter
+    reaction as a differentiable function of the foam ``material_params``. The
+    historical ``grf`` field retains its name for compatibility; it is not a
+    per-column external ground-force field. The reaction matches the live
+    :class:`~projects.digital_instron_v2.dynamics.MidsoleFoundation` adapter.
 
     The shoe last presses only its own footprint, so the rest of the midsole is a
     passive surround that relaxes every substep exactly as the shipped ``stride``
@@ -428,31 +436,16 @@ class DifferentiableStride:
         self.grf = wp.zeros(self.substep_count, dtype=wp.float32, device=device, requires_grad=True)
 
     def forward(self) -> wp.array:
-        """Roll the prescribed stride and return the per-substep vertical GRF [N]."""
+        """Roll the prescribed stride and return the vertical indenter reaction [N]."""
         self.grf.zero_()
         for t in range(self.substep_count):
             self.body_f[t].zero_()
             state = _State(self.poses[t], self.body_qd, self.body_f[t])
             self.foundation.apply(state, t, self.dt)
             wp.launch(
-                _ground_reaction_force,
+                _record_normal_force,
                 dim=self.column_count,
-                inputs=[
-                    0,
-                    self.poses[t],
-                    self.body_qd,
-                    self.foundation.body_com,
-                    self.foundation.anchor_local,
-                    self.foundation.area,
-                    self.foundation.rest_len,
-                    self.foundation.neighbors,
-                    self.foundation.compression[t],
-                    self.foundation.base_pressure[t],
-                    self.foundation.material_params,
-                    self.foundation.params.normal_damping,
-                    t,
-                    self.grf,
-                ],
+                inputs=[self.foundation.applied_force[t], t, self.grf],
                 device=self.device,
             )
         return self.grf
@@ -505,14 +498,15 @@ class DifferentiableSlide:
     Presses the foam bed to a fixed penetration and drags it laterally at a
     constant speed (no solver), accumulating the per-substep net shear force as a
     differentiable function of the Coulomb friction coefficient ``mu`` (and the
-    foam material). Because the pose and slide velocity are held constant the
-    contact patch stays engaged and the tangential velocity never crosses zero, so
-    the smooth-friction drag is a smooth, monotone function of ``mu`` -- the clean
-    setting for gradient-based friction identification from a lateral-force target.
+    foam material). The prescribed position advances consistently with the slide
+    velocity while the depth stays fixed. Drag uses the same anchored bristle
+    state as the live runtime. A friction target identifies ``mu`` only when some
+    bristles reach the Coulomb bound; unsaturated stick is insensitive to ``mu``.
 
     The indenter is the same shoe last as the stride, so the columns it misses
-    relax as the passive surround too and the drag is read off one bed with one
-    contact law.
+    relax as the passive surround too. Top-anchor forces are indenter reactions,
+    not local outsole-ground forces; the historical ``grf`` field retains its
+    name for compatibility.
 
     Args:
         geometry: Column bed from
@@ -524,7 +518,7 @@ class DifferentiableSlide:
         substeps: Number of substeps in the slide rollout.
         frame_dt: Render-frame duration [s] (substep is ``frame_dt / 8``).
         config: Dynamic :class:`~projects.digital_instron_v2.dynamics.FoundationConfig`
-            (must set ``mu > 0`` for friction to act).
+            (must set ``mu > 0`` and positive bristle stiffness for friction).
         surround: Passive-surround settings for the columns the last never
             touches; defaults to the shipped example's settings on
             ``geometry.driven``.
@@ -546,7 +540,9 @@ class DifferentiableSlide:
         device=None,
     ):
         self.device = device
-        self.config = config or FoundationConfig(stretch_floor=0.05, normal_damping=8.0, mu=1.0)
+        self.config = config or FoundationConfig(
+            stretch_floor=0.05, normal_damping=8.0, friction_stiffness=1.0e4, friction=8.0, mu=1.0
+        )
         geo = geometry
         self.column_count = int(len(geo.slack_m))
         self.surround_config = surround or default_surround(geo.driven, carrier_bond=False)
@@ -585,6 +581,11 @@ class DifferentiableSlide:
         self.body_qd = wp.array(
             np.array([[vx, vy, 0.0, 0.0, 0.0, 0.0]], np.float32), dtype=wp.spatial_vector, device=device
         )
+        self.poses = [self.pose]
+        for t in range(1, self.substep_count):
+            translated = pose.copy()
+            translated[:2] += np.asarray([vx, vy], np.float32) * (t * self.dt)
+            self.poses.append(wp.array(translated.reshape(1, 7), dtype=wp.transform, device=device))
         self.body_f = [
             wp.zeros(1, dtype=wp.spatial_vector, device=device, requires_grad=True) for _ in range(self.substep_count)
         ]
@@ -597,50 +598,18 @@ class DifferentiableSlide:
         self.shear.zero_()
         for t in range(self.substep_count):
             self.body_f[t].zero_()
-            state = _State(self.pose, self.body_qd, self.body_f[t])
+            state = _State(self.poses[t], self.body_qd, self.body_f[t])
             self.foundation.apply(state, t, self.dt)
             wp.launch(
-                _ground_reaction_force,
+                _record_normal_force,
                 dim=self.column_count,
-                inputs=[
-                    0,
-                    self.pose,
-                    self.body_qd,
-                    self.foundation.body_com,
-                    self.foundation.anchor_local,
-                    self.foundation.area,
-                    self.foundation.rest_len,
-                    self.foundation.neighbors,
-                    self.foundation.compression[t],
-                    self.foundation.base_pressure[t],
-                    self.foundation.material_params,
-                    self.foundation.params.normal_damping,
-                    t,
-                    self.grf,
-                ],
+                inputs=[self.foundation.applied_force[t], t, self.grf],
                 device=self.device,
             )
             wp.launch(
-                _shear_reaction_force,
+                _record_shear_force,
                 dim=self.column_count,
-                inputs=[
-                    0,
-                    self.pose,
-                    self.body_qd,
-                    self.foundation.body_com,
-                    self.foundation.anchor_local,
-                    self.foundation.area,
-                    self.foundation.rest_len,
-                    self.foundation.neighbors,
-                    self.foundation.compression[t],
-                    self.foundation.base_pressure[t],
-                    self.foundation.material_params,
-                    self.foundation.friction_params,
-                    self.foundation.friction_smoothing,
-                    self.foundation.params.normal_damping,
-                    t,
-                    self.shear,
-                ],
+                inputs=[self.foundation.applied_force[t], t, self.shear],
                 device=self.device,
             )
         return self.shear
@@ -663,12 +632,14 @@ class DifferentiableAttached:
     :class:`~newton.solvers.SolverSemiImplicit`, accumulating the per-substep GRF
     as a differentiable function of the foam ``material_params``. Unlike the
     quasi-static :func:`~projects.digital_instron_v2.core.predict`, the gradient
-    flows through the whole rigid-body loop -- contact, PD actuation, and smooth
-    Coulomb friction. It is exact while contact is continuous and a valid
-    subgradient across contact make/break during the roll.
+    flows through the whole rigid-body loop -- contact, PD actuation, and anchored
+    bristle friction. Derivatives are exact away from contact and bristle branch
+    transitions. At a transition the tape differentiates the selected branch.
 
-    The foam is this shoe's sole, so the outsole carries *every* column and there
-    is no passive surround to relax: the whole bed is driven, exactly as in the
+    Bottom anchors contact the explicit zero-height ground plane. A supplied
+    config with no plane inherits that boundary; a nonzero plane is rejected.
+    The live reference uses the same config. The foam is this shoe's sole, so the
+    outsole carries *every* column and there is no passive surround to relax: the whole bed is driven, exactly as in the
     shipped ``attached`` example, where an all-driven
     :class:`~projects.digital_instron_v2.dynamics.SurroundConfig` makes the
     relaxation a no-op.
@@ -708,9 +679,12 @@ class DifferentiableAttached:
         self.device = device
         self.dt = float(dt)
         self.pd_gains = tuple(float(g) for g in pd_gains)
-        self.config = config or FoundationConfig(
+        config = config or FoundationConfig(
             stretch_floor=0.05, normal_damping=8.0, friction_stiffness=2.0e4, friction=10.0, mu=1.0
         )
+        if config.ground_height_m not in (None, 0.0):
+            raise ValueError("the attached scenario ground plane is fixed at zero")
+        self.config = replace(config, ground_height_m=0.0)
         geo = geometry
         self._geometry = geo
         self._material = material
@@ -798,47 +772,15 @@ class DifferentiableAttached:
                 device=self.device,
             )
             wp.launch(
-                _ground_reaction_force,
+                _record_normal_force,
                 dim=self.column_count,
-                inputs=[
-                    self.carrier,
-                    self.states[t].body_q,
-                    self.states[t].body_qd,
-                    self.model.body_com,
-                    self.foundation.anchor_local,
-                    self.foundation.area,
-                    self.foundation.rest_len,
-                    self.foundation.neighbors,
-                    self.foundation.compression[t],
-                    self.foundation.base_pressure[t],
-                    self.foundation.material_params,
-                    self.foundation.params.normal_damping,
-                    t,
-                    self.grf,
-                ],
+                inputs=[self.foundation.applied_force[t], t, self.grf],
                 device=self.device,
             )
             wp.launch(
-                _shear_reaction_force,
+                _record_shear_force,
                 dim=self.column_count,
-                inputs=[
-                    self.carrier,
-                    self.states[t].body_q,
-                    self.states[t].body_qd,
-                    self.model.body_com,
-                    self.foundation.anchor_local,
-                    self.foundation.area,
-                    self.foundation.rest_len,
-                    self.foundation.neighbors,
-                    self.foundation.compression[t],
-                    self.foundation.base_pressure[t],
-                    self.foundation.material_params,
-                    self.foundation.friction_params,
-                    self.foundation.friction_smoothing,
-                    self.foundation.params.normal_damping,
-                    t,
-                    self.shear,
-                ],
+                inputs=[self.foundation.applied_force[t], t, self.shear],
                 device=self.device,
             )
             self.solver.step(self.states[t], self.states[t + 1], None, None, self.dt)
@@ -973,7 +915,7 @@ def _demo() -> None:
     peak = max(float(reference.max()), 1.0)
     print(f"  substeps={attached.substep_count}  peak GRF={diff.max():.0f} N  (stance->flight min={diff.min():.0f} N)")
     print(
-        f"  GRF vs shipped (smooth vs bristle friction): max|diff|={np.max(np.abs(diff - reference)):.1f} N "
+        f"  GRF vs shipped (shared bristle friction): max|diff|={np.max(np.abs(diff - reference)):.1f} N "
         f"({np.max(np.abs(diff - reference)) / peak * 100:.2f}% of peak)"
     )
 
@@ -1012,17 +954,22 @@ def _demo() -> None:
 
     target = -slide.forward().numpy()[:, 0].astype(np.float64).sum()  # measured drag at the reference mu
     slide.friction_params.assign(np.array([mu0 * 0.4], np.float32))  # start from a wrong guess
-    loss.zero_()
-    slide.zero_grad()
-    tape = wp.Tape()
-    with tape:
-        s = slide.forward()
-        wp.launch(_drag_impulse, dim=slide.substep_count, inputs=[s, loss], device=device)
-    tape.backward(loss)
-    sensitivity = float(slide.friction_params.grad.numpy()[0])  # d(drag)/d(mu), constant for this law
-    recovered = float(slide.friction_params.numpy()[0]) + (target - float(loss.numpy()[0])) / sensitivity
-    tape.zero()
-    print(f"  friction ID: recovered mu={recovered:.4f} from the analytic gradient (target {mu0:.4f})")
+    # Re-evaluate the gradient when the bristle stick/slip active set changes.
+    for _ in range(4):
+        loss.zero_()
+        slide.zero_grad()
+        tape = wp.Tape()
+        with tape:
+            s = slide.forward()
+            wp.launch(_drag_impulse, dim=slide.substep_count, inputs=[s, loss], device=device)
+        tape.backward(loss)
+        sensitivity = float(slide.friction_params.grad.numpy()[0])
+        if sensitivity <= 0.0:
+            raise RuntimeError("friction identification needs sliding bristles")
+        recovered = float(slide.friction_params.numpy()[0]) + (target - float(loss.numpy()[0])) / sensitivity
+        slide.friction_params.assign(np.array([recovered], np.float32))
+        tape.zero()
+    print(f"  friction ID: recovered mu={recovered:.4f} from piecewise gradients (target {mu0:.4f})")
 
 
 if __name__ == "__main__":

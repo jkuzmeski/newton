@@ -31,6 +31,15 @@ from pathlib import Path
 import numpy as np
 import warp as wp
 
+from projects.digital_shoe.rendering import (
+    attached_column_endpoints as attached_columns,
+)
+from projects.digital_shoe.rendering import (
+    bench_column_top_points as column_world_positions,
+)
+from projects.digital_shoe.rendering import (
+    column_colors,
+)
 from projects.digital_shoe.runtime import (
     FoundationConfig,
     FoundationParams,
@@ -58,6 +67,9 @@ __all__ = [
     "FoundationParams",
     "MidsoleFoundation",
     "SurroundConfig",
+    "attached_columns",
+    "column_colors",
+    "column_world_positions",
     "foundation_apply",
     "foundation_pressure",
     "foundation_reset",
@@ -161,10 +173,11 @@ def _build_rearfoot_geometry(config: dict, base: Path, grid, source: dict, mesh_
     """Sample the whole midsole for the rearfoot fixture and drive the punch footprint.
 
     The rearfoot test drives a rigid ``radius_m`` punch straight down onto the
-    heel, so every column under the disc compresses uniformly. Anchoring each
-    column top at its rest foam height (``z_free = slack``) reproduces the
-    calibration's uniform-compression assumption: a carrier descent ``d`` gives
-    every disc column the same compression ``d``.
+    heel. Both fixtures retain the same mesh-derived outsole and rest top.
+    Anchoring each driven top at its own rest height preserves the calibration's
+    uniform-shortening assumption: a vertical carrier descent ``d`` gives each
+    disc column compression ``d`` without flattening the shoe geometry. This
+    reduced loading map is not a gap-aware collision solve against a flat punch.
 
     The midsole outside the disc is kept and reported as undriven. Its tributary
     area is the grid cell area, which is also the area the identification gives
@@ -176,20 +189,23 @@ def _build_rearfoot_geometry(config: dict, base: Path, grid, source: dict, mesh_
     )
     driven = np.linalg.norm(grid.uv_m - center, axis=1) <= radius
     slack = np.asarray(grid.slack_m, dtype=float)
+    bottom = np.asarray(grid.bottom_m, dtype=float)
+    top = np.asarray(grid.top_m, dtype=float)
+    z_shift = float(np.min(bottom))
     count = len(slack)
     return FoundationGeometry(
         uv_m=np.asarray(grid.uv_m, dtype=float),
         slack_m=slack,
         area_m2=float(grid.area_m2),
         spacing_m=grid.spacing_m,
-        z_free_m=slack.copy(),
-        z_bottom_m=np.zeros(count, dtype=np.float64),
-        surface_m=slack.copy(),
+        z_free_m=top - z_shift,
+        z_bottom_m=bottom - z_shift,
+        surface_m=top - z_shift,
         gap0_m=np.zeros(count, dtype=np.float64),
         neighbors=_neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m),
         driven=driven,
         midsole_mesh_path=mesh_path,
-        z_shift_m=0.0,
+        z_shift_m=z_shift,
         indenter_shift_m=0.0,
         thickness_axis=int(grid.thickness_axis),
     )
@@ -305,43 +321,6 @@ def synthetic_stride(peak_depth_m: float, pitch_deg: float, roll_length_m: float
 
 
 @wp.kernel
-def column_world_positions(
-    carrier: wp.int32,
-    body_q: wp.array[wp.transform],
-    anchor_local: wp.array[wp.vec3],
-    z_free: wp.array[wp.float32],
-    out_points: wp.array[wp.vec3],
-):
-    """Write each column's foam-top contact point in world space for rendering."""
-    i = wp.tid()
-    world = wp.transform_point(body_q[carrier], anchor_local[i])
-    top = z_free[i]
-    if world[2] < top:
-        top = world[2]
-    out_points[i] = wp.vec3(world[0], world[1], top)
-
-
-@wp.kernel
-def column_colors(
-    compression: wp.array[wp.float32],
-    ref: wp.float32,
-    out_colors: wp.array[wp.vec3],
-):
-    """Map per-column compression to a cool-to-hot contact colour for rendering."""
-    i = wp.tid()
-    t = wp.clamp(compression[i] / ref, 0.0, 1.0)
-    cool = wp.vec3(0.13, 0.32, 0.92)  # uncompressed foam
-    warm = wp.vec3(0.28, 0.86, 0.24)  # light contact
-    hot = wp.vec3(0.96, 0.20, 0.10)  # firm contact
-    if t < 0.5:
-        s = t * 2.0
-        out_colors[i] = cool * (1.0 - s) + warm * s
-    else:
-        s = (t - 0.5) * 2.0
-        out_colors[i] = warm * (1.0 - s) + hot * s
-
-
-@wp.kernel
 def attach_coupling(
     body: wp.int32,
     body_q: wp.array[wp.transform],
@@ -399,31 +378,3 @@ def attach_coupling(
     wp.atomic_add(body_f, body, wp.spatial_vector(force, moment))
     out_force[0] = wp.length(force)
     counter[0] = (idx + 1) % period
-
-
-@wp.kernel
-def attached_columns(
-    carrier: wp.int32,
-    body_q: wp.array[wp.transform],
-    anchor_bottom: wp.array[wp.vec3],
-    rest_len: wp.array[wp.float32],
-    bottom_out: wp.array[wp.vec3],
-    top_out: wp.array[wp.vec3],
-):
-    """World foam-column endpoints for the attached shoe.
-
-    ``bottom_out`` is the outsole contact point clamped to the ground plane and
-    ``top_out`` is the sole-mounted foam top that rides rigidly with the shoe, so the
-    bed lifts with the shoe in flight and the bars shorten as the foam penetrates the
-    ground in stance.
-    """
-    i = wp.tid()
-    q = body_q[carrier]
-    b = wp.transform_point(q, anchor_bottom[i])
-    t = wp.transform_point(q, anchor_bottom[i] + wp.vec3(0.0, 0.0, rest_len[i]))
-    bottom_z = wp.max(b[2], 0.0)
-    top_z = wp.max(t[2], 0.0)
-    if top_z < bottom_z:
-        bottom_z = top_z
-    bottom_out[i] = wp.vec3(b[0], b[1], bottom_z)
-    top_out[i] = wp.vec3(t[0], t[1], top_z)

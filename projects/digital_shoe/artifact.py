@@ -105,7 +105,13 @@ class VisualMesh:
 
 @dataclass(frozen=True)
 class InstronFixture:
-    """Fixture-specific kinematic mapping used only by the Virtual Instron."""
+    """Fixture-specific kinematic mapping used only by the Virtual Instron.
+
+    Older punch exports use a separate zero-bottom datum for each column.
+    When placing them on the intrinsic shoe bed, translate both the carrier
+    anchor and free top by ``bed_bottom - foam_bottom_m``. This preserves the
+    fixture gap and vertical shortening without flattening or stretching foam.
+    """
 
     fixture: str
     carrier_anchor_m: np.ndarray

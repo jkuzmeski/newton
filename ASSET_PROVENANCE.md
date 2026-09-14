@@ -37,6 +37,7 @@ showcase integration on `main`.
 | `newton/examples/assets/gait2354_subject01.osim` | 318906 | `d22c504cc48103a560c725a6d7e909528eac8fac497c2514cbded71014882a8d` |
 | `newton/examples/assets/gait2354_subject01_walk.mot` | 86534 | `752a125afddfa442c76fe74807b66b3d8e3836cac3a15cd409283766bcf402d4` |
 | `docs/images/examples/example_impedance_instron.jpg` | 5946 | `033d6098989d3f4adc7814b58770fd77c3c9b1864f19cd219d7e493d572be4e6` |
+| `docs/images/examples/example_impedance_stiffness.jpg` | 3677 | `abd8a0853391f8e081781cc80fefb44dbcf248f495e6ab24805432c4a53ae4b0` |
 
 ## Impedance Instron derivatives
 
@@ -53,6 +54,12 @@ role as representative example input. The in-memory fixture-side and known
 winding corrections do not alter the original calibrated artifact or certify
 anatomical side. Do not add that directory or the source acquisition to an
 upstream PR.
+
+`docs/images/examples/example_impedance_stiffness.jpg` is an internal engineering
+render of the two-stiffness rig, simulated pelvis-centroid proxy, and the same
+supplied Digital Shoe and optical reference. It is not a participant photograph.
+Like the earlier example image, it is a restricted footwear/motion derivative;
+this local integration does not grant upstream redistribution rights.
 
 ## Required before upstreaming
 

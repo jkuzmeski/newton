@@ -94,10 +94,6 @@ PRE_BATCHING_DIGESTS = {
 }
 
 
-# The same reference run's atomically reduced totals. The segmented reduction sums the
-# same terms in a different, fixed order, so these are compared within the ordering
-# band the float atomics themselves had, not bit for bit. See
-# :meth:`TestBatchedMidsoleFoundation.assert_reduction_close`.
 PRE_BATCHING_REDUCTIONS = {
     "normal_force": (
         0.0,

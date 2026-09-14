@@ -24,6 +24,19 @@ the same box :meth:`projects.impedance_instron.control.LegCommand.bounds` enforc
 therefore reproduces the nominal open-loop command bit for bit, which is what makes the
 zero-action acceptance test meaningful.
 
+**The ankle is optional and symmetric.** Passing ``ankle`` widens the action to
+``[dL0, dlogK, dzeta, dtheta0, dlogK_theta, dzeta_theta]`` and hands foot pitch to the
+equilibrium-point rotational impedance of
+:func:`projects.impedance_instron.example._apply_ankle_impedance` instead of an ideal prescribed
+motor. Pitch then becomes an integrated state, which is what a prescribed motor structurally
+cannot give: with it, stance duration and vertical impulse are satisfiable but the measured
+momentum history is not, at any training budget. The ankle residual is resolved against
+:meth:`projects.impedance_instron.control.AnkleCommand.bounds` by the same algebra as the leg, and
+the ankle actuator's source power is traced at :data:`TRACE_ANKLE_SOURCE_POWER` so the objective
+can charge it. An uncharged pitch motor is a free resource and a policy will spend it on
+everything. Leaving ``ankle`` as None keeps the three-dimensional prescribed-pitch environment
+bit for bit.
+
 **The observation carries mechanics only.** The shoe material parameters are deliberately absent.
 A policy handed the foam constants could look the answer up instead of inferring the material from
 how the shoe responds, and such a policy would not transfer to a shoe whose constants were never
@@ -32,8 +45,9 @@ measure: leg geometry, ground reaction force, fixture pose and rates, and the po
 previous action.
 
 **Rewards.** The dense per-frame reward is the negated increment of the tier 3 work proxy of
-:class:`projects.impedance_instron.objective.Objective`, ``W+ / 0.25 + abs(W-) / 1.20``. That proxy
-is a time integral of the leg source power, so it is exactly additive over frames: the trapezoid
+:class:`projects.impedance_instron.objective.Objective`, ``W+ / 0.25 + abs(W-) / 1.20`` charged on
+the leg actuator and, when it runs, on the ankle actuator too. That proxy is a time integral of
+each actuator's source power, so it is exactly additive over frames: the trapezoid
 rule over the whole episode equals the sum of the per-frame trapezoids, which share their
 endpoints. The dense term is therefore an exact decomposition of tier 3, not a shaping heuristic.
 An optional momentum-tracking term (``shape_reward``, on by default) and a terminal penalty built
@@ -52,6 +66,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -62,12 +77,21 @@ import warp as wp
 import newton
 from projects.digital_shoe.runtime import MidsoleFoundation
 
-from .control import LegCommand
-from .example import Example, create_parser
+from .control import AnkleCommand, LegCommand
+from .example import (
+    ANKLE_ANGLE,
+    ANKLE_ANGLE_RATE,
+    ANKLE_COLUMN_COUNT,
+    ANKLE_DAMPING,
+    ANKLE_STIFFNESS,
+    ANKLE_STIFFNESS_RATE,
+    Example,
+    create_parser,
+)
 from .objective import Objective, Tolerances
 from .optimize import CHECKPOINTS, Rollout, measured_target
 
-__all__ = ["OBSERVATION_LAYOUT", "ImpedanceEnv"]
+__all__ = ["ANKLE_OBSERVATION_LAYOUT", "OBSERVATION_LAYOUT", "ImpedanceEnv", "ankle_seed"]
 
 # Per-world trace columns written every substep by :func:`_apply_leg_and_record`.
 TRACE_SHOE_FZ = 0
@@ -87,7 +111,15 @@ TRACE_SATURATED = 13
 TRACE_SATURATION_EXCESS = 14
 TRACE_UPPER_Z = 15
 TRACE_COM_Z = 16
-TRACE_COLUMNS = 17
+# Appended for the ankle actuator. Pitch and pitch rate are recorded in both modes: they are the
+# ACHIEVED state, which equals the prescribed schedule only while the prescribed motor writes it.
+TRACE_ANKLE_SOURCE_POWER = 17
+TRACE_ANKLE_DAMPER_POWER = 18
+TRACE_ANKLE_TORQUE = 19
+TRACE_ANKLE_SATURATION_EXCESS = 20
+TRACE_PITCH = 21
+TRACE_PITCH_RATE = 22
+TRACE_COLUMNS = 23
 
 # Command columns of the per-world, per-substep device command: the five numbers
 # ``_apply_leg_and_record`` needs to evaluate the Hogan law. They mirror reference columns
@@ -97,7 +129,15 @@ COMMAND_L0_RATE = 1
 COMMAND_STIFFNESS = 2
 COMMAND_DAMPING = 3
 COMMAND_STIFFNESS_RATE = 4
-COMMAND_COLUMNS = 5
+# The ankle block mirrors the leg block and mirrors reference columns
+# :data:`~projects.impedance_instron.example.ANKLE_ANGLE` onward. It is allocated in both modes
+# and left at zero when the ankle is prescribed, so one kernel serves both.
+COMMAND_ANKLE_ANGLE = 5
+COMMAND_ANKLE_ANGLE_RATE = 6
+COMMAND_ANKLE_STIFFNESS = 7
+COMMAND_ANKLE_DAMPING = 8
+COMMAND_ANKLE_STIFFNESS_RATE = 9
+COMMAND_COLUMNS = 10
 
 # Reference columns the batched kernels read; shared by every world because the pitch motor and
 # the opposite-foot boundary force are properties of the captured task, not of the shoe.
@@ -116,7 +156,9 @@ OBSERVATION_LAYOUT: tuple[tuple[str, str, float], ...] = (
     ("ankle_height", "ankle height above the floor [m]", 0.15),
     ("ankle_vz", "ankle vertical velocity [m/s]", 2.0),
     ("com_vz", "mass-weighted COM vertical velocity [m/s]", 2.0),
-    ("contact_phase", "frames since commanded touchdown / episode frames [-]", 1.0),
+    ("episode_phase", "frames since the commanded touchdown / episode frames [-]", 1.0),
+    ("stance_phase", "time since the DETECTED touchdown / measured stance duration [-]", 1.0),
+    ("in_contact", "one once this world's shoe has been loaded, else zero [-]", 1.0),
     ("previous_d_length", "previous commanded length residual / its own limit [-]", 1.0),
     ("previous_d_log_stiffness", "previous log-stiffness residual / its own limit [-]", 1.0),
     ("previous_d_damping_ratio", "previous damping-ratio residual / its own limit [-]", 1.0),
@@ -125,34 +167,130 @@ OBSERVATION_LAYOUT: tuple[tuple[str, str, float], ...] = (
 
 The third element divides the raw quantity, so every entry lands near unit magnitude on the
 reference stance. No entry names a shoe material constant; see the module docstring.
+
+``foot_pitch`` and ``foot_pitch_rate`` are the ACHIEVED fixture state read back from the trace,
+not the commanded schedule. While the pitch motor is prescribed the two are the same number; once
+the ankle actuator drives pitch they are not, and only the achieved one is observable.
+
+``episode_phase`` and ``stance_phase`` are different clocks and both are needed. The first is the
+deterministic position in the fixed-length episode. The second is where this world is inside its
+OWN stance, which is the clock the momentum reward and the tier 2 momentum excursion are both
+measured on, and which a memoryless policy cannot reconstruct from the instantaneous force alone.
+``in_contact`` separates "stance has not started" from "stance just started", which
+``stance_phase`` alone cannot express because both read zero.
 """
 
-# Residual half-ranges. ``tanh`` squashes the raw action into [-1, 1] and these scale it:
-# 50 mm of equilibrium length, a factor of exp(0.7) ~ 2 on stiffness, and 0.3 of damping ratio.
-# They are wide enough to change the stance qualitatively and narrow enough that a random policy
-# still lands inside the LegCommand box.
-ACTION_SCALE: tuple[float, float, float] = (0.05, 0.7, 0.3)
+ANKLE_OBSERVATION_LAYOUT: tuple[tuple[str, str, float], ...] = (
+    ("previous_d_angle", "previous commanded ankle-angle residual / its own limit [-]", 1.0),
+    ("previous_d_log_ankle_stiffness", "previous ankle log-stiffness residual / its own limit [-]", 1.0),
+    ("previous_d_ankle_damping_ratio", "previous ankle damping-ratio residual / its own limit [-]", 1.0),
+)
+"""Extra observation entries appended when the ankle actuator is enabled.
 
-WORK_REWARD_SCALE_J = 30.0
+The previous action is in the observation because the command is a state the policy itself sets.
+Feeding back only the leg half of a six-dimensional action would hide the ankle impedance the
+policy just chose, and ``k_theta`` is otherwise reachable only through the pitch dynamics it
+produces, so the leg-only layout is left untouched and these three are appended instead.
+"""
+
+# Residual half-ranges. ``tanh`` squashes the raw action into [-1, 1] and these scale it.
+#
+# Leg, indices 0..2: 50 mm of equilibrium length, a factor of exp(0.7) ~ 2 on stiffness, and 0.3
+# of damping ratio. Wide enough to change the stance qualitatively, narrow enough that a random
+# policy still lands inside the LegCommand box.
+#
+# Ankle, indices 3..5, sized against :meth:`~projects.impedance_instron.control.AnkleCommand.bounds`
+# and the measured pitch, which sweeps 1.635 rad over this stance inside a 2.4 rad angle box:
+# * 0.10 rad of equilibrium angle is 6 % of that sweep and 4 % of the box. The measured nominal
+#   spans -0.452 to 1.183 rad, so 0.10 rad leaves 0.35 rad of headroom at the low end and 0.42 rad
+#   at the high end: the clip is never what limits this residual, the physics is.
+# * exp(+-1.2) is 0.30x to 3.32x of stiffness, i.e. 1200 to 13300 N m/rad around the 4000 N m/rad
+#   seed, inside the [100, 20000] N m/rad box. Wider than the leg's 0.7 because the ankle nominal
+#   is normally a single seeded constant rather than a solved profile, so the residual has to
+#   cover more of its own box. The box ceiling stays far below the explicit-integrator limit
+#   4 I / dt^2 = 5.9e6 N m/rad at 64 substeps; do not widen it without redoing that arithmetic.
+# * 0.3 of damping ratio, the same number as the leg, because the two share the [0.05, 3.0] box.
+ACTION_SCALE: tuple[float, ...] = (0.05, 0.7, 0.3, 0.10, 1.2, 0.3)
+
+ACTION_SLEW_FRAMES = 9.0
+"""Frames a residual needs, at minimum, to traverse its own full range.
+
+The residual is ramped across each frame, so its rate is bounded by the per-frame change divided
+by the frame. Without a limit on that change a single decision can still command a physically
+absurd rate: a full swing of ``dL0`` is 0.10 m in 8.3 ms, an equilibrium velocity of 12 m/s that
+the leg damper then resists, against a nominal command whose own equilibrium never exceeds
+1.425 m/s.
+
+Nine frames is a quarter of the 295 ms measured stance, which still lets a correction reconfigure
+the leg between early, mid and late stance. It is chosen because it is the value at which this
+rule reproduces the independent rule "the residual may not slew a channel faster than the nominal
+command already slews it" on the one channel where that rule is neither degenerate nor academic:
+it caps ``dL0`` at 1.33 m/s against the nominal's 1.425 m/s. The nominal stiffness and damping
+ratio splines are too flat for that rule to constrain anything (0.17/s of damping ratio, and a
+seeded ankle stiffness is constant), so the same nine frames are applied to every channel instead
+of inventing a separate number per channel.
+"""
+
+ACTION_RATE_LIMIT: tuple[float, ...] = tuple(2.0 * value / ACTION_SLEW_FRAMES for value in ACTION_SCALE)
+"""Largest change of each residual per frame, in the units of :data:`ACTION_SCALE`.
+
+(0.0111 m, 0.156, 0.0667, 0.0222 rad, 0.267, 0.0667) per frame, i.e. 1.33 m/s of equilibrium
+length, 18.7/s of log stiffness, 8.0/s of damping ratio, 2.67 rad/s of equilibrium angle, 32/s of
+ankle log stiffness and 8.0/s of ankle damping ratio.
+
+The APPLIED residual, not the requested one, is what the previous-action observation entries
+report, so the limit leaves the decision process Markov: the policy can always see the state its
+own rate limit has left it in.
+"""
+
+WORK_REWARD_SCALE_J = 70.0
 """Divisor [J] of the dense work reward.
 
-Engineering choice. The reference command spends about 160 J of tier 3 work proxy over 45 frames,
-so dividing the per-frame increment by 30 J puts a typical frame reward near -0.1.
+Calibrated so that tier 2 keeps dominating tier 3. The tier 3 range on this rig is about 0 to 530 J
+once BOTH actuators are charged: a prescribed reference command spends about 160 J of leg proxy, and
+a 20000 N m/rad ankle holding the measured pitch spends about 92 J positive and -3.7 J negative,
+which is another 371 J after the 0.25 and 1.20 efficiencies. Dividing by 70 leaves 7.6 reward units
+of work available, against the 11.7 units the dense momentum term contributes for an at-tolerance
+error, a margin of 1.55x.
+
+That margin is the whole point and it must be preserved. At the previous value of 30, which was
+calibrated when only the leg was charged and the range was 0 to 227 J, the ankle charge pushed work
+to 17.7 units, ABOVE the 11.7 units of momentum pressure. Task accuracy would have become
+purchasable with work again, which is exactly the failure that made the first trained policy cut the
+work proxy 6.7x while pushing its momentum excursion from 0.87 to 2.12 tolerances.
+
+If the tier 3 range changes again, for a new shoe or a new actuator, rescale this divisor to hold
+the work contribution near 7.6 units rather than adjusting the penalties.
 """
 
-MOMENTUM_REWARD_SCALE_M_S = 0.15
+CONTACT_FORCE_FRACTION = 0.02
+"""Share of body weight above which the shoe counts as loaded.
+
+One constant for the whole module. The dense momentum reward detects touchdown with it online and
+:meth:`ImpedanceEnv._rollout` gates the scored stance with it, which is also the gate
+:func:`projects.impedance_instron.optimize.simulate` uses. They must be the same number: a dense
+term that starts its stance clock at a different instant from the criterion is measuring a
+different quantity, which is exactly the defect this constant was introduced to remove.
+"""
+
+MOMENTUM_REWARD_SCALE_M_S = 0.13
 """Divisor [m/s] of the momentum-tracking reward.
 
-Calibrated to carry the tier 2 pressure DENSELY rather than at the terminal frame. An at-tolerance
-error of 0.044 m/s costs about 0.29 per frame, roughly 11.7 over a stance, which exceeds the whole
-0 to 227 J work range (7.6 reward units). Task accuracy therefore cannot be bought with work even
-before the terminal penalty applies.
+Calibrated so tier 2 keeps dominating tier 3, and re-derived after the term was re-anchored on the
+DETECTED touchdown. An at-tolerance error of 0.044 m/s costs 0.338 per frame; the term is now active
+only from touchdown, so it covers about 35.4 stance frames rather than the roughly 40 assumed
+before, giving 12.0 reward units against the 7.6 units of the 0 to 532 J work range at
+:data:`WORK_REWARD_SCALE_J`. Margin 1.58x.
 
-Why dense: a large terminal penalty makes the return unpredictable from early observations, because
-nothing visible at frame 5 determines whether the episode ends off task. Training with a 25 per unit
-terminal penalty and a 0.5 divisor here drove explained variance to -0.36 with a value loss of 151,
-against 1.000 and 0.002 when the terminal term was small. Explained variance is scale invariant, so
-rescaling does not fix it; moving the pressure to where the error accrues does.
+Do not read the margin as the whole safeguard. The reward and the tier 2 criterion must also AGREE
+IN RANK, and for a long time they did not: the dense term was anchored on the COMMANDED touchdown
+while the criterion used each run's own contact interval. With prescribed pitch the two coincided
+and the defect was invisible. Once the ankle let contact timing move, measured Spearman correlation
+against the criterion was -0.456, and against the clipped excursion it was +0.343, the wrong sign
+outright. A policy trained against it ranked best of fourteen episodes on this term and fourth worst
+on the criterion, and drove the momentum excursion from 1.079 to 1.951 over 800 iterations while the
+reward improved. Anchoring both the datum and the stance clock on the detected touchdown raised the
+correlation to -0.912, against -0.965 for a non-causal ideal.
 """
 
 TERMINAL_EXCURSION_PENALTY = 10.0
@@ -194,18 +332,34 @@ def _advance_sample_index(index: wp.array[wp.int32]):
     index[0] = index[0] + 1
 
 
+@wp.func
+def _pitch_of(rotation: wp.quat) -> float:
+    """Return the Y-axis rotation angle of a planar fixture pose [rad].
+
+    The same projection :func:`projects.impedance_instron.example._pitch_of` applies: only the Y
+    and W components carry a planar pitch, so reading them discards any out-of-plane drift
+    instead of propagating it. It is restated here rather than imported because it is private to
+    that module and this one may not modify it.
+    """
+    return 2.0 * wp.atan2(rotation[1], rotation[3])
+
+
 @wp.kernel
 def _prescribe_world_axes(
     index: wp.array[wp.int32],
     reference: wp.array2d[wp.float32],
+    ankle: int,
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
 ):
-    """Hold every world out of plane and drive its pitch from the shared motor schedule.
+    """Hold every world out of plane, and prescribe its pitch only when no ankle actuator drives it.
 
     The per-world arithmetic is the arithmetic of
     :func:`projects.impedance_instron.example._constrain_planar_axes` with the two body indices
-    offset by the world, so a one-world batch reproduces the single-world rig.
+    offset by the world, so a one-world batch reproduces the single-world rig. With ``ankle``
+    nonzero it is instead
+    :func:`projects.impedance_instron.example._constrain_out_of_plane_axes`: Y translation, roll
+    and yaw are still eliminated, but pitch and pitch rate are integrated states.
     """
     world = wp.tid()
     i = index[0]
@@ -215,12 +369,20 @@ def _prescribe_world_axes(
     c = wp.transform_get_translation(body_q[upper])
     va = wp.spatial_top(body_qd[foot])
     vc = wp.spatial_top(body_qd[upper])
+    pitch = float(0.0)
+    pitch_rate = float(0.0)
+    if ankle != 0:
+        pitch = _pitch_of(wp.transform_get_rotation(body_q[foot]))
+        pitch_rate = wp.spatial_bottom(body_qd[foot])[1]
+    else:
+        pitch = reference[i, 2]
+        pitch_rate = reference[i, 7]
     body_q[foot] = wp.transform(
         wp.vec3(a[0], 0.0, a[2]),
-        wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), reference[i, 2]),
+        wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), pitch),
     )
     body_q[upper] = wp.transform(wp.vec3(c[0], 0.0, c[2]), wp.quat_identity())
-    body_qd[foot] = wp.spatial_vector(wp.vec3(va[0], 0.0, va[2]), wp.vec3(0.0, reference[i, 7], 0.0))
+    body_qd[foot] = wp.spatial_vector(wp.vec3(va[0], 0.0, va[2]), wp.vec3(0.0, pitch_rate, 0.0))
     body_qd[upper] = wp.spatial_vector(wp.vec3(vc[0], 0.0, vc[2]), wp.vec3(0.0))
 
 
@@ -231,6 +393,8 @@ def _apply_leg_and_record(
     command: wp.array3d[wp.float32],
     force_limit: float,
     unilateral: int,
+    ankle: int,
+    torque_limit: float,
     com_share: float,
     shoe_force: wp.array[wp.vec3],
     compression: wp.array[wp.float32],
@@ -249,6 +413,12 @@ def _apply_leg_and_record(
     ``com_share`` is ``foot_mass / mass``, so the recorded COM height is the same mass weighting
     :meth:`ImpedanceEnv._com_vz` applies to the velocities. Height is recorded directly because
     the leg length is a 3-D distance and cannot be resolved back into two heights.
+
+    With ``ankle`` nonzero the same thread also applies the rotational equilibrium-point law of
+    :func:`projects.impedance_instron.example._apply_ankle_impedance` about the fixture pitch
+    axis. The leg contributes a pure force and the ankle a pure torque, so fusing them into one
+    launch cannot change either result. The ankle source power is recorded separately from its
+    damper dissipation and from its stored energy, which must not be added together.
     """
     world = wp.tid()
     i = index[0]
@@ -298,6 +468,59 @@ def _apply_leg_and_record(
     trace[i, world, 14] = wp.abs(limited - raw)
     trace[i, world, 15] = upper_z
     trace[i, world, 16] = com_share * ankle_z + (1.0 - com_share) * upper_z
+    pitch = _pitch_of(wp.transform_get_rotation(body_q[foot]))
+    pitch_rate = wp.spatial_bottom(body_qd[foot])[1]
+    trace[i, world, 21] = pitch
+    trace[i, world, 22] = pitch_rate
+    if ankle != 0:
+        angle = command[i, world, 5]
+        angle_rate = command[i, world, 6]
+        k_theta = command[i, world, 7]
+        b_theta = command[i, world, 8]
+        k_theta_rate = command[i, world, 9]
+        angle_error = pitch - angle
+        angle_slip = pitch_rate - angle_rate
+        torque_raw = -k_theta * angle_error - b_theta * angle_slip
+        torque = wp.clamp(torque_raw, -torque_limit, torque_limit)
+        wp.atomic_add(body_f, foot, wp.spatial_vector(wp.vec3(0.0), wp.vec3(0.0, torque, 0.0)))
+        # The equilibrium-work term carries the PRE-clamp torque, so a limited sample is not
+        # credited with work it never did; the clamp shows up in the saturation term instead.
+        trace[i, world, 17] = (
+            torque_raw * angle_rate
+            + 0.5 * k_theta_rate * angle_error * angle_error
+            + (torque - torque_raw) * pitch_rate
+        )
+        trace[i, world, 18] = -b_theta * angle_slip * angle_slip
+        trace[i, world, 19] = torque
+        trace[i, world, 20] = wp.abs(torque - torque_raw)
+
+
+def ankle_seed(args, times: np.ndarray, pitch_rad: np.ndarray, inertia_kg_m2: float = 0.025) -> np.ndarray:
+    """Return an ankle command vector that holds a measured pitch at a constant impedance.
+
+    A convenience over :meth:`~projects.impedance_instron.control.AnkleCommand.initial` that
+    takes the knot counts, the seed stiffness and the seed damping ratio from the same parsed
+    namespace the environment is built with, so a caller cannot seed one resolution and simulate
+    another. The angle knots are the least-squares fit of the spline basis to ``pitch_rad``; with
+    six knots that fit is not exact, which bounds how closely the commanded-angle rollout can
+    ever approach the prescribed one. Pass ``args.ankle_equilibrium = "measured"`` to remove the
+    fit from the comparison and leave only the finite stiffness.
+
+    Args:
+        args: Parsed namespace from
+            :func:`projects.impedance_instron.example.create_parser`.
+        times: Evaluation grid of the rig [s], shape [sample_count].
+        pitch_rad: Measured fixture pitch to reproduce [rad], shape [sample_count].
+        inertia_kg_m2: Pitch inertia the commanded damping ratio is referred to [kg·m²].
+    """
+    command = AnkleCommand(
+        times,
+        angle_knots=args.ankle_angle_knots,
+        stiffness_knots=args.ankle_stiffness_knots,
+        damping_knots=args.ankle_damping_knots,
+        inertia_kg_m2=inertia_kg_m2,
+    )
+    return command.initial(np.asarray(pitch_rad, dtype=float), args.ankle_stiffness, args.ankle_damping_ratio)
 
 
 def _momentum_checkpoints(times: np.ndarray, velocity: np.ndarray, loaded: np.ndarray) -> list[float]:
@@ -342,6 +565,7 @@ class ImpedanceEnv:
         nominal: np.ndarray,
         seed: int = 0,
         shape_reward: bool = True,
+        ankle: np.ndarray | None = None,
     ):
         if int(num_worlds) < 1:
             raise ValueError(f"num_worlds must be at least one, got {num_worlds}")
@@ -349,12 +573,19 @@ class ImpedanceEnv:
         self.shape_reward = bool(shape_reward)
         self.rng = np.random.default_rng(seed)
         self.seed = int(seed)
+        self.ankle_enabled = ankle is not None
 
         # A private copy so selecting the equilibrium controller and stamping the nominal command
         # never mutates the caller's namespace; ``Example`` also writes back into ``args``.
         self.args = copy.deepcopy(args)
         self.args.control = "equilibrium"
         self.args.control_vector = np.asarray(nominal, dtype=float).reshape(-1)
+        if self.ankle_enabled:
+            # Supplying the vector is what switches ``Example`` to the commanded angle spline;
+            # a caller that wants the prescribed rollout as the stiff limit sets
+            # ``args.ankle_equilibrium = "measured"`` and keeps the angle knots as a seed only.
+            self.args.ankle_control = "impedance"
+            self.args.ankle_vector = np.asarray(ankle, dtype=float).reshape(-1)
         self.device = wp.get_device()
 
         # The reference construction of the single-world example is 300 lines of measured-profile
@@ -378,6 +609,8 @@ class ImpedanceEnv:
         self.gravity = float(prototype.gravity)
         self.body_weight_n = self.mass * self.gravity
         self.force_limit_n = float(self.args.force_limit_bw * self.body_weight_n)
+        self.torque_limit_n_m = float(getattr(self.args, "ankle_torque_limit", 0.0))
+        self.pitch_inertia = float(prototype.pitch_inertia)
         self.touchdown_time_s = float(prototype.registration["touchdown_time_s"])
         self.minimum_last_offsets = np.asarray(prototype.minimum_last_offsets, dtype=float).copy()
         reference = np.ascontiguousarray(prototype.reference, dtype=np.float32)
@@ -386,7 +619,7 @@ class ImpedanceEnv:
         self.objective = Objective(self.target, Tolerances(), body_weight_n=self.body_weight_n)
 
         self._build_nominal_command(reference)
-        self._build_action_bounds(prototype.command)
+        self._build_action_bounds(prototype.command, getattr(prototype, "ankle_command", None))
         self._build_momentum_reference()
         self._build_model(prototype)
         # The prototype owns a second model and a second column bed on the device; nothing below
@@ -398,10 +631,12 @@ class ImpedanceEnv:
         self.graph_status = "enabled" if self.use_graph else "disabled"
         self._frame_index = 0
         self._started = False
-        self._previous_residual = np.zeros((self.num_worlds, 3), dtype=np.float64)
-        self._residual_history = np.zeros((self._episode_frames, self.num_worlds, 3), dtype=np.float64)
+        self._previous_residual = np.zeros((self.num_worlds, self.action_dim), dtype=np.float64)
+        self._residual_history = np.zeros((self._episode_frames, self.num_worlds, self.action_dim), dtype=np.float64)
         self._command_host = np.zeros((self.sample_count, self.num_worlds, COMMAND_COLUMNS), dtype=np.float32)
-        self._touchdown_velocity = np.zeros((self.num_worlds, 2), dtype=float)
+        # Touchdown is DETECTED per world, not assumed: -1 until this world's shoe is first loaded.
+        self._contact_sample = np.full(self.num_worlds, -1, dtype=np.int64)
+        self._contact_velocity = np.zeros((self.num_worlds, 2), dtype=float)
 
     # ------------------------------------------------------------------ construction
 
@@ -412,23 +647,47 @@ class ImpedanceEnv:
         equilibrium length, its rate, the stiffness, the damping and the stiffness rate. Reusing
         them rather than re-evaluating the spline is what makes a zero residual bit-exact.
 
+        The ankle block reads reference columns
+        :data:`~projects.impedance_instron.example.ANKLE_ANGLE` onward the same way, and is left
+        at zero when the pitch motor is prescribed.
+
         Args:
-            reference: Prototype reference rows, shape [sample_count, 28].
+            reference: Prototype reference rows, shape [sample_count, 28] without the ankle
+                actuator and [sample_count, :data:`~projects.impedance_instron.example.ANKLE_COLUMN_COUNT`]
+                with it.
         """
-        self._nominal = np.column_stack(
+        self._nominal = np.zeros((self.sample_count, COMMAND_COLUMNS), dtype=np.float64)
+        self._nominal[:, :5] = np.column_stack(
             [reference[:, 13], reference[:, 14], reference[:, 25], reference[:, 26], reference[:, 27]]
-        ).astype(np.float64)
+        )
         stiffness = self._nominal[:, COMMAND_STIFFNESS]
         # b = 2 zeta sqrt(k m) inverted, so the residual can move the ratio the command was
         # written in instead of the raw damper. The inverse is only ever used as a ratio.
         self._nominal_zeta = self._nominal[:, COMMAND_DAMPING] / (2.0 * np.sqrt(stiffness * self.com_mass))
+        self._nominal_ankle_zeta = np.zeros(self.sample_count)
+        if not self.ankle_enabled:
+            return
+        if reference.shape[1] < ANKLE_COLUMN_COUNT:
+            raise ValueError("The prototype reference carries no ankle block; ankle control did not engage")
+        self._nominal[:, COMMAND_ANKLE_ANGLE] = reference[:, ANKLE_ANGLE]
+        self._nominal[:, COMMAND_ANKLE_ANGLE_RATE] = reference[:, ANKLE_ANGLE_RATE]
+        self._nominal[:, COMMAND_ANKLE_STIFFNESS] = reference[:, ANKLE_STIFFNESS]
+        self._nominal[:, COMMAND_ANKLE_DAMPING] = reference[:, ANKLE_DAMPING]
+        self._nominal[:, COMMAND_ANKLE_STIFFNESS_RATE] = reference[:, ANKLE_STIFFNESS_RATE]
+        ankle_stiffness = self._nominal[:, COMMAND_ANKLE_STIFFNESS]
+        self._nominal_ankle_zeta = self._nominal[:, COMMAND_ANKLE_DAMPING] / (
+            2.0 * np.sqrt(ankle_stiffness * self.pitch_inertia)
+        )
 
-    def _build_action_bounds(self, command: LegCommand) -> None:
-        """Read the resolved-command box straight out of :meth:`LegCommand.bounds`.
+    def _build_action_bounds(self, command: LegCommand, ankle: AnkleCommand | None) -> None:
+        """Read the resolved-command boxes straight out of the two command classes.
 
         Args:
             command: The prototype's leg command, whose knot bounds are also profile bounds
                 because a clamped B-spline stays in the convex hull of its coefficients.
+            ankle: The prototype's ankle command, or None when pitch is prescribed. Its bounds
+                are read the same way, so the residual can never resolve an ankle stiffness,
+                equilibrium angle or damping ratio outside :meth:`AnkleCommand.bounds`.
         """
         lower, upper = command.bounds()
         first = command.length_knots
@@ -436,21 +695,33 @@ class ImpedanceEnv:
         self.length_bounds_m = (float(lower[0]), float(upper[0]))
         self.stiffness_bounds_n_m = (float(np.exp(lower[first])), float(np.exp(upper[first])))
         self.damping_ratio_bounds = (float(lower[second]), float(upper[second]))
-        self.action_scale = np.asarray(ACTION_SCALE, dtype=float)
+        self.action_scale = np.asarray(ACTION_SCALE[: self.action_dim], dtype=float)
+        self.action_rate_limit = np.asarray(ACTION_RATE_LIMIT[: self.action_dim], dtype=float)
+        self.angle_bounds_rad = (0.0, 0.0)
+        self.ankle_stiffness_bounds_n_m_per_rad = (0.0, 0.0)
+        self.ankle_damping_ratio_bounds = (0.0, 0.0)
+        if ankle is None:
+            return
+        lower, upper = ankle.bounds()
+        first = ankle.angle_knots
+        second = first + ankle.stiffness_knots
+        self.angle_bounds_rad = (float(lower[0]), float(upper[0]))
+        self.ankle_stiffness_bounds_n_m_per_rad = (float(np.exp(lower[first])), float(np.exp(upper[first])))
+        self.ankle_damping_ratio_bounds = (float(lower[second]), float(upper[second]))
 
     def _build_momentum_reference(self) -> None:
-        """Resample the measured momentum history onto the substep grid, once.
+        """Anchor the measured momentum history at touchdown so it can be read at any phase.
 
-        The tier 2 history is stated at fractions of contact. The dense term needs it as a
-        function of time, so it is interpolated against the measured stance duration starting at
-        the commanded touchdown instant. Before touchdown the term is switched off entirely.
+        The tier 2 history is stated at nine fractions of contact, the first at 10 %. Reading it
+        below that fraction by clamping would claim the body should already have gained the
+        velocity it gains in the first tenth of stance, a constant penalty in the frames right
+        after touchdown. Velocity change at touchdown is zero by definition, which is also how
+        :func:`projects.impedance_instron.optimize.simulate` builds the history it is compared
+        against, so the zero is prepended explicitly.
         """
-        phase = (self.times - self.touchdown_time_s) / max(self.target.duration_s, 1.0e-9)
-        self._momentum_active = phase >= 0.0
-        clipped = np.clip(phase, 0.0, 1.0)
-        self._momentum_vx = np.interp(clipped, CHECKPOINTS, self.target.momentum_vx_m_s)
-        self._momentum_vz = np.interp(clipped, CHECKPOINTS, self.target.momentum_vz_m_s)
-        self._touchdown_sample = int(np.argmin(np.abs(self.times - self.touchdown_time_s)))
+        self._momentum_phase = np.concatenate([[0.0], CHECKPOINTS])
+        self._momentum_vx = np.concatenate([[0.0], np.asarray(self.target.momentum_vx_m_s, dtype=float)])
+        self._momentum_vz = np.concatenate([[0.0], np.asarray(self.target.momentum_vz_m_s, dtype=float)])
 
     def _build_model(self, prototype: Example) -> None:
         """Replicate the prototype's two-body rig once per world and batch the column bed.
@@ -492,6 +763,14 @@ class ImpedanceEnv:
         self._initial_qd = np.zeros((2 * self.num_worlds, 6), dtype=np.float32)
         self._initial_qd[0::2] = prototype.planar_initial_velocity[0]
         self._initial_qd[1::2] = prototype.planar_initial_velocity[1]
+        if self.ankle_enabled:
+            # Nothing writes pitch during the rollout any more, so the entry angle and angular
+            # rate have to be part of the declared initial state, exactly as ``Example`` declares
+            # them for its single world.
+            angle = float(self._reference_host[0, _REFERENCE_PITCH])
+            angle_rate = float(self._reference_host[0, _REFERENCE_PITCH_RATE])
+            self._initial_q[0::2, 3:7] = (0.0, math.sin(0.5 * angle), 0.0, math.cos(0.5 * angle))
+            self._initial_qd[0::2, 4] = angle_rate
 
         bed = prototype.shoe.column_bed
         scale = float(self.args.shoe_stiffness_scale)
@@ -507,6 +786,7 @@ class ImpedanceEnv:
         # Kept so a caller can randomize the material around the shoe the policy trained on.
         self.shoe = prototype.shoe
         self.material = material
+        # Share the prototype's declared ground plane and contact law in every world.
         self.foundation = MidsoleFoundation(
             bed.anchor_bottom_m - prototype.ankle_mount,
             np.zeros(len(bed.rest_length_m)),
@@ -535,13 +815,28 @@ class ImpedanceEnv:
 
     @property
     def observation_dim(self) -> int:
-        """Width of one observation row; see :data:`OBSERVATION_LAYOUT`."""
-        return len(OBSERVATION_LAYOUT)
+        """Width of one observation row; see :data:`OBSERVATION_LAYOUT`.
+
+        The ankle actuator appends :data:`ANKLE_OBSERVATION_LAYOUT`, so the width is 13 with a
+        prescribed pitch motor and 16 with a commanded ankle impedance.
+        """
+        return len(self.observation_layout)
+
+    @property
+    def observation_layout(self) -> tuple[tuple[str, str, float], ...]:
+        """Observation entries of this environment, in index order."""
+        if self.ankle_enabled:
+            return OBSERVATION_LAYOUT + ANKLE_OBSERVATION_LAYOUT
+        return OBSERVATION_LAYOUT
 
     @property
     def action_dim(self) -> int:
-        """Width of one action row: the residual ``[dL0, dlogK, dzeta]``."""
-        return 3
+        """Width of one action row.
+
+        Three with a prescribed pitch motor, ``[dL0, dlogK, dzeta]``. Six with the ankle
+        actuator, ``[dL0, dlogK, dzeta, dtheta0, dlogK_theta, dzeta_theta]``.
+        """
+        return 6 if self.ankle_enabled else 3
 
     @property
     def episode_frames(self) -> int:
@@ -550,7 +845,12 @@ class ImpedanceEnv:
 
     @property
     def reference(self) -> np.ndarray:
-        """Measured reference the rig is driven against, shape [sample_count, 28], read-only.
+        """Measured reference the rig is driven against, read-only.
+
+        Shape [sample_count, 28] with a prescribed pitch motor, and
+        [sample_count, :data:`~projects.impedance_instron.example.ANKLE_COLUMN_COUNT`] with the
+        ankle actuator, whose commanded angle, angle rate, stiffness, damping and stiffness rate
+        occupy the appended block.
 
         These are the rows :meth:`projects.impedance_instron.example.Example._make_reference`
         builds from the captured running profile, already resolved onto the substep grid, so a
@@ -599,11 +899,13 @@ class ImpedanceEnv:
         self._command_host[:] = 0.0
         self._residual_history[:] = 0.0
         self._previous_residual[:] = 0.0
-        self._touchdown_velocity[:] = 0.0
+        self._contact_sample[:] = -1
+        self._contact_velocity[:] = 0.0
         self._frame_index = 0
         self._started = True
         # Sample 0 is recorded before any decision, so it is driven by the nominal command.
-        self._write_command(np.array([0]), self._previous_residual)
+        zero = np.zeros((1, self.num_worlds, self.action_dim))
+        self._write_command(np.array([0]), zero, np.zeros((self.num_worlds, self.action_dim)))
         self._record_sample()
         return self._observe(0)
 
@@ -615,8 +917,9 @@ class ImpedanceEnv:
         which is what lets the captured CUDA graph replay the whole frame.
 
         Args:
-            actions: Raw policy output, shape [num_worlds, 3]. It is squashed with ``tanh`` and
-                scaled by :data:`ACTION_SCALE` before it is added to the nominal command.
+            actions: Raw policy output, shape [num_worlds, :attr:`action_dim`]. It is squashed
+                with ``tanh`` and scaled by :data:`ACTION_SCALE` before it is added to the
+                nominal command.
 
         Returns:
             ``obs`` [num_worlds, observation_dim] float32, ``reward`` [num_worlds] float32,
@@ -629,16 +932,24 @@ class ImpedanceEnv:
         if self._frame_index >= self._episode_frames:
             raise RuntimeError("the episode is over; call reset()")
         command = np.asarray(actions, dtype=float)
-        if command.shape != (self.num_worlds, 3):
-            raise ValueError(f"actions must have shape {(self.num_worlds, 3)}, got {command.shape}")
+        if command.shape != (self.num_worlds, self.action_dim):
+            raise ValueError(f"actions must have shape {(self.num_worlds, self.action_dim)}, got {command.shape}")
         if not np.all(np.isfinite(command)):
             raise ValueError("actions must be finite")
 
-        residual = np.tanh(command) * self.action_scale
+        requested = np.tanh(command) * self.action_scale
+        # Rate limit first, ramp second: the limit bounds the frame-to-frame change and the ramp
+        # spreads what survives across the frame, so no commanded rate depends on the substep.
+        residual = np.clip(
+            requested,
+            self._previous_residual - self.action_rate_limit,
+            self._previous_residual + self.action_rate_limit,
+        )
         frame = self._frame_index
         start = frame * self.substeps
         rows = np.arange(start + 1, start + self.substeps + 1)
-        self._write_command(rows, residual)
+        ramp, rate = self._frame_ramp(residual)
+        self._write_command(rows, ramp, rate)
         self._advance_frame()
         self._frame_index += 1
         self._previous_residual = residual
@@ -665,6 +976,12 @@ class ImpedanceEnv:
             info["feasible"] = np.array([v.feasible for v in verdicts], dtype=bool)
             info["on_task"] = np.array([v.on_task for v in verdicts], dtype=bool)
             info["value"] = np.array([v.value for v in verdicts], dtype=np.float64)
+            # Exposed so the ankle actuator can be charged for its work: an unpenalised pitch
+            # motor is a free resource and a policy will spend it on everything.
+            episode = self.trace_device.numpy()
+            power = episode[:, :, TRACE_ANKLE_SOURCE_POWER].astype(np.float64)
+            info["ankle_positive_work_j"] = np.trapezoid(np.clip(power, 0.0, None), self.times, axis=0)
+            info["ankle_negative_work_j"] = np.trapezoid(np.clip(power, None, 0.0), self.times, axis=0)
         observation = self._observe(start + self.substeps)
         return (
             observation,
@@ -696,14 +1013,17 @@ class ImpedanceEnv:
         Returns:
             Sample times [s], the resolved equilibrium length [m] and its rate [m/s], stiffness
             [N/m], damping [N·s/m] and damping ratio [-] over the samples produced so far, plus
-            the per-frame residual actually applied.
+            the per-frame residual actually applied. With the ankle actuator the resolved
+            equilibrium angle [rad] and its rate [rad/s], ankle stiffness [N·m/rad], ankle
+            damping [N·m·s/rad] and ankle damping ratio [-] are reported alongside them, so a
+            dashboard can plot both actuators from one call.
         """
         if not 0 <= int(world) < self.num_worlds:
             raise IndexError(f"world {world} is outside a batch of {self.num_worlds}")
         filled = min(self._frame_index * self.substeps + 1, self.sample_count)
         block = self._command_host[:filled, int(world)].astype(float)
         stiffness = block[:, COMMAND_STIFFNESS]
-        return {
+        realised = {
             "time_s": self.times[:filled].copy(),
             "length_m": block[:, COMMAND_L0],
             "length_rate_m_s": block[:, COMMAND_L0_RATE],
@@ -713,6 +1033,21 @@ class ImpedanceEnv:
             "stiffness_rate_n_m_s": block[:, COMMAND_STIFFNESS_RATE],
             "residual": self._residual_history[: self._frame_index, int(world)].copy(),
         }
+        if not self.ankle_enabled:
+            return realised
+        ankle_stiffness = block[:, COMMAND_ANKLE_STIFFNESS]
+        ankle_damping = block[:, COMMAND_ANKLE_DAMPING]
+        realised.update(
+            {
+                "angle_rad": block[:, COMMAND_ANKLE_ANGLE],
+                "angle_rate_rad_s": block[:, COMMAND_ANKLE_ANGLE_RATE],
+                "ankle_stiffness_n_m_per_rad": ankle_stiffness,
+                "ankle_damping_n_m_s_per_rad": ankle_damping,
+                "ankle_damping_ratio": ankle_damping / (2.0 * np.sqrt(ankle_stiffness * self.pitch_inertia)),
+                "ankle_stiffness_rate_n_m_per_rad_s": block[:, COMMAND_ANKLE_STIFFNESS_RATE],
+            }
+        )
+        return realised
 
     def trace(self, world: int) -> np.ndarray:
         """Return one world's recorded substep trace so far, shape [samples, :data:`TRACE_COLUMNS`].
@@ -744,19 +1079,71 @@ class ImpedanceEnv:
             self.foundation.surround_previous.zero_()
             self.foundation.surround_rate.zero_()
 
-    def _write_command(self, rows: np.ndarray, residual: np.ndarray) -> None:
-        """Resolve the nominal command plus a residual onto the given substep rows.
+    def _frame_ramp(self, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return one frame's per-substep residual ramp and the rate that produced it.
+
+        The policy decides once per frame, but applying that decision as a STEP makes the
+        commanded impedance piecewise constant with one discontinuity per frame, which defeats
+        the point of the C2 spline parameterization in
+        :mod:`projects.impedance_instron.control` and, worse, turns ``kdot`` into a spike whose
+        size is set by the substep rather than by any physical rate. Ramping linearly from the
+        previous frame's resolved residual to this one's over the frame's substeps is causal,
+        because both endpoints are known when the frame begins, and bounds every rate by
+        ``delta / frame_dt``. It is a first-order hold: the policy's request is fully applied only
+        at the end of its own frame.
+
+        Args:
+            target: Residual the policy asked for this frame, shape [num_worlds, action_dim].
+        """
+        weights = (np.arange(1, self.substeps + 1, dtype=float) / self.substeps)[:, None, None]
+        previous = self._previous_residual[None]
+        ramp = previous + weights * (target[None] - previous)
+        return ramp, (target - self._previous_residual) / self.frame_dt
+
+    @staticmethod
+    def _clip_with_rate(
+        value: np.ndarray, rate: np.ndarray, bounds: tuple[float, float]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Clip a commanded signal and return the derivative of the CLIPPED signal.
+
+        A clipped command is constant while it is held at a bound, so reporting the unclipped
+        rate there would credit the energy ledger with a stiffness change that never happened.
+        The one-sided test keeps the rate that moves the command back inside the box, which is
+        the true derivative at the bound rather than an approximation of it.
+
+        Args:
+            value: Unclipped command.
+            rate: Time derivative of the unclipped command.
+            bounds: ``(minimum, maximum)`` of the command box.
+        """
+        low, high = bounds
+        clipped = np.clip(value, low, high)
+        effective = np.where(value >= high, np.minimum(rate, 0.0), np.where(value <= low, np.maximum(rate, 0.0), rate))
+        return clipped, effective
+
+    def _write_command(self, rows: np.ndarray, residual: np.ndarray, rate: np.ndarray) -> None:
+        """Resolve the nominal command plus a ramped residual onto the given substep rows.
 
         The resolved stiffness is ``k exp(dlogK)`` clipped into the LegCommand box, so it is
         positive by construction. The damping follows it through
         ``b = b_nominal (zeta / zeta_nominal) sqrt(k / k_nominal)``, which is algebraically the
         same ``b = 2 zeta sqrt(k m)`` the command was written with but leaves a zero residual
-        exactly equal to the nominal float32. The commanded length rate is the nominal rate: a
-        residual held constant over the frame adds no rate inside it.
+        exactly equal to the nominal float32.
+
+        Every commanded RATE is now the derivative of the command actually written, not the
+        nominal one. The equilibrium rate carries the ramp's own rate, and the stiffness rate is
+        the product rule ``kdot_nominal exp(dlogK) + k d(dlogK)/dt``. A stepped residual made both
+        of these wrong: the command moved while its reported rate claimed it had not, and the
+        ``0.5 kdot e^2`` term of the source power became an artefact of the decision rate.
+
+        The ankle block is resolved by the identical algebra against
+        :meth:`AnkleCommand.bounds`, with the pitch inertia in place of the leg mass, so a zero
+        residual reproduces the commanded ankle impedance bit for bit as well.
 
         Args:
             rows: Substep indices to fill, shape [n].
-            residual: Resolved residual per world, shape [num_worlds, 3].
+            residual: Resolved residual per substep and world, shape [n, num_worlds, action_dim].
+            rate: Time derivative of that residual, shape [num_worlds, action_dim].
         """
         nominal = self._nominal[rows]
         length = nominal[:, COMMAND_L0][:, None]
@@ -765,16 +1152,48 @@ class ImpedanceEnv:
         damping = nominal[:, COMMAND_DAMPING][:, None]
         stiffness_rate = nominal[:, COMMAND_STIFFNESS_RATE][:, None]
         zeta = self._nominal_zeta[rows][:, None]
-        resolved_length = np.clip(length + residual[None, :, 0], *self.length_bounds_m)
-        resolved_stiffness = np.clip(stiffness * np.exp(residual[None, :, 1]), *self.stiffness_bounds_n_m)
-        resolved_zeta = np.clip(zeta + residual[None, :, 2], *self.damping_ratio_bounds)
-        gain = resolved_stiffness / stiffness
+        resolved_length, resolved_length_rate = self._clip_with_rate(
+            length + residual[:, :, 0], length_rate + rate[None, :, 0], self.length_bounds_m
+        )
+        gain = np.exp(residual[:, :, 1])
+        resolved_stiffness, resolved_stiffness_rate = self._clip_with_rate(
+            stiffness * gain,
+            stiffness_rate * gain + stiffness * gain * rate[None, :, 1],
+            self.stiffness_bounds_n_m,
+        )
+        resolved_zeta = np.clip(zeta + residual[:, :, 2], *self.damping_ratio_bounds)
         block = np.empty((len(rows), self.num_worlds, COMMAND_COLUMNS), dtype=np.float32)
         block[:, :, COMMAND_L0] = resolved_length
-        block[:, :, COMMAND_L0_RATE] = np.broadcast_to(length_rate, resolved_length.shape)
+        block[:, :, COMMAND_L0_RATE] = resolved_length_rate
         block[:, :, COMMAND_STIFFNESS] = resolved_stiffness
-        block[:, :, COMMAND_DAMPING] = damping * (resolved_zeta / zeta) * np.sqrt(gain)
-        block[:, :, COMMAND_STIFFNESS_RATE] = stiffness_rate * gain
+        block[:, :, COMMAND_DAMPING] = damping * (resolved_zeta / zeta) * np.sqrt(resolved_stiffness / stiffness)
+        block[:, :, COMMAND_STIFFNESS_RATE] = resolved_stiffness_rate
+        if self.ankle_enabled:
+            angle = nominal[:, COMMAND_ANKLE_ANGLE][:, None]
+            angle_rate = nominal[:, COMMAND_ANKLE_ANGLE_RATE][:, None]
+            ankle_stiffness = nominal[:, COMMAND_ANKLE_STIFFNESS][:, None]
+            ankle_damping = nominal[:, COMMAND_ANKLE_DAMPING][:, None]
+            ankle_stiffness_rate = nominal[:, COMMAND_ANKLE_STIFFNESS_RATE][:, None]
+            ankle_zeta = self._nominal_ankle_zeta[rows][:, None]
+            resolved_angle, resolved_angle_rate = self._clip_with_rate(
+                angle + residual[:, :, 3], angle_rate + rate[None, :, 3], self.angle_bounds_rad
+            )
+            ankle_gain = np.exp(residual[:, :, 4])
+            resolved_ankle_stiffness, resolved_ankle_stiffness_rate = self._clip_with_rate(
+                ankle_stiffness * ankle_gain,
+                ankle_stiffness_rate * ankle_gain + ankle_stiffness * ankle_gain * rate[None, :, 4],
+                self.ankle_stiffness_bounds_n_m_per_rad,
+            )
+            resolved_ankle_zeta = np.clip(ankle_zeta + residual[:, :, 5], *self.ankle_damping_ratio_bounds)
+            block[:, :, COMMAND_ANKLE_ANGLE] = resolved_angle
+            block[:, :, COMMAND_ANKLE_ANGLE_RATE] = resolved_angle_rate
+            block[:, :, COMMAND_ANKLE_STIFFNESS] = resolved_ankle_stiffness
+            block[:, :, COMMAND_ANKLE_DAMPING] = (
+                ankle_damping * (resolved_ankle_zeta / ankle_zeta) * np.sqrt(resolved_ankle_stiffness / ankle_stiffness)
+            )
+            block[:, :, COMMAND_ANKLE_STIFFNESS_RATE] = resolved_ankle_stiffness_rate
+        else:
+            block[:, :, COMMAND_ANKLE_ANGLE:] = 0.0
         first, last = int(rows[0]), int(rows[-1]) + 1
         self._command_host[first:last] = block
         self.command_device[first:last].assign(block)
@@ -784,7 +1203,13 @@ class ImpedanceEnv:
         wp.launch(
             _prescribe_world_axes,
             dim=self.num_worlds,
-            inputs=[self.index_device, self.reference_device, self.state_0.body_q, self.state_0.body_qd],
+            inputs=[
+                self.index_device,
+                self.reference_device,
+                int(self.ankle_enabled),
+                self.state_0.body_q,
+                self.state_0.body_qd,
+            ],
             device=self.device,
         )
         self.state_0.clear_forces()
@@ -798,6 +1223,8 @@ class ImpedanceEnv:
                 self.command_device,
                 self.force_limit_n,
                 int(self.args.leg_unilateral),
+                int(self.ankle_enabled),
+                self.torque_limit_n_m,
                 self.foot_mass / self.mass,
                 self.foundation.resultant_force,
                 self.foundation.max_compression,
@@ -851,24 +1278,38 @@ class ImpedanceEnv:
     def _observe(self, sample: int) -> np.ndarray:
         """Build the observation of every world at one substep index.
 
+        Pitch and pitch rate come from the trace, not from the reference schedule. While the
+        pitch motor is prescribed the two are the same number up to the float32 round trip
+        through the pose quaternion, about 1e-7 rad; once the ankle actuator drives pitch they
+        are different quantities and only the achieved one is observable.
+
+        ``stance_phase`` and ``in_contact`` report this world's own detected touchdown, the clock
+        both the dense momentum reward and the tier 2 momentum excursion are measured on. The
+        policy is memoryless, so without them it cannot tell how far into its own stance it is
+        and cannot represent a phase-dependent command at all.
+
         Args:
             sample: Substep index at the frame boundary.
         """
         row = self.trace_device[sample].numpy().astype(np.float64)
-        reference = self._reference_host[sample]
-        phase = (sample / self.substeps - self.touchdown_time_s / self.frame_dt) / self._episode_frames
+        episode_phase = (sample / self.substeps - self.touchdown_time_s / self.frame_dt) / self._episode_frames
+        active = self._contact_sample >= 0
+        elapsed = self.times[sample] - self.times[np.maximum(self._contact_sample, 0)]
+        stance_phase = np.where(active, np.clip(elapsed / max(self.target.duration_s, 1.0e-9), 0.0, 1.0), 0.0)
         observation = np.empty((self.num_worlds, self.observation_dim), dtype=np.float64)
         observation[:, 0] = (row[:, TRACE_LEG_LENGTH] - 1.0) / OBSERVATION_LAYOUT[0][2]
         observation[:, 1] = row[:, TRACE_LEG_RATE] / OBSERVATION_LAYOUT[1][2]
         observation[:, 2] = row[:, TRACE_SHOE_FZ] / self.body_weight_n
         observation[:, 3] = row[:, TRACE_SHOE_FX] / self.body_weight_n
-        observation[:, 4] = reference[_REFERENCE_PITCH] / OBSERVATION_LAYOUT[4][2]
-        observation[:, 5] = reference[_REFERENCE_PITCH_RATE] / OBSERVATION_LAYOUT[5][2]
+        observation[:, 4] = row[:, TRACE_PITCH] / OBSERVATION_LAYOUT[4][2]
+        observation[:, 5] = row[:, TRACE_PITCH_RATE] / OBSERVATION_LAYOUT[5][2]
         observation[:, 6] = row[:, TRACE_ANKLE_Z] / OBSERVATION_LAYOUT[6][2]
         observation[:, 7] = row[:, TRACE_ANKLE_VZ] / OBSERVATION_LAYOUT[7][2]
         observation[:, 8] = self._com_vz(row) / OBSERVATION_LAYOUT[8][2]
-        observation[:, 9] = phase
-        observation[:, 10:13] = self._previous_residual / self.action_scale
+        observation[:, 9] = episode_phase
+        observation[:, 10] = stance_phase
+        observation[:, 11] = active
+        observation[:, 12:] = self._previous_residual / self.action_scale
         return np.ascontiguousarray(observation, dtype=np.float32)
 
     def _com_vz(self, row: np.ndarray) -> np.ndarray:
@@ -888,24 +1329,55 @@ class ImpedanceEnv:
         :meth:`Objective.work_proxy_j` computes from the whole trace. It is a decomposition of
         the objective, not a shaping term.
 
+        Both actuators are charged, because :meth:`Objective.work_proxy_j` charges both and tier 3
+        is paid out here rather than at the terminal frame. Charging only the leg would leave the
+        pitch actuator free in the reward even though the verdict charges it, and a free actuator
+        is one a policy spends without limit. Each actuator is integrated separately before the
+        efficiencies are applied, so the sum over frames is still exactly the episode proxy. With
+        a prescribed pitch motor the ankle column is identically zero and the leg-only reward is
+        unchanged bit for bit.
+
         Args:
             window: Trace rows of the frame including both endpoints, shape
                 [substeps + 1, num_worlds, :data:`TRACE_COLUMNS`].
             start: Substep index of the first row of the window.
         """
         times = self.times[start : start + window.shape[0]]
-        power = window[:, :, TRACE_SOURCE_POWER].astype(np.float64)
-        positive = np.trapezoid(np.clip(power, 0.0, None), times, axis=0)
-        negative = np.trapezoid(np.clip(power, None, 0.0), times, axis=0)
-        proxy = positive / self.objective.positive_efficiency + np.abs(negative) / self.objective.negative_efficiency
+        proxy = self._charge(window[:, :, TRACE_SOURCE_POWER], times)
+        if self.objective.charge_ankle:
+            proxy = proxy + self._charge(window[:, :, TRACE_ANKLE_SOURCE_POWER], times)
         return -proxy / WORK_REWARD_SCALE_J
+
+    def _charge(self, power: np.ndarray, times: np.ndarray) -> np.ndarray:
+        """Charge one actuator's work over a window at the objective's two efficiencies.
+
+        Args:
+            power: Source power of one actuator [W], shape [samples, num_worlds].
+            times: Sample times of the window [s], shape [samples].
+        """
+        source = power.astype(np.float64)
+        positive = np.trapezoid(np.clip(source, 0.0, None), times, axis=0)
+        negative = np.trapezoid(np.clip(source, None, 0.0), times, axis=0)
+        return positive / self.objective.positive_efficiency + np.abs(negative) / self.objective.negative_efficiency
 
     def _momentum_reward(self, window: np.ndarray, start: int) -> np.ndarray:
         """Return the optional momentum-tracking reward of one frame, per world.
 
-        The measured stance momentum history is compared at the frame boundary against the
-        velocity each world has gained since the commanded touchdown instant. Before touchdown
-        the term is zero, because no stance has started to track.
+        The clock and the datum are this world's OWN touchdown, detected online from the traced
+        shoe force with :data:`CONTACT_FORCE_FRACTION`, never the commanded touchdown instant.
+        That is the whole point of this method's current form. The tier 2 momentum excursion is
+        measured on the run's own contact interval, so a dense term anchored on the commanded
+        instant measures a different quantity: a policy can improve it by landing earlier while
+        the excursion it is supposed to predict gets worse. Measured on a trained six-dimensional
+        ankle policy, the commanded anchor ranked that policy BEST of fourteen episodes on the
+        dense term and fourth WORST on the criterion, a Spearman rank correlation of +0.30
+        against the criterion; anchoring on the detected touchdown raises it to +0.91.
+
+        It stays causal. Touchdown is in the past once it is detected, the stance clock is
+        normalized by the MEASURED stance duration rather than by this run's own duration, which
+        is not known until the episode ends, and stance duration is separately graded by its own
+        tier 2 tolerance. Before its own touchdown a world scores zero, because no stance has
+        started to track.
 
         Args:
             window: Trace rows of the frame including both endpoints.
@@ -913,21 +1385,50 @@ class ImpedanceEnv:
         """
         if not self.shape_reward:
             return np.zeros(self.num_worlds)
-        share = self.foot_mass / self.mass
-        end = start + window.shape[0] - 1
-        if start <= self._touchdown_sample <= end:
-            local = self._touchdown_sample - start
-            row = window[local].astype(np.float64)
-            self._touchdown_velocity[:, 0] = share * row[:, TRACE_ANKLE_VX] + (1.0 - share) * row[:, TRACE_UPPER_VX]
-            self._touchdown_velocity[:, 1] = self._com_vz(row)
-        if not self._momentum_active[end]:
+        self._detect_touchdown(window, start)
+        active = self._contact_sample >= 0
+        if not active.any():
             return np.zeros(self.num_worlds)
+        share = self.foot_mass / self.mass
         row = window[-1].astype(np.float64)
         vx = share * row[:, TRACE_ANKLE_VX] + (1.0 - share) * row[:, TRACE_UPPER_VX]
-        error = np.abs(vx - self._touchdown_velocity[:, 0] - self._momentum_vx[end]) + np.abs(
-            self._com_vz(row) - self._touchdown_velocity[:, 1] - self._momentum_vz[end]
+        end = start + window.shape[0] - 1
+        elapsed = self.times[end] - self.times[np.maximum(self._contact_sample, 0)]
+        phase = np.clip(elapsed / max(self.target.duration_s, 1.0e-9), 0.0, 1.0)
+        reference_vx = np.interp(phase, self._momentum_phase, self._momentum_vx)
+        reference_vz = np.interp(phase, self._momentum_phase, self._momentum_vz)
+        error = np.abs(vx - self._contact_velocity[:, 0] - reference_vx) + np.abs(
+            self._com_vz(row) - self._contact_velocity[:, 1] - reference_vz
         )
-        return -error / MOMENTUM_REWARD_SCALE_M_S
+        return -np.where(active, error, 0.0) / MOMENTUM_REWARD_SCALE_M_S
+
+    def _detect_touchdown(self, window: np.ndarray, start: int) -> None:
+        """Record each world's first loaded substep and the COM velocity it landed with.
+
+        The scan covers the whole frame, so touchdown is resolved to the substep the force
+        crossed :data:`CONTACT_FORCE_FRACTION` of body weight rather than to the frame boundary,
+        which is what the tier 2 excursion resolves it to as well. A world is scanned only while
+        it has no touchdown yet, so a shoe that leaves the ground and lands again keeps the datum
+        of the stance it is being scored on.
+
+        Args:
+            window: Trace rows of the frame including both endpoints.
+            start: Substep index of the first row of the window.
+        """
+        pending = self._contact_sample < 0
+        if not pending.any():
+            return
+        loaded = window[:, :, TRACE_SHOE_FZ] > CONTACT_FORCE_FRACTION * self.body_weight_n
+        found = pending & loaded.any(axis=0)
+        if not found.any():
+            return
+        worlds = np.nonzero(found)[0]
+        local = np.argmax(loaded[:, worlds], axis=0)
+        rows = window[local, worlds].astype(np.float64)
+        share = self.foot_mass / self.mass
+        self._contact_sample[worlds] = start + local
+        self._contact_velocity[worlds, 0] = share * rows[:, TRACE_ANKLE_VX] + (1.0 - share) * rows[:, TRACE_UPPER_VX]
+        self._contact_velocity[worlds, 1] = share * rows[:, TRACE_ANKLE_VZ] + (1.0 - share) * rows[:, TRACE_UPPER_VZ]
 
     def _rollout(self, trace: np.ndarray, world: int) -> Rollout:
         """Reduce one finished world to the task-level outcome :class:`Objective` scores.
@@ -942,10 +1443,11 @@ class ImpedanceEnv:
         """
         rows = trace[:, world].astype(np.float64)
         times = self.times
+        ankle_power = rows[:, TRACE_ANKLE_SOURCE_POWER]
         share = self.foot_mass / self.mass
         com_vx = share * rows[:, TRACE_ANKLE_VX] + (1.0 - share) * rows[:, TRACE_UPPER_VX]
         com_vz = share * rows[:, TRACE_ANKLE_VZ] + (1.0 - share) * rows[:, TRACE_UPPER_VZ]
-        loaded = rows[:, TRACE_SHOE_FZ] > 0.02 * self.body_weight_n
+        loaded = rows[:, TRACE_SHOE_FZ] > CONTACT_FORCE_FRACTION * self.body_weight_n
         finite = bool(np.all(np.isfinite(rows)))
         power = rows[:, TRACE_SOURCE_POWER]
         return Rollout(
@@ -972,6 +1474,15 @@ class ImpedanceEnv:
             damper_dissipation_j=-float(np.trapezoid(rows[:, TRACE_DAMPER_POWER], times)) if finite else float("inf"),
             positive_work_j=float(np.trapezoid(np.clip(power, 0.0, None), times)) if finite else float("nan"),
             negative_work_j=float(np.trapezoid(np.clip(power, None, 0.0), times)) if finite else float("nan"),
+            # Negative work stays NEGATIVE. :meth:`Objective.ankle_work_proxy_j` takes the
+            # absolute value itself and charges the two halves at different efficiencies, so
+            # pre-absing here would silently overcharge nothing and undercharge the sign test.
+            ankle_positive_work_j=float(np.trapezoid(np.clip(ankle_power, 0.0, None), times))
+            if finite
+            else float("nan"),
+            ankle_negative_work_j=float(np.trapezoid(np.clip(ankle_power, None, 0.0), times))
+            if finite
+            else float("nan"),
         )
 
     def _terminal(self) -> tuple[np.ndarray, list, list]:
@@ -1019,6 +1530,15 @@ def _create_parser():
         default=Path("outputs/impedance_instron/eval_j/trace.csv"),
         help="Stored open-loop trace the zero-action episode is checked against, when present.",
     )
+    parser.add_argument(
+        "--ankle",
+        action="store_true",
+        help=(
+            "Also drive foot pitch with a commanded rotational impedance seeded from the measured "
+            "pitch, which widens the action to six dimensions and reports how closely the stiff "
+            "limit reproduces the prescribed pitch motor."
+        ),
+    )
     return parser
 
 
@@ -1041,14 +1561,32 @@ def main():
     """Run one zero-action episode, check it against the solved command, and time the batch.
 
     A zero residual is the open-loop command, so this both demonstrates the interface and is the
-    acceptance check of the environment: the printed differences are the float-atomic
-    reproducibility band of the elastic foundation, not a modelling error.
+    acceptance check of the environment: with the prescribed pitch motor the printed differences
+    are the float32 rounding of a deterministic rig against a trace stored before the foundation
+    reduction was made deterministic, not a modelling error.
+
+    With ``--ankle`` the same episode also runs with foot pitch driven by a commanded rotational
+    impedance seeded to hold the measured pitch. The printed pitch difference is how far the
+    ankle actuator sits from the prescribed motor it is the stiff limit of; it cannot reach zero
+    from inside the ankle command box, whose ceiling is a finite 2e4 N·m/rad.
     """
     args = _create_parser().parse_args()
     nominal = np.asarray(json.loads(args.nominal.read_text())["parameters"], dtype=float)
     stored = _reference_trace(args.reference_trace)
+    ankle, prescribed_pitch = None, None
+    if args.ankle:
+        probe = ImpedanceEnv(1, args, nominal)
+        probe.reset()
+        for _ in range(probe.episode_frames):
+            probe.step(np.zeros((1, probe.action_dim)))
+        prescribed_pitch = probe.trace(0)[:, TRACE_PITCH].copy()
+        # The measured pitch is the equilibrium the prescribed motor imposed, so seeding from it
+        # keeps the prescribed rollout as the stiff limit of the ankle impedance.
+        args.ankle_equilibrium = "measured"
+        ankle = ankle_seed(args, probe.times, probe.reference[:, _REFERENCE_PITCH].astype(float))
+        del probe
     for worlds in args.worlds:
-        env = ImpedanceEnv(worlds, args, nominal)
+        env = ImpedanceEnv(worlds, args, nominal, ankle=ankle)
         actions = np.zeros((worlds, env.action_dim))
         env.reset()
         for _ in range(env.episode_frames):
@@ -1072,6 +1610,13 @@ def main():
                 f"             zero-action vs {args.reference_trace}: "
                 f"shoe Fz {force:.3e} N ({force / np.abs(stored['shoe_fz_n']).max():.2e} of peak), "
                 f"leg length {length:.3e} m ({length / np.abs(stored['leg_length_m']).max():.2e} of peak)"
+            )
+        if prescribed_pitch is not None:
+            difference = np.abs(env.trace(0)[:, TRACE_PITCH] - prescribed_pitch).max()
+            print(
+                f"             ankle stiff limit at {env.realised_command(0)['ankle_stiffness_n_m_per_rad'].max():.0f} "
+                f"N m/rad: pitch {difference:.3e} rad "
+                f"({difference / np.ptp(prescribed_pitch):.2e} of the prescribed pitch span)"
             )
         del env
 

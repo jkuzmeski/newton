@@ -13,6 +13,14 @@ The policy is a residual on the solved 15-parameter spline command of
 :class:`projects.impedance_instron.control.LegCommand`. Its action is
 ``[dL0, dlogK, dzeta]``, applied by the environment around that nominal.
 
+With ``--ankle`` the fixture pitch stops being a replayed measurement and
+becomes a decision variable: the environment adds a rotational
+equilibrium-point ankle, the action grows to
+``[dL0, dlogK, dzeta, dtheta0, dlogK_theta, dzeta_theta]``, and the ankle
+command those residuals act around is stored in the checkpoint beside the leg
+nominal. The example's ``--ankle-params`` supplies a solved ankle command
+instead of the fitted seed and switches the ankle on by itself.
+
 Torch is an optional extra of this repository, so it is imported lazily inside
 the functions that need it. Importing this module therefore works without
 torch; only training, checkpoint loading, and ONNX export require it::
@@ -20,8 +28,8 @@ torch; only training, checkpoint loading, and ONNX export require it::
     uv run --extra examples --extra torch-cu12 -m projects.impedance_instron.train --iterations 200
 
 A checkpoint stores the network weights, the observation normalization
-statistics, the nominal command, the environment configuration, and the
-task-level evaluation history together. The statistics are part of the policy:
+statistics, the leg nominal, the ankle nominal, the environment configuration,
+and the task-level evaluation history together. The statistics are part of the policy:
 a policy deployed without them sees observations in the wrong units and
 silently misbehaves. The evaluation history is what makes a finished run
 self-describing: it carries the tier 2 excursions and the tier 3 work proxy of
@@ -31,9 +39,11 @@ every ``--eval-interval`` iterations, so the run no longer depends on its log.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import math
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -49,19 +59,24 @@ __all__ = [
     "PPOConfig",
     "PPOTrainer",
     "RunningNormalizer",
+    "ankle_nominal",
     "clipped_surrogate",
     "compute_advantages",
     "create_actor_critic",
+    "evaluate_frozen",
     "evaluate_policy",
     "evaluation_physics",
     "evaluation_record",
     "explained_variance",
     "export_onnx",
+    "frozen_output_path",
     "load_nominal",
     "load_policy",
     "main",
+    "material_identity",
     "value_loss",
     "waveform_path",
+    "write_record",
     "write_waveform",
 ]
 
@@ -472,6 +487,9 @@ class PPOConfig:
     eval_interval: int = 25
     """Iterations between deterministic evaluations; zero disables them."""
 
+    eval_waveform_stride: int = 1
+    """Substeps between stored waveform samples; one is full resolution."""
+
 
 @dataclass
 class IterationReport:
@@ -592,6 +610,9 @@ class EvalRecord:
     trace: str = "none"
     """Waveform file written for this evaluation, or the literal ``none``."""
 
+    artifact: str = "unknown"
+    """Shoe the episode ran on: artifact stem and material hash, one token."""
+
     def line(self) -> str:
         """Return the single stdout record, parsed downstream by the dashboard.
 
@@ -619,7 +640,8 @@ class EvalRecord:
             f"com_z_rms_mm={self.com_z_rms_mm:.3f} "
             f"contact_ms={self.contact_ms:.3f} "
             f"peak_compression_mm={self.peak_compression_mm:.3f} "
-            f"trace={self.trace}"
+            f"trace={self.trace} "
+            f"artifact={self.artifact}"
         )
 
 
@@ -639,6 +661,9 @@ EVAL_TRACE_COLUMNS: dict[str, int] = {
 }
 REFERENCE_ANKLE_Z = 1
 """Reference column holding the prescribed ankle height [m]."""
+
+REFERENCE_PITCH = 2
+"""Reference column holding the commanded fixture pitch [rad]."""
 
 REFERENCE_COM_Z = 4
 """Reference column holding the virtual upper-mass height [m]."""
@@ -670,7 +695,7 @@ WAVEFORM_KEYS = (
     "stiffness_n_m",
     "damping_ratio",
 )
-"""Per-sample waveforms written next to the checkpoint for the overlay plots."""
+"""Waveforms written next to the checkpoint, one sample per stored substep."""
 
 PHYSICAL_METRICS = (
     "peak_fz_n",
@@ -685,6 +710,91 @@ PHYSICAL_METRICS = (
     "peak_compression_mm",
 )
 """Physical evaluation metrics, all reported over the contact window of world 0."""
+
+
+def material_identity(env: Any, world: int = 0) -> str:
+    """Return one whitespace-free token naming the shoe an episode ran on.
+
+    A comparison whose outputs cannot say which shoe produced them is not a
+    comparison, so the token is derived from the foam the environment actually
+    simulated, not from the command line: the artifact stem followed by a hash
+    of the material constants. It reads the per-world column-bed block first,
+    because :meth:`ImpedanceEnv.set_world_materials` re-materializes a world
+    without touching the artifact path or the environment's construction-time
+    material, and an evaluation scores world 0. Call it per evaluation, never
+    cache it. Environments without a shoe, such as a test double, report
+    ``"unknown"``.
+
+    Args:
+        env: Environment the episode ran on.
+        world: Index of the world the token describes.
+    """
+    args = getattr(env, "args", None)
+    artifact = getattr(args, "artifact", None)
+    label = _token(Path(str(artifact)).stem) if artifact else "unknown"
+    payload = _world_material_payload(env, world)
+    if payload is None:
+        material = getattr(env, "material", None)
+        if material is not None:
+            try:
+                payload = json.dumps(asdict(material), sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                payload = repr(material)
+        elif artifact is not None:
+            try:
+                payload = Path(str(artifact)).read_text()
+            except OSError:
+                payload = str(artifact)
+    if payload is None:
+        return label
+    digest = hashlib.sha1(payload.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+    return f"{label}-{digest}"
+
+
+def _world_material_payload(env: Any, world: int) -> str | None:
+    """Return a stable description of one world's foam, or ``None``.
+
+    Reads the host-side column-bed block of
+    :class:`projects.digital_shoe.runtime.MidsoleFoundation`, which is the only
+    place a randomized world's constants live. Only its numeric fields are
+    used: the block also carries Warp internals whose text contains memory
+    addresses and would change the hash on every run.
+
+    Args:
+        env: Environment the episode ran on.
+        world: Index of the world to describe.
+    """
+    blocks = getattr(getattr(env, "foundation", None), "world_blocks", None)
+    if blocks is None:
+        return None
+    try:
+        block = blocks[world]
+    except (TypeError, KeyError, IndexError):
+        return None
+    names: list[str] = []
+    for klass in type(block).__mro__:
+        names.extend(getattr(klass, "__annotations__", None) or {})
+    constants = {}
+    for name in sorted(set(names)):
+        value = getattr(block, name, None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            constants[name] = float(value)
+    if constants:
+        return json.dumps(constants, sort_keys=True)
+    try:
+        return bytes(block.__ctype__()).hex()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _token(text: str) -> str:
+    """Return a whitespace-free, record-safe form of a label.
+
+    Args:
+        text: Arbitrary label, such as a file stem.
+    """
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "-", str(text)).strip("-")
+    return cleaned or "unknown"
 
 
 def _trace_column(env: Any, name: str) -> int:
@@ -715,7 +825,9 @@ def _reference_rows(env: Any) -> np.ndarray | None:
     return rows if rows.ndim == 2 and rows.shape[1] > REFERENCE_SHOE_FX else None
 
 
-def evaluation_physics(env: Any, world: int = 0) -> tuple[dict[str, float], dict[str, np.ndarray] | None]:
+def evaluation_physics(
+    env: Any, world: int = 0, stride: int = 1
+) -> tuple[dict[str, float], dict[str, np.ndarray] | None]:
     """Reduce one evaluated episode to physical metrics and sampled waveforms.
 
     Everything is measured over the contact window, the samples whose shoe
@@ -726,9 +838,17 @@ def evaluation_physics(env: Any, world: int = 0) -> tuple[dict[str, float], dict
     condition; the reported height error is therefore a drift against the
     measured centroid.
 
+    The waveforms are written at the resolution they were simulated at, one
+    sample per substep, ``frames * substeps + 1`` points, 2881 for the rig. A
+    coarser archive is not merely less detailed: a steep but orderly unloading
+    ramp, 14 N per substep, reads as a 900 N step when it is plotted at one
+    sample per frame, which invites a diagnosis of contact instability that the
+    substep trace does not support.
+
     Args:
         env: Environment that has just finished an episode.
         world: Index of the world to describe.
+        stride: Substeps between stored samples; one keeps full resolution.
     """
     metrics = dict.fromkeys(PHYSICAL_METRICS, float("nan"))
     try:
@@ -789,45 +909,99 @@ def evaluation_physics(env: Any, world: int = 0) -> tuple[dict[str, float], dict
         command = env.realised_command(world)
     except (AttributeError, TypeError, ValueError, IndexError):
         command = {}
-    # One sample per frame boundary keeps the file small enough to rewrite every
-    # evaluation while still resolving the force trace.
-    stride = max(1, int(getattr(env, "substeps", 1)))
-    sampled = np.arange(0, trace.shape[0], stride)
+    step = max(1, int(stride))
+    sampled = np.arange(0, trace.shape[0], step)
     if sampled[-1] != trace.shape[0] - 1:
         sampled = np.append(sampled, trace.shape[0] - 1)
 
     def _sampled(values, fallback: float = float("nan")) -> np.ndarray:
-        """Return one waveform sampled at the frame boundaries.
+        """Return one stored waveform, as float32 like the trace it comes from.
 
         Args:
             values: Per-substep series, or ``None`` when the field is missing.
             fallback: Value used when the series is unavailable.
         """
         if values is None:
-            return np.full(sampled.size, fallback, dtype=np.float64)
+            return np.full(sampled.size, fallback, dtype=np.float32)
         series = np.asarray(values, dtype=np.float64)
         if series.shape[0] < trace.shape[0]:
-            return np.full(sampled.size, fallback, dtype=np.float64)
-        return series[sampled]
+            return np.full(sampled.size, fallback, dtype=np.float32)
+        return series[sampled].astype(np.float32)
 
     waveform = {
-        "time_s": times[sampled],
-        "shoe_fz_n": fz[sampled],
-        "reference_fz_n": reference_fz[sampled],
-        "shoe_fx_n": fx[sampled],
-        "reference_fx_n": reference_fx[sampled],
-        "com_z_m": com_z[sampled],
-        "reference_com_z_m": reference_com_z[sampled],
-        "com_vz_m_s": com_vz[sampled],
-        "reference_com_vz_m_s": reference_com_vz[sampled],
-        "leg_length_m": trace[:, _trace_column(env, "TRACE_LEG_LENGTH")][sampled],
+        "time_s": times[sampled].astype(np.float32),
+        "shoe_fz_n": fz[sampled].astype(np.float32),
+        "reference_fz_n": reference_fz[sampled].astype(np.float32),
+        "shoe_fx_n": fx[sampled].astype(np.float32),
+        "reference_fx_n": reference_fx[sampled].astype(np.float32),
+        "com_z_m": com_z[sampled].astype(np.float32),
+        "reference_com_z_m": reference_com_z[sampled].astype(np.float32),
+        "com_vz_m_s": com_vz[sampled].astype(np.float32),
+        "reference_com_vz_m_s": reference_com_vz[sampled].astype(np.float32),
+        "leg_length_m": trace[:, _trace_column(env, "TRACE_LEG_LENGTH")][sampled].astype(np.float32),
         "commanded_length_m": _sampled(command.get("length_m")),
         "stiffness_n_m": _sampled(command.get("stiffness_n_m")),
         "damping_ratio": _sampled(command.get("damping_ratio")),
         "contact_start_s": np.asarray(start_s, dtype=np.float64),
         "contact_end_s": np.asarray(end_s, dtype=np.float64),
+        # Stored so a consumer can label the time axis without inferring it.
+        "substep_dt_s": np.asarray(_substep_dt(env, times), dtype=np.float64),
+        "stride": np.asarray(step, dtype=np.int64),
     }
+
     return metrics, waveform
+
+
+def _substep_dt(env: Any, times: np.ndarray) -> float:
+    """Return the substep of the episode [s].
+
+    Args:
+        env: Environment that produced the trace.
+        times: Sample times of the trace [s].
+    """
+    dt = getattr(env, "sim_dt", None)
+    if dt is not None and float(dt) > 0.0:
+        return float(dt)
+    return float(np.median(np.diff(times))) if times.size > 1 else float("nan")
+
+
+def frozen_output_path(checkpoint: str | Path, requested: str | Path | None = None, artifact: str = "unknown") -> Path:
+    """Return the base path of a frozen evaluation's artifacts.
+
+    The same frozen policy is deployed on one material after another, so a base
+    derived from the checkpoint alone would have every material overwrite the
+    last. The default therefore appends the shoe token of
+    :func:`material_identity` to the checkpoint stem, and ``--eval-output``
+    overrides it outright.
+
+    Args:
+        checkpoint: Checkpoint being evaluated.
+        requested: Explicit base path from ``--eval-output``.
+        artifact: Shoe token of the environment being evaluated.
+    """
+    if requested is not None:
+        return Path(requested)
+    source = Path(checkpoint)
+    return source.parent / f"{_token(source.stem)}_{_token(artifact)}"
+
+
+def write_record(record: EvalRecord, output: str | Path | None) -> str:
+    """Write one evaluation record beside its archive, returning the path.
+
+    Args:
+        record: Record produced by :func:`evaluate_frozen`.
+        output: Base path; the record is written to ``<base>.eval.json``.
+    """
+    if output is None:
+        return "none"
+    destination = Path(output).with_suffix(".eval.json")
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(asdict(record), indent=2))
+    except Exception as exc:
+        print(f"warning: could not write {destination}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        return "none"
+    return str(destination)
 
 
 def waveform_path(output: str | Path | None) -> Path | None:
@@ -839,25 +1013,43 @@ def waveform_path(output: str | Path | None) -> Path | None:
     return None if output is None else Path(output).with_suffix(".eval.npz")
 
 
-def write_waveform(waveform: dict[str, np.ndarray] | None, output: str | Path | None, iteration: int) -> str:
+def write_waveform(
+    waveform: dict[str, np.ndarray] | None,
+    output: str | Path | None,
+    iteration: int,
+    artifact: str = "unknown",
+) -> str:
     """Write the latest evaluation waveforms, returning the path or ``"none"``.
 
     One file per run, overwritten on every evaluation, so the artifact always
-    describes the most recent evaluation. A diagnostic must never end a run, so
-    any failure is reported as ``"none"`` instead of raising.
+    describes the most recent evaluation. The waveforms are float32 at substep
+    resolution, about 160 kB compressed for a 2881-substep episode, which is
+    negligible beside the checkpoint and is what lets an overlay be drawn on
+    the same axes as a substep trace. A diagnostic must never end a run, so any
+    failure is reported as ``"none"`` instead of raising.
 
     Args:
         waveform: Arrays produced by :func:`evaluation_physics`.
-        output: Checkpoint path the file is written next to.
+        output: Base path the file is derived from; see :func:`waveform_path`.
         iteration: Iteration stamped into the file.
+        artifact: Shoe token stamped into the file, from
+            :func:`material_identity`.
     """
     destination = waveform_path(output)
     if not waveform or destination is None:
         return "none"
     try:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(destination, iteration=np.asarray(int(iteration)), **waveform)
-    except Exception:
+        np.savez_compressed(
+            destination,
+            iteration=np.asarray(int(iteration)),
+            artifact=np.asarray(str(artifact)),
+            **waveform,
+        )
+    except Exception as exc:
+        # Reported rather than swallowed: a material sweep that silently loses
+        # its waveforms looks like a result with no diagnostics, not a failure.
+        print(f"warning: could not write {destination}: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         return "none"
     return str(destination)
 
@@ -886,6 +1078,7 @@ def evaluation_record(
     world: int = 0,
     metrics: dict[str, float] | None = None,
     trace: str = "none",
+    artifact: str = "unknown",
 ) -> EvalRecord:
     """Reduce the terminal info of an evaluation episode to one record.
 
@@ -903,6 +1096,7 @@ def evaluation_record(
         metrics: Physical metrics from :func:`evaluation_physics`; missing
             entries stay NaN.
         trace: Waveform file written for this evaluation, or ``"none"``.
+        artifact: Shoe token from :func:`material_identity`.
     """
     fields = info if isinstance(info, dict) else {}
     verdicts = fields.get("verdicts")
@@ -942,6 +1136,7 @@ def evaluation_record(
         violation_total=float(sum(float(amount) for amount in violations.values())),
         eval_return=float(np.asarray(episode_returns, dtype=np.float64).reshape(-1)[world]),
         trace=str(trace),
+        artifact=_token(artifact),
         **physical,
     )
 
@@ -1013,6 +1208,8 @@ class PPOTrainer:
         config: PPOConfig,
         nominal: np.ndarray,
         env_config: dict[str, Any] | None = None,
+        ankle: np.ndarray | None = None,
+        ankle_source: str = "none",
     ):
         """Seed torch, build the networks, and size the rollout buffer.
 
@@ -1021,12 +1218,18 @@ class PPOTrainer:
             config: Training settings.
             nominal: Solved 15-parameter command the actions are residual to.
             env_config: Serializable environment settings stored in checkpoints.
+            ankle: Ankle command vector the ankle residuals act around, or
+                ``None`` when the fixture pitch is prescribed.
+            ankle_source: Provenance of ``ankle``: ``"none"``, ``"seed"``, or a
+                path to a solved ankle command.
         """
         torch = _require_torch()
         self.torch = torch
         self.env = env
         self.config = config
         self.nominal = np.asarray(nominal, dtype=np.float64)
+        self.ankle = None if ankle is None else np.asarray(ankle, dtype=np.float64)
+        self.ankle_source = str(ankle_source)
         self.env_config = dict(env_config or {})
         self.steps = int(env.episode_frames)
         self.num_worlds = int(config.num_worlds)
@@ -1228,16 +1431,25 @@ class PPOTrainer:
 
         Args:
             iteration: Iteration index stamped on the record.
-            output: Checkpoint path; the waveform file is written next to it.
+            output: Checkpoint path; the waveform file is written next to it,
+                named by :func:`frozen_output_path` for world 0's material, so
+                a fixed-shoe run rewrites one archive and a randomized run
+                keeps one archive per foam.
         """
         rollout = self.collect(deterministic=True)
-        metrics, waveform = evaluation_physics(self.env)
+        metrics, waveform = evaluation_physics(self.env, stride=self.config.eval_waveform_stride)
+        # Recomputed every evaluation, and per material, so a randomized run
+        # cannot leave one overwritten archive that silently belongs to
+        # whichever foam happened to be evaluated last.
+        artifact = material_identity(self.env)
+        base = None if output is None else frozen_output_path(output, None, artifact)
         record = evaluation_record(
             iteration,
             rollout.infos[-1] if rollout.infos else {},
             rollout.episode_returns,
             metrics=metrics,
-            trace=write_waveform(waveform, output, iteration),
+            trace=write_waveform(waveform, base, iteration, artifact),
+            artifact=artifact,
         )
         self.eval_history.append(asdict(record))
         return record
@@ -1260,6 +1472,12 @@ class PPOTrainer:
             "config": asdict(self.config),
             "normalizer": self.normalizer.state(),
             "nominal": self.nominal.tolist(),
+            # The ankle nominal is as load-bearing as the normalization
+            # statistics: the residuals mean nothing without the command they
+            # were trained around, and a checkpoint that cannot rebuild its own
+            # controller invalidates every material comparison made with it.
+            "ankle": None if self.ankle is None else self.ankle.tolist(),
+            "ankle_source": self.ankle_source,
             "env_config": self.env_config,
             "eval_history": list(self.eval_history),
         }
@@ -1281,9 +1499,11 @@ class FrozenPolicy:
 
     The instance is callable, so both ``policy(obs)`` and ``policy.act(obs)``
     return actions. It carries the observation normalization statistics, the
-    nominal command, the environment configuration it was trained with, and
-    the evaluation curve of the run, because a policy without them is not
-    reproducible on another shoe.
+    leg nominal, the ankle nominal, the environment configuration it was
+    trained with, and the evaluation curve of the run, because a policy without
+    them is not reproducible on another shoe. :attr:`ankle` is ``None`` for a
+    prescribed-pitch policy and is the vector the ankle residuals act around
+    otherwise; deploying without it rebuilds a different controller.
     """
 
     def __init__(self, checkpoint: dict[str, Any], device: str = "cpu"):
@@ -1306,6 +1526,11 @@ class FrozenPolicy:
         self.normalizer = RunningNormalizer.from_state(checkpoint["normalizer"])
         self.normalizer.eval()
         self.nominal = np.asarray(checkpoint["nominal"], dtype=np.float64)
+        # Absent for a prescribed-pitch checkpoint, which is what every
+        # checkpoint written before the ankle actuator existed is.
+        stored_ankle = checkpoint.get("ankle")
+        self.ankle = None if stored_ankle is None else np.asarray(stored_ankle, dtype=np.float64)
+        self.ankle_source = str(checkpoint.get("ankle_source", "none"))
         self.env_config = dict(checkpoint.get("env_config", {}))
         self.config = dict(checkpoint.get("config", {}))
         self.eval_history = list(checkpoint.get("eval_history", []))
@@ -1406,6 +1631,25 @@ def export_onnx(policy: FrozenPolicy, path: str | Path) -> Path | None:
     return destination
 
 
+def _run_episode(policy: Callable[[np.ndarray], np.ndarray], env) -> tuple[np.ndarray, dict]:
+    """Run one synchronized episode and return its returns and terminal info.
+
+    Args:
+        policy: Callable mapping raw observations to actions.
+        env: Vectorized environment exposing the ``ImpedanceEnv`` API.
+    """
+    steps = int(env.episode_frames)
+    observations = np.asarray(env.reset(), dtype=np.float32)
+    total = np.zeros(observations.shape[0], dtype=np.float64)
+    info: dict = {}
+    for step in range(steps):
+        observations, reward, done, info = env.step(np.asarray(policy(observations), dtype=np.float32))
+        observations = np.asarray(observations, dtype=np.float32)
+        total += np.asarray(reward, dtype=np.float64)
+        _assert_synchronized(np.asarray(done, dtype=bool), step, steps)
+    return total, info if isinstance(info, dict) else {}
+
+
 def evaluate_policy(policy: Callable[[np.ndarray], np.ndarray], env, episodes: int = 1) -> np.ndarray:
     """Return episode returns of a frozen policy on a vectorized environment.
 
@@ -1414,18 +1658,52 @@ def evaluate_policy(policy: Callable[[np.ndarray], np.ndarray], env, episodes: i
         env: Vectorized environment exposing the ``ImpedanceEnv`` API.
         episodes: Synchronized episodes to run in every world.
     """
-    steps = int(env.episode_frames)
-    collected = []
-    for _ in range(episodes):
-        observations = np.asarray(env.reset(), dtype=np.float32)
-        total = np.zeros(observations.shape[0], dtype=np.float64)
-        for step in range(steps):
-            observations, reward, done, _ = env.step(np.asarray(policy(observations), dtype=np.float32))
-            observations = np.asarray(observations, dtype=np.float32)
-            total += np.asarray(reward, dtype=np.float64)
-            _assert_synchronized(np.asarray(done, dtype=bool), step, steps)
-        collected.append(total)
-    return np.concatenate(collected)
+    return np.concatenate([_run_episode(policy, env)[0] for _ in range(episodes)])
+
+
+def evaluate_frozen(
+    policy: Callable[[np.ndarray], np.ndarray],
+    env,
+    episodes: int = 1,
+    output: str | Path | None = None,
+    iteration: int = 0,
+    stride: int = 1,
+) -> tuple[np.ndarray, EvalRecord]:
+    """Score a frozen policy and produce the same diagnostics as training.
+
+    Deploying a frozen policy on a new foam is the measurement of the whole
+    experiment, so it must emit what a training evaluation emits: the record
+    line, the physical metrics, and the substep waveform archive. The record
+    and the archive describe the FIRST episode: with a frozen policy, a frozen
+    normalizer, and a fixed material, the rig is deterministic, so every later
+    episode of the same call repeats it. The returns cover every episode and
+    are reported exactly as :func:`evaluate_policy` reports them.
+
+    Args:
+        policy: Callable mapping raw observations to actions.
+        env: Vectorized environment exposing the ``ImpedanceEnv`` API.
+        episodes: Synchronized episodes to run in every world.
+        output: Base path the archive is derived from; see :func:`waveform_path`.
+        iteration: Iteration stamped on the record, zero for a frozen run.
+        stride: Substeps between stored waveform samples.
+    """
+    artifact = material_identity(env)
+    collected: list[np.ndarray] = []
+    record: EvalRecord | None = None
+    for index in range(max(1, int(episodes))):
+        returns, info = _run_episode(policy, env)
+        collected.append(returns)
+        if index == 0:
+            metrics, waveform = evaluation_physics(env, stride=stride)
+            record = evaluation_record(
+                iteration,
+                info,
+                returns,
+                metrics=metrics,
+                trace=write_waveform(waveform, output, iteration, artifact),
+                artifact=artifact,
+            )
+    return np.concatenate(collected), record
 
 
 def load_nominal(path: str | Path) -> np.ndarray:
@@ -1437,6 +1715,35 @@ def load_nominal(path: str | Path) -> np.ndarray:
     document = json.loads(Path(path).read_text())
     parameters = document["parameters"] if isinstance(document, dict) else document
     return np.asarray(parameters, dtype=np.float64)
+
+
+def ankle_nominal(args: argparse.Namespace, nominal: np.ndarray) -> tuple[np.ndarray | None, str]:
+    """Return the ankle command the ankle residuals act around, and its provenance.
+
+    ``--ankle-params`` wins when it is given, because a solved ankle command is
+    always preferable to a seed. Otherwise the seed is fitted to the measured
+    fixture pitch, which is only reachable through a built environment, so a
+    throwaway one-world environment is constructed, read, and dropped before
+    the training batch is built. Six angle knots fit that pitch to 0.0998 rad,
+    which then bounds the task rather than the ankle stiffness does, so the
+    trainer defaults ``--ankle-angle-knots`` to 12.
+
+    Args:
+        args: Parsed command line of :func:`create_trainer_parser`.
+        nominal: Solved leg command, needed only to build the probe.
+    """
+    params = getattr(args, "ankle_params", None)
+    if params is not None:
+        return load_nominal(params), str(params)
+    if not getattr(args, "ankle", False):
+        return None, "none"
+    from .env import ImpedanceEnv, ankle_seed  # noqa: PLC0415 - built on Newton, so keep it out of import time
+
+    probe = ImpedanceEnv(1, args, nominal)
+    times = np.asarray(probe.times, dtype=float)
+    pitch = np.asarray(probe.reference[:, REFERENCE_PITCH], dtype=float)
+    del probe
+    return ankle_seed(args, times, pitch), "seed"
 
 
 def create_trainer_parser() -> argparse.ArgumentParser:
@@ -1455,7 +1762,20 @@ def create_trainer_parser() -> argparse.ArgumentParser:
         conflict_handler="resolve",
         description="Train or evaluate the residual impedance policy with PPO.",
     )
-    parser.set_defaults(viewer="null")
+    # Twelve angle knots, not the six of the example: a six-knot least-squares
+    # fit of the measured pitch is itself 0.0998 rad off, and that fit, not the
+    # ankle stiffness, then becomes the binding limit on the task.
+    parser.set_defaults(viewer="null", ankle_angle_knots=12)
+    parser.add_argument(
+        "--ankle",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Make the fixture pitch a decision variable: seed the ankle impedance from the measured "
+            "pitch and give the policy three more residuals. The example's --ankle-params overrides "
+            "the seed with a solved ankle command and switches the ankle on by itself."
+        ),
+    )
     parser.add_argument("--num-worlds", type=int, default=64, help="Environments stepped in lockstep.")
     parser.add_argument("--iterations", type=int, default=200, help="Policy updates.")
     parser.add_argument("--learning-rate", type=float, default=3.0e-4, help="Adam step size.")
@@ -1496,10 +1816,26 @@ def create_trainer_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-only", type=Path, default=None, help="Evaluate this frozen checkpoint and exit.")
     parser.add_argument("--eval-episodes", type=int, default=1, help="Episodes per world when evaluating.")
     parser.add_argument(
+        "--eval-output",
+        type=Path,
+        default=None,
+        help=(
+            "Base path for the frozen-evaluation record and waveform archive. The default is the "
+            "checkpoint stem plus the shoe token, so evaluating one frozen policy on several "
+            "materials never overwrites the previous material's diagnostics."
+        ),
+    )
+    parser.add_argument(
         "--eval-interval",
         type=int,
         default=25,
         help="Iterations between deterministic task-level evaluations; 0 disables them.",
+    )
+    parser.add_argument(
+        "--eval-waveform-stride",
+        type=int,
+        default=1,
+        help="Substeps between samples in the evaluation waveform archive; 1 stores every substep.",
     )
     parser.add_argument(
         "--onnx",
@@ -1527,7 +1863,9 @@ _TRAINING_ARGUMENTS = frozenset(
         "device",
         "eval_only",
         "eval_episodes",
+        "eval_output",
         "eval_interval",
+        "eval_waveform_stride",
         "onnx",
     }
 )
@@ -1584,6 +1922,14 @@ def _report_returns(label: str, returns: np.ndarray) -> None:
 
 def main():
     """Train, or evaluate a frozen checkpoint, on the impedance environment."""
+    import warnings  # noqa: PLC0415 - warn only when the legacy command is invoked
+
+    warnings.warn(
+        "This legacy impedance experiment is deprecated. Use "
+        "python -m projects.impedance_instron --help for the two-stiffness workflow.",
+        FutureWarning,
+        stacklevel=2,
+    )
     import warp as wp  # noqa: PLC0415 - keep the module importable without a Warp import at load time
 
     from .env import ImpedanceEnv  # noqa: PLC0415 - built on Newton, so keep it out of import time
@@ -1596,8 +1942,34 @@ def main():
     device = _default_device(args.device)
     if args.eval_only is not None:
         policy = load_policy(args.eval_only, device=device)
-        env = ImpedanceEnv(args.num_worlds, args, policy.nominal, seed=args.seed)
-        _report_returns(f"frozen {args.eval_only}", evaluate_policy(policy, env, args.eval_episodes))
+        # The checkpoint, never the command line, decides the controller a
+        # frozen policy is deployed with; a stale flag would rebuild a
+        # different rig under the same weights.
+        args.ankle = policy.ankle is not None
+        args.ankle_params = None
+        args.ankle_control = "impedance" if args.ankle else "prescribed"
+        env = ImpedanceEnv(args.num_worlds, args, policy.nominal, seed=args.seed, ankle=policy.ankle)
+        artifact = material_identity(env)
+        base = frozen_output_path(args.eval_only, args.eval_output, artifact)
+        print(
+            f"frozen {args.eval_only}: ankle={policy.ankle_source} artifact={artifact} "
+            f"actions={env.action_dim} observations={env.observation_dim}",
+            flush=True,
+        )
+        # Stamp the record with the iteration the weights came from, so a
+        # material comparison can say which policy produced it.
+        trained = int(policy.eval_history[-1]["iteration"]) if policy.eval_history else 0
+        returns, record = evaluate_frozen(
+            policy,
+            env,
+            args.eval_episodes,
+            output=base,
+            iteration=trained,
+            stride=args.eval_waveform_stride,
+        )
+        print(record.line(), flush=True)
+        print(f"record: {write_record(record, base)}", flush=True)
+        _report_returns(f"frozen {args.eval_only}", returns)
         return
 
     nominal = load_nominal(args.nominal)
@@ -1614,9 +1986,23 @@ def main():
         seed=args.seed,
         device=device,
         eval_interval=args.eval_interval,
+        eval_waveform_stride=args.eval_waveform_stride,
     )
-    env = ImpedanceEnv(args.num_worlds, args, nominal, seed=args.seed)
-    trainer = PPOTrainer(env, config, nominal, environment_config(args))
+    ankle, ankle_source = ankle_nominal(args, nominal)
+    env = ImpedanceEnv(args.num_worlds, args, nominal, seed=args.seed, ankle=ankle)
+    print(
+        f"ankle={ankle_source} parameters={0 if ankle is None else ankle.size} "
+        f"actions={env.action_dim} observations={env.observation_dim}",
+        flush=True,
+    )
+    trainer = PPOTrainer(
+        env,
+        config,
+        nominal,
+        environment_config(args),
+        ankle=ankle,
+        ankle_source=ankle_source,
+    )
     trainer.train(output=args.output)
     trainer.save(args.output)
     _report_returns("frozen", trainer.evaluate(args.eval_episodes))

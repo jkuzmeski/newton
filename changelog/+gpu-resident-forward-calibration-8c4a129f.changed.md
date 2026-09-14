@@ -1,0 +1,1 @@
+Run Digital Instron forward calibration through a cached GPU-resident workspace with CUDA graph sweep blocks. Preserve the shared two-term material law, bounded SciPy objective and existing stopping schedule while replacing full-field host round trips with scalar diagnostics and final force readback.

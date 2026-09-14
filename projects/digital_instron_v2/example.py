@@ -8,7 +8,7 @@
 # in projects/digital_instron_v2. The midsole is a live bed of nonlinear
 # viscoelastic Hyperfoam-Maxwell-Pasternak springs (see dynamics.py) sampled
 # from the shoe mesh and coupled into Newton rigid-body physics through
-# state.body_f. Three modes reuse the same foundation:
+# state.body_f. Four modes reuse the same constitutive and contact implementation:
 #
 #   --mode instron  (default) Displacement-controlled digital Instron: a
 #                   shoe-last crosshead squishes the midsole against the ground
@@ -17,9 +17,9 @@
 #   --mode settle   A free, massive midsole rests in stable equilibrium on the
 #                   foundation under gravity and resists a lateral load through
 #                   Coulomb foam-shear friction.
-#   --mode stride   A synthetic running stride rolls a foot heel-to-toe over the
-#                   foundation, producing a ground-reaction force profile and a
-#                   migrating center of pressure.
+#   --mode stride   A prescribed indenter rolls heel-to-toe over a fixed bench
+#                   foundation, recording transfer reaction and its load centroid.
+#                   This is not the carried-shoe ground-contact boundary.
 #   --mode attached A fully dynamic, foot-mounted shoe with mass and inertia. A
 #                   damped bilateral "upper" keeps the midsole coupled to the foot
 #                   for the whole stride, so the shoe presses the foam into the
@@ -40,16 +40,15 @@ import warp as wp
 
 import newton
 import newton.examples
+from projects.digital_shoe.rendering import bench_column_endpoints_at_sites, carried_column_endpoints
 
 from .dynamics import (
     FoundationConfig,
     MidsoleFoundation,
     SurroundConfig,
     attach_coupling,
-    attached_columns,
     build_foundation_geometry,
     column_colors,
-    column_world_positions,
     cyclic_displacement,
     load_fitted_material,
     load_measured_cycle,
@@ -148,7 +147,6 @@ class Example:
         foam_base = np.column_stack([self.geo.uv_m[:, 0], self.geo.uv_m[:, 1], self.geo.z_bottom_m])
         self._foam_base = wp.array(np.ascontiguousarray(foam_base, np.float32), dtype=wp.vec3, device=self.device)
         self._foam_top = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
-        self._slack = wp.array(np.ascontiguousarray(self.geo.slack_m, np.float32), dtype=wp.float32, device=self.device)
         # Compression that saturates the contact colour [m]; the attached stride penetrates
         # deeper than the bench Instron, so it needs a coarser scale.
         self._color_ref = 0.012 if self.mode == "attached" else 0.008
@@ -188,8 +186,10 @@ class Example:
             )
 
         if self.mode == "settle":
-            anchor_local = np.column_stack([geo.uv_m[:, 0], geo.uv_m[:, 1], geo.slack_m])
-            z_free = geo.slack_m.copy()
+            # Use physical ground sites instead of legacy top-anchor transfer points.
+            # Vertical motion agrees at zero pitch; pitched contact now has the ground-plane lever arm.
+            anchor_local = np.column_stack([geo.uv_m[:, 0], geo.uv_m[:, 1], np.zeros(self.column_count)])
+            z_free = np.zeros(self.column_count, dtype=np.float32)
             self.carrier = builder.add_body(
                 mass=SETTLE_MASS_KG,
                 com=wp.vec3(0.0, 0.0, 0.0),
@@ -201,6 +201,7 @@ class Example:
                 friction_stiffness=2.0e4,
                 friction=10.0,
                 mu=1.0,
+                ground_height_m=0.0,
             )
             self._add_plate_visual(builder)
             self._driven = False
@@ -208,6 +209,7 @@ class Example:
             surround = surround_of(rigid_bed, carrier_bond=True)
 
         elif self.mode == "stride":
+            # This prescribed top indenter rolls over a fixed bench bed, not a carried outsole.
             anchor_local = np.column_stack(
                 [geo.uv_m[:, 0] - self._cx, geo.uv_m[:, 1] - self._cy, geo.surface_m - self._cz]
             )
@@ -252,6 +254,7 @@ class Example:
                 friction_stiffness=2.0e4,
                 friction=10.0,
                 mu=1.0,
+                ground_height_m=0.0,
             )
             # The stiff foam + light shoe is numerically stiff, so integrate the attached
             # stride with finer substeps than the driven/settle scenarios (converged at 128).
@@ -272,6 +275,7 @@ class Example:
 
         else:  # instron
             self.mode = "instron"
+            # Keep top-anchor clearances and the free bench datum used by identification.
             anchor_local = np.column_stack([geo.uv_m[:, 0], geo.uv_m[:, 1], geo.surface_m])
             z_free = geo.z_free_m.copy()
             self.carrier = builder.add_body(mass=1.0, com=wp.vec3(0.0, 0.0, 0.0), inertia=wp.mat33(np.eye(3)))
@@ -442,7 +446,7 @@ class Example:
         self._record()
 
     def _record(self):
-        """Capture one frame of force-displacement / ground-reaction diagnostics."""
+        """Record bench transfer reaction or carried-shoe ground reaction for the active boundary."""
         diag = self.foundation.diagnostics()
         entry = {"t": self.sim_time, **diag}
         if self.mode == "instron":
@@ -472,18 +476,19 @@ class Example:
             inputs=[self.foundation.compression, self._color_ref, self._colors],
             device=self.device,
         )
-        if self.mode == "attached":
-            # The foam is the shoe's sole: draw each column from its ground contact up to the
-            # sole-mounted top so the whole bed lifts with the shoe in flight and the springs
-            # compress under the foot in stance.
+        if self.foundation.ground_height_m is not None:
+            # Carried columns use the same current-pose endpoints in settle and attached scenes.
             wp.launch(
-                attached_columns,
+                carried_column_endpoints,
                 dim=self.column_count,
                 inputs=[
                     self.carrier,
                     self.state_0.body_q,
-                    self._anchor_local,
-                    self._slack,
+                    self.foundation.anchor_local,
+                    self.foundation.rest_len,
+                    self.foundation.compression,
+                    self.foundation.driven,
+                    self.foundation.ground_height_m,
                     self._points,
                     self._foam_top,
                 ],
@@ -491,17 +496,24 @@ class Example:
             )
             self.viewer.log_lines("midsole_springs", self._points, self._foam_top, self._colors, width=0.0035)
         else:
-            # The live free top, not the rigid one, so the relaxed surround is visible.
+            # Keep the bench site's posed XY convention, but use solved compression for passive top height.
             wp.launch(
-                column_world_positions,
+                bench_column_endpoints_at_sites,
                 dim=self.column_count,
-                inputs=[self.carrier, self.state_0.body_q, self._anchor_local, self.foundation.z_free, self._points],
+                inputs=[
+                    self.carrier,
+                    self.state_0.body_q,
+                    self._anchor_local,
+                    self._foam_base,
+                    self.foundation.rest_len,
+                    self.foundation.compression,
+                    self._foam_top,
+                    self._points,
+                ],
                 device=self.device,
             )
             if self.mode == "instron":
-                # Vertical foam "springs" from the ground platen to the current (compressed)
-                # foam top make the depressing contact patch legible.
-                self.viewer.log_lines("midsole_springs", self._foam_base, self._points, self._colors, width=0.0035)
+                self.viewer.log_lines("midsole_springs", self._foam_top, self._points, self._colors, width=0.0035)
         self.viewer.log_points("midsole_columns", self._points, radii=0.0028, colors=self._colors)
         self.viewer.end_frame()
 
@@ -555,13 +567,13 @@ class Example:
         )
 
     def _test_stride(self, forces):
-        """Verify a rise-and-fall ground-reaction force and a heel-to-toe center of pressure."""
+        """Verify a rise-and-fall indenter reaction and a heel-to-toe load centroid."""
         times = np.array([h["t"] for h in self.history])
         cop_x = np.array([h["cop_x_m"] for h in self.history])
         foot_x = np.array([h["foot_x"] for h in self.history])
-        assert forces.max() > 300.0, f"stride ground-reaction force too small: {forces.max():.0f} N"
+        assert forces.max() > 300.0, f"stride indenter reaction too small: {forces.max():.0f} N"
         peak_frac = times[np.argmax(forces)] / STRIDE_PERIOD_S
-        assert 0.1 < peak_frac < 0.6, f"ground-reaction force peak at {peak_frac:.2f} of stride, not mid-stance"
+        assert 0.1 < peak_frac < 0.6, f"indenter reaction peak at {peak_frac:.2f} of stride, not mid-stance"
         assert forces.min() < 0.1 * forces.max(), "foot never lifted clear of the foundation during swing"
         # Restrict the center-of-pressure roll to the first stance so the check is not
         # confused by the following stride's heel strike.
@@ -572,7 +584,7 @@ class Example:
             f"center of pressure did not roll heel-to-toe: {(rel[-1] - rel[0]) * 1000:.1f} mm"
         )
         print(
-            f"[stride] peak GRF {forces.max():.0f} N at {peak_frac * 100:.0f}% of stride; "
+            f"[stride] peak indenter reaction {forces.max():.0f} N at {peak_frac * 100:.0f}% of stride; "
             f"center of pressure rolled {rel[0] * 1000:.0f} -> {rel[-1] * 1000:.0f} mm heel-to-toe"
         )
 

@@ -3,10 +3,23 @@
 
 """Digital Instron material model and fit."""
 
+import hashlib
 import logging
+import threading
+import warnings
+import weakref
 from dataclasses import dataclass
 
 import numpy as np
+
+from projects.digital_shoe.contact import normal_reaction_numpy, pasternak_coupling_numpy
+from projects.digital_shoe.material import (
+    HYPERFOAM_ALPHA_FLOOR,  # noqa: F401  # compatibility export
+    hyperfoam_pressure_from_stretch_numpy,
+    maxwell_coefficients_numpy,
+    maxwell_increment_step_numpy,
+    ogden_hill_term_numpy,
+)
 
 # Confined and unconfined compression of racing-shoe midsole foam agree within
 # scatter, so the effective Poisson ratio is zero (McCulloch, Delp and Kuhl,
@@ -17,42 +30,27 @@ import numpy as np
 EFFECTIVE_POISSON_RATIO = 0.0
 MAXWELL_RELAXATION_TIME_S = 0.08
 
-# Maximum passes of the surround fixed point: relax against the current
-# overstress, refresh the overstress from the relaxed compression, repeat. The
-# support a free column feels is equilibrium pressure plus Maxwell overstress,
-# and the overstress follows from the compression the relaxation produces, so
-# one pass is only self-consistent when the overstress vanishes. Convergence is
-# slowest when the overstress dominates, which needs about ten passes.
-#
-# The pinned material sits in that slow region: the blended pass converges at
-# about 0.63 per pass, so the cap binds before ``SURROUND_TOLERANCE_M`` does and
-# the compression carries roughly 1.2e-5 m of tail. Raising the cap to 60 moves
-# both measured peaks by 0.016% and the whole force history by 0.016% of peak,
-# which is far below the 10% gates and below the float32 noise of the forward
-# pass, so the cap is kept for a reproducible and affordable fit. Anything that
-# differentiates this solve should use its own damped iteration, not this cap.
+# Legacy cap on the outer Maxwell/surround fixed-point iteration. Retain this
+# schedule and its stopping estimate when comparing execution backends; improving
+# numerical convergence is a separate change, not part of the GPU speedup.
 SURROUND_PASSES = 12
 
-# Stop the surround passes once the compression field moves less than this
-# between passes; 1 um is far below the 20 mm working range and below the
-# float32 noise of the forward pass.
+# Preserve the calibration's 1 um outer pass-change threshold [m].
 SURROUND_TOLERANCE_M = 1.0e-6
 
 # Per-trial record of the last surround solve: the maximum compression change
 # between consecutive passes [m], so a stalled fixed point stays visible.
 SURROUND_CONVERGENCE: dict[str, dict[str, object]] = {}
 
-# Last converged compression field per trial, reused as the warm start of the
-# next solve. A fit spends almost all of its time on finite-difference
-# perturbations that move the bed by microns, so restarting each of them from
-# zero paid the full cold-solve cost hundreds of times over.
-_SURROUND_WARM_START: dict[str, object] = {}
+# Trial/device-specific buffers prevent independent trials with the same label
+# from sharing physical history. Content signatures invalidate edited input arrays.
+# Weak references release the resident storage when the trial leaves scope.
+_SURROUND_WORKSPACES: dict[tuple[int, str, int, int], tuple[weakref.ReferenceType, bytes, object]] = {}
+_SURROUND_WARM_START: dict[tuple[int, str, int, int], object] = {}
 
-# Extrapolated remaining compression travel that ends a relaxation [m]. This is
-# a bound on the distance still to travel, not the size of one update, so it is
-# directly comparable with the 1 um tolerance of the outer fixed point above and
-# with the working range of the bed. See
-# :func:`projects.digital_shoe.runtime.relax_surround`.
+# Legacy inner stopping estimate [m], retained for execution-only parity with
+# relax_surround. Its sampled-interval tail extrapolation is not a certified
+# per-sweep error bound; correcting that numerical policy is separate work.
 SURROUND_SOLVE_TOLERANCE_M = 1.0e-8
 
 # Sweeps between convergence tests. Each test costs one device reduction and one
@@ -144,7 +142,8 @@ class Material:
         Args:
             thickness_m: Column rest thickness [m].
         """
-        return self.equilibrium_shear_modulus_pa * np.asarray(thickness_m, dtype=float)
+        thickness = np.asarray(thickness_m, dtype=float)
+        return pasternak_coupling_numpy(thickness, thickness, self.equilibrium_shear_modulus_pa)
 
 
 # Fitted intact-shoe parameters produced by the checked-in Digital Instron
@@ -212,7 +211,13 @@ class Surround:
 
 @dataclass(frozen=True)
 class Trial:
-    """Measured force and matching column lengths."""
+    """Measured force and matching column lengths.
+
+    ``compression_laplacian_m_inv`` is a deprecated fixture-subset input. A
+    precomputed Laplacian cannot recover the symmetric edge conductances of a
+    variable-thickness bed. Use ``surround`` for the whole-bed contact model
+    shared by identification and live simulation.
+    """
 
     name: str
     slack_m: np.ndarray
@@ -225,51 +230,25 @@ class Trial:
     surround: Surround | None = None
 
 
-# Below this exponent magnitude one Ogden-Hill term is evaluated at its removable
-# ``alpha -> 0`` limit, matching
-# :data:`projects.digital_shoe.runtime.HYPERFOAM_ALPHA_FLOOR`.
-HYPERFOAM_ALPHA_FLOOR = 1.0e-3
-
-
 def _hyperfoam_term(
     stretch: np.ndarray, volume_ratio: np.ndarray, mu_pa: float, alpha: float, beta: float
 ) -> np.ndarray:
-    """Return one Ogden-Hill (Hyperfoam) uniaxial compression term [Pa].
-
-    Host twin of :func:`projects.digital_shoe.runtime._hyperfoam_term`; the two
-    are pinned together by ``test_hyperfoam_pressure_matches_reference``.
-
-    Args:
-        stretch: Remaining thickness stretch ``lambda`` [-], already floored.
-        volume_ratio: ``J = lambda^(1 - 2 nu)`` [-].
-        mu_pa: Term shear modulus [Pa].
-        alpha: Term exponent [-]; may be negative and is evaluated at its
-            removable ``alpha -> 0`` limit near zero.
-        beta: ``nu / (1 - 2 nu)`` [-].
-    """
-    if abs(alpha) < HYPERFOAM_ALPHA_FLOOR:
-        return 2.0 * mu_pa / stretch * (-beta * np.log(volume_ratio) - np.log(stretch))
-    return 2.0 * mu_pa / (alpha * stretch) * (volume_ratio ** (-alpha * beta) - stretch**alpha)
+    """Evaluate the shared Ogden-Hill term through its NumPy backend [Pa]."""
+    return ogden_hill_term_numpy(stretch, volume_ratio, mu_pa, alpha, beta)
 
 
 def _hyperfoam_pressure(strain: np.ndarray, material: Material) -> np.ndarray:
-    """Return positive uniaxial compression pressure from the two-term Hyperfoam law."""
-
-    # The stretch floor keeps every exponentiation away from zero, so the
-    # ``beta = 0`` case is the ordinary ``x ** 0 == 1`` and needs no special path.
-    stretch = np.clip(1.0 - strain, 1.0e-3, 1.0)
+    """Evaluate the shared two-term equilibrium compression pressure [Pa]."""
     poisson = EFFECTIVE_POISSON_RATIO
-    beta = poisson / (1.0 - 2.0 * poisson)
-    volume_ratio = stretch ** (1.0 - 2.0 * poisson)
     fraction = material.equilibrium_fraction
-    return _hyperfoam_term(
-        stretch, volume_ratio, material.instantaneous_shear_modulus_pa * fraction, material.hyperfoam_exponent, beta
-    ) + _hyperfoam_term(
-        stretch,
-        volume_ratio,
+    return hyperfoam_pressure_from_stretch_numpy(
+        np.clip(1.0 - strain, 1.0e-3, 1.0),
+        material.instantaneous_shear_modulus_pa * fraction,
+        material.hyperfoam_exponent,
         material.instantaneous_shear_modulus_2_pa * fraction,
         material.hyperfoam_exponent_2,
-        beta,
+        poisson / (1.0 - 2.0 * poisson),
+        1.0 - 2.0 * poisson,
     )
 
 
@@ -283,147 +262,114 @@ def _periodic_maxwell_branch(
 
     if fraction == 0.0:
         return np.zeros_like(equilibrium_pressure)
-    decay = np.exp(-dt_s / relaxation_time_s)
-    ramp = relaxation_time_s * (1.0 - decay) / dt_s
+    decay, ramp = maxwell_coefficients_numpy(dt_s, relaxation_time_s)
     pressure_increment = equilibrium_pressure - np.roll(equilibrium_pressure, 1, axis=0)
     state = np.zeros(equilibrium_pressure.shape[1])
     for frame in range(len(equilibrium_pressure)):
-        state = decay[frame] * state + fraction * ramp[frame] * pressure_increment[frame]
+        state = maxwell_increment_step_numpy(state, pressure_increment[frame], fraction, decay[frame], ramp[frame])
     state /= 1.0 - float(np.prod(decay))
     result = np.empty_like(equilibrium_pressure)
     for frame in range(len(equilibrium_pressure)):
-        state = decay[frame] * state + fraction * ramp[frame] * pressure_increment[frame]
+        state = maxwell_increment_step_numpy(state, pressure_increment[frame], fraction, decay[frame], ramp[frame])
         result[frame] = state
     return result
 
 
-def _surround_force(trial: Trial, material: Material) -> np.ndarray:
-    """Run the whole cycle on the GPU: relax the surround self-consistently, then sum the reaction.
-
-    The relaxation and the summed reaction share one overstress field, refreshed
-    between passes until it settles, so the free columns are placed under the
-    load they actually carry instead of under the equilibrium pressure alone.
-    """
-    import warp as wp  # noqa: PLC0415  # lazy: the identification stays importable without a device
-
-    from projects.digital_shoe.runtime import (  # noqa: PLC0415
-        FoundationParams,
-        ShoeMaterial,
-        cycle_force,
-        cycle_overstress,
-        relax_surround,
-        set_hyperfoam_series,
-    )
-
+def _surround_signature(trial: Trial) -> bytes:
+    """Fingerprint only inputs that define the resident forward problem."""
     surround = trial.surround
-    shoe = ShoeMaterial(
-        material.instantaneous_shear_modulus_pa,
-        material.hyperfoam_exponent,
-        material.equilibrium_fraction,
-        float(np.mean(material.coupling_n_per_m(surround.slack_m))),
-        EFFECTIVE_POISSON_RATIO,
-        material.maxwell_relaxation_time_s,
-        material.instantaneous_shear_modulus_2_pa,
-        material.hyperfoam_exponent_2,
+    digest = hashlib.blake2b(digest_size=16)
+    for value in (
+        trial.slack_m,
+        trial.lengths_m,
+        trial.dt_s,
+        surround.driven,
+        surround.neighbors,
+        surround.slack_m,
+    ):
+        array = np.ascontiguousarray(value)
+        digest.update(str((array.shape, array.dtype.str)).encode())
+        digest.update(memoryview(array).cast("B"))
+    digest.update(repr((surround.area_m2, surround.spacing_m, surround.attachment_n_m, surround.max_strain)).encode())
+    return digest.digest()
+
+
+def _surround_workspace(trial: Trial):
+    """Prepare geometry once and retain only device work fields between evaluations."""
+    import warp as wp  # noqa: PLC0415
+
+    from projects.digital_shoe.calibration import CalibrationWorkspace  # noqa: PLC0415
+
+    device = wp.get_device()
+    stream = wp.get_stream(device).cuda_stream if device.is_cuda else 0
+    key = (id(trial), device.alias, threading.get_ident(), stream)
+    signature = _surround_signature(trial)
+    entry = _SURROUND_WORKSPACES.get(key)
+    if entry is not None and entry[0]() is trial and entry[1] == signature:
+        return key, entry[2]
+    surround = trial.surround
+    driven_compression = np.ascontiguousarray(np.maximum(trial.slack_m[None, :] - trial.lengths_m, 0.0), np.float32)
+    workspace = CalibrationWorkspace(
+        driven_compression,
+        surround.driven,
+        surround.neighbors,
+        surround.slack_m,
+        trial.dt_s,
+        area_m2=surround.area_m2,
+        spacing_m=surround.spacing_m,
+        attachment_n_m=surround.attachment_n_m,
+        max_strain=surround.max_strain,
+        device=device,
     )
+
+    def discard(reference, key=key):
+        cached = _SURROUND_WORKSPACES.get(key)
+        if cached is not None and cached[0] is reference:
+            _SURROUND_WORKSPACES.pop(key, None)
+            _SURROUND_WARM_START.pop(key, None)
+
+    _SURROUND_WORKSPACES[key] = (weakref.ref(trial, discard), signature, workspace)
+    _SURROUND_WARM_START.pop(key, None)
+    return key, workspace
+
+
+def _surround_force(trial: Trial, material: Material) -> np.ndarray:
+    """Evaluate the existing calibrated forward problem with resident GPU fields.
+
+    Only small material updates and convergence diagnostics cross the device
+    boundary during a solve. The final force curve is returned to the unchanged
+    bounded SciPy fitting objective. CPU callers use the same workspace eagerly.
+    """
+    from projects.digital_shoe.runtime import FoundationParams, set_material_block  # noqa: PLC0415
+
+    key, workspace = _surround_workspace(trial)
     params = FoundationParams()
-    poisson = shoe.effective_poisson_ratio
-    set_hyperfoam_series(params, shoe)
+    set_material_block(params, material)
+    poisson = EFFECTIVE_POISSON_RATIO
     params.beta = poisson / (1.0 - 2.0 * poisson)
     params.one_minus_two_poisson = 1.0 - 2.0 * poisson
     params.stretch_floor = 1.0e-3
-    driven_compression = np.ascontiguousarray(np.maximum(trial.slack_m[None, :] - trial.lengths_m, 0.0), np.float32)
-    frames = len(trial.dt_s)
-    count = len(surround.slack_m)
-    fraction = float((1.0 - material.equilibrium_fraction) / material.equilibrium_fraction)
-    tau_s = float(material.maxwell_relaxation_time_s)
-
-    # Undamped repetition of "relax against q, then recompute q" has loop gain
-    # -(1 - eq) / eq, so it oscillates whenever the overstress exceeds the
-    # equilibrium pressure - exactly the long-relaxation-time region the fit
-    # must stay free to visit. Blending the refreshed overstress with weight
-    # ``equilibrium_fraction = 1 / (1 + overstress fraction)`` cancels that gain
-    # to first order and leaves the fixed point unchanged.
-    blend = float(material.equilibrium_fraction)
-    slack_device = None
-    dt_device = None
-    overstress_host = np.zeros((frames, count), np.float32)
-    carried = None
-    refreshed = None
-    compression = None
-    previous = None
-    changes: list[float] = []
-    # Warm start every pass from the previous one, and the first pass of this
-    # solve from the previous solve of the same trial. Both fields are already
-    # close to the answer, so the residual test below ends each relaxation in a
-    # few sweeps instead of the cold-solve thousands.
-    warm = _SURROUND_WARM_START.get(trial.name)
-    if warm is not None and tuple(warm.shape) != (frames, count):
-        warm = None
-    solver_stats: dict[str, float] = {}
-    sweeps_used: list[int] = []
-    for _ in range(SURROUND_PASSES):
-        compression = relax_surround(
-            driven_compression,
-            surround.driven,
-            surround.neighbors,
-            surround.slack_m,
-            params,
-            area_m2=surround.area_m2,
-            spacing_m=surround.spacing_m,
-            attachment_n_m=surround.attachment_n_m,
-            max_strain=surround.max_strain,
-            sweeps=surround.sweeps,
-            over_relaxation=SURROUND_OVER_RELAXATION,
-            overstress=carried,
-            initial=warm,
-            tolerance_m=SURROUND_SOLVE_TOLERANCE_M,
-            check_every=SURROUND_CHECK_EVERY,
-            stats=solver_stats,
-        )
-        warm = compression
-        sweeps_used.append(int(solver_stats["sweeps"]))
-        device = compression.device
-        if slack_device is None:
-            slack_device = wp.array(np.ascontiguousarray(surround.slack_m, np.float32), dtype=wp.float32, device=device)
-            dt_device = wp.array(np.ascontiguousarray(trial.dt_s, np.float32), dtype=wp.float32, device=device)
-        refreshed = wp.zeros((frames, count), dtype=wp.float32, device=device)
-        wp.launch(
-            cycle_overstress,
-            dim=count,
-            inputs=[compression, slack_device, dt_device, params, fraction, tau_s, refreshed],
-            device=device,
-        )
-        overstress_host += blend * (refreshed.numpy() - overstress_host)
-        carried = wp.array(overstress_host, dtype=wp.float32, device=device)
-        relaxed = compression.numpy()
-        if previous is not None:
-            changes.append(float(np.max(np.abs(relaxed - previous))))
-        previous = relaxed
-        if changes and changes[-1] < SURROUND_TOLERANCE_M:
-            break
-    _SURROUND_WARM_START[trial.name] = compression
-    SURROUND_CONVERGENCE[trial.name] = {
-        "pass_change_m": changes,
-        "max_compression_m": float(np.max(previous)),
-        "sweeps_per_pass": sweeps_used,
-        "solver_remaining_m": solver_stats.get("remaining_m", float("nan")),
-    }
+    force = workspace.solve(
+        params,
+        fraction=float((1.0 - material.equilibrium_fraction) / material.equilibrium_fraction),
+        tau_s=float(material.maxwell_relaxation_time_s),
+        blend=float(material.equilibrium_fraction),
+        initial=_SURROUND_WARM_START.get(key),
+        passes=SURROUND_PASSES,
+        tolerance_m=SURROUND_TOLERANCE_M,
+        sweeps=trial.surround.sweeps,
+        solve_tolerance_m=SURROUND_SOLVE_TOLERANCE_M,
+        check_every=SURROUND_CHECK_EVERY,
+        over_relaxation=SURROUND_OVER_RELAXATION,
+    )
+    _SURROUND_WARM_START[key] = workspace.compression
+    SURROUND_CONVERGENCE[trial.name] = dict(workspace.stats)
+    diagnostics = workspace.stats
     _LOGGER.debug(
         "%s surround self-consistency: pass changes %s m, max compression %.4f m",
         trial.name,
-        [f"{value:.2e}" for value in changes],
-        float(np.max(previous)),
-    )
-
-    # The reported load uses the overstress of the final compression itself, so
-    # the summed reaction is exact for the geometry that was relaxed.
-    force = wp.zeros(frames, dtype=wp.float32, device=compression.device)
-    wp.launch(
-        cycle_force,
-        dim=(frames, count),
-        inputs=[compression, refreshed, slack_device, params, float(surround.area_m2), force],
-        device=compression.device,
+        [f"{value:.2e}" for value in diagnostics["pass_change_m"]],
+        diagnostics["max_compression_m"],
     )
     return force.numpy().astype(np.float64)
 
@@ -446,10 +392,13 @@ def predict(trial: Trial, material: Material) -> np.ndarray:
 def _column_bed_force(trial: Trial, material: Material, lengths_m: np.ndarray) -> np.ndarray:
     """Sum the reaction of an uncoupled column set at a given length history.
 
-    The fixture-subset path kept for tests and plotting. Its lateral term is the
-    lumped ``mu_eq * t_i`` coefficient of :meth:`Material.coupling_n_per_m` acting
-    on the subset Laplacian; unlike the whole-bed path it is only force
-    conserving for a bed of uniform rest thickness.
+    The fixture-subset path is kept for tests and plotting. Its imposed
+    compression uses the shared normal contact law with zero damping and no
+    explicit ground-plane gap. The deprecated precomputed Laplacian retains
+    its historical lumped ``mu_eq * t_i`` coefficient for compatibility only.
+    It cannot reconstruct symmetric variable-thickness edge conductances, so
+    it is not the whole-bed shear model and only conserves force for uniform
+    rest thickness. Use :class:`Surround` for coupled columns.
 
     Args:
         trial: Trial supplying the driven-column geometry and timing.
@@ -462,13 +411,19 @@ def _column_bed_force(trial: Trial, material: Material, lengths_m: np.ndarray) -
     pressure = np.array(equilibrium, copy=True)
     maxwell_fraction = (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction
     pressure += _periodic_maxwell_branch(equilibrium, trial.dt_s, maxwell_fraction, material.maxwell_relaxation_time_s)
-    # Clamp only the unilateral ground reaction, then add the shear-layer flux.
-    # Clamping their sum would clip the flux and invent support under columns
-    # that carry no compression, so the runtime uses this same order.
-    ground = np.maximum(pressure, 0.0)
+    ground = normal_reaction_numpy(0.0, pressure, trial.area_m2, 0.0, 0.0, 0.0, 0)
     if trial.compression_laplacian_m_inv is not None:
-        ground = ground - material.coupling_n_per_m(slack)[None, :] * trial.compression_laplacian_m_inv
-    return np.sum(trial.area_m2 * ground, axis=1)
+        warnings.warn(
+            "Trial.compression_laplacian_m_inv is deprecated: a precomputed Laplacian cannot reconstruct "
+            "the symmetric variable-thickness shear model. Use Trial.surround instead.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        # Keep the historical subset transfer, in force units, outside the
+        # shared unilateral clamp; clipping it would invent external support.
+        flux_n = trial.area_m2 * (material.coupling_n_per_m(slack)[None, :] * trial.compression_laplacian_m_inv)
+        ground = ground - flux_n
+    return np.sum(ground, axis=1)
 
 
 HYSTERESIS_WEIGHT = 5.0

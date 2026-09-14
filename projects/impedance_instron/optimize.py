@@ -34,6 +34,9 @@ TRACE_UPPER_VZ = 4
 TRACE_LEG_FORCE = 5
 TRACE_SOURCE_POWER = 6
 TRACE_DAMPER_POWER = 7
+# Ankle actuator source power. In prescribed mode this is the replay motor's demand; in impedance
+# mode it is the rotational equilibrium-point actuator. Either way the rig pays for it.
+TRACE_ANKLE_POWER = 8
 TRACE_COMPRESSION = 11
 TRACE_SATURATED = 12
 TRACE_ANKLE_VZ = 15
@@ -65,6 +68,10 @@ class Rollout:
     momentum_vx_m_s: list[float]
     momentum_vz_m_s: list[float]
     damper_dissipation_j: float
+    positive_work_j: float = float("nan")
+    negative_work_j: float = float("nan")
+    ankle_positive_work_j: float = 0.0
+    ankle_negative_work_j: float = 0.0
     # Net actuator work hides how the leg spent it, but the two halves are charged at different
     # muscle efficiencies. Defaulted so rollouts stored before the split still load.
     positive_work_j: float = float("nan")
@@ -159,6 +166,12 @@ def simulate(args, parameters: np.ndarray | None = None) -> tuple[Rollout, Examp
         negative_work_j=float(np.trapezoid(np.clip(trace[:, TRACE_SOURCE_POWER], None, 0.0), times))
         if finite
         else float("nan"),
+        ankle_positive_work_j=float(np.trapezoid(np.clip(trace[:, TRACE_ANKLE_POWER], 0.0, None), times))
+        if finite
+        else float("nan"),
+        ankle_negative_work_j=float(np.trapezoid(np.clip(trace[:, TRACE_ANKLE_POWER], None, 0.0), times))
+        if finite
+        else float("nan"),
     )
     return rollout, example
 
@@ -221,6 +234,14 @@ def create_optimizer_parser():
 
 def main():
     """Search the equilibrium trajectory and impedance profile against the measured task."""
+    import warnings  # noqa: PLC0415 - warn only when the legacy command is invoked
+
+    warnings.warn(
+        "This legacy impedance experiment is deprecated. Use "
+        "python -m projects.impedance_instron --help for the two-stiffness workflow.",
+        FutureWarning,
+        stacklevel=2,
+    )
     args = create_optimizer_parser().parse_args()
     args.control = "equilibrium"
     tolerances = Tolerances(
