@@ -12,6 +12,10 @@ mechanical safety checks; that is not tracking, transfer or upper-contact
 validation. See [WORKTREE_SUMMARY.md](WORKTREE_SUMMARY.md) for the full worktree
 history and current evidence.
 
+A separate opt-in [movement-intent response experiment](RESPONSE.md) now compares
+fixed-gain controllers under paired disturbances. Its explicit nominal-load
+feedforward mode is not part of the original two-action RL contract below.
+
 ## Contract
 
 - Learned outputs: leg stiffness and ankle rotational stiffness only.

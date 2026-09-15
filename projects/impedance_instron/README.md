@@ -80,6 +80,17 @@ Use `--checkpoint outputs/impedance_instron/simple/training/best.pt` to view a
 frozen policy. Blue is the simulated upper mass. Orange is the measured height
 target (offset sideways for visibility, not a force or constraint).
 
+After moving saved results to another checkout, use `--material` to supply the
+artifact at its new location. This is an explicit same-geometry override; the
+checkpoint and reference are not rewritten. Evaluation uses the same option.
+
+```bash
+uv run --no-sync -m newton.examples impedance_stiffness \
+  --checkpoint outputs/impedance_instron/simple/training/best.pt \
+  --material outputs/impedance_instron/inputs/digital_shoe.json \
+  --allow-physics-update --viewer gl --render-fps 30
+```
+
 After a physics source change, explicitly re-evaluate old weights rather than
 silently treating the checkpoint's old scores as current:
 
@@ -174,6 +185,44 @@ The ankle reacts against the world, not a modeled shank. No prescribed pitch,
 pelvis position servo, release schedule, or auxiliary residual actuator overrides
 the dynamics. The identified foundation and its passive outer region are retained;
 this is not a new anatomical foot-to-shoe attachment model.
+
+## Opt-in movement-intent and disturbance experiment
+
+The original RL controller above remains unchanged. A separate fixed-gain
+experiment compares it with explicit nominal-load plus spring–damper feedback:
+
+```bash
+uv run --no-sync -m projects.impedance_instron response --device cuda:0
+```
+
+Both modes receive paired upper-body pushes and static ground planes at +/-5 mm.
+The default sweep uses half, nominal and double stiffness with identical damping.
+Open `outputs/impedance_instron/simple/response/report.html` for the offline
+comparison. Full-resolution traces and replay inputs are saved beside the report.
+
+The new `intent` mode **does use runtime nominal ID load feedforward**, unlike the
+original equilibrium controller. This separates nominal movement load from the
+response to motion error; it is not unaided predictive dynamics or a new RL policy.
+See [RESPONSE.md](RESPONSE.md) for equations, runnable commands, accounting and
+qualification limits. Training/checkpoint action contracts are not expanded.
+
+## Independent gains and shoe-material perturbations
+
+The next opt-in experiment varies leg/pitch stiffness and damping independently,
+adds forward/backward/upward/downward pushes, and uses whole-episode material
+changes without moving or refitting the shoe geometry or movement reference:
+
+```bash
+uv run --no-sync -m projects.impedance_instron sensitivity --device cuda:0
+```
+
+The default 97-case staged design separates permanent material sensitivity from
+push recovery on each material. It reports true terminal velocities and a declared
+finite-window return screen, not assumed settling. Synthetic modulus and Maxwell
+time variants are parameter-sensitivity hypotheses, not newly validated materials.
+See [SENSITIVITY.md](SENSITIVITY.md) for pairing rules, coverage, explicit material
+imports, full-factorial mode, reproducible replay and qualification limits.
+The original response and RL commands remain unchanged.
 
 ## The entire reward
 

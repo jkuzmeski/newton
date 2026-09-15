@@ -42,9 +42,15 @@ class Example:
     def __init__(self, viewer, args):
         self.viewer, self.args = viewer, args
         self.policy = None
+        material = getattr(args, "material", None)
+        if material is not None and not args.checkpoint:
+            raise ValueError("--material requires --checkpoint; use --artifact for a baseline shoe")
         if args.checkpoint:
             self.rig, self.policy = restore(
-                args.checkpoint, device=args.device, allow_physics_update=args.allow_physics_update
+                args.checkpoint,
+                artifact_path=material,
+                device=args.device,
+                allow_physics_update=args.allow_physics_update,
             )
         else:
             self.rig = Rig(Reference.load(args.reference), args.artifact, device=args.device)
@@ -173,6 +179,12 @@ def create_parser():
     parser.add_argument("--reference", type=Path, default=Path("outputs/impedance_instron/simple/reference.json"))
     parser.add_argument("--artifact", type=Path, default=Path("outputs/impedance_instron/inputs/digital_shoe.json"))
     parser.add_argument("--checkpoint", type=Path, default=None)
+    parser.add_argument(
+        "--material",
+        type=Path,
+        default=None,
+        help="Explicit same-geometry material or relocated artifact for a saved checkpoint.",
+    )
     parser.add_argument(
         "--allow-physics-update",
         action="store_true",

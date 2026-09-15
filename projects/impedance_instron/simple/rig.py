@@ -273,6 +273,10 @@ class _Parameters:
     leg_min: float
     leg_max: float
     speed_max: float
+    response_mode: int
+    damping_leg: float
+    damping_ankle: float
+    ground_height: float
 
 
 @wp.func
@@ -360,6 +364,7 @@ def _actuate_record(
     ref: wp.array2d[float],
     log_start: wp.array2d[float],
     log_end: wp.array2d[float],
+    push: wp.array2d[float],
     touchdown: wp.array[float],
     q: wp.array[wp.transform],
     qd: wp.array[wp.spatial_vector],
@@ -392,6 +397,19 @@ def _actuate_record(
     ar = _curve(clock[0], knots, ref, 6)
     l0, l0dot = lr[0], lr[1] * clock[1]
     a0, a0dot = ar[0], ar[1] * clock[1]
+    movement = wp.vec2(0.0)
+    inverse_l, inverse_a = float(0.0), float(0.0)
+    nominal_l, nominal_a = float(0.0), float(0.0)
+    push_x, push_z = float(0.0), float(0.0)
+    if prm.response_mode != 0:
+        movement = _curve(t, knots, ref, 10)
+        inverse_l = _linear(t, knots, ref, 12)
+        inverse_a = _linear(t, knots, ref, 13)
+        push_x, push_z = float(push[i, 0]), float(push[i, 1])
+        if prm.response_mode == 2:
+            l0, l0dot = movement[0], movement[1]
+            a0, a0dot = pitchr[0], pitchr[1]
+            nominal_l, nominal_a = inverse_l, inverse_a
     u = float(i % prm.substeps) / float(prm.substeps)
     s, ds = _smooth(u), _smooth_rate(u) / prm.frame_dt
     kl = wp.exp(log_start[w, 0] + s * (log_end[w, 0] - log_start[w, 0]))
@@ -400,18 +418,30 @@ def _actuate_record(
     kadot = ka * ds * (log_end[w, 1] - log_start[w, 1])
     bl = 2.0 * prm.zeta_leg * wp.sqrt(kl * prm.mass_upper)
     ba = 2.0 * prm.zeta_ankle * wp.sqrt(ka * prm.pitch_inertia)
+    if prm.response_mode != 0:
+        bl, ba = float(prm.damping_leg), float(prm.damping_ankle)
     el, ea = length - l0, _wrap(angle - a0)
     sl, sa = rate - l0dot, omega - a0dot
-    raw_l, raw_a = -kl * el - bl * sl, -ka * ea - ba * sa
+    feedback_l, feedback_a = -kl * el - bl * sl, -ka * ea - ba * sa
+    raw_l, raw_a = feedback_l, feedback_a
+    if prm.response_mode == 2:
+        raw_l += nominal_l
+        raw_a += nominal_a
     force, torque = (
         wp.clamp(raw_l, -prm.force_limit, prm.force_limit),
         wp.clamp(raw_a, -prm.torque_limit, prm.torque_limit),
     )
     body_f[f] = body_f[f] + wp.spatial_vector(-force * axis, wp.vec3(0.0, torque, 0.0))
     body_f[p] = body_f[p] + wp.spatial_vector(force * axis, wp.vec3(0.0))
+    if prm.response_mode != 0:
+        body_f[p] = body_f[p] + wp.spatial_vector(wp.vec3(push_x, 0.0, push_z), wp.vec3(0.0))
     limit_l, limit_a = (force - raw_l) * rate, (torque - raw_a) * omega
     source_l = raw_l * l0dot + 0.5 * kldot * el * el + limit_l
     source_a = raw_a * a0dot + 0.5 * kadot * ea * ea + limit_a
+    if prm.response_mode == 2:
+        # The nominal assistance does body work, not tracking-spring storage.
+        source_l = nominal_l * rate + feedback_l * l0dot + 0.5 * kldot * el * el + limit_l
+        source_a = nominal_a * omega + feedback_a * a0dot + 0.5 * kadot * ea * ea + limit_a
     damp_l, damp_a = -bl * sl * sl, -ba * sa * sa
     spring_rate_l = 0.5 * kldot * el * el + kl * el * sl
     spring_rate_a = 0.5 * kadot * ea * ea + ka * ea * sa
@@ -419,6 +449,7 @@ def _actuate_record(
     for vertex in range(last_hull.shape[0]):
         local = last_hull[vertex]
         clearance = wp.min(clearance, x[2] - wp.sin(angle) * local[0] + wp.cos(angle) * local[1])
+    clearance -= prm.ground_height
     dz, da = (pelvis[2] - zr[0]) / prm.z_scale, _wrap(angle - pitchr[0]) / prm.pitch_scale
     error = 0.5 * (dz * dz + da * da)
     status = flags[w]
@@ -435,7 +466,7 @@ def _actuate_record(
         status = status | 1
     if clearance < prm.clearance_min:
         status = status | 2
-    if pelvis[2] < prm.pelvis_min or pelvis[2] > prm.pelvis_max:
+    if pelvis[2] - prm.ground_height < prm.pelvis_min or pelvis[2] - prm.ground_height > prm.pelvis_max:
         status = status | 4
     if wp.abs(angle) > prm.pitch_max:
         status = status | 8
@@ -505,6 +536,25 @@ def _actuate_record(
     trace[i, w, 53] = shoe_moment[w][1] - wp.cross(x, shoe_force[w])[1]
     trace[i, w, 54] = touchdown[w]
     trace[i, w, 55] = float(status)
+    if prm.response_mode != 0:
+        trace[i, w, 56] = movement[0]
+        trace[i, w, 57] = movement[1]
+        trace[i, w, 58] = inverse_l
+        trace[i, w, 59] = inverse_a
+        trace[i, w, 60] = nominal_l
+        trace[i, w, 61] = nominal_a
+        trace[i, w, 62] = feedback_l
+        trace[i, w, 63] = feedback_a
+        trace[i, w, 64] = push_x
+        trace[i, w, 65] = push_z
+        trace[i, w, 66] = push_x * vp[0] + push_z * vp[2]
+        trace[i, w, 67] = prm.ground_height
+        trace[i, w, 68] = nominal_l * rate
+        trace[i, w, 69] = nominal_a * omega
+        trace[i, w, 70] = feedback_l * l0dot
+        trace[i, w, 71] = feedback_a * a0dot
+        trace[i, w, 72] = 0.5 * kldot * el * el
+        trace[i, w, 73] = 0.5 * kadot * ea * ea
 
 
 @wp.kernel
@@ -530,9 +580,11 @@ def _observe(
     angle, omega = _pitch(q[2 * w]), wp.spatial_bottom(qd[2 * w])[1]
     zr, ar = _curve(t, knots, ref, 0), _curve(t, knots, ref, 2)
     lr, eq = _curve(t, knots, ref, 4), _curve(t, knots, ref, 6)
+    if prm.response_mode == 2:
+        lr, eq = _curve(t, knots, ref, 10), ar
     length = wp.length(p - x)
-    obs[w, 0] = p[2]
-    obs[w, 1] = x[2]
+    obs[w, 0] = p[2] - prm.ground_height
+    obs[w, 1] = x[2] - prm.ground_height
     obs[w, 2] = p[0] - x[0]
     obs[w, 3] = length
     obs[w, 4] = vp[0]
@@ -545,7 +597,7 @@ def _observe(
     obs[w, 11] = force[w][2]
     obs[w, 12] = lr[0]
     obs[w, 13] = eq[0]
-    obs[w, 14] = zr[0]
+    obs[w, 14] = zr[0] - prm.ground_height
     obs[w, 15] = ar[0]
     obs[w, 16] = log_k[w, 0]
     obs[w, 17] = log_k[w, 1]
@@ -564,9 +616,10 @@ def _observe(
     for vertex in range(hull.shape[0]):
         v = hull[vertex]
         clearance = wp.min(clearance, x[2] - wp.sin(angle) * v[0] + wp.cos(angle) * v[1])
+    clearance -= prm.ground_height
     if clearance < prm.clearance_min:
         status = status | 2
-    if p[2] < prm.pelvis_min or p[2] > prm.pelvis_max:
+    if p[2] - prm.ground_height < prm.pelvis_min or p[2] - prm.ground_height > prm.pelvis_max:
         status = status | 4
     if wp.abs(angle) > prm.pitch_max:
         status = status | 8
@@ -591,6 +644,8 @@ class Rig:
         device: Warp device such as ``"cpu"`` or ``"cuda:0"``.
     """
 
+    _trace_names = TRACE_NAMES
+    _ground_height_m = 0.0
     action_dim = 2
     observation_names = (
         "pelvis_z_m",
@@ -735,7 +790,7 @@ class Rig:
         self._flags_device = wp.zeros(self.num_worlds, dtype=wp.int32, device=self.device)
         self._frame_loss_device = wp.zeros(self.num_worlds, dtype=wp.float32, device=self.device)
         self._trace_device = wp.zeros(
-            (self.sample_count, self.num_worlds, len(TRACE_NAMES)), dtype=wp.float32, device=self.device
+            (self.sample_count, self.num_worlds, len(self._trace_names)), dtype=wp.float32, device=self.device
         )
         ref_columns = (
             "pelvis_z_m",
@@ -753,6 +808,7 @@ class Rig:
             np.column_stack([getattr(reference, name) for name in ref_columns]), dtype=wp.float32, device=self.device
         )
         self._knots_device = wp.array(reference.time_s, dtype=wp.float32, device=self.device)
+        self._prepare_runtime()
         self._build_model()
         self._parameters = self._make_parameters()
         self.graph = None
@@ -787,6 +843,10 @@ class Rig:
             "solver": "newton.solvers.SolverSemiImplicit; dynamic x/z and foot pitch; planar guide only",
         }
         self.reset()
+
+    def _prepare_runtime(self):
+        """Allocate an unused push placeholder for the default mechanical rig."""
+        self._push_device = wp.zeros((1, 2), dtype=wp.float32, device=self.device)
 
     def _build_model(self):
         config, bed = self.config, self.shoe.column_bed
@@ -844,7 +904,7 @@ class Rig:
             mu=config.friction_mu,
             friction_viscous_ratio=config.friction_viscous_ratio,
             friction_release_dwell_s=config.friction_release_dwell_s,
-            ground_height_m=0.0,
+            ground_height_m=self._ground_height_m,
         )
         # Preserve the old physical construction: only the last footprint is rigidly
         # driven; outer columns use the identified foundation's passive relaxation.
@@ -875,7 +935,7 @@ class Rig:
         )
         self.foundation = MidsoleFoundation(
             bed.anchor_bottom_m - self.ankle_mount,
-            np.zeros(len(bed.rest_length_m)),
+            np.full(len(bed.rest_length_m), self._ground_height_m),
             bed.rest_length_m,
             bed.area_m2,
             bed.neighbors,
@@ -916,6 +976,7 @@ class Rig:
             "leg_min": c.minimum_leg_length_m,
             "leg_max": c.maximum_leg_length_m,
             "speed_max": c.maximum_speed_m_s,
+            "ground_height": self._ground_height_m,
         }
         for key, value in values.items():
             setattr(p, key, value)
@@ -1023,6 +1084,7 @@ class Rig:
                 self._reference_device,
                 self._log_start,
                 self._log_end,
+                self._push_device,
                 self._touchdown_device,
                 self.state_0.body_q,
                 self.state_0.body_qd,
@@ -1063,6 +1125,14 @@ class Rig:
             self.graph_status = f"eager fallback: {error}"
             warnings.warn(f"Rig graph capture failed; using eager execution: {error}", stacklevel=2)
 
+    def _update_stiffness(self, action):
+        target = self._log_min + (action + 1.0) * 0.5 * (self._log_max - self._log_min)
+        max_change = self.config.log_stiffness_slew_s * self.frame_dt / 1.875
+        endpoint = self._log_current + np.clip(target - self._log_current, -max_change, max_change)
+        self._log_start.assign(self._log_current)
+        self._log_end.assign(endpoint)
+        self._log_current[:] = endpoint
+
     def step(self, action) -> tuple[np.ndarray, np.ndarray, bool, dict]:
         """Advance one frame with two finite bounded absolute stiffness actions.
 
@@ -1078,12 +1148,7 @@ class Rig:
             raise ValueError(f"Actions must be finite with shape ({self.num_worlds},2)")
         if np.any(np.abs(action) > 1.0):
             raise ValueError("Actions must lie inside [-1,1]")
-        target = self._log_min + (action + 1.0) * 0.5 * (self._log_max - self._log_min)
-        max_change = self.config.log_stiffness_slew_s * self.frame_dt / 1.875
-        endpoint = self._log_current + np.clip(target - self._log_current, -max_change, max_change)
-        self._log_start.assign(self._log_current)
-        self._log_end.assign(endpoint)
-        self._log_current[:] = endpoint
+        self._update_stiffness(action)
         self._frame_loss_device.zero_()
         # One eager frame compiles all kernels and refreshes foundation constants
         # before graph capture. Capture never performs a host-side material update.
@@ -1132,7 +1197,7 @@ class Rig:
         if self._trace_cache is None:
             self._trace_cache = self._trace_device.numpy()[: self.index]
         data = self._trace_cache[:, int(world), :]
-        result = {name: data[:, i].astype(float, copy=True) for i, name in enumerate(TRACE_NAMES)}
+        result = {name: data[:, i].astype(float, copy=True) for i, name in enumerate(self._trace_names)}
         result["upper_x_m"] = result["pelvis_x_m"].copy()
         result["upper_z_m"] = result["pelvis_z_m"].copy()
         result["nominal_contact_phase"] = (
