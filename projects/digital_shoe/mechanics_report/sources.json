@@ -1,0 +1,23 @@
+{
+  "git_commit": "00c2804c30f7c56d8a6ea61875cfdafda44708cc",
+  "artifact_path": "outputs/impedance_instron/inputs/digital_shoe.json",
+  "artifact_sha256": "54d756cea78e22a6d253b578cf4c5db279ece63aed3ce359efffb6988d6c765f",
+  "files": {
+    "projects/digital_shoe/material.py": "b35478d605e800560c041450b278fd63fbdef8f59561f47057caa90c9811b154",
+    "projects/digital_shoe/contact.py": "69319118adaa9b4426e1a79c604a7446e96ce055bf6b4ebd705ef7211f424687",
+    "projects/digital_shoe/runtime.py": "e4c79457ad2e7d346c918d7f1d47cb73dcd9e70adcfb3517bac5094a6d5e5ab6",
+    "projects/digital_shoe/artifact.py": "684db4e16589426897922142d8a0ec53c0865f628fb6aefb5c9bb225a40b2bb6",
+    "projects/digital_shoe/showcase.py": "57493f4922b625c82dc8838bee5e740f53c48a7c912360f79b906a3522ed39d3",
+    "projects/digital_instron_v2/core.py": "9db397573fd2af535ae57d92a815fffbfd4064bfce1daaeef6f9f2c3629a614a",
+    "projects/digital_instron_v2/geometry.py": "bbf99ee842d3f5889bc25cae138eb2cfbd8bb97df3a5d6ded083495c3c3877c2",
+    "projects/digital_instron_v2/phase1.py": "5c7210f31cd084d5670d40654e48e27c6bcb1398ae899cdfa9f13e3a734bf07a",
+    "projects/digital_instron_v2/validation.py": "535f741df796ba3369f25584ff70fc7783816f18711a6e9d845eb16c8e787dde",
+    "projects/digital_instron_v2/export_digital_shoe.py": "abb941db779d782c1327705c5e3601000ca80b6dffc7d3054d1b25f38a8cd7b8",
+    "projects/digital_shoe/calibration.py": "c449affc0fd5999c0911fd876df677a92cbd105d1bd8a795f11690a7a3485fd8",
+    "projects/digital_instron_v2/dynamics_diff.py": "dd72819c722f62259bb3a8bc07adaff6a9290522f9acce5a164d0b0df1b1b95a",
+    "projects/impedance_instron/simple/rig.py": "f8e623128632320b7337504c41adbfc03d43d41568ff70e828935e0207244a4d",
+    "projects/digital_shoe/rendering.py": "ccc5fb6a9697471bc10ce968a63221637b4445d34ec9fb3fe644ea8f9a4feb9c",
+    "newton/_src/solvers/semi_implicit/solver_semi_implicit.py": "80e0cb2b1cdc66c6d1238a6145e916fd8791847a6418045151cb7e5eed03bc19",
+    "projects/digital_shoe/ACQUISITION_PROTOCOL.md": "6698b2db9c76de5739f479aac35025d82594ac0f80f8bc1cdb6d35da5ddf2090"
+  }
+}

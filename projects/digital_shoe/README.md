@@ -84,6 +84,15 @@ uv run --no-sync -m projects.digital_shoe.showcase --mode instron \
 
 Use `--viewer null --num-frames 180 --test` for either fixture's headless replay.
 
+## In-depth two-term mechanics report
+
+[Read the contact and material report](mechanics_report/REPORT.md) for the
+implemented equations, identified versus assumed settings, solver behavior,
+source references, and validation limits. The [rebuild instructions](mechanics_report/README.md)
+produce six figures and a self-contained offline HTML report from the explicitly
+pinned two-term artifact. Generated measurements, geometry figures, and reports
+stay local and ignored; the tools do not change the shoe or physics sources.
+
 ## One shared law
 
 This package owns the mechanics used by Digital Instron and the impedance rigs.
