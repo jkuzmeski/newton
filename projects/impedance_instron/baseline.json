@@ -1,0 +1,24 @@
+{
+  "schema": "controller_baseline12_1",
+  "origin": "outputs/impedance_instron/cartesian/fixed200_retest/fit12",
+  "control_count": 12,
+  "world_count": 128,
+  "iterations_completed": 200,
+  "loss": 2.185638911528388,
+  "accepted": false,
+  "files_sha256": {
+    "optimization_inputs.json": "2c7c1f25eff014f84dcb8d8ac228d3fb2bd3c700e993fd73f4ee4258c48c39e5",
+    "trace.npz": "fb792ade0b026fcd1ba12b00a9161104be6c8a203b45e06641da710fd17e67bd",
+    "refined_trace.npz": "d06926a4d498abc63a1c53758bf983d2a2ad36cc5e95270ba0896da4b4b9718f",
+    "report.html": "db0396e845c228f50bee6269236c22ebaace47700cf7bdd256dfe5e3b695aa44",
+    "digital_shoe.json": "54d756cea78e22a6d253b578cf4c5db279ece63aed3ce359efffb6988d6c765f",
+    "spring_view.npz": "ebac9ad6d987365d1fdf01a7155b6c07ff1fe374508a1e4245d520513a68b9fa",
+    "spring_view.json": "66e022c7e1721487d00533e4c66638e494f3e00112885e250a84db21ceaa1b3a",
+    "profile.json": "7a50cfa9c3c1f5d64a06c77276ddd554a25b9c50991a5f824c49297ca08cc74d",
+    "equilibrium.npz": "59974aa6806ee4ff1bd09d8c6624a9d14a95ff45e8d20b663026607d6b6fd07a",
+    "progress.json": "3019128287fac7a3d53d0d639a1e87435152a73aabb484bfb45c12dcdfafb69f",
+    "summary.json": "c40367478d3ecec284be30dd69dc136a5797750f4b9dfe9c8937eea433a6fe32",
+    "reference.npz": "6ef3ffe9c0885c3ced5e6a9a96a96a2664f6e8deb105d1305d7418cb85f71f59"
+  },
+  "qualification": "Original result retained byte-for-byte; rebuild numerical evidence before running refactored source."
+}

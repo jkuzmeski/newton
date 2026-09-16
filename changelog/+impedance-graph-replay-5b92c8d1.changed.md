@@ -1,1 +1,0 @@
-Replay the Impedance Instron substep sequence from a captured CUDA graph, cutting a rollout from 6.7 s to 0.517 s by removing about 80000 per-rollout kernel launches. Sample indices now live on the device. Use `--no-graph` for the uncaptured path, which also runs automatically on CPU.

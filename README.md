@@ -963,7 +963,7 @@ python -m newton.examples basic_viewer --viewer gl --num-frames 500 --device cpu
 ## Digital Instron / Digital Shoe showcase
 
 See the [shoe-project organization and command map](projects/README.md) for
-Digital Instron, Digital Shoe, and the current versus legacy impedance code.
+Digital Instron, Digital Shoe, and the twelve-point controller pipeline.
 
 This fork includes a standalone shoe calibrated from Digital Instron measurements.
 Export the fitted artifact and HTML report, then launch the Virtual Instron:
@@ -985,24 +985,20 @@ The measurements and footwear assets are restricted to internal fork use; see
 The integration retains the current Newton-native gait and motion adapters;
 it does not restore the branch's legacy OpenSim runtime or human-shoe pipeline.
 
-## Two-stiffness impedance Instron
+## Twelve-point single-leg controller baseline
 
-Use a frozen offline inverse-dynamics equilibrium trace and two online stiffness
-controls to follow measured pelvis-centroid height and foot pitch. Ground-reaction
-force and actuator work are evaluation outputs, not reward terms. This is a
-reduced mechanical rig, not a full human model.
-
-<img width="320" height="320" src="docs/images/examples/example_impedance_stiffness.jpg" alt="Two-stiffness rig with measured pelvis-height target">
+The controller worktree retains one pipeline: a shared 12-point Cartesian-hip,
+knee and ankle equilibrium controller with 128 fixed GPU worlds.
+It starts from the latest saved 200-iteration result, not an older seed.
 
 ```bash
-python -m newton.examples impedance_stiffness --viewer gl
+uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instron/run12
 ```
 
-Prepare the local inputs and frozen reference with the
-[Impedance Instron](projects/impedance_instron/README.md) workflow. It provides
-headless checks, training, frozen material comparisons and offline reports.
-The old `impedance_instron` example is deprecated. Source motion and shoe assets
-remain for internal fork use, not upstream redistribution.
+See [the baseline, commands, and limitations](projects/impedance_instron/README.md).
+The measured fit remains unaccepted; numerical completion is not physical
+validation. Retired controller implementations and commands have been removed.
+Motion and shoe assets remain restricted to internal fork use.
 
 ## Contributing and Development
 

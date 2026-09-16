@@ -5,6 +5,7 @@
 
 import ast
 import importlib.util
+import inspect
 import json
 import tempfile
 import unittest
@@ -17,6 +18,8 @@ import warp as wp
 
 from projects.digital_instron_v2 import example, geometry, scenario_common, scenarios_diff
 from projects.digital_shoe import rendering, showcase
+from projects.impedance_instron import pipeline
+from projects.impedance_instron.cartesian.gpu import baseline, provenance
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -100,7 +103,10 @@ class TestSharedProjectHelpers(unittest.TestCase):
 class TestProjectDependencyBoundaries(unittest.TestCase):
     def test_portable_shoe_has_no_controller_or_fitter_dependency(self):
         """Keep shared shoe code independent of its fitting and controller consumers."""
-        for path in (ROOT / "projects/digital_shoe").rglob("*.py"):
+        runtime_paths = [
+            ROOT / path for path in provenance.source_snapshot() if path.startswith("projects/digital_shoe/")
+        ]
+        for path in runtime_paths:
             for node in ast.walk(ast.parse(path.read_text())):
                 names = [a.name for a in node.names] if isinstance(node, ast.Import) else []
                 if isinstance(node, ast.ImportFrom):
@@ -112,45 +118,61 @@ class TestProjectDependencyBoundaries(unittest.TestCase):
                         name.startswith(("projects.impedance_instron", "projects.digital_instron_v2")), path
                     )
 
-    def test_active_impedance_sources_do_not_import_legacy(self):
-        """Keep the current rig and preparation sources outside the retired dependency graph."""
+    def test_active_impedance_sources_do_not_import_retired_trees(self):
+        """Keep every retained Cartesian source outside the retired dependency graph."""
         base = ROOT / "projects/impedance_instron"
-        files = [
-            *sorted((base / "simple").glob("*.py")),
-            base / "__main__.py",
-            base / "profile.py",
-            base / "orientation.py",
-            base / "trajectory.py",
-            base / "variability.py",
-        ]
-        retired = {
-            "cmaes",
-            "control",
-            "objective",
-            "example",
-            "optimize",
-            "env",
-            "train",
-            "report",
-            "explain",
-            "dashboard",
-            "summary",
-        }
+        files = [base / "__main__.py", base / "pipeline.py", *sorted((base / "cartesian").rglob("*.py"))]
+        retired = {"legacy", "simple", "paper", "joint_space"}
         for path in files:
             for node in ast.walk(ast.parse(path.read_text())):
                 if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        self.assertNotIn("projects.impedance_instron.legacy", alias.name, path)
+                    modules = [alias.name for alias in node.names]
                 elif isinstance(node, ast.ImportFrom):
                     module = node.module or ""
                     if node.level:
                         package = ".".join(path.relative_to(ROOT).parent.parts)
                         module = importlib.util.resolve_name("." * node.level + module, package)
-                    self.assertNotIn("legacy", module.split("."), path)
-                    if module == "projects.impedance_instron":
-                        self.assertFalse(retired.intersection(a.name for a in node.names), path)
-                    if module.startswith("projects.impedance_instron."):
-                        self.assertNotIn(module.split(".")[2], retired, path)
+                    modules = [module]
+                else:
+                    continue
+                for module in modules:
+                    self.assertTrue(retired.isdisjoint(module.split(".")), (path, module))
+
+    def test_pipeline_defaults_select_saved_twelve_point_qualification(self):
+        """Select the saved baseline and fixed throughput and plateau defaults."""
+        args = pipeline.create_parser().parse_args(["--output", "result"])
+        self.assertEqual(args.baseline, pipeline.DEFAULT_BASELINE)
+        self.assertEqual(args.iterations, 200)
+        self.assertEqual(args.plateau_patience, 20)
+        self.assertEqual(args.plateau_rtol, 1.0e-4)
+        self.assertIn("baseline12", str(args.baseline))
+        source = inspect.getsource(pipeline.main)
+        self.assertIn("worlds=128", source)
+        self.assertIn("expected_controls=12", source)
+
+    def test_baseline_replays_saved_twelve_point_controller(self):
+        """Build the CPU baseline from saved coefficients without seed generation."""
+        source = inspect.getsource(baseline.build)
+        self.assertIn("controls = 12", source)
+        self.assertIn('source / "equilibrium.npz"', source)
+        self.assertIn("simulate(reference, profile, equilibrium", source)
+        self.assertNotIn("np.random", source)
+        self.assertNotIn("refine_spline", source)
+
+    def test_provenance_rejects_any_runtime_source_change(self):
+        """Fail closed for missing, extra, and changed runtime source identities."""
+        current = provenance.source_snapshot()
+        audit = provenance.validate_sources({"source_sha256": current})
+        self.assertTrue(audit["validated"])
+        changed = dict(current)
+        first = next(iter(changed))
+        changed[first] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "source changed"):
+            provenance.validate_sources({"source_sha256": changed})
+        with self.assertRaisesRegex(ValueError, "Incomplete or historical"):
+            provenance.validate_sources({"source_sha256": dict(list(current.items())[1:])})
+        with self.assertRaisesRegex(ValueError, "Incomplete or historical"):
+            provenance.validate_sources({"source_sha256": {**current, "unexpected.py": "0" * 64}})
 
 
 class TestDuplicateReviewTool(unittest.TestCase):

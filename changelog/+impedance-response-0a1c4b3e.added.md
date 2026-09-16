@@ -1,1 +1,0 @@
-Add an opt-in Impedance Instron response experiment that separates nominal movement loads from spring–damper feedback and compares paired pushes and static ground-height changes without expanding the existing RL action space.

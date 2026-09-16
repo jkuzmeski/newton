@@ -61,11 +61,9 @@ class TestFootwearMechanicsFigures(unittest.TestCase):
             import matplotlib  # noqa: F401
         except ImportError:
             self.skipTest("Figure generation requires optional matplotlib")
-        artifact_source = figures.ROOT / "outputs/impedance_instron/inputs/digital_shoe.json"
+        artifact_source = figures.ROOT / "outputs/impedance_instron/baseline12/digital_shoe.json"
         if not artifact_source.is_file():
             self.skipTest("The approved saved footwear artifact is not available")
-        from projects.impedance_instron.simple.rig import RigConfig  # noqa: PLC0415
-
         with tempfile.TemporaryDirectory(prefix="footwear figures ") as temporary:
             artifact = Path(temporary) / "artifact copy.json"
             artifact.write_bytes(artifact_source.read_bytes())
@@ -114,14 +112,13 @@ class TestFootwearMechanicsFigures(unittest.TestCase):
                     str(output.resolve()),
                 ],
             )
-            rig = RigConfig()
             settings = metadata["figures"]["contact_bristle"]["settings_assumed_not_identified"]
             for key, expected in {
-                "kt_n_per_m": rig.contact_kt_n_m,
-                "kv_n_s_per_m": rig.contact_kd_n_s_m,
-                "mu": rig.friction_mu,
-                "viscous_ratio": rig.friction_viscous_ratio,
-                "release_dwell_s": rig.friction_release_dwell_s,
+                "kt_n_per_m": 10000.0,
+                "kv_n_s_per_m": 10.0,
+                "mu": 0.8,
+                "viscous_ratio": 0.2,
+                "release_dwell_s": 0.0005,
             }.items():
                 self.assertEqual(settings[key], expected)
             for stem in ("validation_rearfoot", "validation_fullfoot"):

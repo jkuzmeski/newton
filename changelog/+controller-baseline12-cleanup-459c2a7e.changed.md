@@ -1,0 +1,1 @@
+Promote the latest twelve-point controller to the Impedance Instron baseline. Use `uv run --no-sync -m projects.impedance_instron --output NEW_DIRECTORY` for fresh numerical qualification, shared GPU fitting, and replay. Remove retired experimental rigs, optimizers, aliases, and control-count comparisons without changing Newton public APIs or the shared shoe laws.

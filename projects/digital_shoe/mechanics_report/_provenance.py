@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 MANIFEST = Path(__file__).with_name("sources.json")
-DEFAULT_ARTIFACT = ROOT / "outputs/impedance_instron/inputs/digital_shoe.json"
+DEFAULT_ARTIFACT = ROOT / "outputs/impedance_instron/baseline12/digital_shoe.json"
 DEFAULT_OUTPUT = ROOT / "outputs/footwear_contact_material_report"
 
 

@@ -15,9 +15,12 @@
     "projects/digital_instron_v2/export_digital_shoe.py": "abb941db779d782c1327705c5e3601000ca80b6dffc7d3054d1b25f38a8cd7b8",
     "projects/digital_shoe/calibration.py": "c449affc0fd5999c0911fd876df677a92cbd105d1bd8a795f11690a7a3485fd8",
     "projects/digital_instron_v2/dynamics_diff.py": "dd72819c722f62259bb3a8bc07adaff6a9290522f9acce5a164d0b0df1b1b95a",
-    "projects/impedance_instron/simple/rig.py": "f8e623128632320b7337504c41adbfc03d43d41568ff70e828935e0207244a4d",
     "projects/digital_shoe/rendering.py": "ccc5fb6a9697471bc10ce968a63221637b4445d34ec9fb3fe644ea8f9a4feb9c",
     "newton/_src/solvers/semi_implicit/solver_semi_implicit.py": "80e0cb2b1cdc66c6d1238a6145e916fd8791847a6418045151cb7e5eed03bc19",
     "projects/digital_shoe/ACQUISITION_PROTOCOL.md": "6698b2db9c76de5739f479aac35025d82594ac0f80f8bc1cdb6d35da5ddf2090"
-  }
+  },
+  "historical_context_only": {
+    "projects/impedance_instron/simple/rig.py": "f8e623128632320b7337504c41adbfc03d43d41568ff70e828935e0207244a4d"
+  },
+  "context_note": "The removed rig supplied historical illustrative bristle settings, not the material/contact implementation. Active figure settings are declared in figures.py; this report does not certify a controller."
 }

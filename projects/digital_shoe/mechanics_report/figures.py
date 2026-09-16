@@ -489,9 +489,7 @@ def bristle_figure(directory):
     amplitude_mm = settings["amplitude_m"] * 1000
     ax.set(xlim=(-1.12 * amplitude_mm, 1.12 * amplitude_mm), ylim=(-1.34 * cap, 1.34 * cap))
     decorate(ax, "Tangential position [mm]", "Tangential contact force [N]")
-    ax.set_title(
-        "Illustrative N = 10 N; rig defaults: kₜ = 10,000 N/m; μ = 0.8; kᵥ = 10 N·s/m", loc="left", fontsize=11, pad=38
-    )
+    ax.set_title("Illustrative N = 10 N; kₜ = 10,000 N/m; μ = 0.8; kᵥ = 10 N·s/m", loc="left", fontsize=11, pad=38)
     ax.legend(
         handles=[
             Line2D([0], [0], color=BLUE, label="Elastic stick (anchor fixed)"),
@@ -519,7 +517,7 @@ def bristle_figure(directory):
         directory,
         "contact_bristle",
         "Illustrative bristle cycle — shared Warp contact law",
-        "Current rig contact defaults with illustrative fixed N; not Instron-fitted or experimental validation.\n"
+        "Declared illustrative contact settings with fixed N; not Instron-fitted or experimental validation.\n"
         "Second sinusoidal cycle shown in color: ±2.4 mm, period 0.8 s, Δt = 0.2 ms. N stays fixed; no lift-off.\n"
         "Viscous ratio = 0.2; release dwell = 0.5 ms (inactive). Force is the reaction on the moving contact.",
     )
@@ -527,7 +525,7 @@ def bristle_figure(directory):
     return {
         "provenance": "Fresh Warp CPU execution of projects.digital_shoe.contact.bristle_step",
         "settings_assumed_not_identified": settings,
-        "contact_defaults_source": "projects/impedance_instron/simple/rig.py: RigConfig",
+        "contact_defaults_source": "Illustrative settings declared in projects/digital_shoe/mechanics_report/figures.py",
         "illustrative_inputs": ["normal_n", "amplitude_m", "period_s", "dt_s", "cycles"],
         "elastic_slip_limit_m": cap / settings["kt_n_per_m"],
         "device": "cpu",
@@ -609,7 +607,6 @@ def generate_figures(artifact_path: Path, output_dir: Path) -> dict:
         ROOT / "projects/digital_shoe/material.py",
         ROOT / "projects/digital_shoe/contact.py",
         ROOT / "projects/digital_instron_v2/validation.py",
-        ROOT / "projects/impedance_instron/simple/rig.py",
     ]
     command = shlex.join(
         [

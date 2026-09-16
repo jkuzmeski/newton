@@ -7,7 +7,7 @@ not by the age or size of a source file.
 |---|---|---|
 | [`digital_instron_v2`](digital_instron_v2/README.md) | Prepare bench data, identify material, validate and export it | `uv run --no-sync -m projects.digital_instron_v2 --help` |
 | [`digital_shoe`](digital_shoe/README.md) | Own portable artifacts, shared material/contact laws and shoe-only examples | `uv run --no-sync -m projects.digital_shoe --help` |
-| [`impedance_instron`](impedance_instron/README.md) | Run the current two-stiffness experiment using the identified shoe | `uv run --no-sync -m projects.impedance_instron --help` |
+| [`impedance_instron`](impedance_instron/README.md) | Run one leg/shoe with Cartesian hip and knee/ankle equilibrium splines | `uv run --no-sync -m projects.impedance_instron --help` |
 
 [`gait_c3d`](gait_c3d/README.md) supplies separate motion/data adapters. It is not
 another shoe constitutive or contact implementation.
@@ -25,7 +25,7 @@ Digital Instron preparation / identification / validation
 Digital Shoe artifact + material/contact/runtime/calibration
         |
         v
-Impedance Instron current experiment (simple/)
+Impedance Instron single-leg Cartesian-hip stance (cartesian/)
 ```
 
 Digital Shoe does not import the fitting project or the impedance controller.
@@ -50,8 +50,7 @@ module-specific commands remain supported with the same flags and defaults.
 | Rebuild an artifact's offline report | `python -m projects.digital_shoe report ...` | `python -m projects.digital_shoe.report ...` |
 | Record the artifact examples | `python -m projects.digital_shoe record ...` | `python -m projects.digital_shoe.record_gifs ...` |
 | Check an acquisition manifest | `python -m projects.digital_shoe check-acquisition ...` | `python -m projects.digital_shoe.acquisition ...` |
-| Prepare/run/train/evaluate the active impedance experiment | `python -m projects.impedance_instron <command> ...` | Current implementation in `simple/` |
-| View the active impedance rig | `python -m newton.examples impedance_stiffness ...` | `python -m projects.impedance_instron.simple.example ...` |
+| Run the twelve-point baseline pipeline | `python -m projects.impedance_instron --output NEW_DIRECTORY` | Fresh numerical qualification, GPU fit, frozen refinement, and replay |
 
 Use `uv run --no-sync` before these commands. A package invoked with no command
 shows help; it does not start a fit or simulation. A command followed by `--help`
@@ -95,40 +94,22 @@ stack. Artifact loading and actual mechanics still require their normal dependen
 The versioned package name and existing module paths are retained. A directory
 reorganization is not a reason to rename public material records or Warp kernels.
 
-### Current experiment versus retired code: `impedance_instron/`
+### Twelve-point controller: `impedance_instron/`
 
-- `__main__.py` and `simple/`: current fixed-clock, two-stiffness workflow.
-- `profile.py`, `orientation.py`, `trajectory.py`, `variability.py`: preparation
-  and geometry helpers used by the current workflow. They are **not legacy**.
-- `mcclough.py`: optional published-material analysis through the shared law.
-- `legacy/`: retired controller, optimizer, environment, trainer and reports.
-- Old root module names such as `env.py` and `train.py`: compatibility aliases,
-  not second copies of the retired implementations.
-- `REPORT.md`: current results and qualification boundary.
-- `LEGACY_REPORT.md`: historical report template.
-- `WORKTREE_SUMMARY.md`: cross-generation implementation history and evidence.
+`pipeline.py` runs the only retained controller workflow. `cartesian/` owns its
+model, objective, reference validation and replay. `cartesian/gpu/` owns the
+shared resident optimizer and numerical qualification. The previous controller
+rigs, preparation chains, aliases, serial optimizers and comparison tools are
+removed. See [the baseline guide](impedance_instron/README.md).
 
-Read [`legacy/README.md`](impedance_instron/legacy/README.md) before using an old
-controller or checkpoint. Do not attach historical figures/scores to current runs.
+## Data and provenance
 
-## Data, provenance and compatibility
-
-Generated artifacts, checkpoints, traces and report outputs stay under local
-ignored data directories. They are not moved by this cleanup or supplied by a
-source checkout. See [`ASSET_PROVENANCE.md`](../ASSET_PROVENANCE.md) for restrictions.
-The local legacy archive is optional historical evidence, not the implementation.
-
-Keep active `simple/` code, its preparation helpers and the shared physics source
-files in place: their exact bytes/paths participate in frozen identities. Old
-module imports and CLI commands continue to work through aliases. A moved legacy
-implementation has a new defining module/file and may get a new diagnostic source
-hash; old generic pickle lookups remain supported, but new pickles are not promised
-to load in a checkout that predates `legacy/`. Checkpoint checks are not bypassed.
-
-This organization pass does not change the two-term law, calibrated material,
-contact mechanics, fitting objective/optimizer, reference, policy, or unresolved
-upper-last seating assumptions. Advanced fitting/replay changes should be reviewed
-and measured separately.
+The selected result and portable shoe are in the local ignored
+`outputs/impedance_instron/baseline12/` bundle. Its original files remain
+byte-identical. New executions rebuild source- and input-matched numerical
+evidence rather than bypass old hashes. A source checkout does not contain the
+restricted motion and shoe data; see [asset provenance](../ASSET_PROVENANCE.md).
+General Newton, Digital Shoe, calibration and separate gait APIs are unchanged.
 
 ## Duplicate-function review
 
