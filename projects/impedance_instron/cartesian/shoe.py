@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -32,9 +33,19 @@ class Shoe:
         static_pitch_rad: Measured static foot-axis angle [rad]. The intrinsic
             shoe is level in the static calibration, not aligned to skin markers.
         device: Warp device. CPU avoids device round trips in this reference solver.
+        foundation_config: Optional foundation configuration overriding the
+            default horizontal ground plane and friction assumptions.
     """
 
-    def __init__(self, artifact_path: str | Path, mount_m, static_pitch_rad: float, device: str = "cpu"):
+    def __init__(
+        self,
+        artifact_path: str | Path,
+        mount_m,
+        static_pitch_rad: float,
+        device: str = "cpu",
+        *,
+        foundation_config: FoundationConfig | None = None,
+    ):
         self.artifact_path = Path(artifact_path).resolve()
         self.shoe = load_artifact(self.artifact_path)
         self.mount_m = np.asarray(mount_m, dtype=float)
@@ -66,6 +77,26 @@ class Shoe:
         sites[:, 2] += bed.anchor_bottom_m[supported, 2] - fixture.foam_bottom_m
         self.attachment_local_m[supported] = sites - self.mount_m
         gap = sites[:, 2] - (bed.anchor_bottom_m[supported, 2] + bed.rest_length_m[supported])
+        stance_attachment = self.shoe.raw.get("stance_attachment")
+        attachment_desc = "fullfoot last and driven spring tops share one rigid carrier with fixed assembly offsets"
+        if stance_attachment is not None:
+            if not isinstance(stance_attachment, dict):
+                raise ValueError("stance_attachment must be a dictionary")
+            mode = stance_attachment.get("mode")
+            if mode != "all_columns":
+                raise ValueError(f"Unsupported stance_attachment mode: {mode}")
+            top_plane_z_m = stance_attachment.get("top_plane_z_m")
+            if top_plane_z_m is None or not np.isfinite(top_plane_z_m):
+                raise ValueError("stance_attachment top_plane_z_m must be a finite float")
+            nominal_tops_z = bed.anchor_bottom_m[:, 2] + bed.rest_length_m
+            if not np.allclose(nominal_tops_z, float(top_plane_z_m), atol=1e-6):
+                raise ValueError("Column rest tops do not match stance_attachment top_plane_z_m")
+            driven[:] = 1
+            self.attachment_local_m = self.anchor_local_m.copy()
+            self.attachment_local_m[:, 2] += bed.rest_length_m
+            gap = np.zeros(len(bed.rest_length_m))
+            attachment_desc = "all columns driven by rigid carrier with flat top plane attachment"
+
         mesh = self.shoe.visual_mesh("fullfoot_last")
         self.last_vertices_local_m = mesh.vertices_m - self.mount_m
         self.last_triangles = mesh.triangles.copy()
@@ -83,9 +114,24 @@ class Shoe:
         # would add an unintended parallel force path.
         self.model = builder.finalize(device=self.device)
         self.state = self.model.state()
+        if foundation_config is not None:
+            if foundation_config.ground_height_m is None or not np.isfinite(foundation_config.ground_height_m):
+                raise ValueError("foundation_config ground_height_m must be a finite float")
+            ground_plane_height = float(foundation_config.ground_height_m)
+            effective_config = foundation_config
+        else:
+            ground_plane_height = 0.0
+            effective_config = FoundationConfig(
+                ground_height_m=0.0,
+                normal_damping=0.0,
+                friction_stiffness=10000.0,
+                friction=10.0,
+                mu=0.8,
+            )
+        z_free = np.full(len(bed.rest_length_m), ground_plane_height, dtype=np.float32)
         self.foundation = MidsoleFoundation(
             self.anchor_local_m,
-            np.zeros(len(bed.rest_length_m)),
+            z_free,
             bed.rest_length_m,
             bed.area_m2,
             bed.neighbors,
@@ -93,13 +139,7 @@ class Shoe:
             self.shoe.material,
             0,
             self.model.body_com,
-            FoundationConfig(
-                ground_height_m=0.0,
-                normal_damping=0.0,
-                friction_stiffness=10000.0,
-                friction=10.0,
-                mu=0.8,
-            ),
+            effective_config,
             self.device,
             SurroundConfig(driven=driven, carrier_bond=True),
         )
@@ -115,7 +155,7 @@ class Shoe:
             "mount_m": self.mount_m.tolist(),
             "static_pitch_rad": self.static_pitch_rad,
             "registration": "rigid placement only; no geometry scaling or material refit",
-            "attachment": "fullfoot last and driven spring tops share one rigid carrier with fixed assembly offsets",
+            "attachment": attachment_desc,
             "column_count": len(driven),
             "driven_columns": int(driven.sum()),
             "passive_columns": int(len(driven) - driven.sum()),
@@ -133,6 +173,16 @@ class Shoe:
                 "source": "declared contact assumptions, not identified by normal Instron loading",
             },
         }
+        if stance_attachment is not None:
+            self.metadata["stance_attachment"] = dict(stance_attachment)
+        if foundation_config is not None:
+            self.metadata["foundation_config"] = asdict(foundation_config)
+            self.metadata["friction"] = {
+                "mu": float(effective_config.mu),
+                "per_column_stiffness_n_m": float(np.mean(self.foundation.friction_kt.numpy())),
+                "per_column_damping_n_s_m": float(np.mean(self.foundation.friction_kv.numpy())),
+                "source": "declared contact assumptions, not identified by normal Instron loading",
+            }
         points = bed.anchor_bottom_m[:, (0, 2)] - self.mount_m[[0, 2]]
         # A sagittal outline is an undeformed registration diagnostic, not a
         # claim that rigid columns remain undeformed during contact.
@@ -180,7 +230,7 @@ class Shoe:
                 self.foundation.rest_len,
                 self.foundation.compression,
                 self.foundation.driven,
-                0.0,
+                float(self.foundation.ground_height_m if self.foundation.ground_height_m is not None else 0.0),
                 self._bottoms,
                 self._tops,
             ],

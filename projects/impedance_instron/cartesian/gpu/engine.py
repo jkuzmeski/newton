@@ -758,6 +758,8 @@ class Engine:
         world_count: Fixed batch size, one independent leg/shoe per candidate.
         device: CUDA device; the engine does not offer a CPU fallback.
         chunk_steps: Number of integration steps captured in a reusable graph.
+        foundation_config: Optional foundation configuration overriding the
+            default horizontal ground plane and friction assumptions.
     """
 
     def __init__(
@@ -773,6 +775,7 @@ class Engine:
         world_count: int = 49,
         device: str = "cuda:0",
         chunk_steps: int = 32,
+        foundation_config: FoundationConfig | None = None,
     ):
         started = perf_counter()
         self.device = wp.get_device(device)
@@ -791,7 +794,13 @@ class Engine:
         self.dt = self.duration / self.steps
         self.time_s = np.linspace(0.0, self.duration, self.steps + 1)
         # Use the canonical adapter once for artifact registration and footprint selection.
-        self.shoe = Shoe(artifact, mount_m, static_pitch_rad, device=str(self.device))
+        self.shoe = Shoe(
+            artifact,
+            mount_m,
+            static_pitch_rad,
+            device=str(self.device),
+            foundation_config=foundation_config,
+        )
         if np.any(self.shoe.model.body_com.numpy()):
             raise ValueError("The reference shoe carrier COM must remain at its ankle origin")
         self.carriers = SimpleNamespace(
@@ -800,9 +809,18 @@ class Engine:
             body_f=wp.zeros(world_count, dtype=wp.spatial_vector, device=self.device),
         )
         bed = self.shoe.shoe.column_bed
+        effective_foundation_config = (
+            foundation_config
+            if foundation_config is not None
+            else FoundationConfig(
+                ground_height_m=0.0, normal_damping=0.0, friction_stiffness=10000.0, friction=10.0, mu=0.8
+            )
+        )
+        ground_plane_height = float(foundation_config.ground_height_m) if foundation_config is not None else 0.0
+        z_free = np.full(len(bed.rest_length_m), ground_plane_height, dtype=np.float32)
         self.foundation = FoundationFused(
             self.shoe.anchor_local_m,
-            np.zeros(len(bed.rest_length_m)),
+            z_free,
             bed.rest_length_m,
             bed.area_m2,
             bed.neighbors,
@@ -810,9 +828,7 @@ class Engine:
             self.shoe.shoe.material,
             np.arange(world_count),
             wp.zeros(world_count, dtype=wp.vec3, device=self.device),
-            FoundationConfig(
-                ground_height_m=0.0, normal_damping=0.0, friction_stiffness=10000.0, friction=10.0, mu=0.8
-            ),
+            effective_foundation_config,
             self.device,
             self.shoe.foundation.surround,
             world_count=world_count,

@@ -335,6 +335,7 @@ showcontent = true
 files.extend-exclude = ["/examples/assets", "*.urdf", "*.usd", "*.usda", "*.mjcf", "*.js"]
 
 [tool.typos.default.extend-words]
+CANN = "CANN"  # Constitutive Artificial Neural Network
 arange = "arange"
 precess = "precess"
 ba = "ba"

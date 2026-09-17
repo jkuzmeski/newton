@@ -1,0 +1,1 @@
+Add frozen-controller shoe material and geometry experiments with rearfoot and fullfoot hysteresis, synchronized native comparisons, actuator work and baseline percentages, and paper-informed compression surrogates with explicit domain limits.
