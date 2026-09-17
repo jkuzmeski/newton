@@ -155,7 +155,7 @@ def profile_search(directory: Path, output: Path, *, iterations: int = 10, repea
 def main(argv: list[str] | None = None) -> None:
     """Run the reusable timing-only search benchmark."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, default=Path("outputs/impedance_instron/baseline12_accepted"))
+    parser.add_argument("--baseline", type=Path, default=Path("outputs/impedance_instron/baseline12_maxwell"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--iterations", type=_positive, default=10)
     parser.add_argument("--repeats", type=_positive, default=3)

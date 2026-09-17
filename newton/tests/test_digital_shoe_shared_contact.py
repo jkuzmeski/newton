@@ -101,7 +101,20 @@ class TestSharedContact(unittest.TestCase):
         """Invalidate checkpoint physics identity when any shared law source changes."""
         baseline = physics_source_identity()
         read = Path.read_bytes
-        for filename in ("runtime.py", "material.py", "contact.py"):
+        for filename in (
+            "runtime.py",
+            "material.py",
+            "contact.py",
+            "friction_law.py",
+            "friction_deflection.py",
+            "friction_stribeck.py",
+            "friction_pressure.py",
+            "friction_slip_history.py",
+            "friction_maxwell.py",
+            "friction_parameter_adapter.py",
+            "friction_solver.py",
+            "friction_adapter.py",
+        ):
             with self.subTest(filename=filename):
 
                 def changed(path, target=filename):

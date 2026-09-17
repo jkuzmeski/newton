@@ -43,7 +43,7 @@ an exhaustive search over eight independent gain values.
 
 Multipliers are relative to the chosen bundle. The example below deliberately
 uses the preserved `baseline12` bundle to repeat the original gain grid.
-The default pipeline, profilers, and audits now use `baseline12_accepted`, whose
+The default pipeline, profilers, and audits now use `baseline12_maxwell`, whose
 stiffness and damping are already twice that older nominal profile. Using the
 accepted bundle for a new gain screen therefore defines a different gain grid.
 
@@ -270,3 +270,5 @@ an autodiff-fitting result or a changed acceptance criterion.
 The controller, traces, qualification evidence, and verified spring replay are
 under `outputs/impedance_instron/speed_round2_qualified/`. Open
 `fit/report.html` to inspect the saved result.
+
+The current default contact law is Maxwell shear friction. Legacy fused friction remains an explicit compatibility mode. Default Maxwell currently uses the shared foundation launch path, including retained normal-surround optimization.

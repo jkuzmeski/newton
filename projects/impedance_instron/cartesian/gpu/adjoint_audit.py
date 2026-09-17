@@ -230,7 +230,7 @@ def audit(
 def main(argv: list[str] | None = None):
     """Run a reproducible coupled-window gradient audit on the saved controller."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, default=Path("outputs/impedance_instron/baseline12_accepted"))
+    parser.add_argument("--baseline", type=Path, default=Path("outputs/impedance_instron/baseline12_maxwell"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--start-step", type=int, default=0)
