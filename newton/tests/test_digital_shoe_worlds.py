@@ -257,7 +257,6 @@ def _run(
     poison_slot: int | None = None,
     surround: bool = True,
     materials: list[ShoeMaterial] | None = None,
-    friction_model: str = "maxwell",
 ) -> dict[str, np.ndarray]:
     """Step the batched foundation through the scripted motion and return every public array.
 
@@ -305,7 +304,6 @@ def _run(
             friction_stiffness=1.0e4,
             friction=20.0,
             mu=0.6,
-            friction_model=friction_model,
         ),
         device,
         SurroundConfig(driven=bed["driven"], max_strain=0.9, sweeps=3, carrier_bond=True) if surround else None,
@@ -440,7 +438,7 @@ class TestBatchedMidsoleFoundation(unittest.TestCase):
         must be free for existing callers, so exact float32 bytes are the acceptance
         criterion everywhere the arithmetic is unchanged.
         """
-        result = _run(world_count=1, device=wp.get_device("cpu"), friction_model="legacy")
+        result = _run(world_count=1, device=wp.get_device("cpu"))
         self.assert_matches_pre_batching(result)
         # The scenario has to be loaded, sliding and viscoelastic, or the digests
         # above would pin an idle bed.
@@ -561,7 +559,7 @@ class TestBatchedMidsoleFoundation(unittest.TestCase):
         material through the new API must therefore be a no-op down to the last
         bit, on the digests captured from the runtime that predates both changes.
         """
-        result = _run(world_count=1, device=wp.get_device("cpu"), materials=[MATERIAL], friction_model="legacy")
+        result = _run(world_count=1, device=wp.get_device("cpu"), materials=[MATERIAL])
         self.assert_matches_pre_batching(result)
         for device in _available_devices():
             with self.subTest(device=str(device)):

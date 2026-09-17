@@ -142,12 +142,18 @@ def replay(reference: dict, trace: dict, summary: dict, profile: dict, identity:
     if not device.is_cuda:
         raise ValueError(f"GPU contact replay requires a CUDA device, got {device_name}")
 
+    foundation_config = None
+    if "foundation_config" in metadata:
+        from projects.digital_shoe.runtime import FoundationConfig  # noqa: PLC0415
+
+        foundation_config = FoundationConfig(**metadata["foundation_config"])
+
     shoe = Shoe(
         metadata["path"],
         metadata["mount_m"],
         metadata["static_pitch_rad"],
         str(device),
-        friction_model=metadata.get("friction_model", "legacy"),
+        foundation_config=foundation_config,
     )
     if springs._plain(shoe.metadata) != springs._plain(metadata):
         different = sorted(
@@ -228,7 +234,7 @@ def replay(reference: dict, trace: dict, summary: dict, profile: dict, identity:
             shoe.foundation.rest_len,
             compression_d,
             shoe.foundation.driven,
-            0.0,
+            float(shoe.foundation.ground_height_m if shoe.foundation.ground_height_m is not None else 0.0),
             bottoms_d,
             tops_d,
         ],

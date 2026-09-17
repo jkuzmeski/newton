@@ -11,7 +11,6 @@ import numpy as np
 import warp as wp
 
 from projects.digital_shoe.contact import bristle_step, contact_kinematics, normal_reaction, pasternak_flux
-from projects.digital_shoe.friction_maxwell import bristle_maxwell_step
 from projects.digital_shoe.material import maxwell_coefficients, maxwell_step
 from projects.digital_shoe.runtime import FoundationParams, _hyperfoam_pressure, _pasternak_coupling, _surround_balance
 
@@ -165,10 +164,6 @@ def _forces(
     anchor_prev: wp.array[wp.vec2],
     stuck_prev: wp.array[int],
     dwell_prev: wp.array[float],
-    deflection_prev: wp.array[wp.vec2],
-    maxwell_prev: wp.array[wp.vec2],
-    deflection_next: wp.array[wp.vec2],
-    maxwell_next: wp.array[wp.vec2],
     anchor_next: wp.array[wp.vec2],
     stuck_next: wp.array[int],
     dwell_next: wp.array[float],
@@ -184,41 +179,20 @@ def _forces(
     flux = pasternak_flux(c, w * columns, compression, rest, neighbors, p.g_eq + p.g_eq2)
     point, _com, velocity, gap = contact_kinematics(body_q[w], body_qd[w], body_com[w], anchor[c], ground_height, 1)
     reaction = normal_reaction(compression[i], pressure[i], area[c], p.normal_damping, velocity[2], gap, 1)
-    if p.friction_model == 1:
-        tangent, _jac, z, q, next_stuck, next_dwell = bristle_maxwell_step(
-            wp.vec2(velocity[0], velocity[1]),
-            dt,
-            reaction,
-            kt[c],
-            kv[c],
-            p.friction_relaxation_time_s,
-            p.mu,
-            p.friction_release_dwell_s,
-            deflection_prev[i],
-            maxwell_prev[i],
-            stuck_prev[i],
-            dwell_prev[i],
-        )
-        deflection_next[i] = z
-        maxwell_next[i] = q
-        next_anchor = wp.vec2(point[0], point[1]) + dt * wp.vec2(velocity[0], velocity[1]) - z
-    else:
-        tangent, next_anchor, next_stuck, next_dwell = bristle_step(
-            wp.vec2(point[0], point[1]),
-            wp.vec2(velocity[0], velocity[1]),
-            dt,
-            reaction,
-            kt[c],
-            kv[c],
-            p.mu,
-            p.friction_viscous_ratio,
-            p.friction_release_dwell_s,
-            anchor_prev[i],
-            stuck_prev[i],
-            dwell_prev[i],
-        )
-        deflection_next[i] = wp.vec2(0.0)
-        maxwell_next[i] = wp.vec2(0.0)
+    tangent, next_anchor, next_stuck, next_dwell = bristle_step(
+        wp.vec2(point[0], point[1]),
+        wp.vec2(velocity[0], velocity[1]),
+        dt,
+        reaction,
+        kt[c],
+        kv[c],
+        p.mu,
+        p.friction_viscous_ratio,
+        p.friction_release_dwell_s,
+        anchor_prev[i],
+        stuck_prev[i],
+        dwell_prev[i],
+    )
     anchor_next[i] = next_anchor
     stuck_next[i] = next_stuck
     dwell_next[i] = next_dwell
@@ -315,8 +289,6 @@ class ContactTape:
             "tangent_anchor": wp.vec2,
             "tangent_stuck": int,
             "tangent_dwell": float,
-            "tangent_deflection": wp.vec2,
-            "tangent_maxwell_force": wp.vec2,
             "surround_compression": float,
         }
 
@@ -376,11 +348,6 @@ class ContactTape:
             raise ValueError("Controller contact requires a declared ground plane")
         if not np.array_equal(source.carrier.numpy(), np.arange(source.world_count)):
             raise ValueError("Controller contact requires one indexed carrier per world")
-        adapter = getattr(source, "friction_solver", None)
-        if adapter is not None and not getattr(adapter, "is_default", False):
-            raise ValueError(
-                "ContactTape supports the configured default friction model, not arbitrary attached overrides"
-            )
         self.source = source
         self.device = source.device
         self.dt = float(dt)
@@ -521,10 +488,6 @@ class ContactTape:
                 prev.tangent_anchor,
                 prev.tangent_stuck,
                 prev.tangent_dwell,
-                prev.tangent_deflection,
-                prev.tangent_maxwell_force,
-                nxt.tangent_deflection,
-                nxt.tangent_maxwell_force,
                 nxt.tangent_anchor,
                 nxt.tangent_stuck,
                 nxt.tangent_dwell,

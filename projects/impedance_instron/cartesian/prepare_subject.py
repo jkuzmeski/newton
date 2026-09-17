@@ -22,7 +22,7 @@ from projects.gait_c3d.native_motion_fit import load_native_motion_artifact
 from projects.gait_c3d.treadmill import belt_motion, load_treadmill_log
 
 ROOT = Path(__file__).resolve().parents[3]
-BASELINE_BUNDLE = ROOT / "outputs/impedance_instron/baseline12_maxwell"
+BASELINE_BUNDLE = ROOT / "outputs/impedance_instron/baseline12_accepted"
 STATIC_MARKER_NAMES = (
     "LHEE",
     "LHEE2",

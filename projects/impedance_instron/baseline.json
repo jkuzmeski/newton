@@ -1,43 +1,39 @@
 {
   "schema": "controller_baseline12_1",
-  "origin": "default Maxwell promotion from archived legacy accepted controller",
-  "bundle": "outputs/impedance_instron/baseline12_maxwell",
+  "origin": "outputs/impedance_instron/gain_sweeps/S001/runs/k2.00_d2.00_perturbed_i2718_s101_n200/fit",
+  "bundle": "outputs/impedance_instron/baseline12_accepted",
   "control_count": 12,
   "world_count": 128,
+  "iterations_completed": 200,
+  "search_seed": 101,
+  "initialization_seed": 2718,
+  "loss": 1.5389228967121338,
   "accepted": true,
-  "loss": 1.6440621601485659,
   "metrics": {
     "hip_rmse_m": [
-      0.007449841558901681,
-      0.019745797979183063
+      0.007053141433003881,
+      0.019988331770734506
+    ],
+    "hip_maximum_error_m": [
+      0.01478393795046773,
+      0.03954198214900839
     ],
     "joint_rmse_rad": [
-      0.02374160044353205,
-      0.030699970259083924
+      0.02118672157133331,
+      0.02920086612547183
+    ],
+    "joint_maximum_error_rad": [
+      0.055021106721586,
+      0.08247599617607501
     ],
     "force_rmse_n": [
-      91.29571895960767,
-      85.94655847279523
-    ]
-  },
-  "friction_model": {
-    "mu": 0.8,
-    "model": "maxwell",
-    "per_column_stiffness_n_m": 1000.0,
-    "per_column_damping_n_s_m": 10.0,
-    "relaxation_time_s": 0.0051501095220815776,
-    "source": "declared contact assumptions, not identified by normal Instron loading"
-  },
-  "initialization": {
-    "kind": "legacy_controller_hip_z_offset_for_maxwell",
-    "used_previous_controller_coefficients": true,
-    "hip_z_equilibrium_offset_m": 0.0015,
-    "modified_coefficient_channels": [
-      "hip_z"
+      89.85219665777502,
+      79.1628978756256
     ],
-    "gains_changed": false,
-    "normal_model_changed": false,
-    "selection": "Smallest passing offset in the declared -4 to4 mm grid at0.5mm spacing; validation thresholds unchanged."
+    "force_maximum_error_n": [
+      413.9361199993946,
+      264.2110678975039
+    ]
   },
   "fixed_gains": {
     "hip_stiffness_n_m": [
@@ -57,52 +53,208 @@
       8.0
     ]
   },
+  "initialization": {
+    "kind": "fresh_perturbed_seed",
+    "used_previous_controller_coefficients": false,
+    "used_optimizer_history": false,
+    "simulation_or_loss_evaluations_for_initialization": 0,
+    "formula": "q_reference + (D/K) * velocity_reference, channels hip-x/hip-z/knee/ankle",
+    "sampling": "linear interpolation at twelve cubic-spline Greville abscissae",
+    "bounds_handling": "contract each channel toward its initial neutral point; canonical strict bounds",
+    "channel_contraction": [
+      1.0,
+      1.0,
+      0.7185732535863133,
+      0.9533171578270012
+    ],
+    "neutral_anchor": [
+      0.3438762955478155,
+      1.0034318524621595,
+      -0.044596832840280334,
+      -0.027059893643763287
+    ],
+    "sample_times_s": [
+      0.0,
+      0.013333333333333312,
+      0.03999999999999993,
+      0.07999999999999986,
+      0.1199999999999998,
+      0.15999999999999973,
+      0.19999999999999965,
+      0.2399999999999996,
+      0.2799999999999995,
+      0.31999999999999945,
+      0.3466666666666661,
+      0.35999999999999943
+    ],
+    "measured_grf_used_for_initialization": false,
+    "scope": "Fresh controller only; measured data, calibrated shoe, gains, and physical model remain fixed.",
+    "random_seed": 2718,
+    "postprocessing": {
+      "deviation_multiplier": 0.85,
+      "basis": "sin(pi*u), sin(2*pi*u) on control index u",
+      "channel_scales_m_m_rad_rad": [
+        0.01,
+        0.01,
+        0.025,
+        0.025
+      ],
+      "perturbation_halvings": 0
+    }
+  },
   "refinement": {
-    "performed": true,
     "passed": true,
     "within_measured_tolerances": true,
-    "original_six_rmse": [
-      0.007445375504121293,
-      0.019742013580185108,
-      0.023726815568543995,
-      0.03071207165677075,
-      91.27289275549353,
-      86.06063265905573
-    ],
-    "maximum_hip_position_difference_m": 3.54489519545087e-05,
-    "maximum_joint_angle_difference_rad": 0.00019122417889982923,
-    "maximum_grf_difference_n": 4.319244384765625
-  },
-  "cpu_gpu_parity": {
-    "max_force_difference_n": [
-      0.0010986328125,
-      0.0076904296875
-    ],
-    "max_state_difference": [
-      2.243309094041024e-09,
-      2.8783500027884656e-09,
-      1.209897670939597e-08,
-      1.976582697515994e-08,
-      4.802180531005007e-08
-    ]
+    "metrics": {
+      "hip_rmse_m": [
+        0.0070499251448965196,
+        0.01998527876147058
+      ],
+      "joint_rmse_rad": [
+        0.021201491590300797,
+        0.029215063801405004
+      ],
+      "force_rmse_n": [
+        89.86244449852904,
+        79.17512917313749
+      ]
+    },
+    "maximum_hip_position_difference_m": 3.76555261841419e-05,
+    "maximum_joint_angle_difference_rad": 0.00018137714078718392,
+    "maximum_grf_difference_n": 18.31479914027308
   },
   "spring_replay_passed": true,
-  "qualification": "Numerically qualified default Maxwell baseline with retained controller gains and +1.5mm hip-Z equilibrium offset. Not independent friction material calibration. Raw forces are unfiltered.",
-  "legacy_manifest": "projects/impedance_instron/baselines/baseline12_legacy_accepted.json",
+  "hip_z_rms_margin_mm": 0.011668229265494878,
   "files_sha256": {
     "digital_shoe.json": "54d756cea78e22a6d253b578cf4c5db279ece63aed3ce359efffb6988d6c765f",
-    "equilibrium.npz": "485fff89509eb0be20fe6cea19f23d2f3cfb5387a6b7ebe25ef50511623d8773",
-    "failure_equilibrium.npz": "d2b8396b27a653f5d85c16fb33f1d06850f9d2e28cfb0db215ab989a7c211c79",
-    "optimization_inputs.json": "0a429dabbd5562e9777394b8e4d8fe7ea2c8572206d6b73e51401f05dab235cf",
+    "equilibrium.npz": "a2ece648eab6c25d1eb9d2bb0673085a37efbde2911fe462536d2925acfbbc91",
+    "optimization_inputs.json": "19304e5be5d1c2cdd530241867ea6fd9985d0b950bedfc6ac7518ceaf0afaf51",
     "profile.json": "d0ea5a840dc45bba277190e66629d6630b5c423066fed3fa214dd3b5bd48c827",
+    "progress.json": "bd3d5003f6204482486530bfe798afdc6b42dcebbc1e9b07dd58db078940e3fe",
     "reference.npz": "6ef3ffe9c0885c3ced5e6a9a96a96a2664f6e8deb105d1305d7418cb85f71f59",
-    "refined_trace.npz": "c3a2b85bc6e5dab70be2358cdd4aad7dfa5da10089c0cd8132ad259cbccfefc5",
-    "report.html": "2b8a816f287b1c72081659054afee16ba49521c32fbac7c14373055c95e17ff7",
-    "spring_view.json": "935bcf3596c80a4edc6e4e8c2e2fc10fd5bd02baa3005bd1ee1d6511f9595149",
-    "spring_view.npz": "0e9ecd837c056ceb0b23567d1fd43f7e0c7f53db98e15427cba60f9070f0f46d",
-    "summary.json": "cea55c53c2e032aa55f36e8f8ec0878029e7475eb92ad6761d0297e981d6359c",
-    "summary_cpu.json": "09222573902caaf43004d797fe9771dceaf003159832c37cd94f5d95a29a1b3b",
-    "trace.npz": "6d5eca43f7556e2b8516dd15d6011da034c35f18aacc5df4f3e8abdd3c483d9a",
-    "trace_cpu.npz": "8b2f997f0fe0421db0420af975ab7cd3f8606a4327facc956461806f792013d5"
+    "refined_trace.npz": "83699b26b1ca08980d46ebe5b8eaccc5a6ea5159dd3b4463b628e7a0d7882391",
+    "report.html": "e0863488d293173aa15f28e427965d35476d57a05471d458e5ec8ab9bd5c8fcf",
+    "spring_view.json": "8c8e663d7db63d34692f04b6b195ec0f4ecd1cc71471bd13c725de74050b384b",
+    "spring_view.npz": "ea03c4c2f980a4f5c9856ff761b96c257a3310e06d48cd93a90582bada35e075",
+    "summary.json": "ff507d788c80f1d0042cd5901516273099f4681f69882af968960e686711e9ef",
+    "trace.npz": "3c559b855090f9c5d6e591bfce88132cb65bdcd7a89cd143a6d4111fea101901"
+  },
+  "previous_baseline": {
+    "manifest": "projects/impedance_instron/baselines/baseline12_initial.json",
+    "bundle": "outputs/impedance_instron/baseline12",
+    "loss": 2.185638911528388
+  },
+  "qualification": "Selected fit files retained byte-for-byte, with an additional portable shoe artifact. Native/refined measured RMS, half-step agreement, and spring replay pass. Gains are twice the previous nominal stiffness and damping and remain fixed within each solve. Numerical acceptance is not physical validation or a convergence/local/global-optimum certificate. Requalify before further fitting.",
+  "controller": {
+    "duration_s": 0.35999999999999943,
+    "channels": [
+      "hip_x_m",
+      "hip_z_m",
+      "knee_rad",
+      "ankle_rad"
+    ],
+    "coefficients": [
+      [
+        0.3402053805803822,
+        0.9187238028042313,
+        0.09072539136803706,
+        -0.3253116209859674
+      ],
+      [
+        0.3923736524135071,
+        0.9902034905128119,
+        -0.02997210591604733,
+        -0.3915736001837926
+      ],
+      [
+        0.4402881365094925,
+        1.0266258237459858,
+        -0.4738975524408287,
+        -0.21106064819730208
+      ],
+      [
+        0.5960534872724739,
+        0.8461442211552287,
+        -0.5134650218186763,
+        0.5479896749582756
+      ],
+      [
+        0.6569886065445445,
+        0.8664443514620772,
+        0.08694143145349059,
+        0.47351929709807916
+      ],
+      [
+        0.7920202566318942,
+        0.7730249120422121,
+        0.5119323526961312,
+        -0.018984702353264493
+      ],
+      [
+        0.8851911434227391,
+        0.8284882659044801,
+        0.4252751120319548,
+        -0.02770239572337771
+      ],
+      [
+        1.0142757532775264,
+        0.8657241093181447,
+        -0.06038899856900207,
+        -0.44496574775456066
+      ],
+      [
+        1.1942827352840193,
+        0.9799603238574994,
+        -0.19164880230875214,
+        -0.6535321469043502
+      ],
+      [
+        1.3740659526575318,
+        1.0581133329945993,
+        -0.46070223830324925,
+        -0.46697002665012
+      ],
+      [
+        1.3276511138911524,
+        0.8969136717555405,
+        -0.6584849357097928,
+        -0.8011463073015952
+      ],
+      [
+        1.3291442083591631,
+        0.8498074549018997,
+        -0.8497490635894707,
+        -0.8083207657680369
+      ]
+    ],
+    "identity": {
+      "profile_sha256": "df5513bda313c7f98109c6dcbd8b55d479390c8341af18e8512209cd7240d689",
+      "reference_sha256": "6ef3ffe9c0885c3ced5e6a9a96a96a2664f6e8deb105d1305d7418cb85f71f59",
+      "shoe": {
+        "artifact_sha256": "54d756cea78e22a6d253b578cf4c5db279ece63aed3ce359efffb6988d6c765f",
+        "device": "cuda:0",
+        "friction": {
+          "mu": 0.8,
+          "per_column_damping_n_s_m": 10.0,
+          "per_column_stiffness_n_m": 10000.0,
+          "source": "declared contact assumptions, not identified by normal Instron loading"
+        },
+        "mount_m": [
+          -0.03186147427106201,
+          0.0,
+          0.10943209684347802
+        ],
+        "static_pitch_rad": -0.24446041090480894
+      },
+      "simulation_config": {
+        "compression_limit": 0.9,
+        "dt_s": 6.25e-05,
+        "gravity_m_s2": 9.81,
+        "joint_limits_diagnostic": true,
+        "maximum_force_n": 6000.0,
+        "maximum_speed": 100.0,
+        "minimum_hip_height_m": 0.2
+      }
+    }
   }
 }

@@ -172,7 +172,7 @@ def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str
                 "mount_m": original["shoe"]["mount_m"],
                 "static_pitch_rad": original["shoe"]["static_pitch_rad"],
                 "friction": original["shoe"]["friction"],
-                "device": original.get("run", original).get("shoe_device", "cuda:0"),
+                "device": "cuda:0",
             },
         }
         if frozen_identity != expected_identity:

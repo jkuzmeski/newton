@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BASELINE = ROOT / "outputs/impedance_instron/baseline12_maxwell"
+DEFAULT_BASELINE = ROOT / "outputs/impedance_instron/baseline12_accepted"
 
 
 def create_parser() -> argparse.ArgumentParser:

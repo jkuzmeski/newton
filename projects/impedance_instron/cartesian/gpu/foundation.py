@@ -322,7 +322,6 @@ class FoundationFused(MidsoleFoundation):
         """Report whether the CUDA block can also write the controller diagnostics."""
         return (
             self.fused_apply
-            and self.friction_solver is None
             and self.device.is_cuda
             and self.column_count <= 1024
             and self.ground_height_m is not None
@@ -334,7 +333,6 @@ class FoundationFused(MidsoleFoundation):
         """Fuse unchanged shoe stages within each world's CUDA block."""
         if (
             not self.fused_apply
-            or self.friction_solver is not None
             or not self.device.is_cuda
             or self.column_count > 1024
             or self.ground_height_m is None

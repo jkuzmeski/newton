@@ -88,11 +88,3 @@ docs/_static/viser/
 
 # Generated footwear mechanics report (restricted measurement/geometry derivatives).
 /outputs/footwear_contact_material_report/
-
-# Local friction-only diagnostic inputs, compiler caches, and results
-outputs/friction_review/
-outputs/digital_shoe_friction/
-
-/outputs/friction_identification/
-
-/outputs/friction_qualification/

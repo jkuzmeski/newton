@@ -335,6 +335,7 @@ those same tables give 362-380 kPa, so the like-for-like two-term comparison is
 close. Treat all of this as context, not a target: those are cut-cube specimens of
 different foams from a different manufacturer, and foam bonded in a shoe with
 curvature, skin, glue and a plate can legitimately differ from a cube. See
-`outputs/impedance_instron/refit_two_term/stress_stretch_two_term.png`, whose
-right panel shows that the published tables stop at 40% compression while the
-fixtures reach 74-90%.
+`outputs/impedance_instron/refit_two_term/stress_stretch_two_term.png` for an
+earlier comparison plot. The published compression tables extend to stretch
+0.4, which is **60% compression**, not 40%. States beyond that range remain
+extrapolations.

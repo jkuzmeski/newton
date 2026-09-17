@@ -112,8 +112,6 @@ class FoundationParams:
     friction_viscous_ratio: wp.float32  # viscous cap as a fraction of the cone mu*fn
     friction_release_dwell_s: wp.float32  # unloaded dwell before the stick point is discarded [s]
     mu: wp.float32  # Coulomb friction coefficient
-    friction_model: wp.int32  # 0: legacy, 1: maxwell
-    friction_relaxation_time_s: wp.float32  # shear relaxation time [s]
 
 
 @wp.func
@@ -1428,12 +1426,11 @@ class FoundationConfig:
     The Instron replay leaves ``normal_damping``, ``friction_stiffness`` and
     ``friction`` at zero and keeps ``stretch_floor`` below the calibration's peak
     strain so the collected loop reproduces the fitted force-displacement response
-    exactly. The default friction model is a Maxwell shear bristle: an equilibrium
-    spring in parallel with a spring/dashpot branch, in series with a Coulomb slider.
-    ``friction_stiffness`` is the equilibrium tangential stiffness, ``friction``
-    is the internal dashpot viscosity, and ``mu`` bounds traction at ``mu * fn``.
-    Select ``friction_model="legacy"`` for the previous anchored spring with direct
-    velocity damping. No public kernel or legacy symbol is removed.
+    exactly. The free-body scenarios add foam damping and an anchored bristle
+    (elastoplastic) Coulomb friction: ``friction_stiffness`` is the per-column
+    tangential spring that holds a planted contact patch (true stick), ``friction``
+    is its viscous regularization, and ``mu`` bounds the tangential force at the cone
+    ``mu * fn`` (slip).
 
     The tangential bed is a property of the contact area, not of the sampling grid, so
     the per-column values are converted to ``friction_stiffness_per_area``
@@ -1447,10 +1444,9 @@ class FoundationConfig:
     orders of magnitude above the shear stiffness of the identified foam, and the
     Instron identification is compression only.
 
-    ``friction_viscous_ratio`` applies only to legacy direct velocity damping.
-    Maxwell uses ``friction_relaxation_time_s``, or the material relaxation time when
-    omitted. This is an explicit shear extrapolation, not independent shear calibration.
-    ``friction_release_dwell_s`` preserves contact history through short normal dropouts.
+    ``friction_viscous_ratio`` caps the viscous force at ``gamma * mu * fn`` outside the
+    radial return, and ``friction_release_dwell_s`` keeps the stick point alive through
+    normal dropouts shorter than the dwell.
 
     ``ground_height_m`` opts into a horizontal external contact plane [m]. In this
     mode ``anchor_local`` denotes nominal bottom points of a massless attached
@@ -1480,16 +1476,8 @@ class FoundationConfig:
     friction_release_dwell_s: float = 0.0005
     mu: float = 0.0
     ground_height_m: float | None = None
-    friction_model: str = "maxwell"
-    friction_relaxation_time_s: float | None = None
 
     def __post_init__(self) -> None:
-        if self.friction_model not in ("maxwell", "legacy"):
-            raise ValueError(f"friction_model must be 'maxwell' or 'legacy', got {self.friction_model!r}")
-        if self.friction_relaxation_time_s is not None and (
-            not np.isfinite(self.friction_relaxation_time_s) or self.friction_relaxation_time_s <= 0.0
-        ):
-            raise ValueError("friction_relaxation_time_s must be positive and finite if specified")
         if self.ground_height_m is not None and (
             not np.isfinite(self.ground_height_m) or abs(self.ground_height_m) > float(np.finfo(np.float32).max)
         ):
@@ -1661,7 +1649,6 @@ class MidsoleFoundation:
         self.carrier = wp.array(carriers, dtype=wp.int32, device=device)
         self.body_com = body_com
         self.column_count = int(len(rest_len))
-        self.friction_solver = None
 
         params = FoundationParams()
         set_material_block(params, material)
@@ -1673,14 +1660,7 @@ class MidsoleFoundation:
         params.friction_viscous_ratio = config.friction_viscous_ratio
         params.friction_release_dwell_s = config.friction_release_dwell_s
         params.mu = config.mu
-        params.friction_model = 1 if config.friction_model == "maxwell" else 0
-        params.friction_relaxation_time_s = float(
-            config.friction_relaxation_time_s
-            if config.friction_relaxation_time_s is not None
-            else getattr(material, "maxwell_relaxation_time_s", 0.08)
-        )
         self.params = params
-        self.config = config
 
         m = self.column_count
         n = self.world_count * m  # tiled per-column state, world w at [w * m : (w + 1) * m]
@@ -1714,8 +1694,6 @@ class MidsoleFoundation:
         self.tangent_anchor = wp.zeros(n, dtype=wp.vec2, device=device)  # world XY stick point
         self.tangent_stuck = wp.zeros(n, dtype=wp.int32, device=device)  # 1 while the bristle grips
         self.tangent_dwell = wp.zeros(n, dtype=wp.float32, device=device)  # unloaded time held by a grip [s]
-        self.tangent_deflection = wp.zeros(n, dtype=wp.vec2, device=device)
-        self.tangent_maxwell_force = wp.zeros(n, dtype=wp.vec2, device=device)
         self.friction_kt = wp.array(
             np.ascontiguousarray(self.friction_stiffness_per_area_n_m3 * area_m2, np.float32),
             dtype=wp.float32,
@@ -1786,50 +1764,6 @@ class MidsoleFoundation:
             # relaxation is still travelling when the substep ends.
             self.surround_rate = wp.zeros(n, dtype=wp.float32, device=device)
 
-        if self.config.friction_model == "maxwell":
-            self._install_default_friction_adapter()
-
-    def _install_default_friction_adapter(self) -> None:
-        """Auto-install default Maxwell friction parameter adapter (method 7)."""
-        if self.config.mu <= 0.0 or (
-            self.config.friction_stiffness <= 0.0 and self.config.friction_stiffness_per_area <= 0.0
-        ):
-            self.friction_solver = None
-            return
-
-        from .friction_parameter_adapter import FrictionParameterAdapter  # noqa: PLC0415
-
-        rows = []
-        for w in range(self.world_count):
-            tau_w = float(self.world_blocks[w].friction_relaxation_time_s)
-            rows.append(
-                [
-                    7.0,
-                    float(self.config.mu),
-                    1.0,
-                    1.0,
-                    0.0,
-                    float(self.config.friction_release_dwell_s),
-                    0.0,
-                    float(self.config.mu),
-                    0.1,
-                    1.0e12,
-                    0.001,
-                    tau_w,
-                ]
-            )
-        adapter = FrictionParameterAdapter(
-            self,
-            self.world_count,
-            base_kt=self.friction_kt,
-            base_kv=self.friction_kv,
-            is_default=True,
-            initial_parameters=np.array(rows, dtype=np.float32),
-            deflection=self.tangent_deflection,
-            maxwell_force=self.tangent_maxwell_force,
-        )
-        self.friction_solver = adapter
-
     def reset(self) -> None:
         """Clear the viscoelastic overstress history and release the friction bristles."""
         self.q_state.zero_()
@@ -1838,10 +1772,6 @@ class MidsoleFoundation:
         self.tangent_dwell.zero_()
         self.ground_force.zero_()
         self.contact_point.zero_()
-        self.tangent_deflection.zero_()
-        self.tangent_maxwell_force.zero_()
-        if self.friction_solver is not None:
-            self.friction_solver.reset()
         if self.free_column_count:
             self.surround_compression.zero_()
             self.surround_scratch.zero_()
@@ -1865,15 +1795,8 @@ class MidsoleFoundation:
         if not 0 <= int(world) < self.world_count:
             raise IndexError("world index is outside the batch")
         set_material_block(self.world_blocks[int(world)], material)
-        if self.config.friction_relaxation_time_s is None:
-            tau = float(getattr(material, "maxwell_relaxation_time_s", 0.08))
-            self.world_blocks[int(world)].friction_relaxation_time_s = tau
         self.world_params.assign(self.world_blocks)
         self._materials_dirty = True
-        if self.friction_solver is not None and getattr(self.friction_solver, "is_default", False):
-            self.friction_solver.update_world_tau(
-                int(world), float(self.world_blocks[int(world)].friction_relaxation_time_s)
-            )
 
     def set_world_materials(self, materials: Sequence[ShoeMaterial]) -> None:
         """Give every world its own foam in one call.
@@ -1886,13 +1809,8 @@ class MidsoleFoundation:
             raise ValueError("set_world_materials needs one material per world")
         for block, material in zip(self.world_blocks, materials, strict=True):
             set_material_block(block, material)
-            if self.config.friction_relaxation_time_s is None:
-                block.friction_relaxation_time_s = float(getattr(material, "maxwell_relaxation_time_s", 0.08))
         self.world_params.assign(self.world_blocks)
         self._materials_dirty = True
-        if self.friction_solver is not None and getattr(self.friction_solver, "is_default", False):
-            taus = [float(b.friction_relaxation_time_s) for b in self.world_blocks]
-            self.friction_solver.update_taus(taus)
 
     def _refresh_surround_constants(self, dt: float) -> None:
         """Recompute the per-world Maxwell update the surround sweep relaxes against.
@@ -2056,10 +1974,10 @@ class MidsoleFoundation:
                 self.neighbors,
                 self.compression,
                 self.base_pressure,
-                self.tangent_anchor if self.friction_solver is None else self.friction_solver.scratch_anchor,
-                self.tangent_stuck if self.friction_solver is None else self.friction_solver.scratch_stuck,
-                self.tangent_dwell if self.friction_solver is None else self.friction_solver.scratch_dwell,
-                self.friction_kt if self.friction_solver is None else self.friction_solver.zero_stiffness,
+                self.tangent_anchor,
+                self.tangent_stuck,
+                self.tangent_dwell,
+                self.friction_kt,
                 self.friction_kv,
                 self.world_params,
                 self.column_force,
@@ -2068,8 +1986,6 @@ class MidsoleFoundation:
             ],
             device=self.device,
         )
-        if self.friction_solver is not None:
-            self.friction_solver.apply(state, dt)
         wp.launch(
             foundation_partial_ground if plane_contact else foundation_partial,
             dim=self.world_count * self.reduction_groups,
