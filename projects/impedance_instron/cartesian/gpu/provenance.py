@@ -48,15 +48,6 @@ _RUNTIME_SOURCES = tuple(
                     "provenance.py",
                     "rendering.py",
                     "runtime.py",
-                    "friction_parameter_adapter.py",
-                    "friction_maxwell.py",
-                    "friction_deflection.py",
-                    "friction_pressure.py",
-                    "friction_slip_history.py",
-                    "friction_stribeck.py",
-                    "friction_adapter.py",
-                    "friction_solver.py",
-                    "friction_law.py",
                 )
             ),
         )

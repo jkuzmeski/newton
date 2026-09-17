@@ -773,7 +773,6 @@ class Engine:
         world_count: int = 49,
         device: str = "cuda:0",
         chunk_steps: int = 32,
-        friction_model: str = "maxwell",
     ):
         started = perf_counter()
         self.device = wp.get_device(device)
@@ -792,7 +791,7 @@ class Engine:
         self.dt = self.duration / self.steps
         self.time_s = np.linspace(0.0, self.duration, self.steps + 1)
         # Use the canonical adapter once for artifact registration and footprint selection.
-        self.shoe = Shoe(artifact, mount_m, static_pitch_rad, device=str(self.device), friction_model=friction_model)
+        self.shoe = Shoe(artifact, mount_m, static_pitch_rad, device=str(self.device))
         if np.any(self.shoe.model.body_com.numpy()):
             raise ValueError("The reference shoe carrier COM must remain at its ankle origin")
         self.carriers = SimpleNamespace(
@@ -812,12 +811,7 @@ class Engine:
             np.arange(world_count),
             wp.zeros(world_count, dtype=wp.vec3, device=self.device),
             FoundationConfig(
-                ground_height_m=0.0,
-                normal_damping=0.0,
-                friction_stiffness=10000.0 if friction_model == "legacy" else 1000.0,
-                friction=10.0,
-                mu=0.8,
-                friction_model=friction_model,
+                ground_height_m=0.0, normal_damping=0.0, friction_stiffness=10000.0, friction=10.0, mu=0.8
             ),
             self.device,
             self.shoe.foundation.surround,

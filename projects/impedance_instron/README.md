@@ -7,35 +7,34 @@ There is no trunk, opposite leg, hip-angle motor, or added upper-body load.
 
 ## Selected baseline
 
-`outputs/impedance_instron/baseline12_maxwell/` is the current baseline. Maxwell
-shear friction is selected automatically in the shared shoe, CPU leg and GPU leg
-paths. The leg-shoe defaults are mu 0.8, 1000 N/m equilibrium tangential stiffness
-per nominal 25 mm² column, 10 N s/m internal viscosity, and the effective material
-relaxation time. Normal material/contact mechanics are unchanged.
+`outputs/impedance_instron/baseline12_accepted/` holds the byte-identical selected
+fit from the K2/D2 gain campaign, plus its portable shoe artifact.
+[`baseline.json`](baseline.json) versions its 48 controller coefficients and
+frozen identity, and records its source, fixed gains, acceptance, and file hashes. Open `outputs/impedance_instron/baseline12_accepted/report.html`
+to inspect the saved replay without running Python or fitting again.
 
-The gains remain those of the previous K2/D2 controller:
+- Loss: **1.53892290**, after 200 iterations from a fresh perturbed controller.
+- Initialization seed: **2718**. Search seed: **101**. No prior fitted coefficients
+  or optimizer history were used to obtain this selected result.
+- Fixed stiffness: hip **[8000, 12000] N/m**, joints **[240, 180] N·m/rad**.
+- Fixed damping: hip **[80, 80] N·s/m**, joints **[12, 8] N·m·s/rad**.
+  These gains are **2× the previous nominal stiffness and damping**.
+- Measured RMS: hip **7.053141 / 19.988332 mm**, knee/ankle
+  **0.02118672 / 0.02920087 rad**, force **89.852197 / 79.162898 N**.
+- Native and half-step measured RMS, half-step agreement, and spring-contact
+  replay: **passed**. Passive compression caps remain active and visible.
+- Hip-Z RMS margin: only **0.011668 mm** below the unchanged 20 mm limit.
+  This is numerical acceptance, not a claim of robustness or physical validity.
 
-- Hip stiffness [8000, 12000] N/m; joint stiffness [240, 180] N m/rad.
-- Hip damping [80, 80] N s/m; joint damping [12, 8] N m s/rad.
-- All twelve hip-Z equilibrium coefficients are shifted by +1.5 mm to restore
-  tracking margin under the new law. No other coefficients, gains, masses,
-  initial conditions or normal parameters are changed.
+The default pipeline now starts from this accepted 12-point controller.
+Further optimization still selects by the unchanged scalar loss; a lower-loss
+result can fail an individual RMS limit. Always inspect its acceptance result.
 
-The previous accepted legacy-friction baseline is archived in
-[`baselines/baseline12_legacy_accepted.json`](baselines/baseline12_legacy_accepted.json).
-The initial twelve-point research case remains in
-[`baselines/baseline12_initial.json`](baselines/baseline12_initial.json).
-[`baseline.json`](baseline.json) records the current model, numerical qualification
-and bundle hashes. Numerical acceptance is not independent outsole calibration.
-
-- Current measured RMS: hip **7.450 / 19.746 mm**, knee/ankle **0.023742 / 0.030700 rad**,
-  force **91.296 / 85.947 N**; all six original limits pass.
-- Half-step maximum force difference: **4.320 N**; original refinement limits pass.
-- CPU/GPU parity and verified spring-contact replay pass.
-- The previous legacy baseline remains archived rather than silently relabelled.
-
-Choose `friction_model="legacy"` explicitly in `FoundationConfig`, `Shoe`, or
-`Engine` to reproduce the previous contact behavior.
+The former baseline is preserved at `outputs/impedance_instron/baseline12/` and
+in [its archived manifest](baselines/baseline12_initial.json). Use `--baseline`
+with that directory to repeat historical runs. Original fit evidence and source
+hashes are never rewritten. The [gain workflow](cartesian/gpu/README.md#fixed-gain-screens-and-fresh-restarts)
+provides the reusable screen, restart, probe, and replay commands.
 
 ## Run the complete pipeline
 

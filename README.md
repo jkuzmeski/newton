@@ -960,21 +960,6 @@ python -m newton.examples basic_urdf --device cuda:0
 python -m newton.examples basic_viewer --viewer gl --num-frames 500 --device cpu
 ```
 
-## Digital Shoe friction comparison
-
-Compare anchored bristles, a coupled tangential solver, and regularized Coulomb
-friction without changing normal contact:
-
-```bash
-uv run --no-sync -m projects.digital_shoe friction --viewer gl
-```
-
-<img src="projects/digital_shoe/friction_example.jpg" width="320" height="320" alt="Synthetic friction contact samples, anchors, and force vectors">
-
-Use the [friction guide](projects/digital_shoe/FRICTION.md) for headless tests and
-leg-impedance braking/propulsion comparisons. The coupled solver is opt-in;
-no physical-friction validation or speedup is implied.
-
 ## Digital Instron / Digital Shoe showcase
 
 See the [shoe-project organization and command map](projects/README.md) for

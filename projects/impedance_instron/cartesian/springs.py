@@ -100,12 +100,6 @@ def _identity(reference, trace, summary, profile, artifact: Path) -> dict:
         "projects/digital_shoe/contact.py",
         "projects/digital_shoe/material.py",
         "projects/digital_shoe/rendering.py",
-        "projects/digital_shoe/friction_parameter_adapter.py",
-        "projects/digital_shoe/friction_maxwell.py",
-        "projects/digital_shoe/friction_deflection.py",
-        "projects/digital_shoe/friction_pressure.py",
-        "projects/digital_shoe/friction_slip_history.py",
-        "projects/digital_shoe/friction_stribeck.py",
     ]
     runtime = {
         "python": platform.python_version(),

@@ -93,28 +93,6 @@ produce six figures and a self-contained offline HTML report from the explicitly
 pinned two-term artifact. Generated measurements, geometry figures, and reports
 stay local and ignored; the tools do not change the shoe or physics sources.
 
-## Friction-only solver mechanics and identification
-
-[Compare tangential models](FRICTION.md) with five opt-in solver modes
-(explicit/implicit legacy bristle, regularized Coulomb, and explicit/implicit
-consistent deflection) while leaving normal compression, material, and contact
-mechanics unchanged.
-
-Read [FRICTION_IDENTIFICATION.md](FRICTION_IDENTIFICATION.md) and [FRICTION_ONSET.md](FRICTION_ONSET.md); see [FRICTION_CONTINUITY.md](FRICTION_CONTINUITY.md) and [FRICTION_CONTROLLER_REFIT.md](FRICTION_CONTROLLER_REFIT.md) for the raw-force mechanical comparison for the reproducible
-CLI workflow, frozen-history sweeps, free-leg GPU dynamic optimization across
-22,808 attempted candidates, scoring schemas, and honest qualification limits.
-No calibrated parameters are promoted or installed as defaults.
-
-```bash
-# Compare tangential formulations headlessly
-uv run --no-sync -m projects.digital_shoe friction --mode implicit_deflection --viewer null --num-frames 120 --test
-
-# CLI workflow help
-uv run --no-sync -m projects.digital_shoe friction-sweep --help
-uv run --no-sync -m projects.digital_shoe friction-fit --help
-uv run --no-sync -m projects.digital_shoe friction-check --help
-```
-
 ## One shared law
 
 This package owns the mechanics used by Digital Instron and the impedance rigs.

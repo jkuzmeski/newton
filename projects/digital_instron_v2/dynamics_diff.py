@@ -13,8 +13,7 @@ This adapter owns separate pressure, Maxwell, bristle, and force buffers for eac
 substep. No state on the loss path is overwritten during a rollout. Integer
 contact flags select the same branches as the live model; derivatives are
 piecewise derivatives away from contact, stick/slip, and release transitions.
-The default Maxwell shear state uses separate elastic and branch-force buffers.
-``friction_model="legacy"`` retains the previous anchored-bristle kernel and public signature.
+There is no smooth-friction replacement in :class:`DifferentiableMidsoleFoundation`.
 
 The live surround uses fixed, warm-started damped sweeps. This module differentiates
 through those sweeps, giving the derivative of the map the simulation evaluates.
@@ -43,7 +42,6 @@ from projects.digital_shoe.contact import (
     pasternak_flux,
     surround_balance,
 )
-from projects.digital_shoe.friction_maxwell import bristle_maxwell_step
 from projects.digital_shoe.material import (
     hyperfoam_pressure,
     maxwell_coefficients,
@@ -378,96 +376,6 @@ def foundation_apply_bristle_diff(
 
 
 @wp.kernel
-def foundation_apply_maxwell_diff(
-    carrier: wp.int32,
-    body_q: wp.array[wp.transform],
-    body_qd: wp.array[wp.spatial_vector],
-    body_com: wp.array[wp.vec3],
-    anchor_local: wp.array[wp.vec3],
-    area: wp.array[wp.float32],
-    rest_len: wp.array[wp.float32],
-    neighbors: wp.array2d[wp.int32],
-    compression: wp.array[wp.float32],
-    base_pressure: wp.array[wp.float32],
-    params: FoundationParams,
-    material_params: wp.array[wp.float32],
-    friction_params: wp.array[wp.float32],
-    dt: wp.float32,
-    ground_height: wp.float32,
-    ground_plane: wp.int32,
-    friction_kt: wp.array[wp.float32],
-    friction_kv: wp.array[wp.float32],
-    anchor_prev: wp.array[wp.vec2],
-    stuck_prev: wp.array[wp.int32],
-    dwell_prev: wp.array[wp.float32],
-    deflection_prev: wp.array[wp.vec2],
-    maxwell_prev: wp.array[wp.vec2],
-    deflection_out: wp.array[wp.vec2],
-    maxwell_out: wp.array[wp.vec2],
-    anchor_out: wp.array[wp.vec2],
-    stuck_out: wp.array[wp.int32],
-    dwell_out: wp.array[wp.float32],
-    force_out: wp.array[wp.vec3],
-    ground_force_out: wp.array[wp.vec3],
-    body_f: wp.array[wp.spatial_vector],
-    normal_force: wp.array[wp.float32],
-    cop_moment: wp.array[wp.vec3],
-    pressed_force: wp.array[wp.float32],
-    active_count: wp.array[wp.int32],
-):
-    """Apply canonical Maxwell shear contact with separate per-substep state.
-
-    Integer contact flags select the same stick/slip branches as the live model.
-    Tape gradients are piecewise derivatives away from those branch transitions.
-    ``force_out`` records signed transfer traction; ``ground_force_out`` records
-    external support. Their meanings match the live foundation in both modes.
-    """
-    i = wp.tid()
-    mu_eq = material_params[MAT_G_EQ] + material_params[MAT_G_EQ2]
-    ci = compression[i]
-    flux = _pasternak_flux(i, compression, rest_len, neighbors, mu_eq)
-    vel = body_qd[carrier]
-    point, com_world, point_vel, gap = contact_kinematics(
-        body_q[carrier], vel, body_com[carrier], anchor_local[i], ground_height, ground_plane
-    )
-    reaction = normal_reaction(ci, base_pressure[i], area[i], params.normal_damping, point_vel[2], gap, ground_plane)
-    fn = reaction - flux
-    if ground_plane != 0:
-        fn = reaction
-    pressed = wp.max(fn, 0.0)
-    f_tan, _jac, z, q, stuck, dwell = bristle_maxwell_step(
-        wp.vec2(point_vel[0], point_vel[1]),
-        dt,
-        pressed,
-        friction_kt[i],
-        friction_kv[i],
-        params.friction_relaxation_time_s,
-        friction_params[FRIC_MU],
-        params.friction_release_dwell_s,
-        deflection_prev[i],
-        maxwell_prev[i],
-        stuck_prev[i],
-        dwell_prev[i],
-    )
-    deflection_out[i] = z
-    maxwell_out[i] = q
-    anchor = wp.vec2(point[0], point[1]) + dt * wp.vec2(point_vel[0], point_vel[1]) - z
-    anchor_out[i] = anchor
-    stuck_out[i] = stuck
-    dwell_out[i] = dwell
-    force_out[i] = wp.vec3(f_tan[0], f_tan[1], reaction - flux)
-    ground_force_out[i] = wp.vec3(f_tan[0], f_tan[1], reaction)
-    force = wp.vec3(f_tan[0], f_tan[1], fn)
-    torque, _moment, _power = contact_wrench(point, force, com_world, vel)
-    wp.atomic_add(body_f, carrier, wp.spatial_vector(force, torque))
-    wp.atomic_add(normal_force, 0, fn)
-    wp.atomic_add(cop_moment, 0, wp.vec3(point[0] * pressed, point[1] * pressed, 0.0))
-    wp.atomic_add(pressed_force, 0, pressed)
-    if ci > 0.0:
-        wp.atomic_add(active_count, 0, 1)
-
-
-@wp.kernel
 def surround_relax_diff(
     carrier: wp.int32,
     body_q: wp.array[wp.transform],
@@ -678,12 +586,6 @@ class DifferentiableMidsoleFoundation:
         params.friction_viscous_ratio = config.friction_viscous_ratio
         params.friction_release_dwell_s = config.friction_release_dwell_s
         params.mu = config.mu
-        params.friction_model = 1 if config.friction_model == "maxwell" else 0
-        params.friction_relaxation_time_s = float(
-            config.friction_relaxation_time_s
-            if config.friction_relaxation_time_s is not None
-            else material.maxwell_relaxation_time_s
-        )
         self.params = params
 
         # Differentiable constitutive vector [g_eq, alpha, overstress, g_eq2, alpha2].
@@ -740,14 +642,6 @@ class DifferentiableMidsoleFoundation:
         self.tangent_anchor_init = wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True)
         self.tangent_stuck_init = wp.zeros(m, dtype=wp.int32, device=device)
         self.tangent_dwell_init = grad_zeros()
-        self.tangent_deflection_init = wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True)
-        self.tangent_maxwell_force_init = wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True)
-        self.tangent_deflection = [
-            wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True) for _ in range(self.num_substeps)
-        ]
-        self.tangent_maxwell_force = [
-            wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True) for _ in range(self.num_substeps)
-        ]
         self.tangent_anchor = [
             wp.zeros(m, dtype=wp.vec2, device=device, requires_grad=True) for _ in range(self.num_substeps)
         ]
@@ -914,7 +808,7 @@ class DifferentiableMidsoleFoundation:
             device=self.device,
         )
         wp.launch(
-            foundation_apply_maxwell_diff if self.params.friction_model == 1 else foundation_apply_bristle_diff,
+            foundation_apply_bristle_diff,
             dim=self.column_count,
             inputs=[
                 self.carrier,
@@ -938,16 +832,6 @@ class DifferentiableMidsoleFoundation:
                 self.tangent_anchor_init if t == 0 else self.tangent_anchor[t - 1],
                 self.tangent_stuck_init if t == 0 else self.tangent_stuck[t - 1],
                 self.tangent_dwell_init if t == 0 else self.tangent_dwell[t - 1],
-                *(
-                    [
-                        self.tangent_deflection_init if t == 0 else self.tangent_deflection[t - 1],
-                        self.tangent_maxwell_force_init if t == 0 else self.tangent_maxwell_force[t - 1],
-                        self.tangent_deflection[t],
-                        self.tangent_maxwell_force[t],
-                    ]
-                    if self.params.friction_model == 1
-                    else []
-                ),
                 self.tangent_anchor[t],
                 self.tangent_stuck[t],
                 self.tangent_dwell[t],
@@ -972,10 +856,6 @@ class DifferentiableMidsoleFoundation:
         self.peq_init.grad.zero_()
         self.tangent_anchor_init.grad.zero_()
         self.tangent_dwell_init.grad.zero_()
-        self.tangent_deflection_init.grad.zero_()
-        self.tangent_maxwell_force_init.grad.zero_()
-        for buf in (*self.tangent_deflection, *self.tangent_maxwell_force):
-            buf.grad.zero_()
         for buf in (*self.tangent_anchor, *self.tangent_dwell, *self.column_force, *self.ground_force):
             buf.grad.zero_()
         if self.free_column_count:

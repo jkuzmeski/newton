@@ -34,15 +34,7 @@ class Shoe:
         device: Warp device. CPU avoids device round trips in this reference solver.
     """
 
-    def __init__(
-        self,
-        artifact_path: str | Path,
-        mount_m,
-        static_pitch_rad: float,
-        device: str = "cpu",
-        *,
-        friction_model: str = "maxwell",
-    ):
+    def __init__(self, artifact_path: str | Path, mount_m, static_pitch_rad: float, device: str = "cpu"):
         self.artifact_path = Path(artifact_path).resolve()
         self.shoe = load_artifact(self.artifact_path)
         self.mount_m = np.asarray(mount_m, dtype=float)
@@ -104,10 +96,9 @@ class Shoe:
             FoundationConfig(
                 ground_height_m=0.0,
                 normal_damping=0.0,
-                friction_stiffness=10000.0 if friction_model == "legacy" else 1000.0,
+                friction_stiffness=10000.0,
                 friction=10.0,
                 mu=0.8,
-                friction_model=friction_model,
             ),
             self.device,
             SurroundConfig(driven=driven, carrier_bond=True),
@@ -124,13 +115,6 @@ class Shoe:
             "mount_m": self.mount_m.tolist(),
             "static_pitch_rad": self.static_pitch_rad,
             "registration": "rigid placement only; no geometry scaling or material refit",
-            "friction_model": friction_model,
-            "friction_equilibrium_stiffness_n_m": 10000.0 if friction_model == "legacy" else 1000.0,
-            "friction_viscosity_ns_m": 10.0,
-            "friction_mu": 0.8,
-            "friction_relaxation_time_s": self.shoe.material.maxwell_relaxation_time_s
-            if friction_model == "maxwell"
-            else None,
             "attachment": "fullfoot last and driven spring tops share one rigid carrier with fixed assembly offsets",
             "column_count": len(driven),
             "driven_columns": int(driven.sum()),
@@ -144,12 +128,8 @@ class Shoe:
             "side": "intrinsic artifact retained; sagittal projection, no certified anatomical side",
             "friction": {
                 "mu": 0.8,
-                "model": friction_model,
-                "per_column_stiffness_n_m": 10000.0 if friction_model == "legacy" else 1000.0,
+                "per_column_stiffness_n_m": 10000.0,
                 "per_column_damping_n_s_m": 10.0,
-                "relaxation_time_s": self.shoe.material.maxwell_relaxation_time_s
-                if friction_model == "maxwell"
-                else None,
                 "source": "declared contact assumptions, not identified by normal Instron loading",
             },
         }

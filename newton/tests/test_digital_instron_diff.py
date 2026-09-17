@@ -921,9 +921,7 @@ def _column_drag(force: wp.array[wp.vec3], loss: wp.array[float]):
 class TestSharedBristleParity(unittest.TestCase):
     """Pin the tape-safe adapter to live contact state and piecewise derivatives."""
 
-    def _make(
-        self, device, plane, speed=0.5, kt=2.0e4, release_dwell=0.004, height_offset=0.0007, friction_model="maxwell"
-    ):
+    def _make(self, device, plane, speed=0.5, kt=2.0e4, release_dwell=0.004, height_offset=0.0007):
         """Build a nonuniform bed with load, flight, re-entry and nonzero Poisson ratio."""
         n = 10
         material = runtime.ShoeMaterial(
@@ -941,7 +939,6 @@ class TestSharedBristleParity(unittest.TestCase):
             friction=0.7,
             friction_release_dwell_s=release_dwell,
             ground_height_m=0.0 if plane else None,
-            friction_model=friction_model,
         )
         rest = np.array([0.02, 0.025], np.float32)
         anchor = np.array([[-0.02, 0.01, 0], [0.015, -0.01, 0]], np.float32)
@@ -1019,13 +1016,7 @@ class TestSharedBristleParity(unittest.TestCase):
         for device in ["cpu", *wp.get_cuda_devices()]:
             for plane in (False, True):
                 live, diff, states = self._make(
-                    device,
-                    plane,
-                    speed=0.0001,
-                    kt=100.0,
-                    release_dwell=0.001,
-                    height_offset=0.00001,
-                    friction_model="legacy",
+                    device, plane, speed=0.0001, kt=100.0, release_dwell=0.001, height_offset=0.00001
                 )
                 for t, state in enumerate(states):
                     live.apply(state, 0.001)
@@ -1041,23 +1032,6 @@ class TestSharedBristleParity(unittest.TestCase):
                 np.testing.assert_array_equal(diff.tangent_stuck[4].numpy(), np.ones(2, np.int32))
                 np.testing.assert_array_equal(diff.tangent_stuck[5].numpy(), np.zeros(2, np.int32))
                 np.testing.assert_array_equal(diff.tangent_stuck[6].numpy(), np.ones(2, np.int32))
-
-    def test_maxwell_state_parity(self):
-        """Retain matching default Maxwell elastic and branch-force histories on Tape."""
-        for device in ["cpu", *wp.get_cuda_devices()]:
-            live, diff, states = self._make(device, True, release_dwell=0.001)
-            self.assertEqual(live.config.friction_model, "maxwell")
-            for t, state in enumerate(states):
-                live.apply(state, 0.001)
-                state.body_f.zero_()
-                diff.apply(state, t, 0.001)
-                np.testing.assert_allclose(
-                    diff.tangent_deflection[t].numpy(), live.tangent_deflection.numpy(), rtol=2e-6, atol=1e-8
-                )
-                np.testing.assert_allclose(
-                    diff.tangent_maxwell_force[t].numpy(), live.tangent_maxwell_force.numpy(), rtol=2e-6, atol=1e-7
-                )
-            np.testing.assert_array_equal(diff.tangent_maxwell_force[5].numpy(), np.zeros((2, 2)))
 
     def test_mu_gradient(self):
         """Match multi-step piecewise Coulomb coefficient gradients to central differences."""
