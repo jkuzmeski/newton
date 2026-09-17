@@ -7,22 +7,34 @@ There is no trunk, opposite leg, hip-angle motor, or added upper-body load.
 
 ## Selected baseline
 
-`outputs/impedance_instron/baseline12/` holds the byte-identical winner from
-`cartesian/fixed200_retest/fit12`, plus its portable shoe artifact.
-[`baseline.json`](baseline.json) records the original result and file hashes.
-Open `outputs/impedance_instron/baseline12/report.html` to inspect it immediately.
-No Python process or refit is needed for this saved HTML replay.
+`outputs/impedance_instron/baseline12_accepted/` holds the byte-identical selected
+fit from the K2/D2 gain campaign, plus its portable shoe artifact.
+[`baseline.json`](baseline.json) versions its 48 controller coefficients and
+frozen identity, and records its source, fixed gains, acceptance, and file hashes. Open `outputs/impedance_instron/baseline12_accepted/report.html`
+to inspect the saved replay without running Python or fitting again.
 
-- Loss: **2.18563891**, after 200 iterations from the original fresh seed.
-- Frozen half-step check: passed; maximum GRF difference **14.50 N** (limit 25 N).
-- Measured fit: **not accepted**. Hip-up RMS is 20.63 mm (limit 20 mm);
-  vertical-force RMS is 104.04 N (limit 100 N).
-- Passive compression cap: active in coarse and refined winners.
+- Loss: **1.53892290**, after 200 iterations from a fresh perturbed controller.
+- Initialization seed: **2718**. Search seed: **101**. No prior fitted coefficients
+  or optimizer history were used to obtain this selected result.
+- Fixed stiffness: hip **[8000, 12000] N/m**, joints **[240, 180] N·m/rad**.
+- Fixed damping: hip **[80, 80] N·s/m**, joints **[12, 8] N·m·s/rad**.
+  These gains are **2× the previous nominal stiffness and damping**.
+- Measured RMS: hip **7.053141 / 19.988332 mm**, knee/ankle
+  **0.02118672 / 0.02920087 rad**, force **89.852197 / 79.162898 N**.
+- Native and half-step measured RMS, half-step agreement, and spring-contact
+  replay: **passed**. Passive compression caps remain active and visible.
+- Hip-Z RMS margin: only **0.011668 mm** below the unchanged 20 mm limit.
+  This is numerical acceptance, not a claim of robustness or physical validity.
 
-The new pipeline **starts from this optimized 12-point controller**, not a
-fresh six-point seed, a knot-insertion conversion, or another experiment.
-The original result is evidence, not a claim that the changed checkout has
-already passed qualification. Historical source hashes are never rewritten.
+The default pipeline now starts from this accepted 12-point controller.
+Further optimization still selects by the unchanged scalar loss; a lower-loss
+result can fail an individual RMS limit. Always inspect its acceptance result.
+
+The former baseline is preserved at `outputs/impedance_instron/baseline12/` and
+in [its archived manifest](baselines/baseline12_initial.json). Use `--baseline`
+with that directory to repeat historical runs. Original fit evidence and source
+hashes are never rewritten. The [gain workflow](cartesian/gpu/README.md#fixed-gain-screens-and-fresh-restarts)
+provides the reusable screen, restart, probe, and replay commands.
 
 ## Run the complete pipeline
 
@@ -113,18 +125,20 @@ kernel enqueue time. Profiling does not replace numerical qualification.
 Retired bilateral, paper, two-stiffness and learned-controller rigs, old
 preparation chains, serial optimizers, multi-island search, control-count
 comparisons, compatibility aliases, and their tests/reports are removed.
-The pipeline starts with the frozen filtered measured reference; raw C3D
-preparation is not part of this baseline-only worktree.
+The default pipeline starts with the frozen filtered measured reference.
+Subject-specific C3D preparation is a separate, fail-closed workflow described
+in the GPU README; it does not replace frozen inputs during a controller fit.
 
-The inherited foundation interface, material, friction, gains, masses, bounds,
-initial physical state, loss, and acceptance limits are unchanged. Recorded
+Apart from the explicitly selected 2× stiffness and damping, the inherited
+foundation interface, material, friction, masses, bounds, initial physical state,
+loss, and acceptance limits are unchanged. Recorded
 motion after the initial state and measured GRF are targets, never applied
 motion or extra forces. The reference retains its original 20 Hz filtering
 metadata. This cleanup does not certify biological validity or a new shoe
 interface. General Newton APIs and the separate calibration/gait projects are
 not retired by this controller cleanup.
 
-## Cleanup verification
+## Historical cleanup verification
 
 The controller project shrank from **97 Python files / 43,084 source lines** to
 **28 files / 7,094 lines**: a net deletion of **35,990 lines (83.5%)**.
@@ -138,4 +152,5 @@ replay passed. Spring-history errors were zero. The smoke run is verification,
 not a replacement for the selected 200-iteration baseline or a convergence claim.
 Its evidence is in `outputs/impedance_instron/cleanup_validation/verification.json`
 and its replay is `outputs/impedance_instron/cleanup_validation/fit/report.html`.
-The selected baseline and smoke result both remain outside measured-fit acceptance.
+That earlier baseline and cleanup smoke result were outside measured-fit acceptance.
+They are historical evidence, not the newly selected accepted baseline above.

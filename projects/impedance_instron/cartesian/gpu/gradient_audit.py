@@ -161,7 +161,7 @@ def audit_step(params, dt, gravity, stiffness, damping, basis_values, values, *,
 def main(argv: list[str] | None = None) -> None:
     """Write an explicitly local gradient audit from a saved baseline pose."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, default=Path("outputs/impedance_instron/baseline12"))
+    parser.add_argument("--baseline", type=Path, default=Path("outputs/impedance_instron/baseline12_accepted"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args(argv)

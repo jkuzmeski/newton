@@ -1,0 +1,1 @@
+Promote the numerically accepted K2/D2 S001 controller to the twelve-point pipeline baseline and related command defaults. Preserve the previous baseline manifest, document the doubled fixed gains and narrow hip-height RMS margin, and retain unchanged physics laws and acceptance limits.

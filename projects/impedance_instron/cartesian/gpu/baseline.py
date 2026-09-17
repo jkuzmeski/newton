@@ -177,6 +177,50 @@ def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str
         }
         if frozen_identity != expected_identity:
             raise ValueError("Saved controller identity differs from its inputs")
+    return build_inputs(
+        reference_path,
+        profile_path,
+        artifact_path,
+        output,
+        mount_m=original["shoe"]["mount_m"],
+        pitch_rad=original["shoe"]["static_pitch_rad"],
+        config=config,
+        fit_config=fit_config,
+        equilibrium=equilibrium,
+        initialization=None if from_scratch else initialization,
+        input_provenance={"selected_baseline": manifest},
+    )
+
+
+def build_inputs(
+    reference_path: Path,
+    profile_path: Path,
+    artifact_path: Path,
+    output: Path,
+    *,
+    mount_m,
+    pitch_rad: float,
+    config: Config,
+    fit_config: FitConfig,
+    equilibrium: Spline | None = None,
+    initialization: dict | None = None,
+    input_provenance: dict | None = None,
+) -> dict[str, Any]:
+    """Create new numerical evidence from independently frozen measured inputs.
+
+    The caller supplies the subject-specific reference/profile and fixed shoe
+    placement. An omitted controller is generated without fitting. Existing
+    bundles and their identities are never rewritten.
+    """
+    reference_path, profile_path, artifact_path, output = map(
+        Path, (reference_path, profile_path, artifact_path, output)
+    )
+    if output.exists():
+        raise FileExistsError(output)
+    controls = 12
+    if fit_config.control_count != controls:
+        raise ValueError("FitConfig must use twelve controls")
+    from_scratch = equilibrium is None
     sources_before = source_snapshot()
     builder_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
@@ -189,9 +233,24 @@ def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str
     validate_profile(profile)
     if from_scratch:
         equilibrium, initialization = _fresh_equilibrium(reference, profile)
-
-    mount, pitch = original["shoe"]["mount_m"], original["shoe"]["static_pitch_rad"]
-    shoe = Shoe(artifact_path, mount, pitch, device="cpu")
+    if equilibrium.coefficients.shape != (12, 4) or not np.isclose(
+        equilibrium.duration_s, float(reference["time_s"][-1]), rtol=0, atol=1e-12
+    ):
+        raise ValueError("Initial controller must match the twelve-point reference duration")
+    if not equilibrium.bounds(
+        *(
+            profile[k]
+            for k in (
+                "equilibrium_lower",
+                "equilibrium_upper",
+                "equilibrium_rate_limit",
+                "equilibrium_acceleration_limit",
+            )
+        )
+    ):
+        raise ValueError("Initial controller violates canonical bounds")
+    initialization = initialization or {"kind": "explicit_controller", "used_previous_controller_coefficients": True}
+    shoe = Shoe(artifact_path, mount_m, pitch_rad, device="cpu")
     shoe_identity = {
         "artifact_sha256": shoe.metadata["sha256"],
         "mount_m": shoe.metadata["mount_m"],
@@ -217,6 +276,9 @@ def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str
 
     loss = float(residual @ residual)
 
+    failure_spline, failure_info = _failure_fixture(
+        reference, profile, artifact_path, mount_m, pitch_rad, fit_config, config
+    )
     output.mkdir(parents=True)
     (output / "reference.npz").write_bytes(reference_bytes)
     (output / "profile.json").write_bytes(profile_bytes)
@@ -237,7 +299,6 @@ def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str
     )
     np.savez_compressed(output / "trace.npz", **trace)
 
-    failure_spline, failure_info = build_failure_equilibrium(reference, profile, controls, config)
     np.savez_compressed(
         output / "failure_equilibrium.npz",
         duration_s=failure_spline.duration_s,
@@ -269,11 +330,15 @@ def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str
         "objective_components": costs,
         "objective": objective.description,
         "provenance": {
-            "generation": "fresh_twelve_point_controller" if from_scratch else "saved_twelve_point_controller",
+            "generation": (
+                "saved_twelve_point_controller"
+                if initialization.get("used_previous_controller_coefficients", True)
+                else "fresh_twelve_point_controller"
+            ),
             "initialization": initialization,
             "control_count": controls,
             "optimization": "none",
-            "selected_baseline": manifest,
+            **(input_provenance or {}),
             "builder_sha256": builder_hash,
             "raw_reference": str(reference_path.resolve()),
             "raw_profile": str(profile_path.resolve()),
@@ -288,6 +353,47 @@ def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str
 
     (output / "summary.json").write_text(json.dumps(_plain(summary), indent=2, allow_nan=False) + "\n")
     return summary
+
+
+def _failure_fixture(reference, profile, artifact_path, mount, pitch, settings, config):
+    """Find and confirm a bounded failure without changing the numerical screens."""
+    q0, v0 = reference["state"][0], reference["velocity"][0]
+    upper = np.asarray(profile["equilibrium_upper"])
+    force = (
+        np.asarray(profile["hip_stiffness_n_m"]) * (upper[:2] - q0[:2])
+        - np.asarray(profile["hip_damping_ns_m"]) * v0[:2]
+    )
+    if np.linalg.norm(force) > config.maximum_force_n:
+        return build_failure_equilibrium(reference, profile, 12, config)
+    # Smaller gains may have no step-zero force failure anywhere inside the box.
+    # Search fixed box corners, then confirm an actual failure on the CPU.
+    from itertools import product  # noqa: PLC0415
+
+    from .engine import Engine  # noqa: PLC0415
+
+    lower = np.asarray(profile["equilibrium_lower"])
+    corners = np.asarray([np.where(bits, upper, lower) for bits in product((False, True), repeat=4)])
+    candidates = np.repeat(corners[:, None, :], 12, axis=1)
+    engine = Engine(
+        reference, profile, artifact_path, mount, pitch, config=config, settings=settings, world_count=len(candidates)
+    )
+    scores = engine.evaluate(candidates)
+    for index in np.flatnonzero(scores["failure_code"]):
+        spline = Spline(float(reference["time_s"][-1]), candidates[index])
+        shoe = Shoe(artifact_path, mount, pitch, device="cpu")
+        _, run = simulate(reference, profile, spline, shoe, config=config)
+        if run["failure"] is not None:
+            initial_force = (
+                np.asarray(profile["hip_stiffness_n_m"]) * (corners[index, :2] - q0[:2])
+                - np.asarray(profile["hip_damping_ns_m"]) * v0[:2]
+            )
+            return spline, {
+                "time_s": float(run["integrated_duration_s"]),
+                "reasons": [str(run["failure"])],
+                "initial_hip_force_norm_n": float(np.linalg.norm(initial_force)),
+                "mechanism": "bounded_constant_corner_with_cpu_confirmed_failure",
+            }
+    raise ValueError("No bounded CPU-confirmed failure fixture found; qualification cannot be skipped")
 
 
 def main(argv: list[str] | None = None) -> None:

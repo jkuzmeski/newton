@@ -10,7 +10,7 @@ only one status integer per completed iteration; it does not copy fit arrays.
 Leg dynamics and the objective use float64. The shared shoe remains float32.
 Physics, failure screens, six measured-loss channels, and acceptance limits
 are unchanged. No CPU optimizer, multi-island mode, knot-insertion
-continuation, count-comparison harness, or scaling sweep is retained.
+continuation, or count-comparison harness is retained.
 
 For an already prepared and qualified run, the lower-level command is:
 
@@ -32,6 +32,150 @@ numerical checks block fitting. This is separate from measured-fit acceptance.
 Each completed fit writes a frozen half-step check and a spring-enabled HTML
 report. Passive-cap activation stays visible even when numerical checks pass.
 Use a separate `WARP_CACHE_PATH` when testing while another process compiles.
+
+## Fixed-gain screens and fresh restarts
+
+The gain-screen command creates nine independent cases. Common stiffness and
+common damping multipliers are each `0.5`, `1.0`, or `2.0`. They apply to all
+four actuated channels. Shoe geometry, material laws, timesteps, measured loss,
+hard bounds, failure screens, and acceptance limits remain fixed. This is not
+an exhaustive search over eight independent gain values.
+
+Multipliers are relative to the chosen bundle. The example below deliberately
+uses the preserved `baseline12` bundle to repeat the original gain grid.
+The default pipeline, profilers, and audits now use `baseline12_accepted`, whose
+stiffness and damping are already twice that older nominal profile. Using the
+accepted bundle for a new gain screen therefore defines a different gain grid.
+
+```bash
+uv run --no-sync -m projects.impedance_instron.cartesian.gpu.gain_sweep create \
+  --bundle outputs/impedance_instron/baseline12 \
+  --output outputs/impedance_instron/gain_screen --subject S001 --iterations 50
+
+uv run --no-sync -m projects.impedance_instron.cartesian.gpu.gain_sweep run \
+  outputs/impedance_instron/gain_screen --case k1.00_d1.00
+
+uv run --no-sync -m projects.impedance_instron.cartesian.gpu.gain_sweep report \
+  outputs/impedance_instron/gain_screen
+```
+
+Run each case in `plan.json` serially on the GPU. Existing output directories
+are never overwritten. Each case builds a new profile and bounded, unfitted
+kinematic-PD controller. It then runs CPU/GPU, common-pose contact, and mixed-world
+qualification before fitting. Small gains can require a different bounded
+failure fixture; the builder confirms an actual failure without weakening any
+screen. Each fit retains the half-timestep check and interactive replay.
+
+`report.html`, `results.md`, `results.csv`, and `results.json` compare loss, six
+RMS errors, acceptance, refinement, completed iterations, search wall time,
+allocated slots, completed real candidates, padding, and actual world-steps.
+Rankings are separate for each iteration budget. A numerically qualified
+winner can still fail measured acceptance. Fifty iterations are a screen,
+not a convergence certificate.
+
+For a finalist, compare the same longer budget across `reference`, `attenuated`,
+and `perturbed` fresh starts and search seeds `17`, `42`, and `101`. For example:
+
+```bash
+uv run --no-sync -m projects.impedance_instron.cartesian.gpu.gain_sweep run \
+  outputs/impedance_instron/gain_screen --case k1.00_d1.00 \
+  --mode perturbed --initial-seed 2718 --seed 42 --iterations 200
+```
+
+The perturbed-controller seed is separate from the optimizer seed. Holding
+`--initial-seed` fixed lets search seeds start from the same coefficients.
+Attenuated starts contract deviations toward the neutral initial anchor.
+Perturbed starts add bounded smooth changes after contraction. Neither starts
+from a fitted controller or saved optimizer history. The selected gain values
+remain constant throughout each solve.
+
+A different subject requires that subject's measured reference, static geometry,
+inertial parameters, and shoe placement. `--subject` cannot relabel S001 inputs
+as S014. Frozen shoe artifacts remain engineering assumptions unless independently
+identified for the measured subject. Finite restarts and neighborhood probes
+can expose sensitivity to local basins; they cannot prove a global optimum.
+
+### Prepare another subject's measured inputs
+
+With sealed gait assets and the frozen baseline bundle available:
+
+```bash
+uv run --no-sync --with ezc3d==1.7.2 \
+  -m projects.impedance_instron.cartesian.prepare_subject \
+  --subject-root /path/to/subject \
+  --baseline-bundle outputs/impedance_instron/baseline12 \
+  --output outputs/impedance_instron/subject_inputs
+```
+
+Preparation uses that subject's static geometry and inertial source. It uses
+3D heel-cluster Kabsch transport for the anatomical ankle and foot pitch.
+Dynamic toe markers do not set pitch. Native force timing and the 20 Hz
+reference filter remain explicit in the output metadata.
+
+The selector requires raw heel rigidity, finite COP, isolated single-foot
+support, side-assignment evidence, and a guarded constant tied-belt interval.
+Filtered rigidity cannot override a failed raw-marker gate. If no window
+passes, the command stops and writes `selection_diagnostics.json`; do not
+start GPU fitting from rejected or filtered-only inputs.
+
+Successful preparation writes a separate `input_quality` receipt with raw-QC
+values and artifact hashes. This is not controller acceptance: prepared inputs
+retain `accepted=false`. Gain-plan creation checks that receipt and the recorded
+raw rigidity, support, side, and treadmill gates. It refuses marked or
+uncertified subject bundles. Existing manifest-verified frozen baselines remain
+supported.
+
+The shoe's intrinsic artifact bytes remain unchanged. Static ankle height and
+ankle-to-heel geometry set the new rigid registration. The transferred heel
+registration and shared shoe remain engineering assumptions, not a new
+subject-specific shoe identification. The saved treadmill offset also retains
+its stated synchronization limitation.
+
+### Probe a fitted controller locally
+
+After a gain run completes, inspect bounded coordinate and smooth perturbations:
+
+```bash
+uv run --no-sync -m projects.impedance_instron.cartesian.gpu.local_probe \
+  --run-directory outputs/impedance_instron/gain_screen/runs/k1.00_d1.00_reference_s17_n50 \
+  --output outputs/impedance_instron/gain_screen/local_probe
+```
+
+Use a new output directory. The command rechecks frozen inputs and numerical
+qualification, then requires exact fitted-loss rescoring within `1e-12`.
+It generates 192 coordinate and 128 smooth perturbations at 1% and 2% of the
+profile box spans, plus the unchanged controller. Smooth directions and full
+proposals are generated on GPU. Canonical bounds are screened on GPU; rejected
+and padding slots do not integrate. Gains, contact laws, and the objective stay
+fixed. `--seed` and `--random-direction-count` control the smooth directions.
+
+`probes.json` records every proposal's bounds, completion, loss, and six RMS
+errors. `summary.json` separates completed slots, rejected proposals, padding,
+and actual integration work, including the separate baseline rescore and setup
+warmup. Unique controllers are not counted. `equilibrium.npz` contains the best
+completed bounded controller with its original warm-start identity.
+
+A probe winner has not undergone its own half-timestep check or spring replay.
+Do not treat it as an accepted fit. To qualify a saved probe without another
+optimization:
+
+```bash
+uv run --no-sync -m projects.impedance_instron.cartesian.gpu.replay_probe \
+  --probe-directory outputs/impedance_instron/gain_screen/local_probe \
+  --output outputs/impedance_instron/gain_screen/qualified_probe
+```
+
+By default, this selects the lowest-loss probe among those meeting **all six
+native-step RMS limits**. It can differ from the lowest-loss probe overall.
+`--probe-index` selects a specific completed bounded probe instead. The command
+reconstructs that controller on GPU, checks canonical bounds and exact saved-loss
+agreement, and runs the unchanged half-timestep and spring-contact replay checks.
+`summary.json` reports acceptance. `report.html` provides the verified replay.
+Neither the optimizer's objective nor its selection policy is changed.
+
+Nearby improvements and finite unsuccessful probes are diagnostics, not local-
+or global-optimality certificates. Numerical acceptance is not physical or
+physiological validation of the inherited shoe/last interface.
 
 ## Profile complete search
 
