@@ -1649,6 +1649,7 @@ class MidsoleFoundation:
         self.carrier = wp.array(carriers, dtype=wp.int32, device=device)
         self.body_com = body_com
         self.column_count = int(len(rest_len))
+        self.friction_solver = None
 
         params = FoundationParams()
         set_material_block(params, material)
@@ -1772,6 +1773,8 @@ class MidsoleFoundation:
         self.tangent_dwell.zero_()
         self.ground_force.zero_()
         self.contact_point.zero_()
+        if self.friction_solver is not None:
+            self.friction_solver.reset()
         if self.free_column_count:
             self.surround_compression.zero_()
             self.surround_scratch.zero_()
@@ -1974,10 +1977,10 @@ class MidsoleFoundation:
                 self.neighbors,
                 self.compression,
                 self.base_pressure,
-                self.tangent_anchor,
-                self.tangent_stuck,
-                self.tangent_dwell,
-                self.friction_kt,
+                self.tangent_anchor if self.friction_solver is None else self.friction_solver.scratch_anchor,
+                self.tangent_stuck if self.friction_solver is None else self.friction_solver.scratch_stuck,
+                self.tangent_dwell if self.friction_solver is None else self.friction_solver.scratch_dwell,
+                self.friction_kt if self.friction_solver is None else self.friction_solver.zero_stiffness,
                 self.friction_kv,
                 self.world_params,
                 self.column_force,
@@ -1986,6 +1989,8 @@ class MidsoleFoundation:
             ],
             device=self.device,
         )
+        if self.friction_solver is not None:
+            self.friction_solver.apply(state, dt)
         wp.launch(
             foundation_partial_ground if plane_contact else foundation_partial,
             dim=self.world_count * self.reduction_groups,
