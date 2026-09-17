@@ -13,13 +13,14 @@ from types import SimpleNamespace
 import numpy as np
 import warp as wp
 
-from projects.digital_shoe.runtime import FoundationConfig, MidsoleFoundation
+from projects.digital_shoe.runtime import FoundationConfig
 
 from ..fit import FitConfig
 from ..mechanics import Body
 from ..run import Config
 from ..shoe import Shoe
 from ..trajectory import Spline, basis
+from .foundation import FoundationFused
 from .mechanics import Params, Vec5, ankle, dynamics, foot_angle, make_params, solve
 from .objective import MeasuredObjective
 
@@ -77,11 +78,13 @@ def _initialize(
     range_mask[w] = 0
 
 
-@wp.kernel
-def _prepare(
+@wp.func
+def _prepare_world(
+    w: int,
+    s: int,
+    state_row: int,
     p: Params,
     cfg: _Settings,
-    clock: wp.array[int],
     basis_values: wp.array2d[wp.float64],
     coefficients: wp.array3d[wp.float64],
     states: wp.array2d[Vec5],
@@ -95,20 +98,26 @@ def _prepare(
     range_step: wp.array[int],
     range_mask: wp.array[int],
 ):
-    w = wp.tid()
-    s = clock[0]
+    """Stage one world with an immutable time index and caller-owned history row."""
     if failure[w] != 0:
         return
-    q = states[s, w]
-    v = velocities[s, w]
+    q = states[state_row, w]
+    v = velocities[state_row, w]
     if not _finite(q) or not _finite(v):
         failure[w] = 1
         failure_step[w] = s
         return
     eq = wp.vec4d(wp.float64(0.0))
-    for row in range(cfg.controls):
-        for c in range(4):
-            eq[c] = eq[c] + basis_values[s, row] * coefficients[w, row, c]
+    if cfg.controls == 12:
+        # Replay must reconstruct this value before evaluating the force screen.
+        # Warp does not replay intermediate values from a dynamic loop.
+        for row in range(12):
+            for c in range(4):
+                eq[c] += basis_values[s, row] * coefficients[w, row, c]
+    else:
+        for row in range(cfg.controls):
+            for c in range(4):
+                eq[c] += basis_values[s, row] * coefficients[w, row, c]
     control = wp.vec4d(
         cfg.stiffness[0] * (eq[0] - q[0]) - cfg.damping[0] * v[0],
         cfg.stiffness[1] * (eq[1] - q[1]) - cfg.damping[1] * v[1],
@@ -120,8 +129,8 @@ def _prepare(
             failure[w] = 2
             failure_step[w] = s
             return
-    equilibrium[s, w] = eq
-    actuator[s, w] = control
+    equilibrium[state_row, w] = eq
+    actuator[state_row, w] = control
     outside = int(0)
     for j in range(2):
         if q[j + 3] < cfg.lower[j] or q[j + 3] > cfg.upper[j]:
@@ -163,6 +172,113 @@ def _prepare(
     )
 
 
+@wp.func_replay(_prepare_world)
+def _replay_prepare_world(
+    w: int,
+    s: int,
+    state_row: int,
+    p: Params,
+    cfg: _Settings,
+    basis_values: wp.array2d[wp.float64],
+    coefficients: wp.array3d[wp.float64],
+    states: wp.array2d[Vec5],
+    velocities: wp.array2d[Vec5],
+    equilibrium: wp.array2d[wp.vec4d],
+    actuator: wp.array2d[wp.vec4d],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    failure: wp.array[int],
+    failure_step: wp.array[int],
+    range_step: wp.array[int],
+    range_mask: wp.array[int],
+):
+    """Reuse retained array outputs without replaying primal writes or counters."""
+    pass
+
+
+@wp.kernel
+def _prepare(
+    p: Params,
+    cfg: _Settings,
+    clock: wp.array[int],
+    basis_values: wp.array2d[wp.float64],
+    coefficients: wp.array3d[wp.float64],
+    states: wp.array2d[Vec5],
+    velocities: wp.array2d[Vec5],
+    equilibrium: wp.array2d[wp.vec4d],
+    actuator: wp.array2d[wp.vec4d],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    failure: wp.array[int],
+    failure_step: wp.array[int],
+    range_step: wp.array[int],
+    range_mask: wp.array[int],
+):
+    """Stage the mutable forward engine through the shared step function."""
+    _prepare_world(
+        wp.tid(),
+        clock[0],
+        clock[0],
+        p,
+        cfg,
+        basis_values,
+        coefficients,
+        states,
+        velocities,
+        equilibrium,
+        actuator,
+        body_q,
+        body_qd,
+        failure,
+        failure_step,
+        range_step,
+        range_mask,
+    )
+
+
+@wp.kernel
+def _prepare_masked(
+    enabled: wp.array[int],
+    p: Params,
+    cfg: _Settings,
+    clock: wp.array[int],
+    basis_values: wp.array2d[wp.float64],
+    coefficients: wp.array3d[wp.float64],
+    states: wp.array2d[Vec5],
+    velocities: wp.array2d[Vec5],
+    equilibrium: wp.array2d[wp.vec4d],
+    actuator: wp.array2d[wp.vec4d],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    failure: wp.array[int],
+    failure_step: wp.array[int],
+    range_step: wp.array[int],
+    range_mask: wp.array[int],
+):
+    """Stage the mutable forward engine through the shared step function."""
+    if enabled[wp.tid()] == 0:
+        return
+    _prepare_world(
+        wp.tid(),
+        clock[0],
+        clock[0],
+        p,
+        cfg,
+        basis_values,
+        coefficients,
+        states,
+        velocities,
+        equilibrium,
+        actuator,
+        body_q,
+        body_qd,
+        failure,
+        failure_step,
+        range_step,
+        range_mask,
+    )
+
+
 @wp.kernel
 def _compression_partial(
     groups: int,
@@ -175,12 +291,13 @@ def _compression_partial(
     caps: wp.array2d[int],
     nonfinite: wp.array2d[int],
 ):
-    w, group = wp.tid()
+    """Reduce column diagnostics cooperatively without changing float64 division."""
+    w, group, lane = wp.tid()
     driven_max = wp.float64(0.0)
     passive_max = wp.float64(0.0)
     count = int(0)
     invalid = int(0)
-    for c in range(group, column_count, groups):
+    for c in range(group * 32 + lane, column_count, groups * 32):
         fraction = wp.float64(compression[w * column_count + c]) / rest[c]
         if not wp.isfinite(fraction):
             invalid = 1
@@ -190,9 +307,133 @@ def _compression_partial(
             passive_max = wp.max(passive_max, fraction)
             if fraction >= passive_cap - wp.float64(1.0e-6):
                 count = count + 1
-    maxima[w, group] = wp.vec2d(driven_max, passive_max)
-    caps[w, group] = count
-    nonfinite[w, group] = invalid
+    dm = wp.tile_max(wp.tile(driven_max))
+    pm = wp.tile_max(wp.tile(passive_max))
+    ct = wp.tile_sum(wp.tile(count))
+    inv = wp.tile_max(wp.tile(invalid))
+    if lane == 0:
+        maxima[w, group] = wp.vec2d(dm[0], pm[0])
+        caps[w, group] = ct[0]
+        nonfinite[w, group] = inv[0]
+
+
+@wp.func
+def _advance_world(
+    w: int,
+    s: int,
+    state_row: int,
+    next_row: int,
+    p: Params,
+    cfg: _Settings,
+    states: wp.array2d[Vec5],
+    velocities: wp.array2d[Vec5],
+    next_states: wp.array2d[Vec5],
+    next_velocities: wp.array2d[Vec5],
+    actuator: wp.array2d[wp.vec4d],
+    body_f: wp.array[wp.spatial_vector],
+    groups: int,
+    partial_maxima: wp.array2d[wp.vec2d],
+    partial_caps: wp.array2d[int],
+    partial_nonfinite: wp.array2d[int],
+    forces: wp.array2d[wp.vec2d],
+    moments: wp.array2d[wp.float64],
+    fractions: wp.array2d[wp.vec3d],
+    cap_count: wp.array2d[int],
+    integrated: wp.array[int],
+    recorded: wp.array[int],
+    failure: wp.array[int],
+    failure_step: wp.array[int],
+):
+    """Advance one world through the shared screens, load mapping, and mass solve."""
+    if failure[w] != 0:
+        return
+    wrench = body_f[w]
+    force = wp.vec2d(wp.float64(wrench[0]), wp.float64(wrench[2]))
+    moment = -wp.float64(wrench[4])
+    if not wp.isfinite(force[0]) or not wp.isfinite(force[1]) or not wp.isfinite(moment):
+        failure[w] = 64
+        failure_step[w] = s
+        return
+    driven_max = wp.float64(0.0)
+    passive_max = wp.float64(0.0)
+    caps = int(0)
+    for group in range(groups):
+        if partial_nonfinite[w, group] != 0:
+            failure[w] = 128
+            failure_step[w] = s
+            return
+        maxima = partial_maxima[w, group]
+        driven_max = wp.max(driven_max, maxima[0])
+        passive_max = wp.max(passive_max, maxima[1])
+        caps = caps + partial_caps[w, group]
+    forces[state_row, w] = force
+    moments[state_row, w] = moment
+    fractions[state_row, w] = wp.vec3d(wp.max(driven_max, passive_max), driven_max, passive_max)
+    cap_count[state_row, w] = caps
+    recorded[w] = recorded[w] + 1
+    code = int(0)
+    if driven_max > cfg.compression_limit + wp.float64(1.0e-6):
+        code = code | 256
+    if force[1] < wp.float64(-1.0e-6):
+        code = code | 512
+    if wp.length(force) > cfg.max_force:
+        code = code | 1024
+    if code != 0:
+        failure[w] = code
+        failure_step[w] = s
+        return
+    q = states[state_row, w]
+    v = velocities[state_row, w]
+    control = actuator[state_row, w]
+    _position, jx, jz = ankle(q, p)
+    load = Vec5(control[0], control[1], wp.float64(0.0), control[2], control[3])
+    for j in range(5):
+        external = jx[j] * force[0] + jz[j] * force[1]
+        if j >= 2:
+            external = external + moment
+        load[j] += external
+    mass, bias = dynamics(q, v, p, cfg.gravity)
+    acceleration = solve(mass, load - bias)
+    next_v = v + cfg.dt * acceleration
+    next_q = q + cfg.dt * next_v
+    if not _finite(next_q) or not _finite(next_v):
+        failure[w] = 2048
+        failure_step[w] = s
+        return
+    next_states[next_row, w] = next_q
+    next_velocities[next_row, w] = next_v
+    integrated[w] = integrated[w] + 1
+
+
+@wp.func_replay(_advance_world)
+def _replay_advance_world(
+    w: int,
+    s: int,
+    state_row: int,
+    next_row: int,
+    p: Params,
+    cfg: _Settings,
+    states: wp.array2d[Vec5],
+    velocities: wp.array2d[Vec5],
+    next_states: wp.array2d[Vec5],
+    next_velocities: wp.array2d[Vec5],
+    actuator: wp.array2d[wp.vec4d],
+    body_f: wp.array[wp.spatial_vector],
+    groups: int,
+    partial_maxima: wp.array2d[wp.vec2d],
+    partial_caps: wp.array2d[int],
+    partial_nonfinite: wp.array2d[int],
+    forces: wp.array2d[wp.vec2d],
+    moments: wp.array2d[wp.float64],
+    fractions: wp.array2d[wp.vec3d],
+    cap_count: wp.array2d[int],
+    integrated: wp.array[int],
+    recorded: wp.array[int],
+    failure: wp.array[int],
+    failure_step: wp.array[int],
+):
+    """Reuse retained array outputs without replaying primal writes or counters."""
+    pass
 
 
 @wp.kernel
@@ -217,66 +458,169 @@ def _advance(
     failure: wp.array[int],
     failure_step: wp.array[int],
 ):
-    w = wp.tid()
-    s = clock[0]
-    if failure[w] != 0:
+    """Advance the mutable forward engine through the shared step function."""
+    _advance_world(
+        wp.tid(),
+        clock[0],
+        clock[0],
+        clock[0] + 1,
+        p,
+        cfg,
+        states,
+        velocities,
+        states,
+        velocities,
+        actuator,
+        body_f,
+        groups,
+        partial_maxima,
+        partial_caps,
+        partial_nonfinite,
+        forces,
+        moments,
+        fractions,
+        cap_count,
+        integrated,
+        recorded,
+        failure,
+        failure_step,
+    )
+
+
+@wp.kernel
+def _advance_masked(
+    enabled: wp.array[int],
+    p: Params,
+    cfg: _Settings,
+    clock: wp.array[int],
+    states: wp.array2d[Vec5],
+    velocities: wp.array2d[Vec5],
+    actuator: wp.array2d[wp.vec4d],
+    body_f: wp.array[wp.spatial_vector],
+    groups: int,
+    partial_maxima: wp.array2d[wp.vec2d],
+    partial_caps: wp.array2d[int],
+    partial_nonfinite: wp.array2d[int],
+    forces: wp.array2d[wp.vec2d],
+    moments: wp.array2d[wp.float64],
+    fractions: wp.array2d[wp.vec3d],
+    cap_count: wp.array2d[int],
+    integrated: wp.array[int],
+    recorded: wp.array[int],
+    failure: wp.array[int],
+    failure_step: wp.array[int],
+):
+    """Advance the mutable forward engine through the shared step function."""
+    if enabled[wp.tid()] == 0:
         return
-    wrench = body_f[w]
-    force = wp.vec2d(wp.float64(wrench[0]), wp.float64(wrench[2]))
-    moment = -wp.float64(wrench[4])
-    if not wp.isfinite(force[0]) or not wp.isfinite(force[1]) or not wp.isfinite(moment):
-        failure[w] = 64
-        failure_step[w] = s
+    _advance_world(
+        wp.tid(),
+        clock[0],
+        clock[0],
+        clock[0] + 1,
+        p,
+        cfg,
+        states,
+        velocities,
+        states,
+        velocities,
+        actuator,
+        body_f,
+        groups,
+        partial_maxima,
+        partial_caps,
+        partial_nonfinite,
+        forces,
+        moments,
+        fractions,
+        cap_count,
+        integrated,
+        recorded,
+        failure,
+        failure_step,
+    )
+
+
+@wp.kernel
+def _advance_prepare(
+    enabled: wp.array[int],
+    early_tick: int,
+    basis_values: wp.array2d[wp.float64],
+    coefficients: wp.array3d[wp.float64],
+    equilibrium: wp.array2d[wp.vec4d],
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    range_step: wp.array[int],
+    range_mask: wp.array[int],
+    p: Params,
+    cfg: _Settings,
+    clock: wp.array[int],
+    states: wp.array2d[Vec5],
+    velocities: wp.array2d[Vec5],
+    actuator: wp.array2d[wp.vec4d],
+    body_f: wp.array[wp.spatial_vector],
+    groups: int,
+    partial_maxima: wp.array2d[wp.vec2d],
+    partial_caps: wp.array2d[int],
+    partial_nonfinite: wp.array2d[int],
+    forces: wp.array2d[wp.vec2d],
+    moments: wp.array2d[wp.float64],
+    fractions: wp.array2d[wp.vec3d],
+    cap_count: wp.array2d[int],
+    integrated: wp.array[int],
+    recorded: wp.array[int],
+    failure: wp.array[int],
+    failure_step: wp.array[int],
+):
+    """Advance one world, then stage its next carrier without a global dependency."""
+    if enabled[wp.tid()] == 0:
         return
-    driven_max = wp.float64(0.0)
-    passive_max = wp.float64(0.0)
-    caps = int(0)
-    for group in range(groups):
-        if partial_nonfinite[w, group] != 0:
-            failure[w] = 128
-            failure_step[w] = s
-            return
-        maxima = partial_maxima[w, group]
-        driven_max = wp.max(driven_max, maxima[0])
-        passive_max = wp.max(passive_max, maxima[1])
-        caps = caps + partial_caps[w, group]
-    forces[s, w] = force
-    moments[s, w] = moment
-    fractions[s, w] = wp.vec3d(wp.max(driven_max, passive_max), driven_max, passive_max)
-    cap_count[s, w] = caps
-    recorded[w] = recorded[w] + 1
-    code = int(0)
-    if driven_max > cfg.compression_limit + wp.float64(1.0e-6):
-        code = code | 256
-    if force[1] < wp.float64(-1.0e-6):
-        code = code | 512
-    if wp.length(force) > cfg.max_force:
-        code = code | 1024
-    if code != 0:
-        failure[w] = code
-        failure_step[w] = s
-        return
-    q = states[s, w]
-    v = velocities[s, w]
-    control = actuator[s, w]
-    _position, jx, jz = ankle(q, p)
-    load = Vec5(control[0], control[1], wp.float64(0.0), control[2], control[3])
-    for j in range(5):
-        external = jx[j] * force[0] + jz[j] * force[1]
-        if j >= 2:
-            external = external + moment
-        load[j] = load[j] + external
-    mass, bias = dynamics(q, v, p, cfg.gravity)
-    acceleration = solve(mass, load - bias)
-    next_v = v + cfg.dt * acceleration
-    next_q = q + cfg.dt * next_v
-    if not _finite(next_q) or not _finite(next_v):
-        failure[w] = 2048
-        failure_step[w] = s
-        return
-    states[s + 1, w] = next_q
-    velocities[s + 1, w] = next_v
-    integrated[w] = integrated[w] + 1
+    _advance_world(
+        wp.tid(),
+        clock[0] - early_tick,
+        clock[0] - early_tick,
+        (clock[0] - early_tick) + 1,
+        p,
+        cfg,
+        states,
+        velocities,
+        states,
+        velocities,
+        actuator,
+        body_f,
+        groups,
+        partial_maxima,
+        partial_caps,
+        partial_nonfinite,
+        forces,
+        moments,
+        fractions,
+        cap_count,
+        integrated,
+        recorded,
+        failure,
+        failure_step,
+    )
+
+    _prepare_world(
+        wp.tid(),
+        (clock[0] - early_tick) + 1,
+        (clock[0] - early_tick) + 1,
+        p,
+        cfg,
+        basis_values,
+        coefficients,
+        states,
+        velocities,
+        equilibrium,
+        actuator,
+        body_q,
+        body_qd,
+        failure,
+        failure_step,
+        range_step,
+        range_mask,
+    )
 
 
 @wp.kernel
@@ -456,7 +800,7 @@ class Engine:
             body_f=wp.zeros(world_count, dtype=wp.spatial_vector, device=self.device),
         )
         bed = self.shoe.shoe.column_bed
-        self.foundation = MidsoleFoundation(
+        self.foundation = FoundationFused(
             self.shoe.anchor_local_m,
             np.zeros(len(bed.rest_length_m)),
             bed.rest_length_m,
@@ -497,12 +841,20 @@ class Engine:
         self.moments = wp.zeros((self.steps, world_count), dtype=wp.float64, device=self.device)
         self.fractions = wp.zeros((self.steps, world_count), dtype=wp.vec3d, device=self.device)
         self.caps = wp.zeros((self.steps, world_count), dtype=wp.int32, device=self.device)
-        # Parallel maxima/counts preserve exact diagnostics without a serial 910-column load chain.
+        # Each group reduces a contiguous tile; extrema and integer sums are order-independent.
         self.reduction_groups = min(32, self.foundation.column_count)
         self.partial_maxima = wp.zeros((world_count, self.reduction_groups), dtype=wp.vec2d, device=self.device)
         self.partial_caps = wp.zeros((world_count, self.reduction_groups), dtype=wp.int32, device=self.device)
         self.partial_nonfinite = wp.zeros_like(self.partial_caps)
         self.clock = wp.zeros(1, dtype=wp.int32, device=self.device)
+        self.foundation.diagnostics = (
+            self.rest,
+            self.kernel_config.passive_cap,
+            self.partial_maxima,
+            self.partial_caps,
+            self.partial_nonfinite,
+            self.clock,
+        )
         for name in ("integrated", "recorded", "failure", "failure_step", "range_step", "range_mask"):
             setattr(self, name, wp.zeros(world_count, dtype=wp.int32, device=self.device))
         self.objective = MeasuredObjective(reference, settings, self.time_s, world_count, self.device)
@@ -538,10 +890,12 @@ class Engine:
 
     def _prepare(self):
         """Evaluate the four-channel controller and stage the ankle carrier on device."""
+        # One independent world per block spreads small batches across CUDA SMs.
         wp.launch(
-            _prepare,
+            _prepare_masked,
             dim=self.world_count,
             inputs=[
+                self.foundation.enabled,
                 self.params,
                 self.kernel_config,
                 self.clock,
@@ -559,34 +913,52 @@ class Engine:
                 self.range_mask,
             ],
             device=self.device,
-            block_dim=32,
+            block_dim=1,
         )
 
-    def _step(self):
-        """Queue one unchanged contact update and semi-implicit integration step."""
-        self._prepare()
-        self.foundation.apply(self.carriers, self.dt, clear_body_force=True)
+    def _step(self, *, staged=False):
+        """Queue unchanged physics; optionally stage the next carrier inside integration."""
+        if not staged:
+            self._prepare()
+        early_tick = staged and self.foundation.fused_diagnostics
+        self.foundation.apply(self.carriers, self.dt, clear_body_force=True, tick=early_tick)
+        if not self.foundation.fused_diagnostics:
+            wp.launch(
+                _compression_partial,
+                dim=(self.world_count, self.reduction_groups, 32),
+                inputs=[
+                    self.reduction_groups,
+                    self.foundation.column_count,
+                    self.kernel_config.passive_cap,
+                    self.foundation.compression,
+                    self.rest,
+                    self.foundation.driven,
+                    self.partial_maxima,
+                    self.partial_caps,
+                    self.partial_nonfinite,
+                ],
+                device=self.device,
+                block_dim=32,
+            )
         wp.launch(
-            _compression_partial,
-            dim=(self.world_count, self.reduction_groups),
-            inputs=[
-                self.reduction_groups,
-                self.foundation.column_count,
-                self.kernel_config.passive_cap,
-                self.foundation.compression,
-                self.rest,
-                self.foundation.driven,
-                self.partial_maxima,
-                self.partial_caps,
-                self.partial_nonfinite,
-            ],
-            device=self.device,
-            block_dim=32,
-        )
-        wp.launch(
-            _advance,
+            _advance_prepare if staged else _advance_masked,
             dim=self.world_count,
             inputs=[
+                self.foundation.enabled,
+                *(
+                    [
+                        int(early_tick),
+                        self.basis,
+                        self.coefficients,
+                        self.equilibrium,
+                        self.carriers.body_q,
+                        self.carriers.body_qd,
+                        self.range_step,
+                        self.range_mask,
+                    ]
+                    if staged
+                    else []
+                ),
                 self.params,
                 self.kernel_config,
                 self.clock,
@@ -608,15 +980,17 @@ class Engine:
                 self.failure_step,
             ],
             device=self.device,
-            block_dim=32,
+            block_dim=1,
         )
-        wp.launch(_tick, dim=1, inputs=[self.clock], device=self.device)
+        if not early_tick:
+            wp.launch(_tick, dim=1, inputs=[self.clock], device=self.device)
 
     def capture(self, coefficients):
         """Compile and capture fixed-size chunks separately from warm rollout timing."""
         values = self._validate_coefficients(coefficients)
         started = perf_counter()
         self.coefficients.assign(values)
+        self.foundation.enabled.fill_(1)
         self._reset()
         self._step()
         self.objective.launch(self.states, self.forces, self.integrated, self.failure)
@@ -639,8 +1013,10 @@ class Engine:
         """Capture a full rollout with a device-side graph loop and no array copies.
 
         Call :meth:`capture` with the initial bounded coefficients first. The
-        conditional graph node requires CUDA 12.4 or newer. Its body is the same
-        step graph used by the historical chunk path, without host chunk submits.
+        conditional graph node requires CUDA 12.4 or newer. Shared step functions
+        retain their arithmetic, but next-carrier staging joins integration and
+        the shoe block writes compression diagnostics and advances the clock.
+        The chunk path remains available with separate staging for comparison.
         """
         if self.resident_graph is not None:
             return
@@ -651,13 +1027,14 @@ class Engine:
 
         def body():
             for _ in range(self.chunk_steps):
-                self._step()
+                self._step(staged=True)
             wp.launch(
                 _loop_condition, dim=1, inputs=[self.clock, self.resident_condition, chunk_limit], device=self.device
             )
 
         with wp.ScopedCapture(device=self.device) as capture:
             self._reset()
+            self._prepare()
             if chunk_limit:
                 wp.launch(
                     _loop_condition,
@@ -667,11 +1044,10 @@ class Engine:
                 )
                 wp.capture_while(self.resident_condition, body)
                 for _ in range(self.steps % self.chunk_steps):
-                    self._step()
+                    self._step(staged=True)
             else:
                 for _ in range(self.steps):
-                    self._step()
-            self._prepare()
+                    self._step(staged=True)
             self.objective.launch(self.states, self.forces, self.integrated, self.failure)
         self.resident_graph = capture.graph
 
@@ -765,6 +1141,7 @@ class Engine:
             self.capture(values)
         started = perf_counter()
         self.coefficients.assign(values)
+        self.foundation.enabled.fill_(1)
         self.evaluate_device()
         scores = self.objective.read()
         scores.update(integrated_steps=self.integrated.numpy(), failure_code=self.failure.numpy())

@@ -1077,6 +1077,8 @@ def fit_resident(
     warmup_wall_s = perf_counter() - warmup_started
 
     def _launch_forward():
+        if hasattr(engine, "foundation") and hasattr(engine.foundation, "enabled"):
+            wp.copy(engine.foundation.enabled, real_mask)
         if hasattr(engine, "evaluate_device"):
             engine.evaluate_device()
         else:
@@ -1618,7 +1620,8 @@ def fit_resident(
             "first poll mandatory; no convergence stop",
             "next_batch_safety_factor": 1.1,
             "next_batch_safety_margin_s": 0.05,
-            "padding": "bound-rejected or disabled slots remain physical but ineligible; other unused slots explore",
+            "padding": "bound-rejected or disabled slots remain allocated but are not integrated; other unused slots explore",
+            "physics_worlds_scope": "allocated launch slots; completed worlds and integrated steps count actual work",
             "candidate_count_scope": "real proposal slots including baseline reevaluations; global unique count not tracked",
             "failed_initial": "latched on device; later selection disabled; diagnostic returned at final unload",
             "history_count_order": [

@@ -149,6 +149,37 @@ def contact_wrench(
 
 
 @wp.func
+def _surround_balance_pressures(
+    c: float,
+    rigid: float,
+    pull: float,
+    coupling_sum: float,
+    thickness: float,
+    overstress_base: float,
+    overstress_gain: float,
+    area: float,
+    attachment: float,
+    max_strain: float,
+    relaxation: float,
+    carrier_bond: int,
+    peq: float,
+    peq_ahead: float,
+) -> float:
+    """Apply the shared constrained balance to already evaluated pressures."""
+    reaction = area * wp.max(peq + overstress_base + overstress_gain * peq, 0.0)
+    step = 1.0e-3 * thickness
+    ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
+    stiffness = wp.max((ahead - reaction) / step + attachment + coupling_sum, 1.0e-9)
+    bond_reference = float(0.0)
+    upper = max_strain * thickness
+    if carrier_bond != 0:
+        bond_reference = rigid
+        upper = wp.clamp(rigid, 0.0, upper)
+    residual = reaction + attachment * (c - bond_reference) - pull
+    return wp.clamp(c - relaxation * residual / stiffness, 0.0, upper)
+
+
+@wp.func
 def surround_balance(
     c: float,
     rigid: float,
@@ -176,20 +207,26 @@ def surround_balance(
     arrays. The balance and one-sided retention bound do not depend on storage.
     """
     peq = hyperfoam_pressure(c / thickness, g_eq, alpha, g_eq2, alpha2, beta, one_minus_two_poisson, stretch_floor)
-    reaction = area * wp.max(peq + overstress_base + overstress_gain * peq, 0.0)
     step = 1.0e-3 * thickness
     peq_ahead = hyperfoam_pressure(
         (c + step) / thickness, g_eq, alpha, g_eq2, alpha2, beta, one_minus_two_poisson, stretch_floor
     )
-    ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
-    stiffness = wp.max((ahead - reaction) / step + attachment + coupling_sum, 1.0e-9)
-    bond_reference = float(0.0)
-    upper = max_strain * thickness
-    if carrier_bond != 0:
-        bond_reference = rigid
-        upper = wp.clamp(rigid, 0.0, upper)
-    residual = reaction + attachment * (c - bond_reference) - pull
-    return wp.clamp(c - relaxation * residual / stiffness, 0.0, upper)
+    return _surround_balance_pressures(
+        c,
+        rigid,
+        pull,
+        coupling_sum,
+        thickness,
+        overstress_base,
+        overstress_gain,
+        area,
+        attachment,
+        max_strain,
+        relaxation,
+        carrier_bond,
+        peq,
+        peq_ahead,
+    )
 
 
 @wp.func

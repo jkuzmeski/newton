@@ -1,0 +1,1 @@
+Add an explicit Cartesian mass-solve adjoint, tape-safe shared contact and measured-objective diagnostics, and runnable controller-gradient audits. Label full-stance gradients as unqualified and retain the existing forward optimizer as the default.

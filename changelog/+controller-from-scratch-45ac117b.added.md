@@ -1,0 +1,1 @@
+Add `--from-scratch` to the twelve-point controller pipeline. Generate bounded, unfitted coefficients from measured kinematics and fixed PD gains without reusing a saved controller or optimizer history. Record explicit initialization provenance and retain the numerical qualification, objective, and acceptance limits.

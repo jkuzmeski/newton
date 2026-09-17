@@ -254,6 +254,11 @@ def optimize(args):
         "starting_controller": str(starting_controller.resolve()),
         "starting_controller_sha256": hashlib.sha256(starting_controller.read_bytes()).hexdigest(),
         "starting_coefficients": coefficients.tolist(),
+        "initialization": (
+            baseline.get("provenance", {}).get("initialization", {"kind": "saved_controller"})
+            if args.initial_equilibrium is None
+            else {"kind": "saved_controller", "used_previous_controller_coefficients": True}
+        ),
         "cpu_fit_started": False,
         "gpu_validation": {
             "single": str(args.single_validation),

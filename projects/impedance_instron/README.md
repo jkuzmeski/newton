@@ -50,6 +50,27 @@ proof of convergence. Setup, numerical validation, refinement, and reporting
 are outside the search cap. `--iterations 1` is a short end-to-end smoke run.
 The timestep stays 62.5 microseconds, with 31.25 microseconds for refinement.
 
+### Fit a new controller from scratch
+
+The default command above is a warm start. To generate new, unfitted controller
+coefficients instead, use:
+
+```bash
+uv run --no-sync -m projects.impedance_instron --from-scratch   --output outputs/impedance_instron/fresh12 --iterations 200 --wall-seconds 3600
+```
+
+This mode does not use a saved controller or previous optimizer history.
+It samples `q_reference + (D/K) * velocity_reference` at twelve cubic-spline
+Greville abscissae, then contracts the channels toward their initial neutral
+points until the original strict control-polygon bounds hold. No simulation
+loss or measured GRF is used to choose the seed. This is deterministic,
+measurement-based initialization, not random coefficients or prescribed motion.
+The recorded data, calibrated shoe, physical model, gains, and limits stay fixed.
+
+The prepared baseline and fit summary record the initialization formula,
+contraction factors, starting coefficients, and `used_previous_controller_coefficients: false`.
+Use `--from-scratch` with separate stages to require matching fresh provenance.
+
 Stages can also run separately:
 
 ```bash
@@ -63,6 +84,22 @@ uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instro
 format. Existing stage outputs are not overwritten, except an explicit report
 rebuild. If qualification fails, inspect the failed flags; do not enlarge the
 limits or substitute evidence from another input or source version.
+
+## Differentiable search framework
+
+See [the reverse-mode search framework](AUTODIFF_SEARCH.md) for full-horizon
+backprop, memory/checkpoint policy, exact spline constraints, and validation.
+The shared mass-solve adjoint, tape-safe full-contact rollout, measured objective,
+and runnable gradient audits are implemented as experimental diagnostics. Short
+coupled-window checks pass, but the full-stance gradient audit remains unqualified.
+There is no integrated adjoint optimizer; the current forward search stays the default.
+
+## Search performance
+
+Use the [complete-search profiler](cartesian/gpu/README.md#profile-complete-search)
+to compare equal-work GPU searches without rebuilding an HTML report on every
+repeat. It reports full iteration time and useful candidate throughput, not
+kernel enqueue time. Profiling does not replace numerical qualification.
 
 ## What remains
 

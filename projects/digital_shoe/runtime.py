@@ -201,8 +201,9 @@ def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -
     return pasternak_coupling(t_i, t_j, p.g_eq + p.g_eq2)
 
 
-@wp.kernel
-def foundation_pressure(
+@wp.func
+def _foundation_pressure(
+    i: int,
     carrier: wp.array[wp.int32],
     column_count: wp.int32,
     dt: wp.float32,
@@ -224,7 +225,6 @@ def foundation_pressure(
     the world, so every world can carry its own material. See
     :class:`MidsoleFoundation`.
     """
-    i = wp.tid()
     world_index = i // column_count
     column = i - world_index * column_count
     p = params[world_index]
@@ -240,6 +240,39 @@ def foundation_pressure(
     q_state[i] = qn
     peq_prev[i] = peq
     base_pressure[i] = peq + qn
+
+
+@wp.kernel
+def foundation_pressure(
+    carrier: wp.array[wp.int32],
+    column_count: wp.int32,
+    dt: wp.float32,
+    body_q: wp.array[wp.transform],
+    anchor_local: wp.array[wp.vec3],
+    z_free: wp.array[wp.float32],
+    rest_len: wp.array[wp.float32],
+    params: wp.array[FoundationParams],
+    q_state: wp.array[wp.float32],
+    peq_prev: wp.array[wp.float32],
+    compression: wp.array[wp.float32],
+    base_pressure: wp.array[wp.float32],
+):
+    """Run :func:`_foundation_pressure` once per independent column."""
+    _foundation_pressure(
+        wp.tid(),
+        carrier,
+        column_count,
+        dt,
+        body_q,
+        anchor_local,
+        z_free,
+        rest_len,
+        params,
+        q_state,
+        peq_prev,
+        compression,
+        base_pressure,
+    )
 
 
 @wp.func
@@ -801,8 +834,9 @@ def surround_relax(
     )
 
 
-@wp.kernel
-def surround_write_free_top(
+@wp.func
+def _surround_write_free_top(
+    i: int,
     carrier: wp.array[wp.int32],
     column_count: wp.int32,
     inv_dt: wp.float32,
@@ -824,7 +858,6 @@ def surround_write_free_top(
     Launched over ``world_count * column_count`` threads; ``z_free`` is tiled
     per world because the relaxed free surface is state, not a constant.
     """
-    i = wp.tid()
     world_index = i // column_count
     column = i - world_index * column_count
     if driven[column] != 0:
@@ -836,6 +869,37 @@ def surround_write_free_top(
     z_free[i] = world[2] + c
     rate[i] = (c - previous[i]) * inv_dt
     previous[i] = c
+
+
+@wp.kernel
+def surround_write_free_top(
+    carrier: wp.array[wp.int32],
+    column_count: wp.int32,
+    inv_dt: wp.float32,
+    body_q: wp.array[wp.transform],
+    driven: wp.array[wp.int32],
+    anchor_local: wp.array[wp.vec3],
+    z_free_rigid: wp.array[wp.float32],
+    compression: wp.array[wp.float32],
+    previous: wp.array[wp.float32],
+    z_free: wp.array[wp.float32],
+    rate: wp.array[wp.float32],
+):
+    """Run :func:`_surround_write_free_top` once per independent column."""
+    _surround_write_free_top(
+        wp.tid(),
+        carrier,
+        column_count,
+        inv_dt,
+        body_q,
+        driven,
+        anchor_local,
+        z_free_rigid,
+        compression,
+        previous,
+        z_free,
+        rate,
+    )
 
 
 @wp.kernel
@@ -1204,8 +1268,9 @@ def foundation_partial_ground(
     )
 
 
-@wp.kernel
-def foundation_finalize(
+@wp.func
+def _foundation_finalize(
+    world_index: int,
     carrier: wp.array[wp.int32],
     group_count: wp.int32,
     part_force: wp.array[wp.vec3],
@@ -1233,7 +1298,6 @@ def foundation_finalize(
     accumulators need no reset pass and carry no atomic history. Only the carrier wrench
     is added, because other forces may already be staged in ``body_f``.
     """
-    world_index = wp.tid()
     base = world_index * group_count
     force_sum = wp.vec3(0.0, 0.0, 0.0)
     torque_sum = wp.vec3(0.0, 0.0, 0.0)
@@ -1264,6 +1328,55 @@ def foundation_finalize(
     max_compression[world_index] = max_comp
     active_count[world_index] = active
     wp.atomic_add(body_f, carrier[world_index], wp.spatial_vector(force_sum, torque_sum))
+
+
+@wp.kernel
+def foundation_finalize(
+    carrier: wp.array[wp.int32],
+    group_count: wp.int32,
+    part_force: wp.array[wp.vec3],
+    part_torque: wp.array[wp.vec3],
+    part_moment: wp.array[wp.vec3],
+    part_cop: wp.array[wp.vec3],
+    part_normal: wp.array[wp.float32],
+    part_pressed: wp.array[wp.float32],
+    part_power: wp.array[wp.float32],
+    part_max: wp.array[wp.float32],
+    part_active: wp.array[wp.int32],
+    body_f: wp.array[wp.spatial_vector],
+    normal_force: wp.array[wp.float32],
+    cop_moment: wp.array[wp.vec3],
+    active_count: wp.array[wp.int32],
+    resultant_force: wp.array[wp.vec3],
+    resultant_moment_origin: wp.array[wp.vec3],
+    contact_power: wp.array[wp.float32],
+    max_compression: wp.array[wp.float32],
+    pressed_force: wp.array[wp.float32],
+):
+    """Run :func:`_foundation_finalize` once per independent world."""
+    _foundation_finalize(
+        wp.tid(),
+        carrier,
+        group_count,
+        part_force,
+        part_torque,
+        part_moment,
+        part_cop,
+        part_normal,
+        part_pressed,
+        part_power,
+        part_max,
+        part_active,
+        body_f,
+        normal_force,
+        cop_moment,
+        active_count,
+        resultant_force,
+        resultant_moment_origin,
+        contact_power,
+        max_compression,
+        pressed_force,
+    )
 
 
 @wp.kernel
@@ -1898,6 +2011,7 @@ class MidsoleFoundation:
                 self.partial_active,
             ],
             device=self.device,
+            block_dim=32 if self.world_count <= 256 else 256,
         )
         wp.launch(
             foundation_finalize,
@@ -1925,6 +2039,8 @@ class MidsoleFoundation:
                 self.pressed_force,
             ],
             device=self.device,
+            # Small batches need more blocks, not more inactive lanes in one block.
+            block_dim=1 if self.world_count <= 256 else 256,
         )
 
     def diagnostics(self, world: int = 0) -> dict[str, float]:

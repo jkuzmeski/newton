@@ -71,11 +71,72 @@ def build_failure_equilibrium(
     return spline, failure_info
 
 
-def build(source: Path, output: Path) -> dict[str, Any]:
-    """Replay a hash-verified saved controller without fitting or reseeding it.
+def _fresh_equilibrium(reference: dict, profile: dict) -> tuple[Spline, dict]:
+    """Seed twelve controls from measured kinematics and fixed PD gains, without fitting."""
+    from ..spline import _derivative_control_polygons, _uniform_knots  # noqa: PLC0415
 
-    The source bundle keeps the original result unchanged. Only this newly
-    simulated CPU baseline receives current source identities.
+    time = np.asarray(reference["time_s"], dtype=np.float64)
+    duration = float(time[-1])
+    channels = [0, 1, 3, 4]
+    stiffness = np.asarray([*profile["hip_stiffness_n_m"], *profile["joint_stiffness_nm_rad"]])
+    damping = np.asarray([*profile["hip_damping_ns_m"], *profile["joint_damping_nms_rad"]])
+    neutral = (
+        np.asarray(reference["state"])[:, channels]
+        + damping / stiffness * np.asarray(reference["velocity"])[:, channels]
+    )
+    knots = _uniform_knots(12, 3)
+    sample_times = duration * np.asarray([np.mean(knots[i + 1 : i + 4]) for i in range(12)])
+    raw = np.column_stack([np.interp(sample_times, time, neutral[:, c]) for c in range(4)])
+    lower = np.asarray(profile["equilibrium_lower"])
+    upper = np.asarray(profile["equilibrium_upper"])
+    rate = np.asarray(profile["equilibrium_rate_limit"])
+    acceleration = np.asarray(profile["equilibrium_acceleration_limit"])
+    anchor = np.clip(neutral[0], lower, upper)
+    delta = raw - anchor
+    first, second = _derivative_control_polygons(delta)
+    scale = np.ones(4)
+    for c in range(4):
+        positive = delta[:, c] > 0
+        negative = delta[:, c] < 0
+        if np.any(positive):
+            scale[c] = min(scale[c], float(np.min((upper[c] - anchor[c]) / delta[positive, c])))
+        if np.any(negative):
+            scale[c] = min(scale[c], float(np.min((lower[c] - anchor[c]) / delta[negative, c])))
+        for values, bound in ((first, rate[c] * duration), (second, acceleration[c] * duration**2)):
+            peak = np.max(np.abs(values[:, c]))
+            if peak > 0:
+                scale[c] = min(scale[c], float(bound / peak))
+    scale = np.where(scale < 1.0, scale * (1.0 - 1.0e-12), scale)
+    for _ in range(32):
+        seed = Spline(duration, anchor + delta * scale)
+        if seed.bounds(lower, upper, rate, acceleration):
+            break
+        # Canonical bounds remain strict even at a rounded derivative boundary.
+        scale *= 0.5
+    else:
+        raise ValueError("Could not construct a bounded fresh controller")
+    return seed, {
+        "kind": "from_scratch_kinematic_pd_seed",
+        "used_previous_controller_coefficients": False,
+        "used_optimizer_history": False,
+        "simulation_or_loss_evaluations_for_initialization": 0,
+        "formula": "q_reference + (D/K) * velocity_reference, channels hip-x/hip-z/knee/ankle",
+        "sampling": "linear interpolation at twelve cubic-spline Greville abscissae",
+        "bounds_handling": "contract each channel toward its initial neutral point; canonical strict bounds",
+        "channel_contraction": scale.tolist(),
+        "neutral_anchor": anchor.tolist(),
+        "sample_times_s": sample_times.tolist(),
+        "measured_grf_used_for_initialization": False,
+        "scope": "Fresh controller only; measured data, calibrated shoe, gains, and physical model remain fixed.",
+    }
+
+
+def build(source: Path, output: Path, *, from_scratch: bool = False) -> dict[str, Any]:
+    """Qualify a saved controller or a newly generated, unfitted controller.
+
+    ``from_scratch`` uses the bundle only for measured data, fixed model and
+    configuration. It never uses the bundle's controller coefficients.
+    Original bundle bytes remain unchanged in either mode.
     """
     source, output = Path(source), Path(output)
     if output.exists():
@@ -92,27 +153,30 @@ def build(source: Path, output: Path) -> dict[str, Any]:
     if fit_config.control_count != controls:
         raise ValueError("Saved configuration must use twelve controls")
     config = Config(**original["simulation_config"])
-    with np.load(source / "equilibrium.npz", allow_pickle=False) as archive:
-        equilibrium = Spline(float(archive["duration_s"]), archive["coefficients"])
-        frozen_identity = json.loads(str(archive["identity_json"]))
-    if equilibrium.coefficients.shape != (12, 4):
-        raise ValueError("The baseline must have twelve controls per channel")
-    expected_identity = {
-        "reference_sha256": hashlib.sha256(reference_path.read_bytes()).hexdigest(),
-        "profile_sha256": hashlib.sha256(
-            json.dumps(json.loads(profile_path.read_text()), sort_keys=True).encode()
-        ).hexdigest(),
-        "simulation_config": original["simulation_config"],
-        "shoe": {
-            "artifact_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
-            "mount_m": original["shoe"]["mount_m"],
-            "static_pitch_rad": original["shoe"]["static_pitch_rad"],
-            "friction": original["shoe"]["friction"],
-            "device": "cuda:0",
-        },
-    }
-    if frozen_identity != expected_identity:
-        raise ValueError("Saved controller identity differs from its inputs")
+    equilibrium = None
+    initialization = {"kind": "saved_controller", "used_previous_controller_coefficients": True}
+    if not from_scratch:
+        with np.load(source / "equilibrium.npz", allow_pickle=False) as archive:
+            equilibrium = Spline(float(archive["duration_s"]), archive["coefficients"])
+            frozen_identity = json.loads(str(archive["identity_json"]))
+        if equilibrium.coefficients.shape != (12, 4):
+            raise ValueError("The baseline must have twelve controls per channel")
+        expected_identity = {
+            "reference_sha256": hashlib.sha256(reference_path.read_bytes()).hexdigest(),
+            "profile_sha256": hashlib.sha256(
+                json.dumps(json.loads(profile_path.read_text()), sort_keys=True).encode()
+            ).hexdigest(),
+            "simulation_config": original["simulation_config"],
+            "shoe": {
+                "artifact_sha256": hashlib.sha256(artifact_path.read_bytes()).hexdigest(),
+                "mount_m": original["shoe"]["mount_m"],
+                "static_pitch_rad": original["shoe"]["static_pitch_rad"],
+                "friction": original["shoe"]["friction"],
+                "device": "cuda:0",
+            },
+        }
+        if frozen_identity != expected_identity:
+            raise ValueError("Saved controller identity differs from its inputs")
     sources_before = source_snapshot()
     builder_hash = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
@@ -123,6 +187,8 @@ def build(source: Path, output: Path) -> dict[str, Any]:
         reference = dict(archive)
     profile = load_profile(profile_path)
     validate_profile(profile)
+    if from_scratch:
+        equilibrium, initialization = _fresh_equilibrium(reference, profile)
 
     mount, pitch = original["shoe"]["mount_m"], original["shoe"]["static_pitch_rad"]
     shoe = Shoe(artifact_path, mount, pitch, device="cpu")
@@ -203,7 +269,8 @@ def build(source: Path, output: Path) -> dict[str, Any]:
         "objective_components": costs,
         "objective": objective.description,
         "provenance": {
-            "generation": "saved_twelve_point_controller",
+            "generation": "fresh_twelve_point_controller" if from_scratch else "saved_twelve_point_controller",
+            "initialization": initialization,
             "control_count": controls,
             "optimization": "none",
             "selected_baseline": manifest,
@@ -228,8 +295,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--from-scratch", action="store_true", help="Generate unfitted coefficients from measured kinematics."
+    )
     args = parser.parse_args(argv)
-    summary = build(args.source, args.output)
+    summary = build(args.source, args.output, from_scratch=args.from_scratch)
     print(f"Qualified twelve-point CPU baseline at {args.output}; loss={summary['loss']:.7f}")
 
 

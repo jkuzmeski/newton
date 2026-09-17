@@ -140,7 +140,7 @@ def dynamics(q: Vec5, v: Vec5, p: Params, gravity: wp.float64) -> tuple[Mat5, Ve
     bias = Vec5()
     for i in range(5):
         for row in range(6):
-            bias[i] = bias[i] + jacobian[row, i] * force[row]
+            bias[i] += jacobian[row, i] * force[row]
         for j in range(5):
             entry = wp.float64(0.0)
             for row in range(6):
@@ -180,3 +180,18 @@ def solve(m: Mat5, rhs: Vec5) -> Vec5:
             value = value - lower[j, i] * result[j]
         result[i] = value / lower[i, i]
     return result
+
+
+@wp.func_grad(solve)
+def _adj_solve(m: Mat5, rhs: Vec5, adj_result: Vec5):
+    """Differentiate the symmetric matrix defined by the forward solve's lower triangle."""
+    result = solve(m, rhs)
+    dual = solve(m, adj_result)
+    wp.adjoint[rhs] += dual
+    matrix_gradient = Mat5()
+    for i in range(5):
+        matrix_gradient[i, i] = -dual[i] * result[i]
+        for j in range(i):
+            # One lower-triangular entry controls both symmetric matrix entries.
+            matrix_gradient[i, j] = -dual[i] * result[j] - dual[j] * result[i]
+    wp.adjoint[m] += matrix_gradient

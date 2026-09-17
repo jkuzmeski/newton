@@ -20,6 +20,9 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--stage", choices=("all", "prepare", "validate", "fit", "report"), default="all")
+    parser.add_argument(
+        "--from-scratch", action="store_true", help="Prepare an unfitted controller without using saved coefficients."
+    )
     parser.add_argument("--iterations", type=int, default=200)
     parser.add_argument("--wall-seconds", type=float, default=3600.0)
     parser.add_argument("--plateau-patience", type=int, default=20)
@@ -47,9 +50,13 @@ def main(argv: list[str] | None = None) -> None:
 
         if output.exists():
             raise FileExistsError(f"Choose a new output directory: {output}")
-        build(args.baseline, baseline)
+        build(args.baseline, baseline, from_scratch=args.from_scratch)
         sources = {str(ROOT / path): {"baseline": digest} for path, digest in source_snapshot().items()}
         (output / "physical_source_identity.json").write_text(json.dumps(sources, indent=2) + "\n")
+    if args.from_scratch and args.stage not in ("all", "prepare"):
+        prepared = json.loads((baseline / "summary.json").read_text())
+        if prepared.get("provenance", {}).get("generation") != "fresh_twelve_point_controller":
+            raise ValueError("--from-scratch requires a baseline prepared with --from-scratch")
     if args.stage in ("all", "validate"):
         from .cartesian.gpu.__main__ import _validation  # noqa: PLC0415
         from .cartesian.gpu.batch_benchmark import benchmark as mixed_benchmark  # noqa: PLC0415

@@ -19,6 +19,7 @@ from projects.digital_shoe import runtime as shoe_runtime
 from ..fit import FitConfig
 from ..run import Config
 from . import engine as engine_module
+from . import foundation as foundation_module
 from . import objective as objective_module
 from .engine import Engine
 from .provenance import source_snapshot, validate_sources
@@ -35,7 +36,7 @@ def execution_identity():
                 key: wp.get_module_options(module).get(key)
                 for key in ("fuse_fp", "fast_math", "mode", "optimization_level")
             }
-            for module in (engine_module, objective_module, shoe_runtime)
+            for module in (engine_module, objective_module, foundation_module, shoe_runtime)
         },
     }
 

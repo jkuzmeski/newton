@@ -32,6 +32,7 @@ _RUNTIME_SOURCES = tuple(
                     "shoe.py",
                     "gpu/__init__.py",
                     "gpu/engine.py",
+                    "gpu/foundation.py",
                     "gpu/mechanics.py",
                     "gpu/objective.py",
                     "gpu/provenance.py",
