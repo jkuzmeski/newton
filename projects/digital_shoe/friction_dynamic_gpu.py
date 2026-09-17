@@ -189,6 +189,7 @@ class FrictionDynamicGPUWorkspace:
             world_count=self.world_count,
             device=str(self.device),
             chunk_steps=chunk_steps,
+            friction_model="legacy",
         )
 
         # Attach FrictionParameterAdapter to Engine foundation

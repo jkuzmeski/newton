@@ -5,6 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Digital Shoe friction identification and dynamic qualification
 
+> **Current default:** Digital Shoe now uses Maxwell shear friction automatically.
+> The leg-shoe baseline uses mu 0.8, equilibrium stiffness 1000 N/m per nominal
+> 25 mm² column, internal viscosity 10 N s/m, and the material relaxation time.
+> `friction_model="legacy"` explicitly selects the previous law. Historical
+> studies below retain their original settings and do not define current defaults.
+
 > Historical study tools use the archived initial controller manifest by default.
 > The fork's current accepted controller baseline is preserved. Use
 > `NEWTON_BASELINE12_MANIFEST` to select a different pinned manifest and supply
@@ -30,7 +36,7 @@ protocols, and qualification findings for tangential shoe contact.
   and free-leg dynamic searches.
 - **No fitted parameter set passed all six limb dynamics criteria.**
 - **No calibrated parameters are promoted or installed as defaults.**
-- MidsoleFoundation defaults to legacy bristle mechanics unless an adapter is explicitly attached.
+- This historical study used legacy bristle defaults. The current runtime defaults to Maxwell shear friction.
 
 ## Scope and physical invariants
 
@@ -285,7 +291,7 @@ certified or promoted.
    diagnostic sensitive to endpoint velocities, kinematic interpolation, and permissible tracking
    errors; it is not proof that every friction-only formulation must fail, and controller/normal
    retuning remains outside the investigation's frozen scope.
-4. **No parameter promotion:** The Digital Shoe runtime, examples, and downstream consumers
-   remain on their existing defaults. The consistent-deflection law is fully tested and
+4. **No parameter promotion:** The fitted parameter candidates from this study were not promoted. The subsequent
+   Maxwell default promotion is a separate model selection and baseline qualification. The consistent-deflection law is fully tested and
    accessible via `FrictionAdapter(mode='deflection')` or `mode='implicit_deflection'`, but
    no universal default has been modified.

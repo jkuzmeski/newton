@@ -239,7 +239,7 @@ def build_history(
         is_complete = True
 
     n = len(q)
-    shoe = Shoe(shoe_path, shoe_info["mount_m"], static_pitch, device=device)
+    shoe = Shoe(shoe_path, shoe_info["mount_m"], static_pitch, device=device, friction_model="legacy")
     wp_device = shoe.device
     C = shoe.foundation.column_count
     ground_height = float(shoe.foundation.ground_height_m or 0.0)

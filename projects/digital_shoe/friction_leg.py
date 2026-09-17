@@ -347,7 +347,7 @@ def run_friction_leg_replay(
     evaluated_steps = len(q)
 
     # 4. Initialize Shoe
-    shoe = Shoe(shoe_path, shoe_info["mount_m"], static_pitch, device=device)
+    shoe = Shoe(shoe_path, shoe_info["mount_m"], static_pitch, device=device, friction_model="legacy")
 
     # 5. Replay each requested mode
     mode_results = {}

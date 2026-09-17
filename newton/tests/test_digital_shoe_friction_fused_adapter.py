@@ -44,6 +44,7 @@ class TestDigitalShoeFrictionFusedAdapter(unittest.TestCase):
             friction_stiffness=10000.0,
             friction=10.0,
             mu=0.8,
+            friction_model="legacy",
         )
         surround = SurroundConfig(driven=driven, sweeps=1, carrier_bond=True)
 
@@ -170,7 +171,7 @@ class TestDigitalShoeFrictionFusedAdapter(unittest.TestCase):
         self.assertGreater(force_fused[2], 5.0)
         np.testing.assert_allclose(fused.compression.numpy(), midsole.compression.numpy(), rtol=1e-5, atol=1e-5)
 
-    def test_default_fused_behavior_preserved_without_adapter(self):
+    def test_legacy_fused_behavior_preserved_without_adapter(self):
         """Preserve default fused behavior and diagnostics when no adapter is attached."""
         if not wp.is_cuda_available():
             self.skipTest("CUDA required")

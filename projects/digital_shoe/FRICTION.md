@@ -5,12 +5,18 @@ SPDX-License-Identifier: Apache-2.0
 
 # Friction-only Digital Shoe mechanics
 
+> **Current default:** Digital Shoe now uses Maxwell shear friction automatically.
+> The leg-shoe baseline uses mu 0.8, equilibrium stiffness 1000 N/m per nominal
+> 25 mm² column, internal viscosity 10 N s/m, and the material relaxation time.
+> `friction_model="legacy"` explicitly selects the previous law. Historical
+> studies below retain their original settings and do not define current defaults.
+
 This investigation evaluates tangential friction models while leaving the
 accepted normal compression, material, and contact mechanics unchanged. It
 does not refit the two-term foam model, alter the passive surround, replace
-normal support, or enable another collision response. Existing consumers keep
-the original legacy bristle path unless they explicitly attach `FrictionAdapter`
-or configure `FrictionSolver`.
+normal support, or enable another collision response. The shared runtime now selects Maxwell shear friction by default.
+Choose `FoundationConfig(friction_model="legacy")` for the previous anchored-bristle
+behavior. Explicit solver adapters remain available for diagnostic comparisons.
 
 ## Five tangential solver modes
 

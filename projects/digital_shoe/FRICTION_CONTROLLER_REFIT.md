@@ -5,6 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Controlled controller refit with fixed contact mechanics
 
+> **Current default:** Digital Shoe now uses Maxwell shear friction automatically.
+> The leg-shoe baseline uses mu 0.8, equilibrium stiffness 1000 N/m per nominal
+> 25 mm² column, internal viscosity 10 N s/m, and the material relaxation time.
+> `friction_model="legacy"` explicitly selects the previous law. Historical
+> studies below retain their original settings and do not define current defaults.
+
 > These diagnostics default to the archived initial twelve-point manifest
 > `projects/impedance_instron/baselines/baseline12_initial.json`. They do not
 > replace the accepted baseline in `projects/impedance_instron/baseline.json`.

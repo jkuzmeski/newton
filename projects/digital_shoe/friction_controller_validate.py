@@ -544,13 +544,17 @@ def validate_controller(
     static_pitch_rad = float(summary_raw["shoe"]["static_pitch_rad"])
 
     # 1. Run baseline controller + fixed Maxwell friction
-    shoe_run_base = Shoe(Path(baseline_dir) / "digital_shoe.json", mount_m, static_pitch_rad, device=device)
+    shoe_run_base = Shoe(
+        Path(baseline_dir) / "digital_shoe.json", mount_m, static_pitch_rad, device=device, friction_model="legacy"
+    )
     configure_candidate_friction(shoe_run_base, fric_params)
     shoe_run_base.foundation.reset()
     trace_base, sum_base = simulate(ref, prof, spline_base, shoe_run_base, config=sim_config)
 
     # 2. Run refit controller + identical fixed Maxwell friction
-    shoe_run_refit = Shoe(Path(baseline_dir) / "digital_shoe.json", mount_m, static_pitch_rad, device=device)
+    shoe_run_refit = Shoe(
+        Path(baseline_dir) / "digital_shoe.json", mount_m, static_pitch_rad, device=device, friction_model="legacy"
+    )
     configure_candidate_friction(shoe_run_refit, fric_params)
     shoe_run_refit.foundation.reset()
     trace_refit, sum_refit = simulate(ref, prof, spline_refit, shoe_run_refit, config=sim_config)

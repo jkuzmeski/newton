@@ -405,7 +405,7 @@ def load_baseline_bundle(
 
     mount_m = summary_raw["shoe"]["mount_m"]
     static_pitch_rad = float(summary_raw["shoe"]["static_pitch_rad"])
-    shoe = Shoe(base_p / "digital_shoe.json", mount_m, static_pitch_rad, device=device)
+    shoe = Shoe(base_p / "digital_shoe.json", mount_m, static_pitch_rad, device=device, friction_model="legacy")
 
     # Use saved actual_dt_s exactly
     run_block = summary_raw.get("run", {})
@@ -511,7 +511,9 @@ def run_dynamic_qualification(
     # 2. Configure candidate on a fresh shoe instance and simulate
     mount_m = summary_raw["shoe"]["mount_m"]
     static_pitch_rad = float(summary_raw["shoe"]["static_pitch_rad"])
-    shoe_cand = Shoe(Path(baseline_dir) / "digital_shoe.json", mount_m, static_pitch_rad, device=device)
+    shoe_cand = Shoe(
+        Path(baseline_dir) / "digital_shoe.json", mount_m, static_pitch_rad, device=device, friction_model="legacy"
+    )
     configure_candidate_friction(shoe_cand, candidate_params)
     shoe_cand.foundation.reset()
     trace_cand, sum_cand = simulate(ref, prof, spline, shoe_cand, config=sim_config)

@@ -5,6 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Friction onset: initialization and force observations
 
+> **Current default:** Digital Shoe now uses Maxwell shear friction automatically.
+> The leg-shoe baseline uses mu 0.8, equilibrium stiffness 1000 N/m per nominal
+> 25 mm² column, internal viscosity 10 N s/m, and the material relaxation time.
+> `friction_model="legacy"` explicitly selects the previous law. Historical
+> studies below retain their original settings and do not define current defaults.
+
 > **Current priority:** Raw physical-force continuity, not peak fitting. `friction-report`
 > and `friction-fit` now default to `raw`. Filtered `matched` output is only an
 > optional observation diagnostic. See [FRICTION_CONTINUITY.md](FRICTION_CONTINUITY.md).

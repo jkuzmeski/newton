@@ -5,6 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Raw contact-force continuity
 
+> **Current default:** Digital Shoe now uses Maxwell shear friction automatically.
+> The leg-shoe baseline uses mu 0.8, equilibrium stiffness 1000 N/m per nominal
+> 25 mm² column, internal viscosity 10 N s/m, and the material relaxation time.
+> `friction_model="legacy"` explicitly selects the previous law. Historical
+> studies below retain their original settings and do not define current defaults.
+
 The objective here is continuous, well-resolved **physical force**, not peak-height
 fitting. No simulation-output filter is used. Normal mechanics, geometry, initial
 conditions and controller parameters remain unchanged. Experimental force-fit gates
@@ -37,7 +43,7 @@ An ideal parallel dashpot applies a term proportional to relative velocity. It c
 therefore produce a force jump if velocity jumps, and a steep force change during
 rapid deceleration. Simply softening the elastic spring does not remove this term.
 
-The optional Maxwell-bristle model uses an equilibrium spring in parallel with a
+The default Maxwell-bristle model uses an equilibrium spring in parallel with a
 Maxwell branch (another spring in series with a dashpot). This entire element is
 in series with the Coulomb slider. The branch force `q` is a mechanical state:
 
@@ -83,11 +89,11 @@ but retains the previously diagnosed non-conjugate tangential work issue.
 
 The 0.1x compliance setting is a demonstrator, not a fitted material constant.
 Normal and controller laws are unchanged; resulting motion/normal histories can
-change indirectly. No universal runtime default is changed.
+change indirectly. Maxwell is now the runtime default; `friction_model="legacy"` preserves the previous behavior.
 
 On the optimized Cartesian backend, an attached friction adapter selects the shared
 foundation launch path so the adapter cannot be bypassed by a fused kernel. The
-accepted legacy/fused default remains unchanged. Capture graphs after attachment
+legacy/fused compatibility mode remains available. The default Maxwell model uses the shared launch path. Capture graphs after attachment
 (or recapture after changing adapter attachment). This optional path may cost more
 than the default fused evaluation; no performance equivalence is claimed.
 

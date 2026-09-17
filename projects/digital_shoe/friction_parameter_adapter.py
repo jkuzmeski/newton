@@ -247,15 +247,36 @@ class FrictionParameterAdapter:
         world_count: int,
         base_kt: np.ndarray | wp.array | None = None,
         base_kv: np.ndarray | wp.array | None = None,
+        *,
+        is_default: bool = False,
+        initial_parameters: np.ndarray | list | None = None,
+        deflection: wp.array | None = None,
+        maxwell_force: wp.array | None = None,
     ):
         if world_count != foundation.world_count or world_count < 1:
             raise ValueError("Adapter worlds must match the foundation")
-        if foundation.friction_solver is not None:
-            raise ValueError("Foundation already has a friction adapter")
+        current_solver = getattr(foundation, "friction_solver", None)
+        if current_solver is not None:
+            if not getattr(current_solver, "is_default", False) or is_default:
+                raise ValueError("Foundation already has a friction adapter")
+
+        # Baseline per-column stiffness and damping validation
+        column_count = int(foundation.column_count)
+        if base_kt is None:
+            base_kt = foundation.friction_kt.numpy().copy()
+        if base_kv is None:
+            base_kv = foundation.friction_kv.numpy().copy()
+        kt_values = base_kt.numpy() if isinstance(base_kt, wp.array) else np.asarray(base_kt)
+        kv_values = base_kv.numpy() if isinstance(base_kv, wp.array) else np.asarray(base_kv)
+        for name, values in (("base_kt", kt_values), ("base_kv", kv_values)):
+            if values.shape != (column_count,) or not np.isfinite(values).all() or np.any(values < 0):
+                raise ValueError(f"{name} must be finite nonnegative per-column values")
+
+        self.is_default = bool(is_default)
         device = foundation.compression.device
         self.foundation = foundation
         self.world_count = int(world_count)
-        self.column_count = int(foundation.column_count)
+        self.column_count = column_count
         self.device = device
         n = self.world_count * self.column_count
 
@@ -266,9 +287,22 @@ class FrictionParameterAdapter:
         self.scratch_dwell = wp.zeros(n, dtype=float, device=device)
 
         # Deflection and physical history tracked by adapter
-        self.deflection = wp.zeros(n, dtype=wp.vec2, device=device)
+        if deflection is not None:
+            self.deflection = deflection
+        elif hasattr(foundation, "tangent_deflection") and foundation.tangent_deflection is not None:
+            self.deflection = foundation.tangent_deflection
+        else:
+            self.deflection = wp.zeros(n, dtype=wp.vec2, device=device)
+
         self.sliding_distance = wp.zeros(n, dtype=float, device=device)
-        self.maxwell_force = wp.zeros(n, dtype=wp.vec2, device=device)
+
+        if maxwell_force is not None:
+            self.maxwell_force = maxwell_force
+        elif hasattr(foundation, "tangent_maxwell_force") and foundation.tangent_maxwell_force is not None:
+            self.maxwell_force = foundation.tangent_maxwell_force
+        else:
+            self.maxwell_force = wp.zeros(n, dtype=wp.vec2, device=device)
+
         self.stored_energy = wp.zeros(n, dtype=float, device=device)
         self.column_diagnostics = wp.zeros(n, dtype=wp.vec4, device=device)
 
@@ -278,26 +312,23 @@ class FrictionParameterAdapter:
         self.partial_diagnostics = wp.zeros(self.world_count * self.groups, dtype=wp.vec4, device=device)
         self.totals = wp.zeros(self.world_count, dtype=wp.vec4, device=device)
 
-        # Baseline per-column stiffness and damping
-        if base_kt is None:
-            base_kt = foundation.friction_kt.numpy().copy()
-        if base_kv is None:
-            base_kv = foundation.friction_kv.numpy().copy()
-        kt_values = base_kt.numpy() if isinstance(base_kt, wp.array) else np.asarray(base_kt)
-        kv_values = base_kv.numpy() if isinstance(base_kv, wp.array) else np.asarray(base_kv)
-        for name, values in (("base_kt", kt_values), ("base_kv", kv_values)):
-            if values.shape != (self.column_count,) or not np.isfinite(values).all() or np.any(values < 0):
-                raise ValueError(f"{name} must be finite nonnegative per-column values")
         self.base_kt = wp.array(kt_values, dtype=float, device=device)
         self.base_kv = wp.array(kv_values, dtype=float, device=device)
 
-        # Per-world candidate parameters:
-        # [method(0/1), mu, kt_scale, kv_scale, viscous_ratio, release_dwell_s, yield_width(0.0)]
+        # Per-world candidate parameters
         self.settings = wp.zeros((self.world_count, 12), dtype=float, device=device)
-        default_params = np.array([[0.0, 0.8, 1.0, 1.0, 0.2, 0.0005, 0.0]], dtype=np.float32)
-        self.set_parameters(default_params)
+        if initial_parameters is not None:
+            self.set_parameters(initial_parameters)
+        elif not is_default:
+            default_params = np.array([[0.0, 0.8, 1.0, 1.0, 0.2, 0.0005, 0.0]], dtype=np.float32)
+            self.set_parameters(default_params)
 
-        # Attach to foundation
+        # Only detach auto-default after all validation and allocations succeed
+        if current_solver is not None and getattr(current_solver, "is_default", False):
+            current_solver.detach(restore_default=False)
+
+        foundation.tangent_deflection = self.deflection
+        foundation.tangent_maxwell_force = self.maxwell_force
         foundation.friction_solver = self
 
     def set_parameters(self, parameters: np.ndarray | list) -> None:
@@ -449,7 +480,23 @@ class FrictionParameterAdapter:
             device=self.device,
         )
 
-    def detach(self) -> None:
-        """Detach from foundation and restore original friction solver state."""
+    def update_world_tau(self, world: int, tau: float) -> None:
+        """Update shear relaxation time for a specific world."""
+        settings_np = self.settings.numpy()
+        settings_np[world, 11] = float(tau)
+        self.settings.assign(settings_np)
+
+    def update_taus(self, taus: Sequence[float]) -> None:
+        """Update shear relaxation times across all worlds."""
+        settings_np = self.settings.numpy()
+        for w, tau in enumerate(taus):
+            settings_np[w, 11] = float(tau)
+        self.settings.assign(settings_np)
+
+    def detach(self, restore_default: bool = True) -> None:
+        """Detach from foundation and restore configured default friction solver if requested."""
         if getattr(self.foundation, "friction_solver", None) is self:
             self.foundation.friction_solver = None
+            if restore_default and getattr(self.foundation, "config", None) is not None:
+                if getattr(self.foundation.config, "friction_model", "legacy") == "maxwell":
+                    self.foundation._install_default_friction_adapter()

@@ -142,7 +142,13 @@ def replay(reference: dict, trace: dict, summary: dict, profile: dict, identity:
     if not device.is_cuda:
         raise ValueError(f"GPU contact replay requires a CUDA device, got {device_name}")
 
-    shoe = Shoe(metadata["path"], metadata["mount_m"], metadata["static_pitch_rad"], str(device))
+    shoe = Shoe(
+        metadata["path"],
+        metadata["mount_m"],
+        metadata["static_pitch_rad"],
+        str(device),
+        friction_model=metadata.get("friction_model", "legacy"),
+    )
     if springs._plain(shoe.metadata) != springs._plain(metadata):
         different = sorted(
             key for key in set(shoe.metadata) | set(metadata) if shoe.metadata.get(key) != metadata.get(key)

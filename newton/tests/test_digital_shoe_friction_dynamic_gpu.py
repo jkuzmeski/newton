@@ -100,6 +100,7 @@ class TestDigitalShoeFrictionDynamicGPU(unittest.TestCase):
             settings=workspace.fit_config,
             world_count=4,
             device="cuda:0",
+            friction_model="legacy",
         )
         orig_scores = orig_engine.evaluate(workspace.frozen_coefficients)
 

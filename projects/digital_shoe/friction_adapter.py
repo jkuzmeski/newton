@@ -124,8 +124,11 @@ class FrictionAdapter:
         yield_width=0.0,
         free_velocity=None,
     ):
-        if getattr(foundation, "friction_solver", None) is not None:
-            raise ValueError("Foundation already has a friction adapter")
+        current_solver = getattr(foundation, "friction_solver", None)
+        if current_solver is not None:
+            if not getattr(current_solver, "is_default", False):
+                raise ValueError("Foundation already has a friction adapter")
+        self.is_default = False
         if not np.isfinite(smoothing_speed) or smoothing_speed <= 0:
             raise ValueError("smoothing_speed must be finite and positive")
         if not np.isfinite(yield_width) or yield_width != 0.0:
@@ -158,7 +161,16 @@ class FrictionAdapter:
         self.scratch_anchor = wp.zeros(n, dtype=wp.vec2, device=device)
         self.scratch_stuck = wp.zeros(n, dtype=int, device=device)
         self.scratch_dwell = wp.zeros(n, dtype=float, device=device)
-        self.deflection = wp.zeros(n, dtype=wp.vec2, device=device)
+
+        if hasattr(foundation, "tangent_deflection") and foundation.tangent_deflection is not None:
+            self.deflection = foundation.tangent_deflection
+        else:
+            self.deflection = wp.zeros(n, dtype=wp.vec2, device=device)
+
+        if hasattr(foundation, "tangent_deflection"):
+            foundation.tangent_deflection = self.deflection
+        if hasattr(foundation, "tangent_maxwell_force"):
+            foundation.tangent_maxwell_force.zero_()
         self.points = wp.zeros(n, dtype=wp.vec3, device=device)
         self.normal = wp.zeros(n, dtype=float, device=device)
         self.com = wp.zeros(w, dtype=wp.vec3, device=device)
@@ -167,6 +179,11 @@ class FrictionAdapter:
         )
         self.params = wp.zeros(w, dtype=FrictionParams, device=device)
         self.result = None
+
+        # Detach default adapter only after all validation and allocations succeed
+        if current_solver is not None and getattr(current_solver, "is_default", False):
+            current_solver.detach(restore_default=False)
+
         foundation.friction_solver = self
 
     def reset(self) -> None:
@@ -238,7 +255,10 @@ class FrictionAdapter:
             device=device,
         )
 
-    def detach(self) -> None:
+    def detach(self, restore_default: bool = True) -> None:
         """Restore the foundation's original friction path, retaining its current history."""
-        if self.foundation.friction_solver is self:
+        if getattr(self.foundation, "friction_solver", None) is self:
             self.foundation.friction_solver = None
+            if restore_default and getattr(self.foundation, "config", None) is not None:
+                if getattr(self.foundation.config, "friction_model", "legacy") == "maxwell":
+                    self.foundation._install_default_friction_adapter()
