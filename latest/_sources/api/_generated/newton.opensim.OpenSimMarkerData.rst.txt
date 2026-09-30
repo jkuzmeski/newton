@@ -1,0 +1,8 @@
+﻿newton.opensim.OpenSimMarkerData
+================================
+
+.. autoclass:: newton.opensim.OpenSimMarkerData
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :member-order: groupwise

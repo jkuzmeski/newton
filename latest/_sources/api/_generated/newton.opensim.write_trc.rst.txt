@@ -1,0 +1,6 @@
+﻿newton.opensim.write\_trc
+=========================
+
+.. currentmodule:: newton.opensim
+
+.. autofunction:: write_trc

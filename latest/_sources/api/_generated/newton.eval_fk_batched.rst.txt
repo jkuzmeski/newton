@@ -1,0 +1,6 @@
+﻿newton.eval\_fk\_batched
+========================
+
+.. currentmodule:: newton
+
+.. autofunction:: eval_fk_batched
