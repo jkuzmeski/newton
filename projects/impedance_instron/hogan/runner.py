@@ -371,6 +371,36 @@ class RolloutConfig:
             raise ValueError("Timestep, gravity, force, speed, threshold must be positive; compression in (0, 1)")
 
 
+def _summary(trace: dict, failure: str | None, duration_s: float, dt: float, cfg: RolloutConfig) -> dict:
+    """Compute the same physical diagnostics for CPU and CUDA traces."""
+    count = len(trace["load"])
+    power = trace["load"][:, 3:] * trace["velocity"][:-1, 3:]
+    contact = trace["grf_n"][:, 1] > cfg.contact_threshold_n
+    indices = np.flatnonzero(contact)
+    return {
+        "status": "completed" if failure is None else "failed",
+        "failure": failure,
+        "failure_time_s": None if failure is None else count * dt,
+        "dt_s": dt,
+        "contact_threshold_n": cfg.contact_threshold_n,
+        "requested_duration_s": duration_s,
+        "integrated_duration_s": count * dt,
+        "reference_inputs_used": False,
+        "external_actuator_load": [0.0, 0.0, 0.0],
+        "peak_grf_n": trace["grf_n"].max(0).tolist() if count else [0.0, 0.0],
+        "grf_impulse_ns": (trace["grf_n"].sum(0) * dt).tolist(),
+        "contact_duration_s": float(np.count_nonzero(contact) * dt),
+        "touchdown_s": float(indices[0] * dt) if len(indices) else None,
+        "toeoff_s": float((indices[-1] + 1) * dt) if len(indices) else None,
+        "joint_positive_work_j": (np.maximum(power, 0).sum(0) * dt).tolist(),
+        "joint_negative_work_j": (np.minimum(power, 0).sum(0) * dt).tolist(),
+        "torque_saturation_fraction": trace["torque_saturated"].mean(0).tolist() if count else [0.0] * 3,
+        "terminal_state": trace["state"][-1].tolist(),
+        "terminal_velocity": trace["velocity"][-1].tolist(),
+        "validated": False,
+    }
+
+
 def simulate(
     runner: Runner,
     chain: Chain,
@@ -491,29 +521,4 @@ def simulate(
         phase_rad=np.asarray(phases),
         normal_load_bw=np.asarray(loads_bw),
     )
-    power = trace["load"][:, 3:] * trace["velocity"][:-1, 3:]
-    contact = trace["grf_n"][:, 1] > cfg.contact_threshold_n
-    indices = np.flatnonzero(contact)
-    summary = {
-        "status": "completed" if failure is None else "failed",
-        "failure": failure,
-        "failure_time_s": None if failure is None else count * dt,
-        "dt_s": dt,
-        "contact_threshold_n": cfg.contact_threshold_n,
-        "requested_duration_s": duration_s,
-        "integrated_duration_s": count * dt,
-        "reference_inputs_used": False,
-        "external_actuator_load": [0.0, 0.0, 0.0],
-        "peak_grf_n": trace["grf_n"].max(0).tolist() if count else [0.0, 0.0],
-        "grf_impulse_ns": (trace["grf_n"].sum(0) * dt).tolist(),
-        "contact_duration_s": float(np.count_nonzero(contact) * dt),
-        "touchdown_s": float(indices[0] * dt) if len(indices) else None,
-        "toeoff_s": float((indices[-1] + 1) * dt) if len(indices) else None,
-        "joint_positive_work_j": (np.maximum(power, 0).sum(0) * dt).tolist(),
-        "joint_negative_work_j": (np.minimum(power, 0).sum(0) * dt).tolist(),
-        "torque_saturation_fraction": trace["torque_saturated"].mean(0).tolist() if count else [0.0] * 3,
-        "terminal_state": state.q.tolist(),
-        "terminal_velocity": state.v.tolist(),
-        "validated": False,
-    }
-    return trace, summary
+    return trace, _summary(trace, failure, duration_s, dt, cfg)

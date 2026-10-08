@@ -4,7 +4,7 @@
 """Analytic planar mechanics for a floating pelvis carrying one thigh, shank, and foot.
 
 Coordinates are ``[hip_x, hip_z, pelvis, hip, knee, ankle]``. The pelvis origin
-is the hip center, so ``hip_x``/``hip_z`` match :mod:`..cartesian.mechanics`.
+is the hip center, so ``hip_x``/``hip_z`` match the prepared observations.
 Absolute angles increase from world +x toward +z. The pelvis local +x axis
 points up the trunk (``pi/2`` when upright). Thigh absolute angle is
 ``pelvis + hip + pi``, so the hip angle is zero for a vertical thigh under an
@@ -206,7 +206,7 @@ class RestOfBody:
 
 
 def chain_from_profile(reference: dict, profile: dict, rest: RestOfBody | None = None) -> Chain:
-    """Add a lumped pelvis to a Cartesian single-leg profile and reference geometry."""
+    """Add the lumped rest-of-body to the leg inertias and measured geometry."""
     rest = rest or RestOfBody()
     leg_masses = np.asarray(profile["masses_kg"], dtype=float)
     mass = float(reference["subject_mass_kg"]) - float(np.sum(leg_masses)) if rest.mass_kg is None else rest.mass_kg

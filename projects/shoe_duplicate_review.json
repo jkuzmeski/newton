@@ -1,5 +1,13 @@
 {
   "scope": "Reviewed exact/renamed algorithm clones after cleanup; not an allowlist for new copies.",
-  "groups": [],
+  "groups": [
+    {
+      "functions": [
+        "projects/digital_shoe/friction_adapter.py:FrictionAdapter.detach",
+        "projects/digital_shoe/friction_parameter_adapter.py:FrictionParameterAdapter.detach"
+      ],
+      "reason": "Retain the existing short lifecycle callbacks on separate adapters; coupling their state implementations is outside the runner cleanup."
+    }
+  ],
   "near_match_policy": "Near matches require semantic review. Different interpolation, work integration, serialization and boundary policies are not automatically interchangeable."
 }

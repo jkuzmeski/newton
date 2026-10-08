@@ -7,6 +7,8 @@ import json
 import math
 import tempfile
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +16,8 @@ import numpy as np
 import warp as wp
 
 from newton.tests.test_impedance_hogan import _chain, _reference, _tiny_shoe
-from projects.impedance_instron.hogan import generate, gpu_objective, gpu_runner, identify, quick_fit
+from projects.impedance_instron.hogan import generate, gpu_runner, identify, least_squares
+from projects.impedance_instron.hogan.least_squares import LMConfig, fit_lm
 from projects.impedance_instron.hogan.runner import RolloutConfig, Runner, State, Task, simulate
 
 
@@ -64,12 +67,12 @@ class _WorkflowFixture(unittest.TestCase):
 
     def synthetic(self):
         baseline = Runner.seed(reference_speed_m_s=0.3)
-        search = identify.FitConfig(population=4, generations=2, seed=8, regularization=0.0)
-        parameters = identify.Parameterization(baseline, [0.3])
-        # A seeded candidate supplies a reproducible nontrivial fitting target.
-        offsets = np.random.default_rng(search.seed).normal(0, search.sigma, parameters.size)
-        target = parameters.model(offsets)
-        trial = self.trial()
+        search = LMConfig(iterations=1, ladder=(0.1, 1.0), regularization=0.0, chunk=16)
+        data = baseline.to_dict()
+        weights = baseline.weights.copy()
+        weights[0, :, 0] += 0.08
+        target = Runner.from_dict({**data, "weights": weights.tolist()})
+        trial = self.trial(duration=0.003)
         trace, summary = simulate(
             target, self.chain, self.shoe, trial.initial, trial.task, duration_s=trial.duration_s, config=self.config
         )
@@ -163,6 +166,17 @@ class TestGpuWorkflowCpu(_WorkflowFixture):
                 self.assertEqual(identify._parser().parse_args(argv).device, "cuda:0")
                 self.assertEqual(identify._parser().parse_args([*argv, "--device", "cpu"]).device, "cpu")
 
+    def test_identify_fit_cli_accepts_only_lm(self):
+        """Retain the LM entrypoint while rejecting retired search methods and options."""
+        argv = ["fit", "--dataset", str(self.root), "--output", str(self.root / "result")]
+        parser = identify._parser()
+        self.assertEqual(parser.parse_args(argv).method, "lm")
+        self.assertEqual(parser.parse_args([*argv, "--method", "lm"]).method, "lm")
+        for option in (["--method", "cem"], ["--population", "4"], ["--generations", "1"], ["--seed", "8"]):
+            with self.subTest(option=option), redirect_stderr(StringIO()), self.assertRaises(SystemExit) as error:
+                parser.parse_args([*argv, *option])
+            self.assertEqual(error.exception.code, 2)
+
     def test_generate_cli_default_cuda_and_explicit_cpu(self):
         """Route default generation to CUDA while running the explicit CPU solver independently."""
         trial, model = self.trial(duration=0.001), Runner.seed()
@@ -204,21 +218,25 @@ class TestGpuWorkflowCpu(_WorkflowFixture):
         self.assertTrue(qc["passed"])
         self.assertGreater(qc["loaded_clearance_conflict_frames"], 0)
 
-    def test_full_compatibility_gate_precedes_gpu_evaluator_creation(self):
-        """Block an ankle FK incompatibility in either split before allocating or scoring."""
+    def test_full_compatibility_gate_precedes_lm_rollout_creation(self):
+        """Block incompatible training or holdout data before constructing any LM rollout backend."""
         for split in ("train", "eval"):
-            with self.subTest(split=split):
-                incompatible = self.contact_trial("fk", split=split)
-                qc = incompatible.provenance["compatibility"]
-                self.assertFalse(qc["passed"])
-                self.assertGreater(qc["ankle_fk_error_peak_m"], qc["ankle_fk_tolerance_m"])
-                with (
-                    patch.object(gpu_objective, "GpuEvaluator", side_effect=AssertionError("Allocated GPU")) as gpu,
-                    patch.object(identify, "evaluate", side_effect=AssertionError("Scored blocked input")),
-                    self.assertRaisesRegex(ValueError, "Input compatibility failed for 1 trials"),
-                ):
-                    identify.fit(Runner.seed(), [self.contact_trial("none"), incompatible], device="cuda:0")
-                gpu.assert_not_called()
+            for device in ("cpu", "cuda:0"):
+                with self.subTest(split=split, device=device):
+                    incompatible = self.contact_trial("fk", split=split)
+                    qc = incompatible.provenance["compatibility"]
+                    self.assertFalse(qc["passed"])
+                    self.assertGreater(qc["ankle_fk_error_peak_m"], qc["ankle_fk_tolerance_m"])
+                    with (
+                        patch.object(gpu_runner, "GpuBatch", side_effect=AssertionError("Allocated GPU")) as gpu,
+                        patch.object(
+                            least_squares, "_Rollouts", side_effect=AssertionError("Scored blocked input")
+                        ) as rollouts,
+                        self.assertRaisesRegex(ValueError, "Input compatibility failed for 1 trials"),
+                    ):
+                        fit_lm(Runner.seed(), [self.contact_trial("none"), incompatible], device=device)
+                    gpu.assert_not_called()
+                    rollouts.assert_not_called()
 
     def test_cop_outside_footprint_is_reported_not_gated(self):
         """Report loaded COP outside the sole without failing the screen, since treadmill COP is unreliable."""
@@ -227,62 +245,38 @@ class TestGpuWorkflowCpu(_WorkflowFixture):
         self.assertFalse(qc["cop_gating"])
         self.assertGreater(qc["loaded_cop_outside_frames"], 0)
 
-    def test_quick_fit_cli_devices_and_full_held_out_gate(self):
-        """Preserve device selection and block incompatible held-out data before either search arm."""
-        members = [
-            {"id": name, "split": "train", "reference": "unused.npz"} for name in ("FR3_1_train_000", "FR3_2_train_000")
-        ]
-        members.extend({"id": f"eval_{i}", "split": "eval", "reference": "unused.npz"} for i in range(10))
-        (self.root / "manifest.json").write_text(
-            json.dumps({"members": members, "shared_assets": {}}), encoding="utf-8"
-        )
-        trials = [self.contact_trial("none", split=member["split"]) for member in members]
-        for trial, member in zip(trials, members, strict=True):
-            trial.id = member["id"]
-        trials[-1].provenance["compatibility"] = self.contact_trial("fk").provenance["compatibility"]
-        for device, extra in (("cuda:0", []), ("cpu", ["--device", "cpu"])):
-            with self.subTest(device=device):
-                output = self.root / device.replace(":", "_")
-                with (
-                    patch.object(quick_fit, "load_trials", return_value=trials),
-                    patch.object(quick_fit, "search", side_effect=AssertionError("Launched search")) as search,
-                    patch.object(gpu_objective, "GpuEvaluator", side_effect=AssertionError("Allocated GPU")) as gpu,
-                    self.assertRaisesRegex(ValueError, "Contact compatibility failed; no fit launched"),
-                ):
-                    quick_fit.main(["--dataset", str(self.root), "--output", str(output), *extra])
-                search.assert_not_called()
-                gpu.assert_not_called()
-                protocol = json.loads((output / "protocol.json").read_text(encoding="utf-8"))
-                self.assertEqual(protocol["device"], device)
-                blocked = json.loads((output / "blocked.json").read_text(encoding="utf-8"))
-                self.assertEqual(blocked["trials"], [trials[-1].id])
-                self.assertFalse((output / "seed.json").exists())
-
     def test_cpu_fit_remains_independent_of_cuda(self):
         """Fit a real tiny shoe on CPU without constructing any CUDA execution object."""
         baseline, trial, search = self.synthetic()
-        with (
-            patch.object(gpu_objective, "GpuEvaluator", side_effect=AssertionError("CPU requested CUDA scoring")),
-            patch.object(gpu_runner, "GpuBatch", side_effect=AssertionError("CPU requested CUDA dynamics")),
-        ):
-            learned, report = identify.fit(baseline, [trial], config=self.config, search=search, device="cpu")
+        before = baseline.to_dict()
+        initial = trial.initial.copy()
+        targets = trial.q.copy(), trial.grf_n.copy()
+        with patch.object(gpu_runner, "GpuBatch", side_effect=AssertionError("CPU requested CUDA dynamics")):
+            learned, report = fit_lm(baseline, [trial], config=self.config, search=search, device="cpu")
         self.assertNotEqual(learned.to_dict(), baseline.to_dict())
+        self.assertEqual(baseline.to_dict(), before)
+        np.testing.assert_array_equal(trial.initial.q, initial.q)
+        np.testing.assert_array_equal(trial.initial.v, initial.v)
+        np.testing.assert_array_equal(trial.initial.torque_nm, initial.torque_nm)
+        np.testing.assert_array_equal(trial.q, targets[0])
+        np.testing.assert_array_equal(trial.grf_n, targets[1])
         rows = report["splits"]["train"]
+        self.assertLess(report["final_cost"], report["initial_cost"])
         self.assertLess(rows["learned"]["mean_loss"], rows["baseline"]["mean_loss"])
         self.assertEqual(rows["learned"]["failed"], 0)
         self.assertEqual(report["device"], "cpu")
-        self.assertEqual(report["objective_backend"], "numpy")
+        self.assertEqual(report["method"], "levenberg_marquardt")
         self.assertFalse(report["reference_inputs_used"])
         json.dumps(report, allow_nan=False)
 
     def test_explicit_compatibility_override_is_not_validation(self):
         """Allow deliberate diagnostic fitting while retaining the incompatibility disclosure."""
         trial = self.contact_trial("fk")
-        _, report = identify.fit(
+        _, report = fit_lm(
             Runner.seed(),
             [trial],
             config=self.config,
-            search=identify.FitConfig(population=4, generations=1),
+            search=LMConfig(iterations=1, ladder=(1.0,), chunk=16),
             allow_incompatible=True,
             device="cpu",
         )
@@ -299,64 +293,69 @@ class TestGpuWorkflowCpu(_WorkflowFixture):
 class TestGpuWorkflowCuda(_WorkflowFixture):
     """Qualify real CUDA fits, exported generation, and mixed-clock evaluation."""
 
-    def test_seeded_fit_matches_cpu_and_excludes_held_out_selection(self):
-        """Match seeded CPU selection using resident CUDA scoring and frozen held-out evaluation."""
+    def test_lm_cuda_fit_is_isolated_and_excludes_held_out_selection(self):
+        """Fit only training residuals on CUDA without CPU fallback or held-out selection."""
         baseline, training, search = self.synthetic()
         held_out = self.trial("held_out", split="eval", duration=0.00305)
         trials = [training, held_out]
-        cpu_model, cpu_report = identify.fit(baseline, trials, config=self.config, search=search, device="cpu")
-        constructor, evaluate = gpu_objective.GpuEvaluator, gpu_objective.GpuEvaluator.evaluate
+        before = baseline.to_dict()
+        initial = training.initial.copy()
+        targets = training.q.copy(), training.grf_n.copy()
+        cpu_model, cpu_report = fit_lm(baseline, trials, config=self.config, search=search, device="cpu")
         with (
-            patch.object(gpu_objective, "GpuEvaluator", wraps=constructor) as created,
-            patch.object(constructor, "evaluate", autospec=True, side_effect=evaluate) as scored,
-            patch.object(identify, "score", wraps=identify.score) as diagnostic_score,
+            patch.object(
+                least_squares._Rollouts, "_predict", autospec=True, side_effect=least_squares._Rollouts._predict
+            ) as predicted,
             patch.object(identify, "simulate", side_effect=AssertionError("CUDA fit fell back to CPU")),
         ):
-            gpu_model, report = identify.fit(baseline, trials, config=self.config, search=search, device="cuda:0")
-        created.assert_called_once()
-        self.assertEqual(len(created.call_args.args[0]), 1)
-        self.assertIs(created.call_args.args[0][0], training)
-        self.assertEqual(created.call_args.kwargs["device"], "cuda:0")
-        self.assertEqual(created.call_args.kwargs["candidates"], search.population)
-        self.assertEqual(scored.call_count, search.generations + 2)
-        for call in scored.call_args_list:
-            self.assertEqual(len(call.args[1]), search.population)
-        for call in (scored.call_args_list[0], scored.call_args_list[-1]):
-            self.assertTrue(all(model is call.args[1][0] for model in call.args[1]))
-        self.assertEqual(
-            diagnostic_score.call_count, 4, "Only final baseline/learned split diagnostics use host scores"
-        )
-        self.assertEqual(gpu_model.to_dict(), cpu_model.to_dict())
+            gpu_model, report = fit_lm(baseline, trials, config=self.config, search=search, device="cuda:0")
+        self.assertGreater(predicted.call_count, 1)
+        rollouts = predicted.call_args_list[0].args[0]
+        self.assertEqual(rollouts.device, "cuda:0")
+        self.assertEqual(len(rollouts.trials), 1)
+        self.assertIs(rollouts.trials[0], training)
+        self.assertEqual(set(rollouts.batches), {1, search.chunk, len(search.ladder)})
+        for call in predicted.call_args_list:
+            self.assertIs(call.args[0], rollouts)
+        self.assertEqual(baseline.to_dict(), before)
+        np.testing.assert_array_equal(training.initial.q, initial.q)
+        np.testing.assert_array_equal(training.initial.v, initial.v)
+        np.testing.assert_array_equal(training.initial.torque_nm, initial.torque_nm)
+        np.testing.assert_array_equal(training.q, targets[0])
+        np.testing.assert_array_equal(training.grf_n, targets[1])
         self.assertNotEqual(gpu_model.to_dict(), baseline.to_dict())
-        self.assertEqual(report["objective_backend"], "cuda")
+        self.assertNotEqual(cpu_model.to_dict(), baseline.to_dict())
+        self.assertEqual(report["method"], "levenberg_marquardt")
         self.assertEqual(report["device"], "cuda:0")
         self.assertEqual(report["selection_split"], "train")
         self.assertFalse(report["validated"])
         self.assertFalse(report["reference_inputs_used"])
-        for actual, expected in zip(report["history"], cpu_report["history"], strict=True):
-            self.assertEqual(actual["best_failed"], expected["best_failed"])
-            self.assertAlmostEqual(actual["best_score"], expected["best_score"], delta=1e-8)
-            self.assertAlmostEqual(actual["sigma_mean"], expected["sigma_mean"], delta=1e-12)
-        for split in ("train", "eval"):
-            for label in ("baseline", "learned"):
-                actual, expected = report["splits"][split][label], cpu_report["splits"][split][label]
-                self.assertEqual(actual["failed"], expected["failed"])
-                # Use the same float32-contact score tolerance as the lower-level suites.
-                self.assertAlmostEqual(actual["mean_loss"], expected["mean_loss"], delta=1e-4)
+        self.assertAlmostEqual(report["initial_cost"], cpu_report["initial_cost"], delta=1e-4)
+        self.assertLess(report["final_cost"], report["initial_cost"])
+        self.assertLess(cpu_report["final_cost"], cpu_report["initial_cost"])
+        for label in ("baseline", "learned"):
+            self.assertEqual(report["splits"]["train"][label]["failed"], 0)
         self.assertLess(
             report["splits"]["train"]["learned"]["mean_loss"], report["splits"]["train"]["baseline"]["mean_loss"]
         )
         held_out.q[:] += 10
         held_out.grf_n[:] += 1000
-        repeated, changed = identify.fit(baseline, trials, config=self.config, search=search, device="cuda:0")
+        with patch.object(identify, "simulate", side_effect=AssertionError("CUDA fit fell back to CPU")):
+            repeated, changed = fit_lm(baseline, trials, config=self.config, search=search, device="cuda:0")
         self.assertEqual(repeated.to_dict(), gpu_model.to_dict())
-        self.assertEqual(changed["history"], report["history"])
+        self.assertEqual(changed["final_cost"], report["final_cost"])
+        self.assertEqual(changed["splits"]["train"], report["splits"]["train"])
+        for actual, expected in zip(changed["history"], report["history"], strict=True):
+            self.assertEqual(
+                {k: v for k, v in actual.items() if k != "wall_s"},
+                {k: v for k, v in expected.items() if k != "wall_s"},
+            )
         self.assertGreater(
             changed["splits"]["eval"]["learned"]["mean_loss"], report["splits"]["eval"]["learned"]["mean_loss"]
         )
         json.dumps(report, allow_nan=False)
 
-    def test_mixed_dt_predict_many_evaluate_and_resident_score_agree(self):
+    def test_mixed_dt_predict_many_and_evaluate_agree(self):
         """Preserve trial order and CPU scoring across the four-trial CUDA batch boundary."""
         durations = [0.00305, 0.0031, 0.0062, 0.00305, 0.00413]
         trials = [self.trial(str(i), duration=duration) for i, duration in enumerate(durations)]
@@ -371,7 +370,6 @@ class TestGpuWorkflowCuda(_WorkflowFixture):
         with patch.object(identify, "simulate", side_effect=AssertionError("CUDA prediction fell back to CPU")):
             actual = identify.predict_many(models, trials, self.config, device="cuda:0")
             evaluations = [identify.evaluate(model, trials, self.config, device="cuda:0") for model in models]
-        resident = gpu_objective.GpuEvaluator(trials, candidates=2, config=self.config).evaluate(models)
         self.assertEqual([len(row) for row in actual], [5, 5])
         for candidate, model in enumerate(models):
             expected_scores = []
@@ -389,9 +387,7 @@ class TestGpuWorkflowCuda(_WorkflowFixture):
                     self.assertEqual(evaluations[candidate]["trials"][i], gpu_score)
             self.assertNotEqual(actual[candidate][0][1]["dt_s"], actual[candidate][1][1]["dt_s"])
             self.assertEqual(evaluations[candidate]["failed"], 1)
-            self.assertEqual(resident[candidate]["failed"], 1)
             self.assertAlmostEqual(evaluations[candidate]["mean_loss"], np.mean(expected_scores), delta=1e-4)
-            self.assertAlmostEqual(resident[candidate]["mean_loss"], evaluations[candidate]["mean_loss"], delta=1e-9)
 
     def test_cuda_predictions_never_receive_measurement_feedback(self):
         """Change future measurements and clocks without changing CUDA dynamics or exported inputs."""
@@ -423,44 +419,6 @@ class TestGpuWorkflowCuda(_WorkflowFixture):
         self.assertFalse(summary["reference_inputs_used"])
         self.assertFalse(summary["validated"])
         self.assertEqual(summary["scenario"], identify.scenario(trial, self.config))
-
-    def test_quick_search_cuda_matches_cpu_for_both_arms(self):
-        """Match both real search arms with common seeded draws and final-mean GPU padding."""
-        baseline, trial, settings = self.synthetic()
-        data = baseline.to_dict()
-        weights = np.asarray(data["weights"])
-        weights[1:, :, 1:] = 0
-        data["weights"] = weights.tolist()
-        baseline = Runner.from_dict(data)
-        protocol = {
-            "search_dt_s": self.config.dt_s,
-            "population": settings.population,
-            "generations": settings.generations,
-            "seed": settings.seed,
-            "sigma": settings.sigma,
-            "bound": settings.bound,
-            "regularization": settings.regularization,
-        }
-        for variable in (False, True):
-            results = []
-            for device in ("cpu", "cuda:0"):
-                with self.subTest(variable=variable, device=device):
-                    destination = self.root / f"{variable}_{device.replace(':', '_')}"
-                    destination.mkdir()
-                    result = quick_fit.search(
-                        baseline,
-                        [trial],
-                        variable=variable,
-                        output=destination,
-                        protocol={**protocol, "device": device},
-                    )
-                    results.append(result.to_dict())
-                    report = json.loads((destination / "search.json").read_text(encoding="utf-8"))
-                    self.assertEqual(report["candidate_evaluations"], settings.population * settings.generations + 1)
-                    self.assertEqual(report["stance_rollouts"], report["candidate_evaluations"])
-                    if not variable:
-                        np.testing.assert_array_equal(result.weights[1:, :, 1:], 0)
-            self.assertEqual(results[0], results[1])
 
 
 if __name__ == "__main__":

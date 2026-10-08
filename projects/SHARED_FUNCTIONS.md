@@ -2,23 +2,24 @@
 
 | Computation | Owner | Consumers |
 |---|---|---|
-| Shoe material, contact, foundation runtime | `digital_shoe/` | Calibration, standalone shoe examples, twelve-point controller |
+| Shoe material, contact, foundation runtime | `digital_shoe/` | Calibration, standalone shoe examples, Hogan runner |
 | Camera look-at calculation | `digital_shoe.rendering.camera_look_at` | Showcase and Instron example |
 | Quaternion and attachment PD helpers | `digital_instron_v2.scenario_common` | Forward and differentiable calibration adapters |
 | XYZ rotation and ray-origin setup | `digital_instron_v2.geometry` | Mesh loading and ray queries |
-| Cubic basis and derivative polygons | `impedance_instron.cartesian.spline` | CPU reference and GPU controller setup |
-| Rigid foot/shoe attachment | `impedance_instron.cartesian.shoe` | CPU qualification, GPU dynamics and contact replay |
+| Planar chain mechanics | `impedance_instron.hogan.mechanics` | CPU runner and observation preparation |
+| CUDA chain/contact staging | `impedance_instron.hogan.gpu_mechanics` | Batched generative runner |
+| Rigid foot/shoe attachment | `impedance_instron.cartesian.shoe` | CPU and CUDA runner |
 
 The retired controller stacks and their duplicate-review exemptions are gone.
-The retained spline helpers and Shoe implementation were extracted without
-changing their computation. New source identities require new qualification.
+The retained GPU mechanics helpers and Shoe implementation were extracted
+without changing their computation. Full-run replay checks preserve results.
 Shared material/contact laws remain unchanged.
 
 Run the structural duplicate check without importing the projects:
 
 ```bash
 uv run --no-sync python scripts/check_shoe_project_duplicates.py --check \
-  --output /tmp/shoe-duplicates.json
+  --output outputs/shoe-duplicates.json
 ```
 
 `shoe_duplicate_review.json` records reviewed remaining groups. Strict JSON,

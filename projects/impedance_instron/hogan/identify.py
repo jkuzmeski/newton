@@ -448,30 +448,6 @@ def evaluate(runner: Runner, trials: list[Trial], config: RolloutConfig, *, devi
     }
 
 
-@dataclass(frozen=True)
-class FitConfig:
-    """Cross-entropy search settings; no held-out selection."""
-
-    population: int = 8
-    generations: int = 10
-    sigma: float = 0.2
-    bound: float = 1.5
-    regularization: float = 0.01
-    seed: int = 0
-
-    def __post_init__(self):
-        for name in ("population", "generations", "seed"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-                raise ValueError(f"{name} must be an integer")
-        if self.population < 4 or self.generations < 1:
-            raise ValueError("population must be at least four and generations at least one")
-        if not np.isfinite([self.sigma, self.bound, self.regularization]).all():
-            raise ValueError("Search settings must be finite")
-        if min(self.sigma, self.bound) <= 0 or self.regularization < 0:
-            raise ValueError("Search sigma/bound must be positive and regularization nonnegative")
-
-
 class Parameterization:
     """Fit shared impedance weights, stride frequency, and torque response time.
 
@@ -515,125 +491,6 @@ class Parameterization:
         return Runner.from_dict(data)
 
 
-def fit(
-    baseline: Runner,
-    trials: list[Trial],
-    *,
-    config: RolloutConfig | None = None,
-    search: FitConfig | None = None,
-    allow_incompatible: bool = False,
-    device: str = "cpu",
-) -> tuple[Runner, dict]:
-    """Fit on training trials only; evaluate held-out trials after selection.
-
-    By default incompatible references stop identification. An explicit override
-    permits implementation experiments, but never marks the result validated.
-    """
-    cfg, search = config or RolloutConfig(), search or FitConfig()
-    train = [trial for trial in trials if trial.split == "train"]
-    held_out = [trial for trial in trials if trial.split == "eval"]
-    if not train:
-        raise ValueError("Identification requires training trials")
-    incompatible = [trial.id for trial in trials if not trial.provenance["compatibility"]["passed"]]
-    if incompatible and not allow_incompatible:
-        raise ValueError(f"Input compatibility failed for {len(incompatible)} trials; run inspect before fitting")
-    parameters = Parameterization(baseline, [trial.task.speed_m_s for trial in train])
-    evaluator = None
-    if device != "cpu":
-        from .gpu_objective import GpuEvaluator  # noqa: PLC0415 - optional execution backend
-
-        evaluator = GpuEvaluator(train, candidates=search.population, config=cfg, device=device)
-
-    def evaluations(models):
-        if evaluator is None:
-            return [evaluate(model, train, cfg) for model in models]
-        count = len(models)
-        return evaluator.evaluate(models + [models[-1]] * (search.population - count))[:count]
-
-    rng = np.random.default_rng(search.seed)
-    mean, sigma = np.zeros(parameters.size), np.full(parameters.size, search.sigma)
-    best = mean.copy()
-    initial_evaluation = evaluations([baseline])[0]
-    best_rank = (initial_evaluation["failed"], initial_evaluation["mean_loss"])
-    history = []
-    for generation in range(search.generations):
-        samples = np.vstack(
-            (
-                mean,
-                best,
-                np.clip(
-                    mean + sigma * rng.standard_normal((search.population - 2, parameters.size)),
-                    -search.bound,
-                    search.bound,
-                ),
-            )
-        )
-        ranks = []
-        for offset, result in zip(samples, evaluations([parameters.model(x) for x in samples]), strict=True):
-            ranks.append((result["failed"], result["mean_loss"] + search.regularization * float(np.mean(offset**2))))
-        order = sorted(range(len(samples)), key=lambda i: ranks[i])
-        if ranks[order[0]] < best_rank:
-            best, best_rank = samples[order[0]].copy(), ranks[order[0]]
-        elites = samples[order[: max(2, search.population // 4)]]
-        mean = 0.3 * mean + 0.7 * elites.mean(0)
-        sigma = np.maximum(0.3 * sigma + 0.7 * elites.std(0), 0.03)
-        history.append(
-            {
-                "generation": generation,
-                "best_failed": best_rank[0],
-                "best_score": best_rank[1],
-                "sigma_mean": float(sigma.mean()),
-            }
-        )
-    # The final mean is a candidate too, but only training observations choose it.
-    mean_result = evaluations([parameters.model(mean)])[0]
-    mean_rank = (mean_result["failed"], mean_result["mean_loss"] + search.regularization * float(np.mean(mean**2)))
-    if mean_rank < best_rank:
-        best = mean
-    learned = parameters.model(best)
-    del evaluator
-    results = {
-        "train": {
-            "baseline": evaluate(baseline, train, cfg, device=device),
-            "learned": evaluate(learned, train, cfg, device=device),
-        }
-    }
-    if held_out:
-        results["eval"] = {
-            "baseline": evaluate(baseline, held_out, cfg, device=device),
-            "learned": evaluate(learned, held_out, cfg, device=device),
-        }
-    return learned, {
-        "schema": "generative_runner_identification_1",
-        "validated": False,
-        "reference_inputs_used": False,
-        "device": device,
-        "objective_backend": "numpy" if device == "cpu" else "cuda",
-        "selection_split": "train",
-        "initial_model": baseline.to_dict(),
-        "search": asdict(search),
-        "rollout": asdict(cfg),
-        "history": history,
-        "parameters": parameters.size,
-        "task_speed_parameters_learned": parameters.variable_speed,
-        "incompatible_trials": incompatible,
-        "allow_incompatible": allow_incompatible,
-        "initialization": "three-frame observed position prefix; prediction starts at prefix end",
-        "shoe_adaptation": "shared law responds to simulated load; no shoe-ID-specific adaptation fitted",
-        "scope": "single-leg independent windows; effective actuation, not identified physiology or sustained running",
-        "loss_scales": {
-            "hip_m": 0.02,
-            "angle_rad": 0.05,
-            "force_n": 100.0,
-            "impulse_ns": 20.0,
-            "contact_s": 0.02,
-            "effort_weight": 0.01,
-        },
-        "splits": results,
-        "trials": [{"id": trial.id, "split": trial.split, **trial.provenance} for trial in trials],
-    }
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("inspect", "fit", "evaluate"))
@@ -658,10 +515,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--device", default="cuda:0", help="CUDA backend by default; cpu selects the reference")
     parser.add_argument("--limit-per-split", type=int, help="Explicit small subset for implementation checks")
-    parser.add_argument("--method", choices=("cem", "lm"), default="lm", help="Fit optimizer")
-    parser.add_argument("--population", type=int, default=8, help="CEM population")
-    parser.add_argument("--generations", type=int, default=10, help="CEM generations")
-    parser.add_argument("--seed", type=int, default=0, help="CEM seed")
+    parser.add_argument("--method", choices=("lm",), default="lm", help="Levenberg-Marquardt fit")
     parser.add_argument("--iterations", type=int, default=15, help="LM iterations")
     parser.add_argument("--chunk", type=int, default=16, help="LM candidates per batched GPU rollout")
     parser.add_argument("--central", action="store_true", help="LM central-difference Jacobian")
@@ -680,7 +534,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """Inspect, identify, or evaluate generative models without changing the tracker."""
+    """Inspect, identify, or evaluate the shared generative runner."""
     args = _parser().parse_args(argv)
     if args.output.exists():
         raise FileExistsError(f"Refusing to overwrite {args.output}")
@@ -711,19 +565,13 @@ def main(argv: list[str] | None = None) -> None:
         )
         if args.intrinsic_damping is not None:
             baseline = Runner.from_dict({**baseline.to_dict(), "intrinsic_damping_nms_rad": args.intrinsic_damping})
-        if args.method == "lm":
-            from .least_squares import LMConfig, fit_lm  # noqa: PLC0415 - least_squares imports this module
+        from .least_squares import LMConfig, fit_lm  # noqa: PLC0415 - least_squares imports this module
 
-            optimizer = fit_lm
-            search = LMConfig(iterations=args.iterations, chunk=args.chunk, central=args.central)
-        else:
-            optimizer = fit
-            search = FitConfig(population=args.population, generations=args.generations, seed=args.seed)
-        model, report = optimizer(
+        model, report = fit_lm(
             baseline,
             trials,
             config=cfg,
-            search=search,
+            search=LMConfig(iterations=args.iterations, chunk=args.chunk, central=args.central),
             allow_incompatible=args.allow_incompatible,
             device=args.device,
         )
@@ -747,11 +595,12 @@ def main(argv: list[str] | None = None) -> None:
         Path(__file__).with_name("generate.py"),
         Path(__file__).with_name("mechanics.py"),
         Path(__file__).with_name("gpu_runner.py"),
-        Path(__file__).with_name("gpu_objective.py"),
+        Path(__file__).with_name("gpu_mechanics.py"),
         Path(__file__).with_name("least_squares.py"),
         project_root / "cartesian/shoe.py",
         project_root / "cartesian/data.py",
         project_root / "cartesian/profile.py",
+        project_root / "cartesian/gpu/foundation.py",
     ]
     sources.extend((project_root.parent / "digital_shoe").glob("*.py"))
     report["source_sha256"] = {str(path.relative_to(project_root.parent)): _hash(path) for path in sources}
@@ -773,6 +622,10 @@ def main(argv: list[str] | None = None) -> None:
     (args.output / "summary.json").write_text(json.dumps(report, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     bad = sum(not trial.provenance["compatibility"]["passed"] for trial in trials)
     print(f"{args.command}: {len(trials)} trials; {bad} incompatible; not validated; wrote {args.output}")
+    if args.command == "fit":
+        from .fit_report import write_report  # noqa: PLC0415 - report imports identification helpers
+
+        print(f"report: {write_report(args.output, device=args.device)}")
 
 
 if __name__ == "__main__":

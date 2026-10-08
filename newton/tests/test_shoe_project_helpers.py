@@ -5,7 +5,6 @@
 
 import ast
 import importlib.util
-import inspect
 import json
 import tempfile
 import unittest
@@ -18,10 +17,22 @@ import warp as wp
 
 from projects.digital_instron_v2 import example, geometry, scenario_common, scenarios_diff
 from projects.digital_shoe import rendering, showcase
-from projects.impedance_instron import pipeline
-from projects.impedance_instron.cartesian.gpu import baseline, provenance
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _import_names(path: Path):
+    """Resolve direct and relative module imports, including from-import aliases."""
+    package = ".".join(path.relative_to(ROOT).parent.parts)
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            yield from (alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level:
+                module = importlib.util.resolve_name("." * node.level + module, package)
+            yield module
+            yield from (f"{module}.{alias.name}" for alias in node.names if alias.name != "*")
 
 
 @wp.kernel
@@ -103,76 +114,106 @@ class TestSharedProjectHelpers(unittest.TestCase):
 class TestProjectDependencyBoundaries(unittest.TestCase):
     def test_portable_shoe_has_no_controller_or_fitter_dependency(self):
         """Keep shared shoe code independent of its fitting and controller consumers."""
-        runtime_paths = [
-            ROOT / path for path in provenance.source_snapshot() if path.startswith("projects/digital_shoe/")
-        ]
-        for path in runtime_paths:
-            for node in ast.walk(ast.parse(path.read_text())):
-                names = [a.name for a in node.names] if isinstance(node, ast.Import) else []
-                if isinstance(node, ast.ImportFrom):
-                    names += [node.module or ""]
-                    if node.module == "projects":
-                        names += [f"projects.{a.name}" for a in node.names]
-                for name in names:
-                    self.assertFalse(
-                        name.startswith(("projects.impedance_instron", "projects.digital_instron_v2")), path
-                    )
+        runtime_modules = (
+            "__init__",
+            "artifact",
+            "runtime",
+            "material",
+            "contact",
+            "rendering",
+            "provenance",
+            "friction_law",
+            "friction_deflection",
+            "friction_stribeck",
+            "friction_pressure",
+            "friction_slip_history",
+            "friction_maxwell",
+            "friction_parameter_adapter",
+            "friction_solver",
+            "friction_adapter",
+        )
+        for module in runtime_modules:
+            path = ROOT / "projects" / "digital_shoe" / f"{module}.py"
+            for name in _import_names(path):
+                self.assertFalse(
+                    name.startswith(("projects.impedance_instron", "projects.digital_instron_v2")), (path, name)
+                )
 
     def test_active_impedance_sources_do_not_import_retired_trees(self):
-        """Keep every retained Cartesian source outside the retired dependency graph."""
+        """Keep retained Hogan and data-preparation sources outside retired experiment trees."""
         base = ROOT / "projects/impedance_instron"
-        files = [base / "__main__.py", base / "pipeline.py", *sorted((base / "cartesian").rglob("*.py"))]
+        files = sorted(base.rglob("*.py"))
+        self.assertIn(base / "__main__.py", files)
+        self.assertIn(base / "hogan" / "runner.py", files)
         retired = {"legacy", "simple", "paper", "joint_space"}
+        retired_modules = {"projects.impedance_instron.pipeline"}
+        retired_modules.update(
+            f"projects.impedance_instron.cartesian.{name}"
+            for name in (
+                "run",
+                "fit",
+                "trajectory",
+                "spline",
+                "mechanics",
+                "phase",
+                "diagnostics",
+                "report",
+                "rendering",
+                "springs",
+                "prepare_subject",
+            )
+        )
+        retired_modules.update(
+            f"projects.impedance_instron.hogan.{name}"
+            for name in (
+                "adaptation",
+                "control",
+                "plan",
+                "registration",
+                "rollout",
+                "batch",
+                "learn",
+                "learn_report",
+                "quick_fit",
+                "recovery",
+                "gpu_objective",
+                "identify.FitConfig",
+                "identify.fit",
+            )
+        )
+        gpu_package = "projects.impedance_instron.cartesian.gpu"
         for path in files:
-            for node in ast.walk(ast.parse(path.read_text())):
-                if isinstance(node, ast.Import):
-                    modules = [alias.name for alias in node.names]
-                elif isinstance(node, ast.ImportFrom):
-                    module = node.module or ""
-                    if node.level:
-                        package = ".".join(path.relative_to(ROOT).parent.parts)
-                        module = importlib.util.resolve_name("." * node.level + module, package)
-                    modules = [module]
-                else:
-                    continue
-                for module in modules:
-                    self.assertTrue(retired.isdisjoint(module.split(".")), (path, module))
+            for module in _import_names(path):
+                location = (path.relative_to(base), module)
+                self.assertTrue(retired.isdisjoint(module.split(".")), location)
+                self.assertFalse(
+                    any(module == old or module.startswith(old + ".") for old in retired_modules), location
+                )
+                if module.startswith(gpu_package + "."):
+                    self.assertTrue(
+                        module == gpu_package + ".foundation" or module.startswith(gpu_package + ".foundation."),
+                        location,
+                    )
 
-    def test_pipeline_defaults_select_saved_twelve_point_qualification(self):
-        """Select the saved baseline and fixed throughput and plateau defaults."""
-        args = pipeline.create_parser().parse_args(["--output", "result"])
-        self.assertEqual(args.baseline, pipeline.DEFAULT_BASELINE)
-        self.assertEqual(args.iterations, 200)
-        self.assertEqual(args.plateau_patience, 20)
-        self.assertEqual(args.plateau_rtol, 1.0e-4)
-        self.assertIn("baseline12", str(args.baseline))
-        source = inspect.getsource(pipeline.main)
-        self.assertIn("worlds=128", source)
-        self.assertIn("expected_controls=12", source)
-
-    def test_baseline_replays_saved_twelve_point_controller(self):
-        """Build the CPU baseline from saved coefficients without seed generation."""
-        source = inspect.getsource(baseline.build)
-        self.assertIn("controls = 12", source)
-        self.assertIn('source / "equilibrium.npz"', source)
-        self.assertIn("simulate(reference, profile, equilibrium", source)
-        self.assertNotIn("np.random", source)
-        self.assertNotIn("refine_spline", source)
-
-    def test_provenance_rejects_any_runtime_source_change(self):
-        """Fail closed for missing, extra, and changed runtime source identities."""
-        current = provenance.source_snapshot()
-        audit = provenance.validate_sources({"source_sha256": current})
-        self.assertTrue(audit["validated"])
-        changed = dict(current)
-        first = next(iter(changed))
-        changed[first] = "0" * 64
-        with self.assertRaisesRegex(ValueError, "source changed"):
-            provenance.validate_sources({"source_sha256": changed})
-        with self.assertRaisesRegex(ValueError, "Incomplete or historical"):
-            provenance.validate_sources({"source_sha256": dict(list(current.items())[1:])})
-        with self.assertRaisesRegex(ValueError, "Incomplete or historical"):
-            provenance.validate_sources({"source_sha256": {**current, "unexpected.py": "0" * 64}})
+    def test_dependency_scan_resolves_relative_from_import_aliases(self):
+        """Expose module aliases that would otherwise hide retired relative imports."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "projects" / "impedance_instron" / "hogan" / "module.py"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                "from . import plan\n"
+                "from ..cartesian import mechanics\n"
+                "from ..cartesian.gpu import foundation\n"
+                "from projects import digital_instron_v2\n",
+                encoding="utf-8",
+            )
+            with patch("newton.tests.test_shoe_project_helpers.ROOT", root):
+                modules = set(_import_names(path))
+        self.assertIn("projects.impedance_instron.hogan.plan", modules)
+        self.assertIn("projects.impedance_instron.cartesian.mechanics", modules)
+        self.assertIn("projects.impedance_instron.cartesian.gpu.foundation", modules)
+        self.assertIn("projects.digital_instron_v2", modules)
 
 
 class TestDuplicateReviewTool(unittest.TestCase):

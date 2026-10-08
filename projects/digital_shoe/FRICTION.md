@@ -5,16 +5,15 @@ SPDX-License-Identifier: Apache-2.0
 
 # Friction-only Digital Shoe mechanics
 
-> **Current default:** Digital Shoe now uses Maxwell shear friction automatically.
-> The leg-shoe baseline uses mu 0.8, equilibrium stiffness 1000 N/m per nominal
-> 25 mm² column, internal viscosity 10 N s/m, and the material relaxation time.
-> `friction_model="legacy"` explicitly selects the previous law. Historical
-> studies below retain their original settings and do not define current defaults.
+> **Current default:** `FoundationConfig` uses area-scaled `elastic_coulomb`
+> friction. Maxwell shear and the previous anchored-bristle law remain explicit
+> options. See [FRICTION_COLUMN.md](FRICTION_COLUMN.md) for the column-derived models.
 
 This investigation evaluates tangential friction models while leaving the
 accepted normal compression, material, and contact mechanics unchanged. It
 does not refit the two-term foam model, alter the passive surround, replace
-normal support, or enable another collision response. The shared runtime now selects Maxwell shear friction by default.
+normal support, or enable another collision response. The shared runtime selects
+area-scaled elastic Coulomb friction by default.
 Choose `FoundationConfig(friction_model="legacy")` for the previous anchored-bristle
 behavior. Explicit solver adapters remain available for diagnostic comparisons.
 
@@ -79,8 +78,8 @@ mathematically non-idempotent: $g(r) < r$ causes spurious numerical relaxation/c
 toward $C \cdot (1 - w)$ at a rate dictated by the simulation time step $\Delta t$.
 Therefore:
 - `yield_width` must be strictly `0.0` in all production simulations, sweeps, and fits.
-- `FrictionParameterAdapter`, `FrictionDynamicGPUWorkspace`, and `friction_dynamic` CLI
-  explicitly enforce `yield_width == 0.0` and reject nonzero values.
+- `FrictionParameterAdapter` explicitly enforces `yield_width == 0.0` and rejects
+  nonzero values.
 - The mathematical formulation is retained solely as an unsupported reference.
 
 ### Coupled solve mechanics
@@ -101,7 +100,7 @@ Jacobians and a pivoted $6 \times 6$ linear solve with backtracking line search.
 History is updated once after the fixed iteration budget. Inspect the returned residual;
 convergence is not guaranteed for every input.
 
-## Separate dynamic Stribeck experiment
+## Experimental Stribeck constitutive law
 
 `friction_stribeck.py` implements an experimental velocity-dependent Coulomb cap
 for exploratory parameter fitting:
@@ -113,17 +112,9 @@ the transition velocity. The law delegates state advance and radial return to
 `bristle_deflection_step` with $\mu = \mu_{\text{eff}}$ and $w = 0.0$, adding the
 analytic velocity chain-rule derivative $\frac{\partial F}{\partial C} \frac{\partial C}{\partial v}$.
 
-**Experimental status and negative finding:**
-- The dynamic Stribeck law was evaluated across 9,233 parameter candidates in free-leg
-  simulations (seeds 43, 67, and 89).
-- When evaluated against full simulation-rate reference forces (seed 89), the
-  optimizer converged to $\mu_{\text{dynamic}} = \mu_{\text{static}} = 0.5360$,
-  collapsing the velocity-dependent term entirely.
-- Apparent improvements under native-rate scoring (seed 43) were confirmed to be
-  sub-sample aliasing artifacts that produced severe inter-sample force oscillations
-  (91.94 N $F_x$ difference under time step halving).
-- This selected run alone does not justify extra Stribeck parameters over constant-coefficient
-  consistent deflection. It does not establish that speed dependence is absent in real shoes.
+The constitutive law remains available through `FrictionParameterAdapter`, but
+the old free-leg parameter-search experiment has been retired. This law is not an
+independent calibration of outsole speed dependence.
 
 ## Integration with MidsoleFoundation
 
@@ -146,7 +137,7 @@ foundation.apply(state, dt)
 # Access forces, predicted velocities, and residuals
 result = friction.result
 
-# Detach adapter to restore default legacy bristle path
+# Restore the foundation's configured friction path
 friction.detach()
 ```
 
@@ -169,13 +160,6 @@ uv run --no-sync -m projects.digital_shoe friction   --mode implicit_deflection 
 uv run --no-sync -m projects.digital_shoe friction --mode deflection --viewer gl
 ```
 
-### Prescribed leg replay comparison
-
-Replay saved Cartesian leg kinematics to evaluate friction force curves:
-
-```bash
-uv run --no-sync -m projects.digital_shoe friction-leg   --baseline outputs/impedance_instron/baseline12   --output outputs/friction_identification/leg_run   --forward-sign 1 --device cuda:0
-```
-
-For the complete parameter sweep, dynamic optimization, and independent qualification
-workflow, see [FRICTION_IDENTIFICATION.md](FRICTION_IDENTIFICATION.md).
+The standalone demonstration does not require a controller, gait reference, or
+saved leg rollout. For shared per-world parameter schemas and calibration limits,
+see [FRICTION_IDENTIFICATION.md](FRICTION_IDENTIFICATION.md).

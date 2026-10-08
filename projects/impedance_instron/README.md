@@ -1,235 +1,80 @@
-# Twelve-point controllers and shared runner identification
+# Hogan variable-impedance runner
 
-## Generative runner direction
+One pipeline: prepare observations, fit a shared generative runner with
+Levenberg-Marquardt, and predict from its frozen model. No measured trajectory,
+force target, or inverse-dynamics feedforward enters the simulation. Only the
+hip, knee, and ankle are actuated.
 
-For the new **reference-free variable-impedance runner**, use
-[`hogan/GENERATIVE_RUNNER.md`](hogan/GENERATIVE_RUNNER.md). It identifies shared
-joint actuation from offline observations and generates motion from initial
-state, task, body, and shoe only. It has no measured-force feedforward or pelvis
-actuator. Multi-speed/multi-shoe inputs are supported; current contact-geometry
-incompatibilities remain explicitly gated. Candidate rollouts and objective
-reductions now run on CUDA by default, with a CPU reference backend. This is an
-experimental single-leg model, not yet validated physiology or sustained running.
-See [`hogan/CONTACT_INPUT_STATUS.md`](hogan/CONTACT_INPUT_STATUS.md) for the
-unresolved calibration/forefoot blocker; the endpoint-frame fix does not resolve it.
+## Preserved full-run baseline
 
-The controller pipelines described below and `hogan.learn` remain diagnostic
-tracking/legacy baselines. Their existing commands are preserved.
+- Model: [F01 runner](hogan/baselines/generative_runner_f01_20261008.json).
+- Saved run: `outputs/impedance_instron/generative_fit_lm_flightcom_20261008`.
+- Dataset: `outputs/impedance_instron/generative_fit_dataset_flight_20261008`.
+- Subject: 66 kg; belt: 3.65 m/s; 98 training and 9 held-out stances.
+- Mean loss: **16.079667862151016 train**, **14.796461691170371 held-out**.
 
-The original controller pipeline uses one leg, one shoe, one stance,
-with **12 cubic control points per equilibrium channel**. The original
-controller has four equilibrium channels (48 coefficients); the promoted FR3_2
-sample adds ankle XY for six channels (72 coefficients). The shared GPU search
-uses 128 worlds for four channels and 192 for six.
-There is no trunk, opposite leg, hip-angle motor, or added upper-body load.
+The saved model, scenarios, traces, summaries, and report are not rewritten by
+cleanup. Local motion and shoe assets are required; see
+[asset provenance](../../ASSET_PROVENANCE.md).
 
-The shared runner experiment fits one 72-coefficient equilibrium curve from
-100 training stances and validates ten held-out stances. Runtime accepts only
-initial conditions, keeps one stored phase clock and human geometry, and can
-compare materials without refitting the human. See
-[runner results](RUNNER_CONTROLLER_RESULTS.md) and the
-[portable controller/report bundle](data/samples/runner_shared_100/README.md).
+## Run
 
-Small reference and controller bundles for the recovered FR3_1 rate refit and
-the FR3_2 peak-to-peak movement are in [sample data](data/samples/README.md).
-The promoted FR3_2 six-channel controller meets numerical measured-fit and
-refinement criteria; its rollout still reaches the passive shoe compression
-cap.
+From the repository root, inspect the available commands:
 
-## Peak-to-peak stance dataset
-
-The right-foot dataset at `outputs/impedance_instron/stance_dataset_peak_hip/`
-contains 50 training and 5 evaluation windows from each of FR3_1 and FR3_2.
-Each window starts at the right hip-center height peak before an identified
-right-foot contact and ends at the next peak after toe-off. Hip-center height
-is the requested proxy for center-of-mass height; it is not a whole-body COM
-measurement. FR3_3 is excluded. `manifest.json` records split membership,
-event bounds, side assignment, and source hashes. Rebuild it with:
-
-```bash
-uv run --no-sync -m projects.impedance_instron.cartesian.prepare_dataset
+```console
+uv run --no-sync -m projects.impedance_instron --help
 ```
 
-## Import processed measurements
+Reproduce the latest fit from its original seed, including the HTML report:
 
-Raw C3D and processed Visual3D exports use separate preparation paths. To audit
-the new F01 exports without guessing timing or physical metadata:
-
-```bash
-uv run --no-sync -m projects.impedance_instron visual3d inspect data/F01
+```console
+uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_instron/generative_fit_dataset_flight_20261008 --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --chunk 16 --output outputs/impedance_instron/hogan_fit
 ```
 
-See [Visual3D inputs](VISUAL3D_INPUTS.md) for the export scripts, manifest,
-normalization command, and Cartesian preparation requirements. All three F01
-trials now contain the required clocks, static measurements, joint centers, and
-force channels. Subject-specific inertias remain provisional. A baseline
-comparison also requires the baseline's exact shoe artifact and fixed
-foot-to-shoe registration.
+Choose a new output directory. CUDA is the default; `--device cpu` selects the
+reference backend. Use `--limit-per-split 1 --iterations 1` for a small fit.
+The full baseline fit took about 82 minutes on an RTX A4000 Laptop GPU.
 
-Subject-profile preparation now scales sagittal thigh and shank inertia by
-the square of the measured-to-model segment-length ratio. Foot and toes are
-combined about their shared COM, then scaled by the square of the endpoint
-ratio. Population radii of gyration from de Leva (1996) are recorded as a
-comparison; they do not replace subject-model segment masses or inertias.
-Source inertial-frame rotations remain recorded in provenance and need to be
-checked against the source model's frame convention before treating the
-inertias as validated.
+Leg profiles need only `masses_kg` (3), `com_local_m` (3 by 2),
+`inertias_kg_m2` (3), and `provenance.inertial`. Old gain/limit fields are
+accepted when loading historical files but discarded; they never set Hogan
+impedance. Newly prepared profiles contain only inertial inputs.
 
-The GPU objective computes measured hip-velocity RMSE, maximum hip speed, peak
-hip spring and damping loads, and a Coulomb-equivalent force ratio for every
-candidate; the final selected candidate's diagnostics are saved in its fit
-summary. These are diagnostics only and do not enter the fitted loss. The ratio is
-`abs(GRF_x)/(mu*GRF_z)` where normal force exceeds 5 N; it is a proximity proxy,
-not the internal saturation state of the selected viscoelastic shoe model.
+| Command | Purpose |
+|---|---|
+| `prepare` | Build peak-to-peak observations from Visual3D exports |
+| `inspect` | Check a dataset's initialization and ankle/shoe compatibility |
+| `fit` | Fit on training stances, evaluate held-out stances, write `report.html` |
+| `evaluate` | Score a frozen model on observations without refitting |
+| `generate` | Predict from a frozen model and exported scenario, without observations |
+| `report` | Rebuild an existing LM fit report |
+| `visual3d`, `prepare-visual3d` | Inspect/import exports and prepare an individual reference |
 
-## Selected baseline
+Use `<command> --help` for its arguments. The module-specific Hogan commands
+remain available; `python -m projects.impedance_instron.hogan` uses the same router.
 
-`outputs/impedance_instron/baseline12_maxwell/` is the saved baseline. Its shoe
-uses the friction model recorded in its manifest (`maxwell`). New Cartesian
-shoe and GPU Engine instances default to `elastic_coulomb`, with per-column
-stiffness `G_eq A / L`, `mu = 0.8`, and no tangential damping. `maxwell` and
-`column_maxwell` remain available explicitly. Normal material/contact mechanics
-are unchanged.
+Regenerate one saved prediction without the measurement dataset:
 
-The gains remain those of the previous K2/D2 controller:
-
-- Hip stiffness [8000, 12000] N/m; joint stiffness [240, 180] N m/rad.
-- Hip damping [80, 80] N s/m; joint damping [12, 8] N m s/rad.
-- All twelve hip-Z equilibrium coefficients are shifted by +1.5 mm to restore
-  tracking margin under the saved Maxwell law. No other coefficients, gains, masses,
-  initial conditions or normal parameters are changed.
-
-The previous accepted legacy-friction baseline is archived in
-[`baselines/baseline12_legacy_accepted.json`](baselines/baseline12_legacy_accepted.json).
-The initial twelve-point research case remains in
-[`baselines/baseline12_initial.json`](baselines/baseline12_initial.json).
-[`baseline.json`](baseline.json) records the current model, numerical qualification
-and bundle hashes. Numerical acceptance is not independent outsole calibration.
-
-- Current measured RMS: hip **7.450 / 19.746 mm**, knee/ankle **0.023742 / 0.030700 rad**,
-  force **91.296 / 85.947 N**; all six original limits pass.
-- Half-step maximum force difference: **4.320 N**; original refinement limits pass.
-- CPU/GPU parity and verified spring-contact replay pass.
-- The previous legacy baseline remains archived rather than silently relabelled.
-
-Choose `friction_model="legacy"` explicitly in `FoundationConfig`, `Shoe`, or
-`Engine` to reproduce the previous contact behavior.
-
-## Run the complete pipeline
-
-Run from the repository root with its existing `uv` environment and CUDA.
-Choose a new output directory. The local baseline bundle is required; restricted
-motion and shoe data are not supplied by a source-only checkout.
-
-```bash
-uv run --no-sync -m projects.impedance_instron \
-  --output outputs/impedance_instron/run12
+```console
+uv run --no-sync -m projects.impedance_instron generate --model projects/impedance_instron/hogan/baselines/generative_runner_f01_20261008.json --scenario outputs/impedance_instron/generative_fit_lm_flightcom_20261008/scenario_000.json --output outputs/impedance_instron/hogan_generated
 ```
 
-This command:
+## Code and checks
 
-1. Checks bundle hashes and replays the selected controller on CPU.
-2. Runs same-step CPU/GPU, common-pose contact, and channel-sized
-   permutation/reset/isolation checks, including a failed candidate.
-3. Fits one shared controller on GPU with the six-output measured loss.
-4. Runs a frozen half-timestep check and writes `fit/report.html`, including
-   verified spring and deformation views.
+- [Model and method](hogan/GENERATIVE_RUNNER.md): initialization, loss, baseline results, and limitations.
+- [Visual3D inputs](VISUAL3D_INPUTS.md): clocks, reference frames, and data preparation.
+- `hogan/`: CPU/CUDA dynamics, LM identification, frozen generation, and reporting.
+- `cartesian/`: retained measurement/profile preparation and shoe attachment;
+  `cartesian/gpu/foundation.py` is the shared batched shoe adapter, not another runner model.
 
-Defaults are 200 iterations, a 3,600-second soft search cap, seed 17,
-plateau patience 20, and relative plateau improvement 0.0001. A plateau is not
-proof of convergence. Setup, numerical validation, refinement, and reporting
-are outside the search cap. `--iterations 1` is a short end-to-end smoke run.
-The timestep stays 62.5 microseconds, with 31.25 microseconds for refinement.
+The retired Cartesian equilibrium searches, reference-tracking Hogan schedules,
+CEM optimizer, quick-fit/recovery experiments, old controller bundles, and their
+reports are removed. Shared Digital Shoe material/contact laws and Newton's
+public controllers are unchanged.
 
-### Fit a new controller from scratch
+Run the focused regression checks, including an exact replay of all 107 saved
+full-run traces when the local dataset and CUDA are available:
 
-The default command above is a warm start. To generate new, unfitted controller
-coefficients instead, use:
-
-```bash
-uv run --no-sync -m projects.impedance_instron --from-scratch   --output outputs/impedance_instron/fresh12 --iterations 200 --wall-seconds 3600
+```console
+uv run --no-sync -m unittest newton.tests.test_impedance_pipeline newton.tests.test_impedance_profile newton.tests.test_impedance_hogan newton.tests.test_impedance_runner newton.tests.test_impedance_runner_gpu newton.tests.test_impedance_least_squares newton.tests.test_impedance_gpu_workflow
 ```
-
-This mode does not use a saved controller or previous optimizer history.
-It samples `q_reference + (D/K) * velocity_reference` at twelve cubic-spline
-Greville abscissae, then contracts the channels toward their initial neutral
-points until the original strict control-polygon bounds hold. No simulation
-loss or measured GRF is used to choose the seed. This is deterministic,
-measurement-based initialization, not random coefficients or prescribed motion.
-The recorded data, calibrated shoe, physical model, gains, and limits stay fixed.
-
-The prepared baseline and fit summary record the initialization formula,
-contraction factors, starting coefficients, and `used_previous_controller_coefficients: false`.
-Use `--from-scratch` with separate stages to require matching fresh provenance.
-
-Stages can also run separately:
-
-```bash
-uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instron/run12 --stage prepare
-uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instron/run12 --stage validate
-uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instron/run12 --stage fit
-uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instron/run12 --stage report
-```
-
-`--baseline DIRECTORY` selects a complete saved bundle with the same manifest
-format. Existing stage outputs are not overwritten, except an explicit report
-rebuild. If qualification fails, inspect the failed flags; do not enlarge the
-limits or substitute evidence from another input or source version.
-
-## Differentiable search framework
-
-See [the reverse-mode search framework](AUTODIFF_SEARCH.md) for full-horizon
-backprop, memory/checkpoint policy, exact spline constraints, and validation.
-The shared mass-solve adjoint, tape-safe full-contact rollout, measured objective,
-and runnable gradient audits are implemented as experimental diagnostics. Short
-coupled-window checks pass, but the full-stance gradient audit remains unqualified.
-There is no integrated adjoint optimizer; the current forward search stays the default.
-
-## Search performance
-
-Use the [complete-search profiler](cartesian/gpu/README.md#profile-complete-search)
-to compare equal-work GPU searches without rebuilding an HTML report on every
-repeat. It reports full iteration time and useful candidate throughput, not
-kernel enqueue time. Profiling does not replace numerical qualification.
-
-## What remains
-
-- `pipeline.py`: the single entry point and stage order.
-- `cartesian/`: reference validation, spline algebra, fixed physical model,
-  measured objective, CPU reference rollout, shoe attachment, and replay.
-- `cartesian/gpu/`: GPU dynamics/objective, shared resident search, numerical
-  qualification, and GPU spring export.
-- Newton and `projects/digital_shoe/`: shared framework and material/contact laws.
-
-Retired bilateral, paper, two-stiffness and learned-controller rigs, old
-preparation chains, serial optimizers, multi-island search, control-count
-comparisons, compatibility aliases, and their tests/reports are removed.
-The default pipeline starts with the frozen filtered measured reference.
-Subject-specific C3D preparation is a separate, fail-closed workflow described
-in the GPU README; it does not replace frozen inputs during a controller fit.
-
-Apart from the explicitly selected 2× stiffness and damping, the inherited
-foundation interface, material, friction, masses, bounds, initial physical state,
-loss, and acceptance limits are unchanged. Recorded
-motion after the initial state and measured GRF are targets, never applied
-motion or extra forces. The reference retains its original 20 Hz filtering
-metadata. This cleanup does not certify biological validity or a new shoe
-interface. General Newton APIs and the separate calibration/gait projects are
-not retired by this controller cleanup.
-
-## Historical cleanup verification
-
-The controller project shrank from **97 Python files / 43,084 source lines** to
-**28 files / 7,094 lines**: a net deletion of **35,990 lines (83.5%)**.
-These counts exclude tests, generated outputs, and compiler caches.
-Another 48 obsolete test modules were removed. Newton public source is unchanged.
-
-The retained pipeline passed 90 targeted tests on CPU/CUDA, all pre-commit
-checks, and a fresh one-iteration end-to-end CUDA smoke run. Same-step parity,
-128-world isolation/reset/permutation, frozen half-step refinement, and spring
-replay passed. Spring-history errors were zero. The smoke run is verification,
-not a replacement for the selected 200-iteration baseline or a convergence claim.
-Its evidence is in `outputs/impedance_instron/cleanup_validation/verification.json`
-and its replay is `outputs/impedance_instron/cleanup_validation/fit/report.html`.
-That earlier baseline and cleanup smoke result were outside measured-fit acceptance.
-They are historical evidence, not the newly selected accepted baseline above.

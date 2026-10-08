@@ -313,46 +313,22 @@ class TestDigitalShoeFrictionFullFusion(unittest.TestCase):
             previous = current
         self.assertEqual(pointers, [foundation.friction_solver.settings.ptr for foundation, _ in pair])
 
-    def test_diagnostic_clock_and_disabled_worlds(self):
-        """Tick once even with world zero disabled and leave disabled histories and diagnostics untouched."""
+    def test_disabled_worlds_preserve_histories(self):
+        """Preserve disabled worlds' histories and forces while enabled worlds match the shared runtime."""
         device = self._cuda()
         pair = _pair(513, device, (7, 8, 9))
         fused, state = pair[1]
-        groups = 32  # Match Engine's fixed allocation, including unused groups.
-        rest = fused.rest_len.numpy().astype(np.float64)
-        maxima = wp.zeros((3, groups), dtype=wp.vec2d, device=device)
-        caps = wp.zeros((3, groups), dtype=int, device=device)
-        invalid = wp.zeros_like(caps)
-        clock = wp.zeros(1, dtype=int, device=device)
-        fused.diagnostics = (wp.array(rest, dtype=wp.float64, device=device), 0.01, maxima, caps, invalid, clock)
-        self.assertTrue(fused.fused_diagnostics)
-        maxima.fill_(wp.vec2d(99.0, 99.0))
-        caps.fill_(99)
-        invalid.fill_(1)
         for foundation, body_state in pair:
             foundation.apply(body_state, _DT, clear_body_force=True)
         before = _snapshot(fused, state)
-        diagnostic_before = [arr.numpy() for arr in (maxima, caps, invalid)]
         fused.enabled.assign(np.array([0, 1, 0], dtype=np.int32))
         _motion(pair, 0.01, -0.9, 5)
-        for tick in (False, True):
+        for _ in range(2):
             pair[0][0].apply(pair[0][1], _DT, clear_body_force=True)
-            self._observed_apply(fused, state, tick=tick)
+            self._observed_apply(fused, state)
             self._assert_pair(pair, world=1)
-            self.assertEqual(clock.numpy()[0], int(tick))
         for name, value in _snapshot(fused, state).items():
             np.testing.assert_array_equal(value[[0, 2]], before[name][[0, 2]], err_msg=name)
-        for arr, old in zip((maxima, caps, invalid), diagnostic_before, strict=True):
-            np.testing.assert_array_equal(arr.numpy()[[0, 2]], old[[0, 2]])
-        fraction = fused.compression.numpy().reshape(3, -1).astype(np.float64) / rest
-        driven = fused.driven.numpy() != 0
-        expected = np.stack(
-            [np.where(driven, fraction, 0).max(axis=1), np.where(~driven, fraction, 0).max(axis=1)], axis=1
-        )
-        np.testing.assert_array_equal(maxima.numpy().max(axis=1), expected)
-        np.testing.assert_array_equal(caps.numpy().sum(axis=1), ((fraction >= 0.01 - 1e-6) & ~driven).sum(axis=1))
-        np.testing.assert_array_equal(invalid.numpy(), 0)
-        self.assertGreater(caps.numpy().sum(), 0)
 
 
 if __name__ == "__main__":

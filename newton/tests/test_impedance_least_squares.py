@@ -26,7 +26,7 @@ def _initial():
 
 
 class TestLeastSquares(unittest.TestCase):
-    """Keep LM residuals consistent with the CEM score and fit on training data."""
+    """Keep LM residuals consistent with the reported score and fit on training data."""
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

@@ -28,11 +28,7 @@ SELECTED_SIDE = "right"
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _share_bundle_assets(root: Path, records: list[dict[str, Any]]) -> dict[str, dict[str, str]]:

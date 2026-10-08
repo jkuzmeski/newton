@@ -1,24 +1,14 @@
-# Cartesian controller implementation
+# Runner inputs and shoe attachment
 
-Use the [twelve-point baseline pipeline](../README.md) from the repository root:
+This directory retains only the infrastructure used by the
+[generative Hogan pipeline](../README.md):
 
-```bash
-uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instron/run12
-```
+- `visual3d.py`, `prepare_visual3d.py`, `prepare_dataset.py`: export ingestion,
+  endpoint registration, and peak-to-peak observations.
+- `data.py`, `profile.py`: validation/loading of existing observation and inertial schemas.
+- `shoe.py`: rigid attachment to the shared Digital Shoe runtime.
+- `gpu/foundation.py`: its batched CUDA adapter.
 
-This directory contains only the current model and its CPU qualification and
-replay support. The CPU rollout is a numerical reference, not an optimizer.
-The measured loss and frozen refinement criteria live in `fit.py`.
-`shoe.py` attaches the shared Digital Shoe without duplicating its contact law.
-`spline.py` owns only cubic basis and derivative-control-polygon algebra.
-
-Rebuild a saved result's HTML report without refitting:
-
-```bash
-uv run --no-sync -m projects.impedance_instron.cartesian report outputs/impedance_instron/run12/fit
-```
-
-Spring export replays contact at saved simulated states. It verifies force,
-moment, compression and cap histories. It does not integrate the leg or use
-recorded target motion as simulated motion. Use `--mesh-only` only to explicitly
-skip this verification and disable the spring views.
+The directory name and existing data schemas are retained so saved datasets
+remain usable. Cartesian controller models, splines, searches, and adjoint
+experiments are removed; runner dynamics live exclusively in `hogan/`.

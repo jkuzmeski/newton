@@ -15,10 +15,12 @@ import numpy as np
 from projects.impedance_instron.cartesian.visual3d import (
     _ascii,
     _clock_rate,
-    _main,
     export_manifest_template,
     inspect_visual3d_root,
     load_visual3d_export,
+)
+from projects.impedance_instron.cartesian.visual3d import (
+    main as _main,
 )
 
 
@@ -160,7 +162,7 @@ class Visual3DExportTest(unittest.TestCase):
             (trial / "motion_all_targets.txt").write_text("source\n", encoding="utf-8")
             report = inspect_visual3d_root(root)
             self.assertEqual(report["trials"][0]["name"], "walk_a")
-            self.assertIn("FORCE/motion_FP1_X.txt", report["trials"][0]["missing_files"])
+            self.assertIn(str(Path("FORCE") / "motion_FP1_X.txt"), report["trials"][0]["missing_files"])
 
     def test_template_is_conservative(self) -> None:
         """Write a manifest template that requires physical metadata to be filled in."""

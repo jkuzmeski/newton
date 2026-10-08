@@ -126,10 +126,6 @@ def _convergence(summary: dict) -> str:
     history = summary.get("history", [])
     if not history:
         return ""
-    if "iteration" not in history[0]:
-        x = [row["generation"] for row in history]
-        series = [("best score", x, [row["best_score"] for row in history], FITTED, "")]
-        return _figure("Search convergence", _plot(series, xlabel="generation", ylabel="training score"))
     x = np.arange(len(history) + 1)
     cost = [summary["initial_cost"], *(row["cost"] for row in history)]
     motion = [summary["initial_motion"], *(row["motion"] for row in history)]
@@ -311,13 +307,10 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
     eval_count = len(_rows(summary, "eval", "learned")) if "eval" in summary["splits"] else 0
     flight = sum("plate force" in entry["initialization"] for entry in summary["trials"])
     search = summary["search"]
-    lm = summary.get("method") == "levenberg_marquardt"
     optimizer = (
         f"Levenberg&ndash;Marquardt, {len(summary['history'])} iterations, forward-difference Jacobian "
         f"over {summary['parameters']} parameters, damping ladder {search['ladder']}, "
         f"{search['chunk']} candidates per batched GPU rollout, {summary['rollouts']} candidate evaluations"
-        if lm
-        else f"cross-entropy method, population {search['population']}, {search['generations']} generations"
     )
     flags = [
         f"--{key.replace('_', '-')} {' '.join(map(str, value)) if isinstance(value, list) else value}"

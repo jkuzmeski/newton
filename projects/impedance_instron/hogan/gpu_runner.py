@@ -32,7 +32,7 @@ from projects.digital_shoe.runtime import clone_params
 
 from ..cartesian.gpu.foundation import FoundationFused
 from ..cartesian.shoe import Shoe
-from .batch import (
+from .gpu_mechanics import (
     ChainParams,
     Settings,
     Vec6,
@@ -46,7 +46,7 @@ from .batch import (
     _tick,
 )
 from .mechanics import Chain
-from .runner import FEATURE_NAMES, RolloutConfig, Runner, State, Task
+from .runner import FEATURE_NAMES, RolloutConfig, Runner, State, Task, _summary
 
 wp.set_module_options({"enable_backward": False, "fuse_fp": False})
 
@@ -361,36 +361,6 @@ def _model_params(model: Runner, dt: float) -> _Model:
     return p
 
 
-def _summary(trace: dict, code: int, duration: float, dt: float, cfg: RolloutConfig) -> dict:
-    count = len(trace["load"])
-    failure = None if code == 1 else _FAILURES[code]
-    power = trace["load"][:, 3:] * trace["velocity"][:-1, 3:]
-    contact = trace["grf_n"][:, 1] > cfg.contact_threshold_n
-    indices = np.flatnonzero(contact)
-    return {
-        "status": "completed" if failure is None else "failed",
-        "failure": failure,
-        "failure_time_s": None if failure is None else count * dt,
-        "dt_s": dt,
-        "contact_threshold_n": cfg.contact_threshold_n,
-        "requested_duration_s": duration,
-        "integrated_duration_s": count * dt,
-        "reference_inputs_used": False,
-        "external_actuator_load": [0.0, 0.0, 0.0],
-        "peak_grf_n": trace["grf_n"].max(0).tolist() if count else [0.0, 0.0],
-        "grf_impulse_ns": (trace["grf_n"].sum(0) * dt).tolist(),
-        "contact_duration_s": float(np.count_nonzero(contact) * dt),
-        "touchdown_s": float(indices[0] * dt) if len(indices) else None,
-        "toeoff_s": float((indices[-1] + 1) * dt) if len(indices) else None,
-        "joint_positive_work_j": (np.maximum(power, 0).sum(0) * dt).tolist(),
-        "joint_negative_work_j": (np.minimum(power, 0).sum(0) * dt).tolist(),
-        "torque_saturation_fraction": trace["torque_saturated"].mean(0).tolist() if count else [0.0] * 3,
-        "terminal_state": trace["state"][-1].tolist(),
-        "terminal_velocity": trace["velocity"][-1].tolist(),
-        "validated": False,
-    }
-
-
 class _Group:
     def __init__(self, batch, indices, chains, shoes, initials, tasks):
         self.indices = tuple(indices)
@@ -574,7 +544,8 @@ class _Group:
                     phase_rad=senses[: count + 1, w, 0].copy(),
                     normal_load_bw=senses[: count + 1, w, 1].copy(),
                 )
-                row.append((trace, _summary(trace, int(status[w]), float(self.durations[s]), self.dt, self.config)))
+                failure = None if status[w] == 1 else _FAILURES[int(status[w])]
+                row.append((trace, _summary(trace, failure, float(self.durations[s]), self.dt, self.config)))
             result.append(row)
         return result
 

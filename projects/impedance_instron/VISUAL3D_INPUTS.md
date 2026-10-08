@@ -49,13 +49,11 @@ is the model metric and still needs confirmation against the subject record.
 The static heel-to-metatarsal and heel-to-toe vectors point along laboratory
 `+Y`, so the F01 manifests declare `forward_axis: "+Y"`.
 
-For a provisional controller run, record transferred inertial assumptions
+For runner identification, record transferred inertial assumptions
 separately from the measured exports. Carry over the fixed shoe artifact and
 foot-to-shoe registration from the selected baseline; do not tune the shoe
 placement against a trial. Select a single stance and anchor treadmill
-translation at that window's first point sample; a translation from the start
-of the full recording changes the controller position bounds with the stride's
-recording time.
+translation at that window's first point sample.
 
 Use the updated `data/F01/FullBuild.v3s`, verify the model in Visual3D, then run
 `data/F01/Export_FR3_ImpedanceInstron.v3s` into a **fresh export directory**.
@@ -105,10 +103,11 @@ For reconstructed ground pitch $g$, the solver's internal ankle coordinate is:
 The unchanged shoe adapter subtracts the fixed shoe pitch after combining the three limb angles,
 so the actual contact carrier and rendered mesh both rotate by $g$. The saved reference retains
 the reconstructed ground target separately from the raw Visual3D relative angle and the derived
-solver joint coordinate. CPU, resident CUDA, and adjoint objectives score knee angle and ground pitch
-directly; a changing shank cannot hide a ground-angle error. The report and plots display all three
-angles separately in degrees (shank inclination, relative virtual-foot angle, and shoe pitch to ground),
-with positive pitch indicating toe-up and negative indicating toe-down.
+solver joint coordinate. Hogan converts the prepared five-coordinate reference
+to its floating-pelvis chain before identification; the former Cartesian and
+adjoint fitting objectives are removed. Positive ground pitch indicates toe-up.
+The linked HAS-Motion tutorial returned HTTP 403 during the cleanup review;
+the retained preparation/frame conventions are verified by local regression tests.
 
 When only anatomical ankle angles are present, the preparer subtracts the
 matched static baseline. If angle signals are absent, it derives pitch from
@@ -125,7 +124,7 @@ The segment endpoint exports assume `LTH/LSK/LFT` and `RTH/RSK/RFT`, matching th
 segment names used in FullBuild. Confirm that their proximal endpoints represent
 your intended anatomical joint centers; especially check the foot's proximal
 endpoint against the ankle. Do not substitute tracking-cluster markers for
-anatomical centers. The scripts cannot be executed in this Linux workspace;
+anatomical centers. The scripts require Visual3D and are not executed by this pipeline;
 inspect the Visual3D execution log for missing signals and export errors.
 
 

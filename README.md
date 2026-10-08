@@ -978,7 +978,7 @@ no physical-friction validation or speedup is implied.
 ## Digital Instron / Digital Shoe showcase
 
 See the [shoe-project organization and command map](projects/README.md) for
-Digital Instron, Digital Shoe, and the twelve-point controller pipeline.
+Digital Instron, Digital Shoe, and the generative Hogan runner pipeline.
 
 This fork includes a standalone shoe calibrated from Digital Instron measurements.
 Export the fitted artifact and HTML report, then launch the Virtual Instron:
@@ -1000,19 +1000,19 @@ The measurements and footwear assets are restricted to internal fork use; see
 The integration retains the current Newton-native gait and motion adapters;
 it does not restore the branch's legacy OpenSim runtime or human-shoe pipeline.
 
-## Twelve-point single-leg controller baseline
+## Generative Hogan runner
 
-The controller worktree retains one pipeline: a shared 12-point Cartesian-hip,
-knee and ankle equilibrium controller with 128 fixed GPU worlds.
-It starts from the latest saved 200-iteration result, not an older seed.
+The impedance project retains one shared, reference-free variable-impedance
+runner and its Levenberg-Marquardt fitting pipeline. The latest frozen F01
+model preserves the 98-training/9-held-out full run (held-out mean loss 14.8).
 
 ```bash
-uv run --no-sync -m projects.impedance_instron --output outputs/impedance_instron/run12
+uv run --no-sync -m projects.impedance_instron --help
 ```
 
 See [the baseline, commands, and limitations](projects/impedance_instron/README.md).
-The measured fit remains unaccepted; numerical completion is not physical
-validation. Retired controller implementations and commands have been removed.
+Fit and report with the `fit` command; independently regenerate frozen scenarios
+with `generate`. Numerical completion is not physiological validation.
 Motion and shoe assets remain restricted to internal fork use.
 
 ## Contributing and Development

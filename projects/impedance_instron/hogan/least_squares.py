@@ -4,7 +4,7 @@
 """Levenberg-Marquardt identification of shared runner parameters.
 
 The cost is the sample part of :func:`~projects.impedance_instron.hogan.identify.score`
-(coordinate and GRF mean squares, averaged over trials) plus the CEM offset
+(coordinate and GRF mean squares, averaged over trials) plus offset
 regularization, written as a residual vector. Finite-difference Jacobians and
 the parallel damping ladder each run as one batched rollout; only the small
 damped normal-equation solve runs on the host.
