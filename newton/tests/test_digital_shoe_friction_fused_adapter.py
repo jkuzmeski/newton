@@ -104,8 +104,6 @@ class TestDigitalShoeFrictionFusedAdapter(unittest.TestCase):
         adapter_midsole = FrictionAdapter(midsole, mobility, mode="deflection")
         adapter_fused = FrictionAdapter(fused, mobility, mode="deflection")
 
-        self.assertFalse(fused.fused_diagnostics)
-
         state_midsole = self._build_state(device)
         state_fused = self._build_state(device)
 
@@ -147,8 +145,6 @@ class TestDigitalShoeFrictionFusedAdapter(unittest.TestCase):
         adapter_midsole.set_parameters(params)
         adapter_fused.set_parameters(params)
 
-        self.assertFalse(fused.fused_diagnostics)
-
         state_midsole = self._build_state(device)
         state_fused = self._build_state(device)
 
@@ -172,23 +168,13 @@ class TestDigitalShoeFrictionFusedAdapter(unittest.TestCase):
         np.testing.assert_allclose(fused.compression.numpy(), midsole.compression.numpy(), rtol=1e-5, atol=1e-5)
 
     def test_legacy_fused_behavior_preserved_without_adapter(self):
-        """Preserve default fused behavior and diagnostics when no adapter is attached."""
+        """Preserve default fused behavior when no adapter is attached."""
         if not wp.is_cuda_available():
             self.skipTest("CUDA required")
         device = wp.get_device("cuda:0")
 
         _midsole, fused = self._build_foundations(device)
         self.assertIsNone(fused.friction_solver)
-
-        fused.diagnostics = (
-            wp.zeros(fused.column_count, dtype=wp.float64, device=device),
-            0.85,
-            wp.zeros((1, 1), dtype=wp.vec2d, device=device),
-            wp.zeros((1, 1), dtype=wp.int32, device=device),
-            wp.zeros((1, 1), dtype=wp.int32, device=device),
-            wp.zeros(1, dtype=wp.int32, device=device),
-        )
-        self.assertTrue(fused.fused_diagnostics)
 
         state = self._build_state(device)
         fused.apply(state, 0.001, clear_body_force=True)

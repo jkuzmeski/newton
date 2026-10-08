@@ -240,15 +240,6 @@ class FoundationFused(MidsoleFoundation):
         """Keep persistent foundation arrays together for the block-local launch."""
 
         zero_pressure: wp.array[wp.vec2]
-        record_diagnostics: int
-        diagnostic_groups: int
-        diagnostic_rest: wp.array[wp.float64]
-        passive_cap: wp.float64
-        diagnostic_maxima: wp.array2d[wp.vec2d]
-        diagnostic_caps: wp.array2d[int]
-        diagnostic_nonfinite: wp.array2d[int]
-        clock: wp.array[int]
-        tick: int
         ground_force: wp.array[wp.vec3]
         enabled: wp.array[int]
         free_column_count: int
@@ -331,7 +322,6 @@ class FoundationFused(MidsoleFoundation):
         self._refresh_zero_pressure()
         self.enabled = wp.ones(self.world_count, dtype=int, device=self.device)
         self.fused_apply = True
-        self.diagnostics = None
         self._unique_carriers = len(np.unique(self.carrier.numpy())) == self.world_count
 
     def _refresh_surround_constants(self, dt: float) -> None:
@@ -354,7 +344,7 @@ class FoundationFused(MidsoleFoundation):
 
     @property
     def _fused_eligible(self):
-        """Keep launch and controller-diagnostic eligibility consistent."""
+        """Restrict fusion to independent worlds and supported contact laws."""
         return (
             self.fused_apply
             # Subclasses may override apply with a coupled solve or other work.
@@ -365,12 +355,7 @@ class FoundationFused(MidsoleFoundation):
             and self._unique_carriers
         )
 
-    @property
-    def fused_diagnostics(self):
-        """Report whether the CUDA block can also write the controller diagnostics."""
-        return self._fused_eligible and self.diagnostics is not None
-
-    def apply(self, state, dt: float, clear_body_force: bool = False, *, tick=False) -> None:
+    def apply(self, state, dt: float, clear_body_force: bool = False) -> None:
         """Fuse unchanged shoe stages within each world's CUDA block."""
         if not self._fused_eligible or not clear_body_force:
             super().apply(state, dt, clear_body_force)
@@ -379,17 +364,6 @@ class FoundationFused(MidsoleFoundation):
         cfg = self.surround
         data = self.Data()
         data.zero_pressure = self.zero_pressure
-        if self.diagnostics is not None:
-            rest, cap, maxima, caps, nonfinite, clock = self.diagnostics
-            data.record_diagnostics = 1
-            data.diagnostic_groups = maxima.shape[1]
-            data.diagnostic_rest = rest
-            data.passive_cap = cap
-            data.diagnostic_maxima = maxima
-            data.diagnostic_caps = caps
-            data.diagnostic_nonfinite = nonfinite
-            data.clock = clock
-            data.tick = int(tick)
         data.ground_force = self.ground_force
         data.enabled = self.enabled
         data.free_column_count = self.free_column_count
@@ -570,26 +544,6 @@ __syncthreads();
 def _sync_threads(): ...
 
 
-@wp.func_native("""
-#if defined(__CUDA_ARCH__)
-for (int offset = 16; offset > 0; offset >>= 1)
-    v = fmax(v, __shfl_xor_sync(0xffffffffu, v, offset));
-#endif
-return v;
-""")
-def _warp_max_double(v: wp.float64) -> wp.float64: ...
-
-
-@wp.func_native("""
-#if defined(__CUDA_ARCH__)
-for (int offset = 16; offset > 0; offset >>= 1)
-    v += __shfl_xor_sync(0xffffffffu, v, offset);
-#endif
-return v;
-""")
-def _warp_sum_int(v: int) -> int: ...
-
-
 @wp.func
 def _apply_world_step(
     world_index: int,
@@ -602,9 +556,6 @@ def _apply_world_step(
     block_size: int,
 ):
     """Keep each world's shared-law stages and ordered reductions in one block."""
-    # The shoe phases never read the clock, so world zero may tick it independently.
-    if data.tick and world_index == 0 and lane == 0:
-        data.clock[0] += 1
     if data.enabled[world_index] == 0:
         return
     if lane == 0:
@@ -675,38 +626,6 @@ def _apply_world_step(
                 data.base_pressure,
             )
     _sync_threads()
-    if data.record_diagnostics:
-        # The controller may allocate more groups than this bed needs. Publish
-        # neutral padding too, rather than leaving stale extrema/failure flags.
-        diagnostic_rows = (data.diagnostic_groups + block_size // 32 - 1) // (block_size // 32)
-        for row in range(diagnostic_rows):
-            column = row * block_size + lane
-            group = row * (block_size // 32) + lane // 32
-            dm = wp.float64(0.0)
-            pm = wp.float64(0.0)
-            cap = int(0)
-            invalid = int(0)
-            if column < data.column_count:
-                fraction = (
-                    wp.float64(data.compression[world_index * data.column_count + column])
-                    / data.diagnostic_rest[column]
-                )
-                if not wp.isfinite(fraction):
-                    invalid = 1
-                elif data.driven[column] != 0:
-                    dm = wp.max(dm, fraction)
-                else:
-                    pm = wp.max(pm, fraction)
-                    if fraction >= data.passive_cap - wp.float64(1.0e-6):
-                        cap = 1
-            dm = _warp_max_double(dm)
-            pm = _warp_max_double(pm)
-            cap = _warp_sum_int(cap)
-            invalid = _warp_sum_int(invalid)
-            if lane % 32 == 0 and group < data.diagnostic_groups:
-                data.diagnostic_maxima[world_index, group] = wp.vec2d(dm, pm)
-                data.diagnostic_caps[world_index, group] = cap
-                data.diagnostic_nonfinite[world_index, group] = int(invalid > 0)
     for row in range(rows):
         column = row * block_size + lane
         if column < data.column_count:

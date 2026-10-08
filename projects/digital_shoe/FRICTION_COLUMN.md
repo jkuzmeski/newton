@@ -9,7 +9,7 @@ same equilibrium stiffness and adds a Maxwell branch using
 unsaturated force response scale with the modeled foam geometry and preserves
 the summed stiffness when a footprint is refined into smaller columns.
 
-The shoe, Cartesian leg engine, and generic `FoundationConfig` use
+The shoe and generic `FoundationConfig` use
 `elastic_coulomb` by default. Explicitly selecting `maxwell` retains configured
 per-column stiffness and viscosity. The legacy anchored spring remains
 available.

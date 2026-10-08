@@ -13,8 +13,21 @@ import warp as wp
 
 import newton
 from projects.digital_shoe.artifact import load_artifact
-from projects.digital_shoe.rendering import carried_column_endpoints
 from projects.digital_shoe.runtime import FoundationConfig, MidsoleFoundation, SurroundConfig
+
+
+def _hull(points: np.ndarray) -> np.ndarray:
+    ordered = sorted(set(map(tuple, points)))
+    lower, upper = [], []
+    for chain, sequence in ((lower, ordered), (upper, reversed(ordered))):
+        for point in sequence:
+            while len(chain) >= 2:
+                a, b = np.subtract(chain[-1], chain[-2]), np.subtract(point, chain[-1])
+                if a[0] * b[1] - a[1] * b[0] > 0:
+                    break
+                chain.pop()
+            chain.append(point)
+    return np.asarray(lower[:-1] + upper[:-1])
 
 
 class Shoe:
@@ -73,22 +86,11 @@ class Shoe:
         sites = fixture.carrier_anchor_m.copy()
         sites[:, 2] += bed.anchor_bottom_m[supported, 2] - fixture.foam_bottom_m
         self.attachment_local_m[supported] = sites - self.mount_m
-        gap = sites[:, 2] - (bed.anchor_bottom_m[supported, 2] + bed.rest_length_m[supported])
         mesh = self.shoe.visual_mesh("fullfoot_last")
         self.last_vertices_local_m = mesh.vertices_m - self.mount_m
-        self.last_triangles = mesh.triangles.copy()
         builder = newton.ModelBuilder()
         builder.add_body(mass=1.0, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)), label="fullfoot_last_carrier")
-        builder.add_shape_mesh(
-            0,
-            mesh=newton.Mesh(self.last_vertices_local_m.astype(np.float32), self.last_triangles.ravel()),
-            cfg=newton.ModelBuilder.ShapeConfig(density=0.0, has_shape_collision=False, has_particle_collision=False),
-            color=(0.72, 0.77, 0.82),
-            label="fullfoot_last",
-        )
-        # As in the previous rig, the mesh and all column sites share this body.
-        # Only the foundation supplies contact; enabling triangle collision here
-        # would add an unintended parallel force path.
+        # Only the column foundation supplies contact; reports use artifact geometry.
         self.model = builder.finalize(device=self.device)
         self.state = self.model.state()
         self.foundation = MidsoleFoundation(
@@ -115,133 +117,21 @@ class Shoe:
             SurroundConfig(driven=driven, carrier_bond=True),
         )
         self.foundation.reset()
-        self._bottoms = wp.zeros(len(driven), dtype=wp.vec3, device=self.device)
-        self._tops = wp.zeros(len(driven), dtype=wp.vec3, device=self.device)
         self.metadata = {
             "path": str(self.artifact_path),
             "sha256": hashlib.sha256(self.artifact_path.read_bytes()).hexdigest(),
             "shoe_id": self.shoe.shoe_id,
-            "artifact_provenance": self.shoe.provenance,
-            "constitutive_model": self.shoe.raw["constitutive_model"],
             "mount_m": self.mount_m.tolist(),
             "static_pitch_rad": self.static_pitch_rad,
-            "registration": "rigid placement only; no geometry scaling or material refit",
             "friction_model": friction_model,
-            "friction_equilibrium_stiffness_n_m": (
-                10000.0 if friction_model == "legacy" else (1000.0 if friction_model == "maxwell" else None)
-            ),
-            "friction_viscosity_ns_m": (
-                10.0
-                if friction_model in ("legacy", "maxwell")
-                else (None if friction_model == "column_maxwell" else 0.0)
-            ),
-            "friction_mu": 0.8,
-            "friction_relaxation_time_s": self.shoe.material.maxwell_relaxation_time_s
-            if friction_model in ("maxwell", "column_maxwell")
-            else None,
-            "friction_stiffness_source": (
-                "material_shear_modulus_times_column_area_over_rest_length"
-                if friction_model in ("column_maxwell", "elastic_coulomb")
-                else "configured_per_column"
-            ),
-            "attachment": "fullfoot last and driven spring tops share one rigid carrier with fixed assembly offsets",
             "column_count": len(driven),
             "driven_columns": int(driven.sum()),
             "passive_columns": int(len(driven) - driven.sum()),
-            "last_vertex_count": len(self.last_vertices_local_m),
-            "last_triangle_count": len(self.last_triangles),
-            "mesh_collision_enabled": False,
-            "fixture_offset_median_m": float(np.median(gap)),
-            "fixture_offset_max_m": float(np.max(gap)),
-            "limitations": "original fixture registration retained, not a new gap-aware upper contact solve; recorded shoe may differ",
-            "side": "intrinsic artifact retained; sagittal projection, no certified anatomical side",
-            "friction": {
-                "mu": 0.8,
-                "model": friction_model,
-                "per_column_stiffness_n_m": (
-                    10000.0 if friction_model == "legacy" else (1000.0 if friction_model == "maxwell" else None)
-                ),
-                "per_column_damping_n_s_m": (
-                    10.0
-                    if friction_model in ("legacy", "maxwell")
-                    else (None if friction_model == "column_maxwell" else 0.0)
-                ),
-                "stiffness_source": (
-                    "material_shear_modulus_times_column_area_over_rest_length"
-                    if friction_model in ("column_maxwell", "elastic_coulomb")
-                    else "configured_per_column"
-                ),
-                "equilibrium_shear_modulus_pa": self.shoe.material.equilibrium_shear_modulus_pa,
-                "instantaneous_shear_modulus_pa": (
-                    self.shoe.material.instantaneous_shear_modulus_pa
-                    + self.shoe.material.instantaneous_shear_modulus_2_pa
-                ),
-                "relaxation_time_s": self.shoe.material.maxwell_relaxation_time_s
-                if friction_model in ("maxwell", "column_maxwell")
-                else None,
-                "source": "declared contact assumptions, not identified by normal Instron loading",
-            },
         }
         points = bed.anchor_bottom_m[:, (0, 2)] - self.mount_m[[0, 2]]
         # A sagittal outline is an undeformed registration diagnostic, not a
         # claim that rigid columns remain undeformed during contact.
-        unique = sorted(set(map(tuple, points)))
-        lower, upper = [], []
-        for chain, ordered in ((lower, unique), (upper, reversed(unique))):
-            for point in ordered:
-                while len(chain) >= 2:
-                    a, b = np.subtract(chain[-1], chain[-2]), np.subtract(point, chain[-1])
-                    if a[0] * b[1] - a[1] * b[0] > 0:
-                        break
-                    chain.pop()
-                chain.append(point)
-        self.outline_local = np.asarray(lower[:-1] + upper[:-1])
-
-    def geometry(self) -> dict[str, np.ndarray]:
-        """Return fixed last and spring-site geometry in the ankle-centered frame [m]."""
-        bed = self.shoe.column_bed
-        return {
-            "last_vertices_local_m": self.last_vertices_local_m.copy(),
-            "last_triangles": self.last_triangles.copy(),
-            "anchor_local_m": self.anchor_local_m.copy(),
-            "attachment_local_m": self.attachment_local_m.copy(),
-            "rest_length_m": bed.rest_length_m.copy(),
-            "area_m2": bed.area_m2.copy(),
-            "driven": self.foundation.driven.numpy().copy(),
-            "static_pitch_rad": np.asarray(self.static_pitch_rad),
-        }
-
-    def column_state(self) -> tuple[np.ndarray, np.ndarray]:
-        """Copy per-column compression [m] and external ground normal pressure [Pa]."""
-        compression = self.foundation.compression.numpy().copy()
-        pressure = self.foundation.ground_force.numpy()[:, 2] / self.shoe.column_bed.area_m2
-        return compression, pressure.astype(np.float32)
-
-    def snapshot(self) -> dict[str, np.ndarray]:
-        """Copy the loaded bed and reconstruct its endpoints without advancing physics."""
-        wp.launch(
-            carried_column_endpoints,
-            dim=self.foundation.column_count,
-            inputs=[
-                0,
-                self.state.body_q,
-                self.foundation.anchor_local,
-                self.foundation.rest_len,
-                self.foundation.compression,
-                self.foundation.driven,
-                0.0,
-                self._bottoms,
-                self._tops,
-            ],
-            device=self.device,
-        )
-        compression, pressure = self.column_state()
-        return {
-            "bottom_m": self._bottoms.numpy().copy(),
-            "top_m": self._tops.numpy().copy(),
-            "compression_m": compression,
-            "pressure_pa": pressure,
-        }
+        self.outline_local = _hull(points)
 
     def outline(self, ankle_m, pitch_rad: float) -> np.ndarray:
         """Return the undeformed registered sagittal outline [m], shape [N, 2]."""

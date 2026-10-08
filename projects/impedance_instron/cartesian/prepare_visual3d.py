@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import shutil
 from pathlib import Path
 from typing import Any
@@ -23,9 +24,51 @@ import numpy as np
 from projects.gait_c3d.c3d_adapter import lab_to_newton_rotation
 
 from .data import validate as validate_reference
-from .prepare_subject import _kabsch_rigid_transforms
-from .profile import validate as validate_profile
+from .profile import load as load_profile
 from .visual3d import _ascii, load_visual3d_export
+
+
+def _kabsch_rigid_transforms(
+    source_points_m: np.ndarray, target_points_m: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Fit proper rigid transforms and report marker residuals per frame."""
+    source = np.asarray(source_points_m, dtype=np.float64)
+    target = np.asarray(target_points_m, dtype=np.float64)
+    for name, value in (("source_points_m", source), ("target_points_m", target)):
+        if not np.all(np.isfinite(value)):
+            raise ValueError(f"{name} contains nonfinite values")
+    if (
+        source.ndim != 2
+        or source.shape[0] < 3
+        or source.shape[-1] != 3
+        or target.ndim != 3
+        or target.shape[1:] != source.shape
+    ):
+        raise ValueError("Kabsch rigid fit expects source [point_count, 3] and target [frame_count, point_count, 3]")
+    source_centroid = source.mean(axis=0)
+    source_centered = source - source_centroid
+    rotations = np.empty((len(target), 3, 3), dtype=np.float64)
+    translations = np.empty((len(target), 3), dtype=np.float64)
+    frame_rms = np.empty(len(target), dtype=np.float64)
+    point_max = np.empty(len(target), dtype=np.float64)
+    for i, points in enumerate(target):
+        target_centroid = points.mean(axis=0)
+        target_centered = points - target_centroid
+        covariance = source_centered.T @ target_centered
+        left, _, right_t = np.linalg.svd(covariance)
+        rotation = right_t.T @ left.T
+        if np.linalg.det(rotation) < 0.0:
+            right_t[-1] *= -1.0
+            rotation = right_t.T @ left.T
+        translation = target_centroid - rotation @ source_centroid
+        fitted = (rotation @ source.T).T + translation
+        residual = points - fitted
+        rotations[i] = rotation
+        translations[i] = translation
+        point_norm = np.linalg.norm(residual, axis=1)
+        frame_rms[i] = math.sqrt(float(np.mean(np.sum(np.square(residual), axis=1))))
+        point_max[i] = float(np.max(point_norm))
+    return rotations, translations, frame_rms, point_max
 
 
 def _read_triplets(path: Path, manifest: dict[str, Any]) -> tuple[tuple[str, ...], np.ndarray, np.ndarray]:
@@ -299,8 +342,7 @@ def prepare(
         shoe_static_pitch_rad is None or not np.isfinite(shoe_static_pitch_rad)
     ):
         raise ValueError("Ground-referenced input requires the fixed shoe static pitch")
-    profile = json.loads(Path(profile_path).read_text(encoding="utf-8"))
-    validate_profile(profile)
+    profile = load_profile(profile_path)
     shoe_path = Path(shoe_path)
     if not shoe_path.is_file():
         raise ValueError(f"missing shoe artifact: {shoe_path}")
@@ -528,7 +570,6 @@ def prepare(
         qc["foot_model_tracking_rms_max_m"] = float(np.max(ft_rms))
         qc["foot_model_tracking_point_max_m"] = float(np.max(ft_pt_max))
 
-    profile = dict(profile)
     reference = {
         "time_s": time,
         "state": state,
@@ -587,9 +628,6 @@ def prepare(
     metadata["angle_convention"] = angle_convention
     metadata["selected_source_time_s"] = trial.marker_time_s[mask][[0, -1]].tolist()
     reference["metadata_json"] = np.asarray(json.dumps(metadata))
-    if ground_target is not None:
-        reference["foot_ground_target_rad"] = ground_target
-        reference["shoe_static_pitch_rad"] = np.asarray(shoe_static_pitch_rad)
     # COP on the treadmill frame moves with the belt like the markers. Below the
     # contact threshold COP is noise, so hold the nearest loaded value instead.
     cop_x = trial.cop_m[force_mask, 0] + force_time * float(belt_speed_m_s)

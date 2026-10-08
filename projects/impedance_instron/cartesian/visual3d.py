@@ -64,11 +64,7 @@ class Visual3DTrial:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _header(path: Path, lines: list[str]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
@@ -407,7 +403,7 @@ def inspect_visual3d_root(root: str | Path) -> dict[str, Any]:
     return {"schema": "visual3d_input_audit_1", "root": str(root), "trials": trials}
 
 
-def _main(argv: list[str] | None = None) -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     inspect = subparsers.add_parser("inspect", help="audit exported trials without physical assumptions")
@@ -453,4 +449,4 @@ def _main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    _main()
+    main()

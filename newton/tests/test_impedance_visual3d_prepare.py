@@ -119,17 +119,7 @@ class Visual3DPreparationTest(unittest.TestCase):
                     "masses_kg": [1.0, 1.0, 1.0],
                     "com_local_m": [[0, 0], [0, 0], [0, 0]],
                     "inertias_kg_m2": [1, 1, 1],
-                    "hip_stiffness_n_m": [1, 1],
-                    "hip_damping_ns_m": [0, 0],
-                    "joint_stiffness_nm_rad": [1, 1],
-                    "joint_damping_nms_rad": [0, 0],
-                    "equilibrium_lower": [-2, -2, -3, -3],
-                    "equilibrium_upper": [2, 2, 3, 3],
-                    "equilibrium_rate_limit": [10, 10, 10, 10],
-                    "equilibrium_acceleration_limit": [10, 10, 10, 10],
-                    "joint_lower_rad": [-3, -3],
-                    "joint_upper_rad": [-0.01, -0.01],
-                    "provenance": {"inertial": "test", "impedance": "test", "limits": "test"},
+                    "provenance": {"inertial": "test"},
                 }
                 profile_path = root / "profile.json"
                 profile_path.write_text(json.dumps(profile), encoding="utf-8")
@@ -227,17 +217,7 @@ class Visual3DPreparationTest(unittest.TestCase):
                     "masses_kg": [1.0, 1.0, 1.0],
                     "com_local_m": [[0, 0], [0, 0], [0, 0]],
                     "inertias_kg_m2": [1, 1, 1],
-                    "hip_stiffness_n_m": [1, 1],
-                    "hip_damping_ns_m": [0, 0],
-                    "joint_stiffness_nm_rad": [1, 1],
-                    "joint_damping_nms_rad": [0, 0],
-                    "equilibrium_lower": [-2, -2, -3, -3],
-                    "equilibrium_upper": [2, 2, 3, 3],
-                    "equilibrium_rate_limit": [10, 10, 10, 10],
-                    "equilibrium_acceleration_limit": [10, 10, 10, 10],
-                    "joint_lower_rad": [-3, -3],
-                    "joint_upper_rad": [-0.01, -0.01],
-                    "provenance": {"inertial": "test", "impedance": "test", "limits": "test"},
+                    "provenance": {"inertial": "test"},
                 }
                 profile_path = root / "profile.json"
                 profile_path.write_text(json.dumps(profile), encoding="utf-8")
@@ -360,17 +340,7 @@ class Visual3DPreparationTest(unittest.TestCase):
                     "masses_kg": [1.0, 1.0, 1.0],
                     "com_local_m": [[0, 0], [0, 0], [0, 0]],
                     "inertias_kg_m2": [1, 1, 1],
-                    "hip_stiffness_n_m": [1, 1],
-                    "hip_damping_ns_m": [0, 0],
-                    "joint_stiffness_nm_rad": [1, 1],
-                    "joint_damping_nms_rad": [0, 0],
-                    "equilibrium_lower": [-2, -2, -3, -3],
-                    "equilibrium_upper": [2, 2, 3, 3],
-                    "equilibrium_rate_limit": [10, 10, 10, 10],
-                    "equilibrium_acceleration_limit": [10, 10, 10, 10],
-                    "joint_lower_rad": [-3, -3],
-                    "joint_upper_rad": [-0.01, -0.01],
-                    "provenance": {"inertial": "test", "impedance": "test", "limits": "test"},
+                    "provenance": {"inertial": "test"},
                 }
                 profile_path = root / "profile.json"
                 profile_path.write_text(json.dumps(profile), encoding="utf-8")

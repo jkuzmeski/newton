@@ -16,20 +16,20 @@ import numpy as np
 from newton.tests.test_impedance_hogan import _chain, _reference, _tiny_shoe
 from projects.impedance_instron.cartesian.prepare_dataset import _flight_velocity
 from projects.impedance_instron.cartesian.profile import validate
+from projects.impedance_instron.hogan import least_squares
 from projects.impedance_instron.hogan.generate import main as generate_main
 from projects.impedance_instron.hogan.identify import (
-    FitConfig,
     Parameterization,
     Trial,
     coordinates,
     evaluate,
-    fit,
     initialize,
     load_trials,
     main,
     predict,
     score,
 )
+from projects.impedance_instron.hogan.least_squares import LMConfig, fit_lm
 from projects.impedance_instron.hogan.runner import (
     _SCHEMA_1_FEATURES,
     FEATURE_NAMES,
@@ -399,33 +399,40 @@ class TestRunnerIdentification(unittest.TestCase):
     def test_shared_fit_keeps_best_and_excludes_evaluation_selection(self):
         """Select a shared model on train alone regardless of held-out targets."""
         baseline = Runner.seed()
-        training, held_out = _trial(), _trial("eval")
-        search = FitConfig(population=6, generations=3, seed=3)
-
-        def objective(model, trials, config, **kwargs):
-            target = 0.2 if trials[0].split == "train" else float(trials[0].q[0, 0])
-            error = model.weights[0, 0, 0] - baseline.weights[0, 0, 0] - target
-            return {"mean_loss": float(error**2), "failed": 0, "trials": []}
-
-        with patch("projects.impedance_instron.hogan.identify.evaluate", side_effect=objective):
-            learned, report = fit(baseline, [training, held_out], search=search)
+        training, held_out = _trial(), _trial("eval", speed=4.0)
+        search = LMConfig(iterations=1, ladder=(1.0,), chunk=16)
+        with patch.object(least_squares, "_Rollouts", wraps=least_squares._Rollouts) as rollouts:
+            learned, report = fit_lm(baseline, [training, held_out], search=search)
             held_out.q[:] = 9000
-            other, _ = fit(baseline, [training, held_out], search=search)
-        np.testing.assert_array_equal(learned.weights, other.weights)
-        self.assertLess(report["splits"]["train"]["learned"]["mean_loss"], 0.04)
+            held_out.grf_n[:] = 1000
+            held_out.task = Task(5.0)
+            other, changed = fit_lm(baseline, [training, held_out], search=search)
+        for call in rollouts.call_args_list:
+            self.assertEqual(len(call.args[1]), 1)
+            self.assertIs(call.args[1][0], training)
+        self.assertEqual(learned.to_dict(), other.to_dict())
+        np.testing.assert_array_equal(learned.weights[:, :, -1], baseline.weights[:, :, -1])
+        self.assertEqual(learned.cadence_speed_gain, baseline.cadence_speed_gain)
+        self.assertLessEqual(report["final_cost"], report["initial_cost"])
+        self.assertEqual(changed["final_cost"], report["final_cost"])
+        self.assertEqual(changed["splits"]["train"], report["splits"]["train"])
+        self.assertGreater(
+            changed["splits"]["eval"]["learned"]["mean_loss"], report["splits"]["eval"]["learned"]["mean_loss"]
+        )
         self.assertEqual(report["selection_split"], "train")
+        self.assertEqual(report["method"], "levenberg_marquardt")
 
     def test_incompatible_data_is_not_silently_fitted(self):
         """Refuse fitting when input compatibility fails without an explicit override."""
         trial = _trial()
         trial.provenance["compatibility"]["passed"] = False
         with self.assertRaisesRegex(ValueError, "compatibility"):
-            fit(Runner.seed(), [trial])
+            fit_lm(Runner.seed(), [trial])
 
     def test_short_end_to_end_fit(self):
         """Run forward identification and held-out evaluation without a tracking plan."""
         trials = [_trial(), _trial("eval")]
-        _, report = fit(Runner.seed(), trials, search=FitConfig(population=4, generations=1))
+        _, report = fit_lm(Runner.seed(), trials, search=LMConfig(iterations=1, ladder=(1.0,), chunk=16))
         self.assertFalse(report["reference_inputs_used"])
         self.assertFalse(report["validated"])
         self.assertEqual(report["splits"]["train"]["learned"]["failed"], 0)
@@ -451,17 +458,7 @@ class TestRunnerIdentification(unittest.TestCase):
                 "masses_kg": [8.66, 3.45, 1.46],
                 "com_local_m": [[0.17, 0], [0.17, 0], [0.05, 0]],
                 "inertias_kg_m2": [0.15, 0.05, 0.008],
-                "hip_stiffness_n_m": [1, 1],
-                "hip_damping_ns_m": [1, 1],
-                "joint_stiffness_nm_rad": [1, 1],
-                "joint_damping_nms_rad": [1, 1],
-                "joint_lower_rad": [-3, -2],
-                "joint_upper_rad": [0, 2],
-                "equilibrium_lower": [-5, -5, -3, -2],
-                "equilibrium_upper": [5, 5, 0, 2],
-                "equilibrium_rate_limit": [10] * 4,
-                "equilibrium_acceleration_limit": [100] * 4,
-                "provenance": {"inertial": "synthetic", "impedance": "synthetic", "limits": "synthetic"},
+                "provenance": {"inertial": "synthetic"},
             }
             validate(profile)
             (root / "profile.json").write_text(json.dumps(profile))
@@ -563,7 +560,12 @@ class TestRunnerIdentification(unittest.TestCase):
             np.zeros((len(trace["time_s"]), 2)),
             {"compatibility": {"passed": True}},
         )
-        _, report = fit(baseline, [trial], config=cfg, search=FitConfig(population=8, generations=3, seed=8))
+        _, report = fit_lm(
+            baseline,
+            [trial],
+            config=cfg,
+            search=LMConfig(iterations=1, ladder=(0.1, 1.0), regularization=0.0, chunk=16),
+        )
         results = report["splits"]["train"]
         self.assertLess(results["learned"]["mean_loss"], results["baseline"]["mean_loss"])
 
@@ -574,8 +576,9 @@ class TestRunnerIdentification(unittest.TestCase):
         self.assertEqual(parameters.model(np.zeros(parameters.size)).to_dict(), baseline.to_dict())
         with self.assertRaises(ValueError):
             Parameterization(Runner(baseline.weights, frequency_hz=10.0), [3.7])
-        with self.assertRaises(ValueError):
-            FitConfig(population=4.5)
+        for settings in ({"iterations": 0}, {"chunk": 0}, {"step": 0.0}, {"ladder": ()}, {"regularization": -1.0}):
+            with self.subTest(settings=settings), self.assertRaises(ValueError):
+                LMConfig(**settings)
 
 
 if __name__ == "__main__":

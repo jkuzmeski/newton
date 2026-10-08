@@ -16,7 +16,7 @@ import numpy as np
 
 from projects.impedance_instron.cartesian import prepare_visual3d
 from projects.impedance_instron.cartesian.data import load as load_reference
-from projects.impedance_instron.cartesian.mechanics import Body
+from projects.impedance_instron.hogan.mechanics import Chain, from_leg_coordinates
 
 GROUND_REFERENCES = ("ground", "reconstructed_ground", "raw_ground_deprecated", "sole_markers")
 
@@ -67,17 +67,7 @@ class TestEndpointFramePreparation(unittest.TestCase):
                     "masses_kg": [1.0, 1.0, 1.0],
                     "com_local_m": [[0.1, 0.0], [0.1, 0.0], [0.05, -0.01]],
                     "inertias_kg_m2": [1.0, 1.0, 1.0],
-                    "hip_stiffness_n_m": [1.0, 1.0],
-                    "hip_damping_ns_m": [0.0, 0.0],
-                    "joint_stiffness_nm_rad": [1.0, 1.0],
-                    "joint_damping_nms_rad": [0.0, 0.0],
-                    "equilibrium_lower": [-2.0, -2.0, -3.0, -3.0],
-                    "equilibrium_upper": [2.0, 2.0, 3.0, 3.0],
-                    "equilibrium_rate_limit": [10.0] * 4,
-                    "equilibrium_acceleration_limit": [10.0] * 4,
-                    "joint_lower_rad": [-3.0, -3.0],
-                    "joint_upper_rad": [-0.01, -0.01],
-                    "provenance": {"inertial": "test", "impedance": "test", "limits": "test"},
+                    "provenance": {"inertial": "test"},
                 }
             ),
             encoding="utf-8",
@@ -220,8 +210,9 @@ class TestEndpointFramePreparation(unittest.TestCase):
         legacy_local = _rotation(self.marker_pitch).T @ self.displacement
         legacy_error = _rotation(self.shoe_pitch) @ legacy_local - self.displacement
         self.assertAlmostEqual(legacy_error[1], -0.0205, delta=0.001)
-        body = Body(reference["lengths_m"], reference["endpoint_local_m"], [1.0] * 3, [[0.0, 0.0]] * 3, [1.0] * 3)
-        positions = body.kinematics(reference["state"][0])
+        chain = Chain(reference["lengths_m"], reference["endpoint_local_m"], [1.0] * 4, [[0.0, 0.0]] * 4, [1.0] * 4)
+        q, _ = from_leg_coordinates(reference["state"][:1], np.zeros((1, 5)), np.pi / 2, 0.0)
+        positions = chain.kinematics(q[0])
         np.testing.assert_allclose(positions[2], self.ankle[[0, 2]], atol=1e-14)
         np.testing.assert_allclose(positions[3], self.mth[[0, 2]], atol=1e-14)
 
@@ -293,20 +284,27 @@ class TestEndpointFrameTransform(unittest.TestCase):
             prepare_visual3d._endpoint_in_state_frame(displacement, reference_pitch_rad=pitch)
             for pitch in (-0.14, -0.24446041090480894)
         ]
-        bodies = [
-            Body([0.4, 0.45], local, [8.0, 4.0, 1.0], [[0.2, 0.0], [0.2, 0.0], [0.05, -0.01]], [1.0] * 3)
+        chains = [
+            Chain(
+                [0.4, 0.45],
+                local,
+                [57.0, 8.0, 4.0, 1.0],
+                [[0.19, 0.0], [0.2, 0.0], [0.2, 0.0], [0.05, -0.01]],
+                [5.0, 1.0, 1.0, 1.0],
+            )
             for local in endpoints
         ]
         velocity = np.array([0.1, -0.2, 0.3, -0.4, 0.5])
         for foot_pitch in (-0.4, 0.0, 0.3):
             with self.subTest(foot_pitch=foot_pitch):
-                q = np.array([0.1, 0.9, -1.1, -0.3, foot_pitch + 1.4 - np.pi / 2])
-                np.testing.assert_array_equal(bodies[0].kinematics(q)[:3], bodies[1].kinematics(q)[:3])
-                for old, new in zip(bodies[0].dynamics(q, velocity), bodies[1].dynamics(q, velocity), strict=True):
+                state = np.array([0.1, 0.9, -1.1, -0.3, foot_pitch + 1.4 - np.pi / 2])
+                q, v = from_leg_coordinates(state[None], velocity[None], np.pi / 2, 0.0)
+                np.testing.assert_array_equal(chains[0].kinematics(q[0])[:3], chains[1].kinematics(q[0])[:3])
+                for old, new in zip(chains[0].dynamics(q[0], v[0]), chains[1].dynamics(q[0], v[0]), strict=True):
                     np.testing.assert_array_equal(old, new)
                 for old, new in zip(
-                    bodies[0].point(q, 2, [0.1, -0.05], velocity),
-                    bodies[1].point(q, 2, [0.1, -0.05], velocity),
+                    chains[0].point(q[0], 3, [0.1, -0.05], v[0]),
+                    chains[1].point(q[0], 3, [0.1, -0.05], v[0]),
                     strict=True,
                 ):
                     np.testing.assert_array_equal(old, new)
