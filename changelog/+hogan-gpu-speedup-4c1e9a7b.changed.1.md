@@ -1,0 +1,1 @@
+Integrate the experimental Hogan runner's CUDA LM finite differences with fast-math shoe kernels by default, cutting a full-dataset iteration from about 20 s to 15 s. Costs, damping-ladder proposals, and accepted steps still use exact rollouts. Pass `identify fit --exact-jacobian`, or use `LMConfig(fast_jacobian=False)`, to integrate the differences exactly as before.

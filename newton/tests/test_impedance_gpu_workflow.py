@@ -319,6 +319,11 @@ class TestGpuWorkflowCuda(_WorkflowFixture):
         self.assertEqual(len(objective.trials), 1)
         self.assertIs(objective.trials[0], training)
         self.assertEqual({capacity for _, capacity in objective._groups}, {1, search.chunk, len(search.ladder)})
+        # Finite differences, with their own reference, use the fast-math shoe;
+        # the start cost and damping-ladder proposals stay exact.
+        calls = evaluated.call_args_list
+        self.assertEqual([len(c.args[1]) for c in calls if not c.kwargs.get("fast")], [1, len(search.ladder)])
+        self.assertEqual([bool(c.kwargs.get("fast")) for c in calls], [False, True, False])
         for call in evaluated.call_args_list:
             self.assertIs(call.args[0], objective)
         self.assertEqual(baseline.to_dict(), before)

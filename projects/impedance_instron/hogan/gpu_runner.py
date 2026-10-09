@@ -412,7 +412,13 @@ def _rates(models: list[Runner], dts: np.ndarray, capacity: int) -> tuple[np.nda
 
 
 class _Group:
-    """Persistent worlds for up to ``candidates`` models over one shoe's trials."""
+    """Persistent worlds for up to ``candidates`` models over one shoe's trials.
+
+    Setting ``fast_shoe`` before :meth:`launch` advances lean elastic-Coulomb
+    shoes with fast-math kernels, which agree with the exact kernels only to
+    float32 intrinsic rounding. Both modes share the group's memory and keep
+    one captured graph each.
+    """
 
     def __init__(self, batch, indices, chains, shoes, initials, tasks, *, candidates=None, record=True, lean=True):
         self.indices = tuple(indices)
@@ -425,10 +431,11 @@ class _Group:
         self.dts = batch.dts[list(indices)].copy()
         self.durations = batch.durations_s[list(indices)]
         self.chunk_steps = min(batch.chunk_steps, int(self.steps.max()))
-        self.graph = None
+        self._graphs = {}
         self.max_steps = int(self.steps.max())
         self.active = self.candidates
         self.observers = []
+        self.fast_shoe = False
         d, w = self.device, self.world_count
         self.params = wp.array([_chain_params(chains[i]) for i in indices], dtype=ChainParams, device=d)
         self.models = wp.zeros(self.candidates, dtype=_Model, device=d)
@@ -481,7 +488,14 @@ class _Group:
         self.driven = wp.array(driven, dtype=int, device=d)
         self.rest = wp.array(np.asarray(bed.rest_length_m, dtype=np.float64)[driven], dtype=wp.float64, device=d)
         # Elastic-Coulomb ground beds advance only physics history in one fused pass.
-        self.lean = ground_shoe(foundation, bed.rest_length_m) if lean else None
+        # Without traces the float64 compression fraction only feeds the screen.
+        self.lean = (
+            ground_shoe(
+                foundation, bed.rest_length_m, exact_screen=record, compression_limit=self.config.compression_limit
+            )
+            if lean
+            else None
+        )
         self.carriers = SimpleNamespace(
             body_q=wp.zeros(w, dtype=wp.transform, device=d),
             body_qd=wp.zeros(w, dtype=wp.spatial_vector, device=d),
@@ -553,7 +567,14 @@ class _Group:
             device=d,
         )
         if self.lean is not None:
-            apply_ground_shoe(self.foundation, self.lean, self.carriers, data.fraction, data.invalid_compression)
+            apply_ground_shoe(
+                self.foundation,
+                self.lean,
+                self.carriers,
+                data.fraction,
+                data.invalid_compression,
+                fast=self.fast_shoe,
+            )
         else:
             self.foundation.apply(self.carriers, None, clear_body_force=True)
             wp.launch_tiled(
@@ -597,7 +618,8 @@ class _Group:
     def launch(self, models):
         self.set_models(models)
         self._reset()
-        if self.graph is None:
+        graph = self._graphs.get(self.fast_shoe)
+        if graph is None:
             # Settle compilation and shoe caches before capture, not at every step.
             self._step()
             wp.synchronize_device(self.device)
@@ -605,9 +627,9 @@ class _Group:
             with wp.ScopedCapture(device=self.device) as capture:
                 for _ in range(self.chunk_steps):
                     self._step()
-            self.graph = capture.graph
+            graph = self._graphs[self.fast_shoe] = capture.graph
         for _ in range(math.ceil(self.max_steps / self.chunk_steps)):
-            wp.capture_launch(self.graph)
+            wp.capture_launch(graph)
 
     def collect(self):
         data = self.data

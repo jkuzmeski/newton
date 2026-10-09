@@ -521,6 +521,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--chunk", type=int, default=128, help="LM candidates per batched GPU rollout")
     parser.add_argument("--central", action="store_true", help="LM central-difference Jacobian")
     parser.add_argument(
+        "--exact-jacobian",
+        action="store_true",
+        help="Integrate LM finite differences with exact shoe kernels instead of fast math on CUDA",
+    )
+    parser.add_argument(
         "--intrinsic-damping",
         type=float,
         nargs=3,
@@ -572,7 +577,12 @@ def main(argv: list[str] | None = None) -> None:
             baseline,
             trials,
             config=cfg,
-            search=LMConfig(iterations=args.iterations, chunk=args.chunk, central=args.central),
+            search=LMConfig(
+                iterations=args.iterations,
+                chunk=args.chunk,
+                central=args.central,
+                fast_jacobian=not args.exact_jacobian,
+            ),
             allow_incompatible=args.allow_incompatible,
             device=args.device,
         )

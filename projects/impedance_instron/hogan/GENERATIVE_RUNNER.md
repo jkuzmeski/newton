@@ -95,19 +95,27 @@ evaluation and generation, grouped by shoe instance.
 Elastic-Coulomb ground beds advance with the lean kernels in
 [`gpu_shoe.py`](gpu_shoe.py): they evaluate the shared material, Maxwell,
 surround, and friction laws but keep only physics history, reduce the carrier
-wrench in the shared fixed order, and skip a world's shoe while its history is
-pristine and no column is within 0.5 mm of the ground. They reproduce the
-generic fused-foundation traces bitwise. Chain and actuator arithmetic use
-float64; shared shoe physics use float32. The CPU backend remains the numerical
-reference. Both backends compute rollout diagnostics with the same summary
-function. The shoe allocates only its prescribed carrier and physical foundation
-state; report geometry comes directly from the artifact, without a second mesh or
-spring-replay simulation.
+wrench in the shared fixed order, and skip a world's shoe while every column
+clears the ground by 0.5 mm, both before touchdown and after toe-off. A lifted
+shoe counts the skipped steps and replays their unloaded history updates before
+contact resumes. The kernels reproduce the generic fused-foundation traces
+bitwise. Chain and actuator arithmetic use float64; shared shoe physics use
+float32. The CPU backend remains the numerical reference. Both backends compute
+rollout diagnostics with the same summary function. The shoe allocates only its
+prescribed carrier and physical foundation state; report geometry comes directly
+from the artifact, without a second mesh or spring-replay simulation.
+
+By default, the finite-difference rollouts and their own reference use the same
+shoe kernels compiled with fast math, which changes only float32 intrinsic
+rounding. Costs, damping-ladder proposals, `J^T r`, and accepted steps always use
+exact rollouts. `identify fit --exact-jacobian` integrates the differences
+exactly as well.
 
 On the same GPU, one full-dataset LM iteration (119 Jacobian and 5 ladder
-candidates over 98 stances) now takes about 25 s instead of about 245 s, with
-the same rollouts; the iteration history agrees with the saved run to float
-roundoff in the reductions.
+candidates over 98 stances) now takes about 15 s instead of about 245 s, or
+about 20 s with `--exact-jacobian`. With exact differences the iteration history
+agrees with the saved run to float roundoff in the reductions; with fast-math
+differences the first three costs agree to within 4e-5 relative.
 
 Each fit writes `runner.json`, split metrics and provenance in `summary.json`,
 `trace_NNN.npz`, reference-free `scenario_NNN.json`, and `report.html`.

@@ -34,10 +34,12 @@ uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_i
 Choose a new output directory. CUDA is the default; `--device cpu` selects the
 reference backend. Use `--limit-per-split 1 --iterations 1` for a small fit.
 The full baseline fit originally took about 82 minutes on an RTX A4000 Laptop
-GPU; the batched CUDA runtime replays the same rollouts at about 25 s per LM
-iteration. `--chunk` (default 128) sets candidates integrated concurrently; 128
-candidates over 98 stances need about 2.5 GB of GPU memory, so lower it on
-smaller GPUs. It changes speed, not results.
+GPU; the batched CUDA runtime now takes about 15 s per LM iteration. Its finite
+differences use fast-math shoe kernels while costs and accepted steps stay
+exact; `--exact-jacobian` replays the original rollouts exactly at about 20 s
+per iteration. `--chunk` (default 128) sets candidates integrated
+concurrently; 128 candidates over 98 stances need about 2.5 GB of GPU memory,
+so lower it on smaller GPUs. It changes speed, not results.
 
 Leg profiles need only `masses_kg` (3), `com_local_m` (3 by 2),
 `inertias_kg_m2` (3), and `provenance.inertial`. Old gain/limit fields are

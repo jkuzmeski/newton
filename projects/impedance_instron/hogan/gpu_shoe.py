@@ -9,10 +9,14 @@ carrier wrench and the driven-compression screen, so these kernels evaluate the
 same shared material, Maxwell, surround, and elastic-Coulomb laws for each
 column and keep everything else in registers or shared memory. Per column they
 read and write only surround, Maxwell, and bristle history; the wrench uses the
-shared fixed-order reduction. A world whose history is still pristine and whose
-columns all clear the ground is skipped, because the shared laws leave it
-exactly at rest. Carrier forces and histories are bitwise identical to
-:class:`FoundationFused`.
+shared fixed-order reduction. Carrier forces and histories are bitwise identical
+to :class:`FoundationFused`.
+
+Each world's shoe is skipped while every column clears the ground by
+:data:`FLIGHT_MARGIN_M`: before first contact its history is exactly zero, and
+after lift-off the shared laws only decay that history at zero load. Skipped
+lifted steps are counted and replayed column by column, with the same
+functions, if the shoe comes back down.
 """
 
 from __future__ import annotations
@@ -23,26 +27,135 @@ import warp as wp
 from projects.digital_shoe.contact import _surround_balance_pressures, contact_kinematics, normal_reaction
 from projects.digital_shoe.friction_maxwell import bristle_elastic_coulomb_step, elastic_coulomb_stiffness
 from projects.digital_shoe.friction_parameter_adapter import FrictionParameterAdapter
-from projects.digital_shoe.material import HYPERFOAM_ALPHA_FLOOR, maxwell_coefficients, maxwell_step, ogden_hill_term
+from projects.digital_shoe.material import HYPERFOAM_ALPHA_FLOOR, maxwell_coefficients, ogden_hill_term
 from projects.digital_shoe.runtime import FoundationParams, _pasternak_coupling
 
 # Match the shared float32 shoe runtime, not the float64 leg module.
 wp.set_module_options({"enable_backward": False, "fuse_fp": True})
+_EXACT = {"enable_backward": False, "fuse_fp": True, "fast_math": False}
+_FAST = {"enable_backward": False, "fuse_fp": True, "fast_math": True}
 
 _BLOCK = wp.constant(256)
 _ROWS = wp.constant(4)
 _Rows = wp.types.vector(4, float)
 _Wrench = wp.types.vector(6, float)
-_WRENCH_ROWS = wp.constant(24)
+_SURROUND_SLOTS = wp.constant(1024)
+_WARPS = wp.constant(8)
+_MAX_SLOT = wp.constant(96)
+_TOTAL_SLOT = wp.constant(104)
+_SCREEN_BLOCK = wp.constant(64)
 _ELASTIC_COULOMB = 9
 _DRIVEN = wp.constant(-2)
+_PRISTINE = wp.constant(0)
+_ACTIVE = wp.constant(1)
+_LIFTED = wp.constant(2)
 FLIGHT_MARGIN_M = 5.0e-4
-"""Rigid clearance below which a pristine shoe is still integrated [m]."""
+"""Rigid clearance above which a shoe's columns are treated as airborne [m]."""
+
+
+# Raw block-shared buffers: register tiles synchronize the block on every
+# cross-lane read, and tile assignment adds a barrier per call.
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+__syncthreads();
+#endif
+""")
+def _sync_threads(): ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+__shared__ float surround_buffer[2 * 1024];
+if (write) surround_buffer[index] = value;
+return surround_buffer[index];
+#else
+return value;
+#endif
+""")
+def _surround_shared(index: int, value: float, write: int) -> float: ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+__shared__ float wrench_buffer[24 * 256];
+if (write) wrench_buffer[index] = value;
+return wrench_buffer[index];
+#else
+return value;
+#endif
+""")
+def _wrench_shared(index: int, value: float, write: int) -> float: ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+__shared__ float reduce_buffer[128];
+if (write) reduce_buffer[index] = value;
+return reduce_buffer[index];
+#else
+return value;
+#endif
+""")
+def _reduce_shared(index: int, value: float, write: int) -> float: ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+__shared__ double reduce_buffer64[32];
+if (write) reduce_buffer64[index] = value;
+return reduce_buffer64[index];
+#else
+return value;
+#endif
+""")
+def _reduce_shared64(index: int, value: wp.float64, write: int) -> wp.float64: ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+float result = value;
+for (int offset = 16; offset > 0; offset >>= 1)
+    result = fmaxf(result, __shfl_xor_sync(0xffffffffu, result, offset));
+return result;
+#else
+return value;
+#endif
+""")
+def _warp_max(value: float) -> float: ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+double result = value;
+for (int offset = 16; offset > 0; offset >>= 1)
+    result = fmax(result, __shfl_xor_sync(0xffffffffu, result, offset));
+return result;
+#else
+return value;
+#endif
+""")
+def _warp_max64(value: wp.float64) -> wp.float64: ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+return __fmaf_rn(decay, q, __fmul_rn(__fmul_rn(overstress, ramp), __fsub_rn(peq, peq_prev)));
+#else
+return decay * q + overstress * ramp * (peq - peq_prev);
+#endif
+""")
+def _maxwell_update(q: float, peq: float, peq_prev: float, overstress: float, decay: float, ramp: float) -> float:
+    """Return :func:`maxwell_step` with the rounding the shared CUDA kernels compile to.
+
+    Fixing the fused multiply-add keeps contact and the lifted-step replay bitwise
+    equal regardless of how either call site would otherwise be contracted.
+    """
+    ...
 
 
 @wp.struct
 class GroundShoe:
-    """Persistent arrays the lean contact kernel reads from a fused foundation."""
+    """Persistent arrays the lean contact kernels read from a fused foundation."""
 
     enabled: wp.array[int]
     carrier: wp.array[wp.int32]
@@ -54,6 +167,8 @@ class GroundShoe:
     rest_len: wp.array[wp.float32]
     area: wp.array[wp.float32]
     screen_rest: wp.array[wp.float64]
+    exact_screen: int
+    screen_limit: float
     world_params: wp.array[FoundationParams]
     world_dt: wp.array[wp.float32]
     q_state: wp.array[wp.float32]
@@ -80,7 +195,9 @@ class GroundShoe:
     carrier_bond: int
     sweeps: int
     surround_lanes: int
-    touched: wp.array[int]
+    phase: wp.array[int]
+    pending: wp.array[int]
+    dormancy: int
     flight_columns: wp.array[int]
 
 
@@ -112,8 +229,10 @@ def _relax_free_column(shoe: GroundShoe, w: int, lane: int, pose: wp.transform):
 
     Driven columns hold their old value in the first sweep and their rigid
     compression afterwards, so each lane keeps both for its driven neighbours and
-    only undriven columns enter the shared tile. Sums keep the original side
-    order, which leaves every compression bitwise unchanged.
+    only undriven columns enter the shared exchange. Sums keep the original side
+    order, unchanged compressions reuse their pressures, and a column without
+    rigid penetration is clamped to zero by the carrier bond, so every
+    compression stays bitwise unchanged.
     """
     count = shoe.column_count
     p = shoe.world_params[w]
@@ -152,41 +271,49 @@ def _relax_free_column(shoe: GroundShoe, w: int, lane: int, pose: wp.transform):
                     old[side] = shoe.surround[w * count + j]
                     neighbor = wp.transform_point(pose, shoe.anchor_local[j])
                     new[side] = wp.max(shoe.z_free_rigid[j] - neighbor[2], 0.0)
+    upper = shoe.max_strain * thickness
+    if shoe.carrier_bond != 0:
+        upper = wp.clamp(rigid, 0.0, upper)
+    pinned = shoe.carrier_bond != 0 and upper == 0.0
+    step = 1.0e-3 * thickness
+    cached_c = float(-1.0)
+    cached_peq = float(0.0)
+    cached_ahead = float(0.0)
     for sweep in range(shoe.sweeps):
-        shared = wp.tile(c)
+        # Ping-pong buffers need one barrier per sweep: a buffer is rewritten only
+        # after every lane has passed the following sweep's barrier.
+        buffer = (sweep % 2) * _SURROUND_SLOTS
+        _surround_shared(buffer + lane, c, 1)
+        _sync_threads()
         next_c = c
         if column >= 0:
-            pull = float(0.0)
-            for side in range(4):
-                slot = slots[side]
-                if slot != -1:
-                    value = new[side]
-                    if slot >= 0:
-                        value = shared[slot]
-                    elif sweep == 0:
-                        value = old[side]
-                    pull += couplings[side] * (value - c)
-            if c == 0.0:
-                peq = shoe.zero_pressure[i]
-                next_c = _surround_balance_pressures(
-                    c,
-                    rigid,
-                    pull,
-                    coupling_sum,
-                    thickness,
-                    overstress,
-                    gain,
-                    column_area,
-                    shoe.attachment,
-                    shoe.max_strain,
-                    relaxation,
-                    shoe.carrier_bond,
-                    peq[0],
-                    peq[1],
-                )
+            if pinned:
+                next_c = 0.0
             else:
-                # The Newton step of contact.surround_balance with the shared material law.
-                step = 1.0e-3 * thickness
+                pull = float(0.0)
+                for side in range(4):
+                    slot = slots[side]
+                    if slot != -1:
+                        value = new[side]
+                        if slot >= 0:
+                            value = _surround_shared(buffer + slot, 0.0, 0)
+                        elif sweep == 0:
+                            value = old[side]
+                        pull += couplings[side] * (value - c)
+                peq = float(0.0)
+                ahead = float(0.0)
+                if c == 0.0:
+                    cached = shoe.zero_pressure[i]
+                    peq = cached[0]
+                    ahead = cached[1]
+                else:
+                    # The Newton step of contact.surround_balance with the shared material law.
+                    if c != cached_c:
+                        cached_c = c
+                        cached_peq = _hyperfoam(c / thickness, p)
+                        cached_ahead = _hyperfoam((c + step) / thickness, p)
+                    peq = cached_peq
+                    ahead = cached_ahead
                 next_c = _surround_balance_pressures(
                     c,
                     rigid,
@@ -200,48 +327,107 @@ def _relax_free_column(shoe: GroundShoe, w: int, lane: int, pose: wp.transform):
                     shoe.max_strain,
                     relaxation,
                     shoe.carrier_bond,
-                    _hyperfoam(c / thickness, p),
-                    _hyperfoam((c + step) / thickness, p),
+                    peq,
+                    ahead,
                 )
         c = next_c
     if column >= 0:
         shoe.surround[i] = c
 
 
-@wp.kernel(module="unique")
 def _ground_surround(shoe: GroundShoe, body_q: wp.array[wp.transform]):
     """Relax one world's undriven columns before :func:`_ground_contact` reads them.
 
-    Launch with one lane per undriven column, rounded up to whole warps. A unique
-    module keeps that bed-specific block size from recompiling the contact kernel.
+    Launch with one lane per undriven column, rounded up to whole warps.
     """
     w, lane = wp.tid()
-    if shoe.enabled[w] == 0 or shoe.touched[w] == 0:
+    if shoe.enabled[w] == 0 or shoe.phase[w] != _ACTIVE:
         return
     _relax_free_column(shoe, w, lane, body_q[shoe.carrier[w]])
 
 
-@wp.kernel
-def _flight_screen(shoe: GroundShoe, body_q: wp.array[wp.transform]):
-    """Mark a world touched once any candidate column comes within the flight margin.
+@wp.func
+def _replay_lifted(shoe: GroundShoe, w: int, lane: int, steps: int):
+    """Apply ``steps`` skipped lifted updates to every column, exactly as contact would.
 
-    Until then its shoe history is exactly zero and no column penetrates, so the
-    shared laws return zero compression, pressure, traction and history updates;
-    the contact kernels skip such worlds and write the zero wrench directly.
+    With all columns airborne, compression and normal reaction are exactly zero,
+    the carrier bond clamps the surround to zero, and the bristle law takes its
+    unloaded branch, which does not read velocity.
     """
-    w = wp.tid()
-    if shoe.enabled[w] == 0 or shoe.touched[w] != 0:
+    count = shoe.column_count
+    p = shoe.world_params[w]
+    dt = shoe.world_dt[w]
+    decay, ramp = maxwell_coefficients(dt, p.tau_s)
+    peq_zero = shoe.zero_pressure[w * count][0]
+    shear = p.g_eq + p.g_eq2
+    mu = shoe.settings[w, 1]
+    kt_scale = shoe.settings[w, 2]
+    release = shoe.settings[w, 5]
+    for column in range(lane, count, _SCREEN_BLOCK):
+        i = w * count + column
+        q = shoe.q_state[i]
+        peq_old = shoe.peq_prev[i]
+        z = shoe.deflection[i]
+        s = shoe.stuck[i]
+        elapsed = shoe.dwell[i]
+        kt = elastic_coulomb_stiffness(shear, shoe.area[column], shoe.rest_len[column]) * kt_scale
+        for _step in range(steps):
+            q = _maxwell_update(q, peq_zero, peq_old, p.overstress, decay, ramp)
+            peq_old = peq_zero
+            _force, _jacobian, z, s, elapsed = bristle_elastic_coulomb_step(
+                wp.vec2(0.0), dt, 0.0, kt, mu, release, z, s, elapsed
+            )
+        shoe.q_state[i] = q
+        shoe.peq_prev[i] = peq_old
+        shoe.deflection[i] = z
+        shoe.stuck[i] = s
+        shoe.dwell[i] = elapsed
+        if shoe.has_surround != 0:
+            shoe.surround[i] = 0.0
+
+
+def _flight_screen(shoe: GroundShoe, body_q: wp.array[wp.transform]):
+    """Advance each world's pristine/active/lifted shoe phase from its carrier pose.
+
+    A world is airborne when every flight-candidate column clears the ground by
+    :data:`FLIGHT_MARGIN_M`, which bounds every column's clearance (see
+    :func:`flight_columns`). Pristine worlds start contact on first approach;
+    active worlds become lifted when airborne, if dormancy is enabled; lifted
+    worlds count skipped steps and replay them before contact resumes.
+    """
+    w, lane = wp.tid()
+    if shoe.enabled[w] == 0:
         return
+    phase = shoe.phase[w]
+    if phase == _ACTIVE and shoe.dormancy == 0:
+        return
+    pending = shoe.pending[w]
     pose = body_q[shoe.carrier[w]]
-    for index in range(shoe.flight_columns.shape[0]):
+    near = int(0)
+    for index in range(lane, shoe.flight_columns.shape[0], _SCREEN_BLOCK):
         column = shoe.flight_columns[index]
         world = wp.transform_point(pose, shoe.anchor_local[column])
         if shoe.z_free_rigid[column] - world[2] > -FLIGHT_MARGIN_M:
-            shoe.touched[w] = 1
-            return
+            near = 1
+    # Every lane joins the reduction, which also orders the reads above before any write.
+    near = wp.tile_max(wp.tile(near))[0]
+    if phase == _PRISTINE:
+        if near != 0 and lane == 0:
+            shoe.phase[w] = _ACTIVE
+    elif phase == _ACTIVE:
+        if near == 0 and lane == 0:
+            shoe.phase[w] = _LIFTED
+            shoe.pending[w] = 1
+    elif near == 0:
+        if lane == 0:
+            shoe.pending[w] = pending + 1
+    else:
+        _replay_lifted(shoe, w, lane, pending)
+        if lane == 0:
+            shoe.phase[w] = _ACTIVE
+            shoe.pending[w] = 0
 
 
-@wp.kernel(launch_bounds=(256, 2))
 def _ground_contact(
     shoe: GroundShoe,
     body_q: wp.array[wp.transform],
@@ -254,7 +440,8 @@ def _ground_contact(
     w, lane = wp.tid()
     if shoe.enabled[w] == 0:
         return
-    if shoe.touched[w] == 0:
+    if shoe.phase[w] != _ACTIVE:
+        # Airborne columns carry zero compression and zero traction.
         if lane == 0:
             body_f[shoe.carrier[w]] = wp.spatial_vector(wp.vec3(0.0), wp.vec3(0.0))
             fraction[w] = wp.float64(0.0)
@@ -273,12 +460,9 @@ def _ground_contact(
     kt_scale = shoe.settings[w, 2]
     release = shoe.settings[w, 5]
     shear = p.g_eq + p.g_eq2
-    # Zero strain means unit stretch for every thickness, so one value serves all columns.
-    peq_zero = _hyperfoam(0.0, p)
-    # Force and torque components per column, reduced in the shared fixed order below.
-    # Cross-lane reads must come from shared storage; register-tile extraction
-    # synchronizes the block per element.
-    columns = wp.tile_empty(shape=(_WRENCH_ROWS, _BLOCK), dtype=float, storage="shared")
+    # Zero strain means unit stretch for every thickness, so the generic path's cached
+    # zero-compression pressure serves all columns.
+    peq_zero = shoe.zero_pressure[w * count][0]
     driven_comp = _Rows(-1.0)
     largest32 = float(0.0)
     nonfinite = int(0)
@@ -306,7 +490,7 @@ def _ground_contact(
                 peq = _hyperfoam(comp / thickness, p)
             q_old = shoe.q_state[i]
             peq_old = shoe.peq_prev[i]
-            qn = maxwell_step(q_old, peq, peq_old, p.overstress, decay, ramp)
+            qn = _maxwell_update(q_old, peq, peq_old, p.overstress, decay, ramp)
             # Idle histories stay +0.0, so skipping equal stores leaves every bit unchanged.
             if qn != q_old:
                 shoe.q_state[i] = qn
@@ -349,28 +533,41 @@ def _ground_contact(
             for k in range(3):
                 wrench[k] = force[k]
                 wrench[k + 3] = torque[k]
-        wp.tile_assign(columns, wp.tile(wrench), offset=(6 * row, 0))
+        for k in range(6):
+            _wrench_shared((6 * row + k) * _BLOCK + lane, wrench[k], 1)
+    _sync_threads()
     # _foundation_partial sums stride group g over columns g, g + G, ... and
     # vec3 addition is per component, so one lane per (component, group) keeps
     # every rounding step of the shared reduction.
     groups = shoe.groups
-    partial = float(0.0)
     if lane < 6 * groups:
+        partial = float(0.0)
         component = lane // groups
         for column in range(lane % groups, count, groups):
-            partial += columns[6 * (column // _BLOCK) + component, column % _BLOCK]
-    partials = wp.tile_empty(shape=_BLOCK, dtype=float, storage="shared")
-    wp.tile_assign(partials, wp.tile(partial), offset=(0,))
+            partial += _wrench_shared((6 * (column // _BLOCK) + component) * _BLOCK + column % _BLOCK, 0.0, 0)
+        _reduce_shared(lane, partial, 1)
     # The float32 estimate is within a few ulps of the float64 ratio, so only
     # columns near its maximum can hold the exact maximum; divide just those in
     # float64 (slow on this hardware), as the CPU does with the artifact
-    # thickness. Every lane runs the register-tile extractions together.
+    # thickness. Without traces only the screen decision matters, which the
+    # estimate settles unless it is near the limit. Maxima are order independent.
     key = largest32
     if nonfinite != 0:
         key = wp.inf
-    estimate_max = wp.tile_max(wp.tile(key))[0]
-    exact = wp.float64(0.0)
-    if estimate_max > 0.0 and estimate_max < wp.inf:
+    key = _warp_max(key)
+    if lane % 32 == 0:
+        _reduce_shared(_MAX_SLOT + lane // 32, key, 1)
+    _sync_threads()
+    estimate_max = float(0.0)
+    for warp in range(_WARPS):
+        estimate_max = wp.max(estimate_max, _reduce_shared(_MAX_SLOT + warp, 0.0, 0))
+    if lane < 6:
+        value = float(0.0)
+        for group in range(groups):
+            value += _reduce_shared(lane * groups + group, 0.0, 0)
+        _reduce_shared(_TOTAL_SLOT + lane, value, 1)
+    exact = wp.float64(estimate_max)
+    if estimate_max > 0.0 and estimate_max < wp.inf and (shoe.exact_screen != 0 or estimate_max >= shoe.screen_limit):
         cutoff = estimate_max * (1.0 - 1.0e-5)
         largest = wp.float64(0.0)
         for row in range(_ROWS):
@@ -379,19 +576,36 @@ def _ground_contact(
                 column = row * _BLOCK + lane
                 if comp / shoe.rest_len[column] >= cutoff:
                     largest = wp.max(largest, wp.float64(comp) / shoe.screen_rest[column])
-        exact = wp.tile_max(wp.tile(largest))[0]
+        largest = _warp_max64(largest)
+        if lane % 32 == 0:
+            _reduce_shared64(lane // 32, largest, 1)
+        _sync_threads()
+        exact = wp.float64(0.0)
+        for warp in range(_WARPS):
+            exact = wp.max(exact, _reduce_shared64(warp, wp.float64(0.0), 0))
+    _sync_threads()
     if lane == 0:
         total = wp.spatial_vector(wp.vec3(0.0), wp.vec3(0.0))
         for k in range(6):
-            value = float(0.0)
-            for group in range(groups):
-                value += partials[k * groups + group]
-            total[k] = value
+            total[k] = _reduce_shared(_TOTAL_SLOT + k, 0.0, 0)
         body_f[body] = wp.spatial_vector(wp.vec3(0.0), wp.vec3(0.0)) + total
+        if estimate_max == wp.inf:
+            exact = wp.float64(0.0)
         fraction[w] = exact
         invalid[w] = int(estimate_max == wp.inf)
 
 
+def _kernels(options: dict) -> tuple:
+    # One unique module per kernel keeps each launch's block size from recompiling
+    # the others; module options, including fast math, are part of its hash.
+    return (
+        wp.kernel(_flight_screen, module="unique", module_options=options),
+        wp.kernel(_ground_surround, module="unique", module_options=options),
+        wp.kernel(_ground_contact, module="unique", module_options=options, launch_bounds=(256, 2)),
+    )
+
+
+_KERNELS = {False: _kernels(_EXACT), True: _kernels(_FAST)}
 _FLIGHT_COLUMNS: dict[bytes, np.ndarray] = {}
 
 
@@ -423,7 +637,9 @@ def flight_columns(foundation, *, step_rad: float = 1.0e-3, band_m: float = 2.0e
     return _FLIGHT_COLUMNS[key]
 
 
-def ground_shoe(foundation, screen_rest) -> GroundShoe | None:
+def ground_shoe(
+    foundation, screen_rest, *, exact_screen: bool = True, compression_limit: float = 1.0
+) -> GroundShoe | None:
     """Return lean-contact arrays, or ``None`` when the foundation needs the generic path.
 
     Eligible beds are fused-CUDA, ground-plane, at most 1,024 columns, with the
@@ -432,6 +648,10 @@ def ground_shoe(foundation, screen_rest) -> GroundShoe | None:
     Args:
         foundation: Fused foundation whose state the lean kernel advances.
         screen_rest: Float64 rest thickness per column [m] for the compression screen.
+        exact_screen: Always report the exact float64 driven-compression fraction.
+            Otherwise it is exact only near ``compression_limit``, which keeps
+            every screen decision unchanged.
+        compression_limit: Screen limit on driven compression over rest thickness.
     """
     adapter = foundation.friction_solver
     if (
@@ -442,6 +662,8 @@ def ground_shoe(foundation, screen_rest) -> GroundShoe | None:
         or not np.all(adapter.settings.numpy()[:, 0] == _ELASTIC_COULOMB)
         # The float32 screen prefilter needs representable positive thicknesses.
         or np.any(foundation.rest_len.numpy() <= 0.0)
+        # The block reduction reserves six components per stride group.
+        or foundation.reduction_groups > 16
     ):
         return None
     d = foundation.device
@@ -468,6 +690,9 @@ def ground_shoe(foundation, screen_rest) -> GroundShoe | None:
     shoe.dwell = foundation.tangent_dwell
     shoe.ground_height = float(foundation.ground_height_m)
     shoe.screen_rest = wp.array(np.asarray(screen_rest, dtype=np.float64), dtype=wp.float64, device=d)
+    shoe.exact_screen = int(bool(exact_screen))
+    # A float32 estimate this far below the limit cannot round across it.
+    shoe.screen_limit = float(compression_limit) - 1.0e-3
     driven = foundation.driven.numpy()
     free = np.flatnonzero(driven == 0)
     # One lane per undriven column, in whole warps; larger surrounds keep the
@@ -493,19 +718,43 @@ def ground_shoe(foundation, screen_rest) -> GroundShoe | None:
         shoe.max_strain = float(cfg.max_strain)
         shoe.carrier_bond = int(bool(cfg.carrier_bond))
         shoe.sweeps = int(cfg.sweeps)
-    shoe.touched = wp.zeros(foundation.world_count, dtype=int, device=d)
+    shoe.phase = wp.zeros(foundation.world_count, dtype=int, device=d)
+    shoe.pending = wp.zeros(foundation.world_count, dtype=int, device=d)
+    # Lifted replay assumes the carrier bond zeroes an airborne surround, which the
+    # generic sweep fallback would otherwise have to skip as well.
+    shoe.dormancy = int(not foundation.free_column_count or (shoe.fused_surround and shoe.carrier_bond != 0))
     shoe.flight_columns = wp.array(flight_columns(foundation), dtype=int, device=d)
     return shoe
 
 
 def reset_ground_shoe(shoe: GroundShoe) -> None:
-    """Mark every world pristine after :meth:FoundationFused.reset cleared its history."""
-    shoe.touched.zero_()
+    """Mark every world pristine after :meth:`FoundationFused.reset` cleared its history."""
+    shoe.phase.zero_()
+    shoe.pending.zero_()
 
 
-def apply_ground_shoe(foundation, shoe: GroundShoe, state, fraction: wp.array, invalid: wp.array) -> None:
-    """Relax the passive surround, then advance lean contact for enabled worlds."""
-    wp.launch(_flight_screen, dim=foundation.world_count, inputs=[shoe, state.body_q], device=foundation.device)
+def apply_ground_shoe(
+    foundation, shoe: GroundShoe, state, fraction: wp.array, invalid: wp.array, *, fast: bool = False
+) -> None:
+    """Advance shoe phases, relax the passive surround, then advance lean contact.
+
+    Args:
+        foundation: Fused foundation that owns the shoe state.
+        shoe: Lean-contact arrays from :func:`ground_shoe`.
+        state: Carrier state with ``body_q``, ``body_qd`` and ``body_f``.
+        fraction: Driven-compression screen per world, written here.
+        invalid: Nonfinite-compression flag per world, written here.
+        fast: Compile the shared laws with fast math. Results then agree with the
+            exact kernels only to float32 rounding of the approximate intrinsics.
+    """
+    screen, surround, contact = _KERNELS[bool(fast)]
+    wp.launch_tiled(
+        screen,
+        dim=foundation.world_count,
+        block_dim=_SCREEN_BLOCK,
+        inputs=[shoe, state.body_q],
+        device=foundation.device,
+    )
     if foundation.free_column_count and not shoe.fused_surround:
         foundation._relax_surround_block(state, None, mask_worlds=True)
     else:
@@ -513,14 +762,14 @@ def apply_ground_shoe(foundation, shoe: GroundShoe, state, fraction: wp.array, i
         foundation._refresh_surround_constants(None)
         if shoe.fused_surround:
             wp.launch_tiled(
-                _ground_surround,
+                surround,
                 dim=foundation.world_count,
                 block_dim=shoe.surround_lanes,
                 inputs=[shoe, state.body_q],
                 device=foundation.device,
             )
     wp.launch_tiled(
-        _ground_contact,
+        contact,
         dim=foundation.world_count,
         block_dim=_BLOCK,
         inputs=[shoe, state.body_q, state.body_qd, state.body_f, fraction, invalid],

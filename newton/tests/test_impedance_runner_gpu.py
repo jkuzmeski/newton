@@ -365,6 +365,115 @@ class TestRunnerGpu(unittest.TestCase):
             self.assertEqual(grf[0], 0.0)
             self.assertGreater(grf.max(), 1.0)
 
+    def test_lifted_shoe_replays_skipped_history_on_recontact(self):
+        """Skip airborne steps after contact and replay them bitwise before landing again.
+
+        Prescribed carrier poses press, lift, and re-press a 600-column bed in
+        staggered worlds, so pristine, active, lifted, and waking worlds coexist
+        in one launch. Wrenches, compression screens, and every shoe history match
+        the generic fused foundation at each step.
+        """
+        shoe, models = self._grid_shoe(), _models()
+        initials = [_initial() for _ in range(3)]
+        lean = self.batch(initials, [0.01] * 3, models, shoes=[shoe] * 3)
+        with patch.object(gpu_runner, "ground_shoe", return_value=None):
+            generic = self.batch(initials, [0.01] * 3, models, shoes=[shoe] * 3)
+        groups = lean._groups[0], generic._groups[0]
+        worlds = groups[0].world_count
+        for group in groups:
+            group.set_models(models)
+            group._reset()
+        names = ("q_state", "peq_prev", "surround_compression", "tangent_deflection", "tangent_stuck", "tangent_dwell")
+        phases = set()
+        for step in range(90):
+            poses = np.zeros((worlds, 7), dtype=np.float32)
+            twists = np.zeros((worlds, 6), dtype=np.float32)
+            for w in range(worlds):
+                # Pristine flight, pressed, lifted 8 mm, then pressed again, staggered per world.
+                airborne = step < 2 * w or 25 + 3 * w <= step < 55 + 2 * w
+                height = 0.108 if airborne else 0.097 - 0.00002 * step
+                half = 0.02 * np.sin(0.1 * step + w)
+                poses[w] = [0.001 * step, 0.0, height, 0.0, -np.sin(half), 0.0, np.cos(half)]
+                twists[w] = [0.3 + 0.05 * w, 0.0, -0.02, 0.0, 0.4, 0.0]
+            screens = []
+            for group in groups:
+                group.carriers.body_q.assign(poses)
+                group.carriers.body_qd.assign(twists)
+                if group.lean is not None:
+                    gpu_runner.apply_ground_shoe(
+                        group.foundation,
+                        group.lean,
+                        group.carriers,
+                        group.data.fraction,
+                        group.data.invalid_compression,
+                    )
+                else:
+                    group.foundation.apply(group.carriers, None, clear_body_force=True)
+                    wp.launch_tiled(
+                        gpu_runner._compression,
+                        dim=worlds,
+                        block_dim=32,
+                        inputs=[
+                            group.foundation.column_count,
+                            group.driven,
+                            group.rest,
+                            group.foundation.compression,
+                            group.data,
+                        ],
+                    )
+                screens.append((group.carriers.body_f.numpy(), group.data.fraction.numpy()))
+            phase = groups[0].lean.phase.numpy()
+            phases.update(phase.tolist())
+            np.testing.assert_array_equal(screens[0][0], screens[1][0], err_msg=f"wrench, step {step}")
+            np.testing.assert_array_equal(screens[0][1], screens[1][1], err_msg=f"screen, step {step}")
+            if not np.any(phase == 2):
+                # Lifted worlds defer their history until they wake.
+                for name in names:
+                    np.testing.assert_array_equal(
+                        getattr(groups[0].foundation, name).numpy(),
+                        getattr(groups[1].foundation, name).numpy(),
+                        err_msg=f"{name}, step {step}",
+                    )
+        self.assertEqual(phases, {0, 1, 2})
+        self.assertTrue(np.all(groups[0].lean.phase.numpy() == 1))
+        self.assertGreater(np.abs(groups[0].carriers.body_f.numpy()[:, 2]).min(), 1.0)
+
+    def test_fast_math_shoe_tracks_exact_kernels(self):
+        """Keep fast-math shoe wrenches and compression screens within float32 rounding of the exact kernels."""
+        shoe, models = self._grid_shoe(), _models()
+        initials = [_initial() for _ in range(2)]
+        groups = [self.batch(initials, [0.01] * 2, models, shoes=[shoe] * 2)._groups[0] for _ in range(2)]
+        for group in groups:
+            self.assertIsNotNone(group.lean)
+            group.set_models(models)
+            group._reset()
+        worlds = groups[0].world_count
+        for step in range(60):
+            poses = np.zeros((worlds, 7), dtype=np.float32)
+            twists = np.zeros((worlds, 6), dtype=np.float32)
+            for w in range(worlds):
+                half = 0.02 * np.sin(0.1 * step + w)
+                poses[w] = [0.001 * step, 0.0, 0.098 - 0.00003 * step, 0.0, -np.sin(half), 0.0, np.cos(half)]
+                twists[w] = [0.3 + 0.05 * w, 0.0, -0.03, 0.0, 0.4, 0.0]
+            results = []
+            for group, fast_math in zip(groups, (False, True), strict=True):
+                group.carriers.body_q.assign(poses)
+                group.carriers.body_qd.assign(twists)
+                gpu_runner.apply_ground_shoe(
+                    group.foundation,
+                    group.lean,
+                    group.carriers,
+                    group.data.fraction,
+                    group.data.invalid_compression,
+                    fast=fast_math,
+                )
+                results.append((group.carriers.body_f.numpy(), group.data.fraction.numpy()))
+            (exact, exact_fraction), (fast, fast_fraction) = results
+            scale = np.abs(exact).max()
+            np.testing.assert_allclose(fast, exact, rtol=0.0, atol=1e-4 * scale, err_msg=f"wrench, step {step}")
+            np.testing.assert_allclose(fast_fraction, exact_fraction, rtol=0.0, atol=1e-4, err_msg=f"step {step}")
+        self.assertGreater(scale, 1.0)
+
     def test_validation_and_group_bound(self):
         """Reject invalid batches and initial torques before launching candidates."""
         initial, models = _initial(), _models()

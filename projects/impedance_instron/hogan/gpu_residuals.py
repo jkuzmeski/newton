@@ -365,8 +365,12 @@ class GpuResiduals:
             self._groups[key] = (group, observer)
         return self._groups[key]
 
-    def evaluate(self, models: list[Runner], rows, *, metrics: bool = False):
+    def evaluate(self, models: list[Runner], rows, *, metrics: bool = False, fast: bool = False):
         """Integrate ``models`` and write each residual vector into its ``rows`` entry.
+
+        With ``fast``, lean shoes use fast-math kernels, which agree with the exact
+        rollouts only to float32 intrinsic rounding (see
+        :func:`.gpu_shoe.apply_ground_shoe`).
 
         Returns:
             ``(completed, sumsq, motion)``: whether every trial completed, the
@@ -386,6 +390,7 @@ class GpuResiduals:
         for index, indices in enumerate(self.group_trial_indices):
             capacity = min(n, self.chunk)
             group, observer = self._group(index, capacity)
+            group.fast_shoe = bool(fast)
             for start in range(0, n, capacity):
                 block = models[start : start + capacity]
                 chosen = np.zeros(capacity, dtype=np.int32)
