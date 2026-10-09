@@ -1,0 +1,1 @@
+Set the F01 subject mass to 66.5 kg and height to 1.65 m in the Visual3D model, and align the trial mass exports and stance-selection mass override. Regenerate derived datasets to use these subject measurements.
