@@ -90,6 +90,107 @@ def initialize(time_s, q, *, com_velocity_m_s=None, chain: Chain | None = None) 
     return State(q[-1], velocity, phase_rad=phase)
 
 
+def _biquad(x: np.ndarray, coefficients: tuple[float, ...]) -> np.ndarray:
+    """Run one transposed direct-form-II biquad pass from zero state over rows of ``x``.
+
+    :mod:`.gpu_residuals` evaluates the same recurrence in the same operation
+    order, so both backends observe a trajectory identically.
+    """
+    b0, b1, b2, a1, a2 = coefficients
+    y = np.empty_like(x)
+    z1 = np.zeros(x.shape[1])
+    z2 = np.zeros(x.shape[1])
+    for k in range(len(x)):
+        value = x[k]
+        out = b0 * value + z1
+        z1 = b1 * value - a1 * out + z2
+        z2 = b2 * value - a2 * out
+        y[k] = out
+    return y
+
+
+@dataclass(frozen=True)
+class ForceObservation:
+    """Measurement model of a low-passed, gated force-plate GRF target.
+
+    Visual3D exports the plate force through a zero-lag second-order
+    Butterworth (run forward and backward) and zeroes both components where the
+    filtered vertical force is below a small gate. The F01 exports use a 20 Hz
+    cutoff, the running convention; exports before 2026-10-09 used 6 Hz. A
+    physical contact force has content above that bandwidth that such a target
+    cannot contain, and the smoothing moves the target's loading earlier and its
+    unloading later. Passing simulated GRF through the same processing compares
+    like with like. The observation only affects scores and residuals, never the
+    dynamics.
+
+    Both passes start from zero filter state, which is exact when the simulated
+    window starts and ends without contact.
+
+    A target filtered this way says nothing about force content above its
+    bandwidth, so fitting the observed force alone leaves stance vibration
+    unconstrained. ``vibration_weight`` penalizes that content explicitly, as
+    the physical minus observed force, on the GRF error scale.
+
+    Args:
+        cutoff_hz: Nominal cutoff of the two-pass filter [Hz]. Each pass uses
+            Winter's correction so that the combined response is -3 dB here.
+        gate_n: Filtered vertical force below which both components are zeroed [N].
+        vibration_weight: Weight of the physical force above the observation
+            bandwidth relative to the GRF error; zero fits only the observed force.
+    """
+
+    cutoff_hz: float = 20.0
+    gate_n: float = 1.0
+    vibration_weight: float = 1.0
+
+    def __post_init__(self):
+        if not np.isfinite(self.cutoff_hz) or self.cutoff_hz <= 0:
+            raise ValueError("Force observation cutoff must be finite and positive")
+        if not np.isfinite(self.gate_n) or self.gate_n < 0:
+            raise ValueError("Force observation gate must be finite and nonnegative")
+        if not np.isfinite(self.vibration_weight) or self.vibration_weight < 0:
+            raise ValueError("Force vibration weight must be finite and nonnegative")
+
+    def coefficients(self, dt_s: float) -> tuple[float, float, float, float, float]:
+        """Return one pass's ``b0, b1, b2, a1, a2`` at timestep ``dt_s`` [s]."""
+        if not np.isfinite(dt_s) or dt_s <= 0 or self.cutoff_hz * dt_s >= 0.25:
+            raise ValueError("Force observation needs a positive timestep well below the cutoff period")
+        # Winter's two-pass correction applied to the prewarped second-order cutoff.
+        omega = math.tan(math.pi * self.cutoff_hz * dt_s) / (math.sqrt(2.0) - 1.0) ** 0.25
+        norm = 1.0 / (1.0 + math.sqrt(2.0) * omega + omega * omega)
+        b0 = omega * omega * norm
+        return (
+            b0,
+            2.0 * b0,
+            b0,
+            2.0 * (omega * omega - 1.0) * norm,
+            (1.0 - math.sqrt(2.0) * omega + omega * omega) * norm,
+        )
+
+    def apply(self, grf_n, dt_s: float) -> np.ndarray:
+        """Return the observed horizontal/vertical GRF [N], shape [steps, 2]."""
+        force = np.asarray(grf_n, dtype=float)
+        if force.ndim != 2 or force.shape[1] != 2:
+            raise ValueError("GRF must have shape [steps, 2]")
+        coefficients = self.coefficients(dt_s)
+        observed = _biquad(_biquad(force, coefficients)[::-1], coefficients)[::-1].copy()
+        observed[observed[:, 1] < self.gate_n] = 0.0
+        return observed
+
+
+def observed_grf(trace: dict, trial: Trial) -> np.ndarray:
+    """Return simulated GRF as the trial's target was measured [N], shape [steps, 2]."""
+    grf = trace["grf_n"]
+    if trial.force_observation is None or not len(grf):
+        return grf
+    return trial.force_observation.apply(grf, float(trace["time_s"][1] - trace["time_s"][0]))
+
+
+def vibration_weight(trial: Trial) -> float:
+    """Return the weight of simulated GRF content the trial's target cannot observe."""
+    return 0.0 if trial.force_observation is None else trial.force_observation.vibration_weight
+
+
 @dataclass
 class Trial:
     """Offline trial boundary separating predictive inputs from fitting targets."""
@@ -109,6 +210,9 @@ class Trial:
     grf_n: np.ndarray
     """Measured horizontal/vertical GRF [N], shape [force_frames, 2]."""
     provenance: dict
+    force_observation: ForceObservation | None = None
+    """How ``grf_n`` was processed; simulated GRF is observed the same way before
+    scoring. ``None`` compares the raw simulated contact force."""
 
     def __post_init__(self):
         self.time_s = np.asarray(self.time_s, dtype=float).copy()
@@ -131,6 +235,8 @@ class Trial:
             raise ValueError("Trial clocks must increase strictly")
         if self.force_time_s[0] > 0 or self.force_time_s[-1] < self.time_s[-1]:
             raise ValueError("Trial forces must cover the prediction horizon")
+        if self.force_observation is not None and not isinstance(self.force_observation, ForceObservation):
+            raise ValueError("force_observation must be a ForceObservation or None")
 
     @property
     def duration_s(self) -> float:
@@ -200,6 +306,7 @@ def load_trials(
     height_offset_m: float = 0.0,
     friction_model: str = "elastic_coulomb",
     limit_per_split: int | None = None,
+    force_observation: ForceObservation | None = None,
 ) -> list[Trial]:
     """Load existing or multi-condition datasets without cached tracking plans.
 
@@ -209,6 +316,8 @@ def load_trials(
     runner; optional ``subject_id`` values must agree. Speed is explicit task
     metadata, never inferred from future movement. Existing source files are
     fingerprinted in the output; declared shared-asset hashes are checked.
+    ``force_observation`` declares how the GRF targets were processed; it is
+    attached to every trial and only changes scoring.
     """
     root = Path(dataset).resolve()
     manifest_path = root / "manifest.json"
@@ -308,8 +417,10 @@ def load_trials(
                     ),
                     "rest_of_body": asdict(rest),
                     "friction_model": friction_model,
+                    "force_observation": None if force_observation is None else asdict(force_observation),
                     "compatibility": qc,
                 },
+                force_observation,
             )
         )
         counts[split] += 1
@@ -386,7 +497,10 @@ def score(trace: dict, summary: dict, trial: Trial, runner: Runner) -> dict:
     Failed predictions receive an explicit unfinished-window penalty. Selection
     additionally ranks failure count before numeric loss, so early failure cannot
     win by avoiding difficult late samples. Physical metrics remain diagnostics,
-    not physiological acceptance claims.
+    not physiological acceptance claims. With a trial ``force_observation``, the
+    GRF, peak, impulse, and contact terms use the observed simulated force, and
+    the unobservable vibration (physical minus observed force) adds its weighted
+    mean square; the returned summary fields keep the physical contact force.
     """
     time = trace["time_s"]
     observed = (trial.time_s > 0) & (trial.time_s <= time[-1] + 1e-12)
@@ -394,20 +508,34 @@ def score(trace: dict, summary: dict, trial: Trial, runner: Runner) -> dict:
     if observed.any():
         simulated = np.column_stack([np.interp(trial.time_s[observed], time, trace["state"][:, c]) for c in range(6)])
         tracking = np.sqrt(np.mean((simulated - trial.q[observed]) ** 2, axis=0))
+    grf = observed_grf(trace, trial)
     force = np.zeros(2)
-    if len(trace["grf_n"]):
+    vibration = np.zeros(2)
+    if len(grf):
         measured = np.column_stack([np.interp(time[:-1], trial.force_time_s, trial.grf_n[:, c]) for c in range(2)])
-        force = np.sqrt(np.mean((trace["grf_n"] - measured) ** 2, axis=0))
+        force = np.sqrt(np.mean((grf - measured) ** 2, axis=0))
+        vibration = np.sqrt(np.mean((trace["grf_n"] - grf) ** 2, axis=0))
+    if trial.force_observation is None:
+        peak, simulated_impulse, contact_duration = (
+            summary["peak_grf_n"][1],
+            np.asarray(summary["grf_impulse_ns"]),
+            summary["contact_duration_s"],
+        )
+    else:
+        dt = summary["dt_s"]
+        peak = float(grf[:, 1].max()) if len(grf) else 0.0
+        simulated_impulse = grf.sum(0) * dt
+        contact_duration = float(np.count_nonzero(grf[:, 1] > summary["contact_threshold_n"]) * dt)
     # Integrate the target on a horizon-clipped native clock, retaining endpoints.
     interior = (trial.force_time_s > 0) & (trial.force_time_s < trial.duration_s)
     clock = np.concatenate(([0.0], trial.force_time_s[interior], [trial.duration_s]))
     measured = np.column_stack([np.interp(clock, trial.force_time_s, trial.grf_n[:, c]) for c in range(2)])
     impulse = np.sum(0.5 * (measured[1:] + measured[:-1]) * np.diff(clock)[:, None], axis=0)
-    peak_error = float(summary["peak_grf_n"][1] - measured[:, 1].max())
-    impulse_error = np.asarray(summary["grf_impulse_ns"]) - impulse
+    peak_error = float(peak - measured[:, 1].max())
+    impulse_error = simulated_impulse - impulse
     contact = measured[:, 1] > summary["contact_threshold_n"]
     contact_time = float(np.sum(np.diff(clock) * contact[:-1]))
-    contact_error = summary["contact_duration_s"] - contact_time
+    contact_error = contact_duration - contact_time
     effort = 0.0
     if len(trace["load"]):
         effort = float(np.mean((trace["load"][:, 3:] / runner.bounds.torque_max_nm) ** 2))
@@ -420,12 +548,16 @@ def score(trace: dict, summary: dict, trial: Trial, runner: Runner) -> dict:
         + (contact_error / 0.02) ** 2
         + 0.01 * effort
     )
+    if trial.force_observation is not None:
+        loss += float(np.mean((vibration_weight(trial) * vibration / 100.0) ** 2))
     if summary["status"] != "completed":
         loss += 1000.0 * (2.0 - time[-1] / trial.duration_s)
+    observation = {} if trial.force_observation is None else {"grf_vibration_rmse_n": vibration.tolist()}
     return {
         "loss": loss,
         "tracking_rmse": tracking.tolist(),
         "grf_rmse_n": force.tolist(),
+        **observation,
         "peak_fz_error_n": peak_error,
         "impulse_error_ns": impulse_error.tolist(),
         "contact_duration_error_s": contact_error,
@@ -492,6 +624,18 @@ class Parameterization:
         return Runner.from_dict(data)
 
 
+def force_observation(command: dict) -> ForceObservation | None:
+    """Return the force observation recorded in parsed ``identify`` arguments, if any.
+
+    Older run summaries without the setting compare the raw simulated force.
+    """
+    if command.get("force_filter_hz") is None:
+        return None
+    return ForceObservation(
+        command["force_filter_hz"], command.get("force_gate_n", 1.0), command.get("force_vibration_weight", 1.0)
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=("inspect", "fit", "evaluate"))
@@ -532,6 +676,28 @@ def _parser() -> argparse.ArgumentParser:
         help="Fixed lag-free hip, knee, ankle damping [N m s/rad] set on the initial model for fit",
     )
     parser.add_argument(
+        "--immediate-damping",
+        action="store_true",
+        help="Apply the scheduled impedance damping without the torque response lag (set on the initial model for fit)",
+    )
+    parser.add_argument(
+        "--force-filter-hz",
+        type=float,
+        help="Score simulated GRF through the target's zero-lag two-pass Butterworth cutoff [Hz] (F01 exports: 20)",
+    )
+    parser.add_argument(
+        "--force-gate-n",
+        type=float,
+        default=1.0,
+        help="With --force-filter-hz, zero observed GRF where filtered Fz is below this force [N]",
+    )
+    parser.add_argument(
+        "--force-vibration-weight",
+        type=float,
+        default=1.0,
+        help="With --force-filter-hz, weight of simulated GRF content above the target bandwidth (0 ignores it)",
+    )
+    parser.add_argument(
         "--allow-incompatible",
         action="store_true",
         help="Permit diagnostic fitting of incompatible inputs; never a validation claim",
@@ -554,6 +720,7 @@ def main(argv: list[str] | None = None) -> None:
         height_offset_m=args.height_offset,
         friction_model=args.friction_model,
         limit_per_split=args.limit_per_split,
+        force_observation=force_observation(vars(args)),
     )
     if not trials:
         raise ValueError("Dataset is empty")
@@ -571,6 +738,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         if args.intrinsic_damping is not None:
             baseline = Runner.from_dict({**baseline.to_dict(), "intrinsic_damping_nms_rad": args.intrinsic_damping})
+        if args.immediate_damping:
+            baseline = Runner.from_dict({**baseline.to_dict(), "immediate_damping": True})
         from .least_squares import LMConfig, fit_lm  # noqa: PLC0415 - least_squares imports this module
 
         model, report = fit_lm(

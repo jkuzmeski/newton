@@ -125,6 +125,39 @@ class TestGenerativeRunner(unittest.TestCase):
         with self.assertRaises(ValueError):
             Runner(plain.weights, intrinsic_damping_nms_rad=[-1.0, 0.0, 0.0])
 
+    def test_immediate_damping_bypasses_torque_lag(self):
+        """Lag only the spring torque and apply the scheduled damping in full from the first step."""
+        plain = Runner.seed()
+        intrinsic = np.array([2.0, 3.0, 1.0])
+        immediate = Runner.from_dict(
+            {**plain.to_dict(), "immediate_damping": True, "intrinsic_damping_nms_rad": intrinsic.tolist()}
+        )
+        self.assertFalse(plain.immediate_damping)
+        state, dt = _initial(), 1e-4
+        equilibrium, stiffness, damping = immediate.impedance(state, _chain(), Task(3.0))
+        load, _ = immediate.actuate(state, _chain(), Task(3.0), dt)
+        fraction = -math.expm1(-dt / immediate.response_time_s)
+        rate = np.asarray(immediate.bounds.torque_rate_max_nm_s) * dt
+        spring = np.clip(fraction * stiffness * (equilibrium - state.q[3:]), -rate, rate)
+        np.testing.assert_allclose(state.torque_nm, spring, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(load[3:], spring - (damping + intrinsic) * state.v[3:], rtol=0, atol=1e-12)
+        np.testing.assert_array_equal(load[:3], 0)
+        # The default law passes the damper through the response with the spring.
+        lagged = _initial()
+        base, _ = plain.actuate(lagged, _chain(), Task(3.0), dt)
+        raw = stiffness * (equilibrium - lagged.q[3:]) - damping * lagged.v[3:]
+        np.testing.assert_allclose(base[3:], np.clip(fraction * raw, -rate, rate), rtol=0, atol=1e-12)
+        state.v[3:] = [1e4, -1e4, 1e4]
+        load, info = immediate.actuate(state, _chain(), Task(3.0), dt)
+        np.testing.assert_allclose(np.abs(load[3:]), immediate.bounds.torque_max_nm)
+        self.assertTrue(info["torque_saturated"].all())
+        self.assertTrue(Runner.from_dict(immediate.to_dict()).immediate_damping)
+        legacy = plain.to_dict()
+        del legacy["immediate_damping"]
+        self.assertFalse(Runner.from_dict(legacy).immediate_damping)
+        with self.assertRaises(ValueError):
+            Runner(plain.weights, immediate_damping=1)
+
     def test_variable_impedance_responds_to_simulated_state(self):
         """Change impedance with internal phase and load rather than a reference."""
         runner = Runner.seed()

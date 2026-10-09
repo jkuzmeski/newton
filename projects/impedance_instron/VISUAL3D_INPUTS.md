@@ -129,10 +129,17 @@ inspect the Visual3D execution log for missing signals and export errors.
 
 
 FullBuild now explicitly enables processed targets and selects all loaded motion
-trials before force processing/filtering. Its analog filter uses **6 Hz**, while
-the target filter uses **20 Hz**. The updated comment reflects the configured
-analog cutoff; the numerical cutoff and session-specific plate calibration are
-unchanged. Verify the platform calibration for this session before re-exporting.
+trials before force processing/filtering. Both its target (marker) filter and
+its analog (force-plate) filter use **20 Hz**, the running convention; F01
+exports before 2026-10-09 used a 6 Hz analog filter. The session-specific plate
+calibration is unchanged. Verify the platform calibration for this session
+before re-exporting.
+
+The 20 Hz zero-lag analog filter, with a ~1 N force gate, is applied to the
+exported plate force that becomes the GRF target. It keeps the impact peak and
+stance-phase content up to about 20 Hz. Fit with `--force-filter-hz 20` so the
+simulated force is observed the same way. See
+[GRF targets and force ripple](hogan/GENERATIVE_RUNNER.md#grf-targets-and-force-ripple-2026-10-09).
 
 ## Physical metadata
 

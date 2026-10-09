@@ -86,6 +86,7 @@ class _Model:
     cadence_gain: wp.float64
     phase_feedback: wp.float64
     intrinsic_damping: wp.vec3d
+    immediate_damping: wp.int32
 
 
 @wp.struct
@@ -238,13 +239,19 @@ def _actuate(
     saturated = wp.vec3i(0)
     rate = response[w]
     for j in range(3):
-        raw = stiffness[j] * (equilibrium[j] - q[j + 3]) - damping[j] * v[j + 3]
+        spring = stiffness[j] * (equilibrium[j] - q[j + 3])
+        raw = spring - damping[j] * v[j + 3]
         cap = m.torque_cap[j]
         limit = m.torque_rate[j] * dt
-        desired = wp.clamp(raw, -cap, cap)
+        command = raw
+        immediate = m.intrinsic_damping[j]
+        if m.immediate_damping != 0:
+            command = spring
+            immediate = immediate + damping[j]
+        desired = wp.clamp(command, -cap, cap)
         change = wp.clamp(rate * (desired - torque[j]), -limit, limit)
         torque[j] = wp.clamp(torque[j] + change, -cap, cap)
-        load[j + 3] = wp.clamp(torque[j] - m.intrinsic_damping[j] * v[j + 3], -cap, cap)
+        load[j + 3] = wp.clamp(torque[j] - immediate * v[j + 3], -cap, cap)
         saturated[j] = int(wp.abs(raw) > cap)
     data.torque[w] = torque
     data.load[w] = load
@@ -395,6 +402,7 @@ def _model_params(model: Runner) -> _Model:
     p.cadence_gain = model.cadence_speed_gain
     p.phase_feedback = model.phase_feedback
     p.intrinsic_damping = wp.vec3d(*model.intrinsic_damping_nms_rad)
+    p.immediate_damping = int(model.immediate_damping)
     return p
 
 

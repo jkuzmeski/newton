@@ -22,7 +22,7 @@ from time import perf_counter
 
 import numpy as np
 
-from .identify import Parameterization, Trial, evaluate, predict_many, score
+from .identify import Parameterization, Trial, evaluate, observed_grf, predict_many, score, vibration_weight
 from .runner import RolloutConfig, Runner
 
 _HIP_SCALE_M = 0.02
@@ -68,8 +68,9 @@ def residuals(trace: dict, summary: dict, trial: Trial) -> np.ndarray | None:
     """Return weighted sample residuals whose squared sum equals the score's sample terms.
 
     Matches the coordinate and GRF mean-square terms of :func:`identify.score`;
-    peak, impulse, contact-duration and effort terms are excluded. Returns
-    ``None`` for failed rollouts.
+    peak, impulse, contact-duration and effort terms are excluded. The GRF is
+    compared through the trial's force observation, if any, followed by its
+    weighted unobservable vibration. Returns ``None`` for failed rollouts.
     """
     if summary["status"] != "completed":
         return None
@@ -85,7 +86,12 @@ def residuals(trace: dict, summary: dict, trial: Trial) -> np.ndarray | None:
     steps = len(trace["grf_n"])
     if steps:
         measured = np.column_stack([np.interp(time[:-1], trial.force_time_s, trial.grf_n[:, c]) for c in range(2)])
-        parts.append(((trace["grf_n"] - measured) / (_FORCE_SCALE_N * math.sqrt(2 * steps))).ravel())
+        grf = observed_grf(trace, trial)
+        scale = _FORCE_SCALE_N * math.sqrt(2 * steps)
+        parts.append(((grf - measured) / scale).ravel())
+        weight = vibration_weight(trial)
+        if weight > 0:
+            parts.append((weight * (trace["grf_n"] - grf) / scale).ravel())
     return np.concatenate(parts) if parts else np.zeros(0)
 
 
@@ -310,6 +316,9 @@ def fit_lm(
     incompatible = [trial.id for trial in trials if not trial.provenance["compatibility"]["passed"]]
     if incompatible and not allow_incompatible:
         raise ValueError(f"Input compatibility failed for {len(incompatible)} trials; run inspect before fitting")
+    observation = trials[0].force_observation
+    if any(trial.force_observation != observation for trial in trials):
+        raise ValueError("All trials of one fit must share a force observation")
     parameters = Parameterization(baseline, [trial.task.speed_m_s for trial in train])
     size, reg = parameters.size, search.regularization
     engine = (
@@ -400,7 +409,14 @@ def fit_lm(
         "device": device,
         "selection_split": "train",
         "method": "levenberg_marquardt",
-        "objective": "coordinate and GRF mean squares of identify.score plus offset regularization",
+        "objective": "coordinate and GRF mean squares of identify.score plus offset regularization"
+        + (
+            ""
+            if observation is None
+            else f"; simulated GRF observed through a {observation.cutoff_hz:g} Hz target filter, "
+            f"unobservable vibration weighted {observation.vibration_weight:g}"
+        ),
+        "force_observation": None if observation is None else asdict(observation),
         "initial_model": baseline.to_dict(),
         "search": asdict(search),
         "rollout": asdict(cfg),

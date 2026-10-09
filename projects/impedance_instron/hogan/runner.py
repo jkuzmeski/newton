@@ -134,6 +134,13 @@ class Runner:
     optional intrinsic damping ``-c * v_joint`` bypasses that lag, standing in
     for passive muscle and tissue viscosity.
 
+    By default the whole command passes through the response, so at frequency
+    ``w`` the damper keeps only ``1 / (1 + (w T)^2)`` of ``D`` and the lagged
+    spring adds ``-K T / (1 + (w T)^2)`` of damping. With ``immediate_damping``
+    only the spring passes through the response; the scheduled ``D * v_joint``
+    acts without lag, like ``c``, so it can damp the stance foot/leg vibration
+    on the shoe.
+
     Args:
         weights: Feature weights, shape [3 outputs, 3 joints, 14 features].
         bounds: Fixed engineering bounds recorded with the model.
@@ -146,6 +153,9 @@ class Runner:
         phase_feedback: Fractional bounded oscillator-rate modulation by load.
         intrinsic_damping_nms_rad: Hip, knee, ankle damping applied without the
             torque response lag [N m s/rad]; the total torque keeps the cap.
+        immediate_damping: Apply the scheduled damping ``D`` without the torque
+            response lag and slew bound; only the spring torque is lagged.
+            ``False`` keeps the original fully lagged command.
     """
 
     def __init__(
@@ -161,6 +171,7 @@ class Runner:
         load_time_s: float = 0.02,
         phase_feedback: float = 0.2,
         intrinsic_damping_nms_rad=(0.0, 0.0, 0.0),
+        immediate_damping: bool = False,
     ):
         self.weights = np.array(weights, dtype=float, copy=True)
         if self.weights.shape != (3, 3, len(FEATURE_NAMES)) or not np.isfinite(self.weights).all():
@@ -193,6 +204,9 @@ class Runner:
         if np.any(self.intrinsic_damping_nms_rad < 0):
             raise ValueError("intrinsic_damping_nms_rad must be nonnegative")
         self.intrinsic_damping_nms_rad.setflags(write=False)
+        if not isinstance(immediate_damping, (bool, np.bool_)):
+            raise ValueError("immediate_damping must be a boolean")
+        self.immediate_damping = bool(immediate_damping)
 
     @classmethod
     def seed(cls, *, reference_speed_m_s: float = 3.7) -> Runner:
@@ -261,14 +275,18 @@ class Runner:
         if np.any(np.abs(state.torque_nm) > cap):
             raise ValueError("Initial torque exceeds the model bounds")
         equilibrium, stiffness, damping = self.impedance(state, chain, task)
-        raw = stiffness * (equilibrium - state.q[3:]) - damping * state.v[3:]
-        desired = np.clip(raw, -cap, cap)
+        spring = stiffness * (equilibrium - state.q[3:])
+        raw = spring - damping * state.v[3:]
+        desired = np.clip(spring if self.immediate_damping else raw, -cap, cap)
         fraction = -math.expm1(-dt_s / self.response_time_s)
         rate = np.asarray(self.bounds.torque_rate_max_nm_s) * dt_s
         change = np.clip(fraction * (desired - state.torque_nm), -rate, rate)
         state.torque_nm = np.clip(state.torque_nm + change, -cap, cap)
+        immediate = self.intrinsic_damping_nms_rad
+        if self.immediate_damping:
+            immediate = immediate + damping
         load = np.zeros(6)
-        load[3:] = np.clip(state.torque_nm - self.intrinsic_damping_nms_rad * state.v[3:], -cap, cap)
+        load[3:] = np.clip(state.torque_nm - immediate * state.v[3:], -cap, cap)
         return load, {
             "equilibrium_rad": equilibrium,
             "stiffness_nm_rad": stiffness,
@@ -308,6 +326,7 @@ class Runner:
                 )
             },
             "intrinsic_damping_nms_rad": self.intrinsic_damping_nms_rad.tolist(),
+            "immediate_damping": self.immediate_damping,
         }
 
     @classmethod

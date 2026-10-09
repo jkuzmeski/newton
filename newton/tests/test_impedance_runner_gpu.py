@@ -179,6 +179,20 @@ class TestRunnerGpu(unittest.TestCase):
             self.assertTrue(np.all(np.abs(expected[0]["load"][:, 3:]) <= np.asarray(model.bounds.torque_max_nm)))
         self.assertTrue(np.any(np.abs(expected[0]["load"][:, 3:]) == np.asarray(models[1].bounds.torque_max_nm)))
 
+    def test_immediate_damping_parity(self):
+        """Match CPU traces when the scheduled damping bypasses the torque response, with intrinsic damping."""
+        models = [
+            Runner.from_dict({**model.to_dict(), "immediate_damping": True, "intrinsic_damping_nms_rad": damping})
+            for model, damping in zip(_models(), ([0.0, 0.0, 0.0], [40.0, 0.0, 25.0]), strict=True)
+        ]
+        initial = _initial()
+        result = self.batch([initial], [0.008], models).evaluate(models)
+        lagged = self.batch([initial], [0.008], _models()).evaluate(_models())
+        for c, model in enumerate(models):
+            expected = simulate(model, self.chain, self.shoe, initial, Task(0.3), duration_s=0.008, config=self.cfg)
+            self.assertParity(result[c][0], expected)
+            self.assertGreater(np.max(np.abs(result[c][0][0]["load"] - lagged[c][0][0]["load"])), 1e-3)
+
     def test_mixed_exact_timesteps_durations_and_shoes(self):
         """Use each adjusted timestep for both the shoe and chain without rounding."""
         models = _models()

@@ -14,7 +14,7 @@ import warp as wp
 
 from newton.tests.test_impedance_hogan import _chain, _tiny_shoe
 from projects.impedance_instron.hogan import least_squares
-from projects.impedance_instron.hogan.identify import Parameterization, Trial, predict, score
+from projects.impedance_instron.hogan.identify import ForceObservation, Parameterization, Trial, predict, score
 from projects.impedance_instron.hogan.runner import RolloutConfig, Runner, State, Task, simulate
 
 
@@ -37,7 +37,7 @@ class TestLeastSquares(unittest.TestCase):
         self.baseline = Runner.seed(reference_speed_m_s=0.3)
         self.parameters = Parameterization(self.baseline, [0.3])
 
-    def trial(self, model=None, split="train", duration=0.008):
+    def trial(self, model=None, split="train", duration=0.008, observation=None):
         """Build a trial whose targets are an exact rollout of ``model`` on irregular clocks."""
         initial = _initial()
         time = duration * np.array([0.0, 0.127, 0.43, 0.79, 1.0])
@@ -59,6 +59,7 @@ class TestLeastSquares(unittest.TestCase):
             force_time,
             grf,
             {"compatibility": {"passed": True}},
+            observation,
         )
 
     def test_residuals_match_score_sample_terms(self):
@@ -74,6 +75,74 @@ class TestLeastSquares(unittest.TestCase):
         r = least_squares.residuals(trace, summary, trial)
         self.assertAlmostEqual(float(r @ r), float(expected), places=10)
         self.assertIsNone(least_squares.residuals(trace, summary | {"status": "failed"}, trial))
+
+    def test_force_observation_reproduces_target_processing(self):
+        """Filter with unit gain, zero lag, and -3 dB at the nominal two-pass cutoff, then gate both axes."""
+        self.assertEqual(ForceObservation().cutoff_hz, 20.0)
+        dt = 1e-3
+        for cutoff in (20.0, 6.0):
+            with self.subTest(cutoff_hz=cutoff):
+                observation = ForceObservation(cutoff_hz=cutoff, gate_n=1.0)
+                b0, b1, b2, a1, a2 = observation.coefficients(dt)
+
+                def gain(frequency_hz, b0=b0, b1=b1, b2=b2, a1=a1, a2=a2):
+                    z = np.exp(-2j * math.pi * frequency_hz * dt)
+                    return abs((b0 + b1 * z + b2 * z * z) / (1.0 + a1 * z + a2 * z * z)) ** 2
+
+                self.assertAlmostEqual(gain(0.0), 1.0, places=12)
+                self.assertAlmostEqual(gain(cutoff), math.sqrt(0.5), places=3)
+                # A half-sine stance padded by flight keeps its timing through the zero-lag observation.
+                time = np.arange(600) * dt
+                stance = (time > 0.2) & (time < 0.4)
+                fz = np.where(stance, 1200.0 * np.sin(np.pi * (time - 0.2) / 0.2), 0.0)
+                observed = observation.apply(np.column_stack((-0.2 * fz, fz)), dt)
+                self.assertLess(abs(int(np.argmax(observed[:, 1])) - 300), 2)
+                # A steady ripple at 3.5 x the cutoff keeps the two-pass gain |H|^2 of its amplitude, under 2 %.
+                long_time = np.arange(2000) * dt
+                ripple = 1000.0 + 80.0 * np.sin(2 * np.pi * 3.5 * cutoff * long_time)
+                middle = observation.apply(np.column_stack((0.0 * ripple, ripple)), dt)[500:1500, 1]
+                self.assertLess(gain(3.5 * cutoff), 0.02)
+                self.assertAlmostEqual(
+                    np.max(np.abs(middle - 1000.0)), 80.0 * gain(3.5 * cutoff), delta=0.02 * 80.0 * gain(3.5 * cutoff)
+                )
+                # Zero-lag smoothing loads before contact and unloads after it, and the gate zeroes both axes together.
+                loaded = np.flatnonzero(observed[:, 1] > 0.0)
+                self.assertLess(loaded[0], 200)
+                self.assertGreater(loaded[-1], 400)
+                np.testing.assert_array_equal(observed[observed[:, 1] < 1.0], 0.0)
+        np.testing.assert_array_equal(ForceObservation().apply(np.zeros((5, 2)), dt), 0.0)
+        for build in (lambda: ForceObservation(0.0), lambda: ForceObservation(20.0, -1.0)):
+            with self.assertRaises(ValueError):
+                build()
+        with self.assertRaises(ValueError):
+            ForceObservation().coefficients(0.1)
+
+    def test_observed_residuals_match_observed_score_terms(self):
+        """Compare observed simulated GRF in both the LM residual and the score, plus its weighted vibration."""
+        observation = ForceObservation(cutoff_hz=400.0, gate_n=0.0, vibration_weight=0.7)
+        trial = self.trial(observation=observation)
+        trial.grf_n[:, 1] += 30.0
+        trace, summary = predict(self.baseline, trial, self.config)
+        result = score(trace, summary, trial, self.baseline)
+        tracking, force = np.asarray(result["tracking_rmse"]), np.asarray(result["grf_rmse_n"])
+        vibration = np.asarray(result["grf_vibration_rmse_n"])
+        expected = np.mean((tracking[:2] / 0.02) ** 2) + np.mean((tracking[2:] / 0.05) ** 2)
+        expected += np.mean((force / 100.0) ** 2) + np.mean((0.7 * vibration / 100.0) ** 2)
+        r = least_squares.residuals(trace, summary, trial)
+        self.assertAlmostEqual(float(r @ r), float(expected), places=10)
+        steps = len(trace["grf_n"])
+        observed = observation.apply(trace["grf_n"], summary["dt_s"])
+        self.assertGreater(vibration.max(), 0.0)
+        np.testing.assert_allclose(vibration, np.sqrt(np.mean((trace["grf_n"] - observed) ** 2, axis=0)))
+        # The GRF block compares the observed force; the trailing block is the weighted vibration.
+        raw = least_squares.residuals(trace, summary, self.trial())
+        self.assertEqual(len(r), len(raw) + 2 * steps)
+        self.assertGreater(np.max(np.abs(r[24 : 24 + 2 * steps] - raw[24:])), 1e-6)
+        unweighted = self.trial(observation=ForceObservation(400.0, 0.0, 0.0))
+        self.assertEqual(len(least_squares.residuals(trace, summary, unweighted)), len(raw))
+        self.assertAlmostEqual(result["peak_fz_error_n"], float(observed[:, 1].max()) - 30.0, places=10)
+        # Physical diagnostics stay on the raw contact force.
+        self.assertEqual(result["peak_grf_n"], trace["grf_n"].max(0).tolist())
 
     def test_lm_reduces_cost_toward_known_truth(self):
         """Decrease the training cost monotonically when fitting an exact truth rollout."""
@@ -134,6 +203,41 @@ class TestLeastSquares(unittest.TestCase):
         np.testing.assert_allclose(gradient, jacobian @ gpu[2], rtol=1e-10, atol=1e-12)
         objective.copy_row(5, 3)
         np.testing.assert_array_equal(objective.store.numpy()[3], objective.store.numpy()[5])
+
+    @unittest.skipUnless(wp.is_cuda_available(), "CUDA required")
+    def test_device_objective_matches_host_observed_residuals(self):
+        """Filter, gate, and score the observed GRF and its vibration on CUDA exactly like the host residuals."""
+        from projects.impedance_instron.hogan.gpu_residuals import GpuResiduals  # noqa: PLC0415
+        from projects.impedance_instron.hogan.identify import predict_many  # noqa: PLC0415
+
+        offsets = np.random.default_rng(9).normal(0, 0.02, (3, self.parameters.size))
+        models = [self.parameters.model(x) for x in offsets]
+        trace, summary = predict_many(models[:1], [self.trial()], self.config, device="cuda:0")[0][0]
+        # Gate half of the peak so the device gate and its zeroed samples are exercised.
+        gate = 0.5 * float(ForceObservation(400.0, 0.0).apply(trace["grf_n"], summary["dt_s"])[:, 1].max())
+        self.assertGreater(gate, 0.0)
+        # Observed with and without a vibration block, and raw, share one batch.
+        trials = [
+            self.trial(observation=ForceObservation(400.0, gate, 0.7)),
+            self.trial(split="train", duration=0.0061),
+            self.trial(split="train", duration=0.0071, observation=ForceObservation(300.0, 0.0, 0.0)),
+        ]
+        expected = least_squares._Rollouts(self.parameters, trials, self.config, "cuda:0")(offsets, 3)
+        objective = GpuResiduals(trials, self.config, rows=4, chunk=2)
+        self.assertEqual(objective.length, len(expected[0]))
+        completed, sums, motion = objective.evaluate(models, [0, 1, 3], metrics=True)
+        self.assertTrue(completed.all())
+        rows = objective.store.numpy()[:, : objective.length]
+        for row, vector, total in zip((0, 1, 3), expected, sums, strict=True):
+            np.testing.assert_allclose(rows[row], vector, rtol=1e-12, atol=1e-15)
+            self.assertAlmostEqual(total, float(vector @ vector), delta=1e-12 * max(1.0, total))
+        raw_trials = [self.trial(), *trials[1:2], self.trial(split="train", duration=0.0071)]
+        raw = least_squares._Rollouts(self.parameters, raw_trials, self.config, "cuda:0")(offsets, 3)
+        steps = len(trace["grf_n"])
+        self.assertEqual(objective.offsets[1], 24 + 4 * steps)
+        self.assertGreater(np.max(np.abs(expected[0][24 : 24 + 2 * steps] - raw[0][24 : 24 + 2 * steps])), 1e-6)
+        self.assertGreater(np.max(np.abs(rows[0][24 + 2 * steps : objective.offsets[1]])), 0.0)
+        self.assertEqual({m["status"] for m in motion[0]}, {"completed"})
 
     @unittest.skipUnless(wp.is_cuda_available(), "CUDA required")
     def test_fast_jacobian_redoes_differences_exactly_when_its_reference_fails(self):

@@ -51,6 +51,14 @@ class _Targets:
     angle_scale: wp.array[wp.float64]
     force_scale: wp.array[wp.float64]
     weight: wp.float64
+    # Per-trial force observation (identify.ForceObservation); observe == 0 keeps raw GRF.
+    observe: wp.array[int]
+    filter_b: wp.array[wp.vec3d]
+    filter_a: wp.array[wp.vec2d]
+    gate: wp.array[wp.float64]
+    # Weight and first column of each trial's unobservable-vibration residuals (weight 0: no block).
+    vibration: wp.array[wp.float64]
+    vibration_offset: wp.array[int]
 
 
 @wp.struct
@@ -63,6 +71,8 @@ class _Accumulators:
     peak: wp.array[wp.float64]
     rows: wp.array[int]
     residuals: wp.array2d[wp.float64]
+    filter_z1: wp.array[wp.vec2d]
+    filter_z2: wp.array[wp.vec2d]
 
 
 @wp.kernel
@@ -74,6 +84,19 @@ def _clear(acc: _Accumulators):
     acc.tracking[w] = Vec6(wp.float64(0.0))
     acc.force[w] = wp.vec2d(wp.float64(0.0))
     acc.peak[w] = wp.float64(-1.0e300)
+    acc.filter_z1[w] = wp.vec2d(wp.float64(0.0))
+    acc.filter_z2[w] = wp.vec2d(wp.float64(0.0))
+
+
+@wp.func
+def _biquad_step(
+    x: wp.vec2d, b: wp.vec3d, a: wp.vec2d, z1: wp.vec2d, z2: wp.vec2d
+) -> tuple[wp.vec2d, wp.vec2d, wp.vec2d]:
+    """Advance identify._biquad by one sample with its exact operation order."""
+    y = wp.vec2d(b[0] * x[0] + z1[0], b[0] * x[1] + z1[1])
+    n1 = wp.vec2d(b[1] * x[0] - a[0] * y[0] + z2[0], b[1] * x[1] - a[0] * y[1] + z2[1])
+    n2 = wp.vec2d(b[2] * x[0] - a[1] * y[0], b[2] * x[1] - a[1] * y[1])
+    return y, n1, n2
 
 
 @wp.kernel
@@ -91,17 +114,31 @@ def _observe(trials: int, data: _Buffers, targets: _Targets, acc: _Accumulators)
     count = targets.obs_count[s]
     weight = targets.weight
     grf = data.grf[w]
-    target = targets.grf[s, k]
-    ex = grf[0] - target[0]
-    ez = grf[1] - target[1]
-    rx = weight * (ex / targets.force_scale[s])
-    rz = weight * (ez / targets.force_scale[s])
     column = base + 6 * count + 2 * k
-    acc.residuals[row, column] = rx
-    acc.residuals[row, column + 1] = rz
-    total = acc.sumsq[w] + rx * rx + rz * rz
-    acc.force[w] = acc.force[w] + wp.vec2d(ex * ex, ez * ez)
-    acc.peak[w] = wp.max(acc.peak[w], grf[1])
+    total = acc.sumsq[w]
+    if targets.observe[s] != 0:
+        # Stash the forward filter pass (and the raw force for the vibration block);
+        # _finish_observed forms these residuals after the rollout.
+        y, z1, z2 = _biquad_step(grf, targets.filter_b[s], targets.filter_a[s], acc.filter_z1[w], acc.filter_z2[w])
+        acc.filter_z1[w] = z1
+        acc.filter_z2[w] = z2
+        acc.residuals[row, column] = y[0]
+        acc.residuals[row, column + 1] = y[1]
+        if targets.vibration[s] > wp.float64(0.0):
+            stash = targets.vibration_offset[s] + 2 * k
+            acc.residuals[row, stash] = grf[0]
+            acc.residuals[row, stash + 1] = grf[1]
+    else:
+        target = targets.grf[s, k]
+        ex = grf[0] - target[0]
+        ez = grf[1] - target[1]
+        rx = weight * (ex / targets.force_scale[s])
+        rz = weight * (ez / targets.force_scale[s])
+        acc.residuals[row, column] = rx
+        acc.residuals[row, column + 1] = rz
+        total = acc.sumsq[w] + rx * rx + rz * rz
+        acc.force[w] = acc.force[w] + wp.vec2d(ex * ex, ez * ez)
+        acc.peak[w] = wp.max(acc.peak[w], grf[1])
     q0 = data.previous[w]
     q1 = data.state[w]
     tracking = acc.tracking[w]
@@ -129,6 +166,62 @@ def _observe(trials: int, data: _Buffers, targets: _Targets, acc: _Accumulators)
     acc.cursor[w] = j
     acc.sumsq[w] = total
     acc.seen[w] = k + 1
+
+
+@wp.kernel
+def _finish_observed(trials: int, data: _Buffers, targets: _Targets, acc: _Accumulators):
+    """Run the backward filter pass and gate over each completed world, then write its GRF residuals.
+
+    Mirrors ``identify.ForceObservation.apply`` followed by the GRF part of
+    ``least_squares.residuals``; the forward pass was stored by :func:`_observe`.
+    """
+    w = wp.tid()
+    s = w % trials
+    # Only completed rollouts' residuals are consumed.
+    if targets.observe[s] == 0 or data.status[w] != 1:
+        return
+    row = acc.rows[w // trials]
+    base = targets.offset[s] + 6 * targets.obs_count[s]
+    b = targets.filter_b[s]
+    a = targets.filter_a[s]
+    gate = targets.gate[s]
+    scale = targets.force_scale[s]
+    weight = targets.weight
+    vibration = targets.vibration[s]
+    stash = targets.vibration_offset[s]
+    z1 = wp.vec2d(wp.float64(0.0))
+    z2 = wp.vec2d(wp.float64(0.0))
+    total = acc.sumsq[w]
+    force = acc.force[w]
+    peak = acc.peak[w]
+    steps = data.recorded[w]
+    for i in range(steps):
+        k = steps - 1 - i
+        column = base + 2 * k
+        x = wp.vec2d(acc.residuals[row, column], acc.residuals[row, column + 1])
+        y, z1, z2 = _biquad_step(x, b, a, z1, z2)
+        if y[1] < gate:
+            y = wp.vec2d(wp.float64(0.0))
+        target = targets.grf[s, k]
+        ex = y[0] - target[0]
+        ez = y[1] - target[1]
+        rx = weight * (ex / scale)
+        rz = weight * (ez / scale)
+        acc.residuals[row, column] = rx
+        acc.residuals[row, column + 1] = rz
+        total += rx * rx + rz * rz
+        force = force + wp.vec2d(ex * ex, ez * ez)
+        peak = wp.max(peak, y[1])
+        if vibration > wp.float64(0.0):
+            j = stash + 2 * k
+            vx = weight * ((vibration * (acc.residuals[row, j] - y[0])) / scale)
+            vz = weight * ((vibration * (acc.residuals[row, j + 1] - y[1])) / scale)
+            acc.residuals[row, j] = vx
+            acc.residuals[row, j + 1] = vz
+            total += vx * vx + vz * vz
+    acc.sumsq[w] = total
+    acc.force[w] = force
+    acc.peak[w] = peak
 
 
 @wp.kernel
@@ -191,10 +284,22 @@ class _Observer:
         acc.peak = wp.zeros(w, dtype=wp.float64, device=d)
         acc.rows = wp.zeros(group.candidates, dtype=int, device=d)
         acc.residuals = store
+        acc.filter_z1 = wp.zeros(w, dtype=wp.vec2d, device=d)
+        acc.filter_z2 = wp.zeros(w, dtype=wp.vec2d, device=d)
         self.acc = acc
 
     def reset(self):
         wp.launch(_clear, dim=self.group.world_count, inputs=[self.acc], device=self.group.device)
+
+    def finish(self):
+        """Form observed GRF residuals once every world has stopped integrating."""
+        g = self.group
+        wp.launch(
+            _finish_observed,
+            dim=g.world_count,
+            inputs=[g.trial_count, g.data, self.targets, self.acc],
+            device=g.device,
+        )
 
     def step(self):
         g = self.group
@@ -291,9 +396,23 @@ class GpuResiduals:
             if not count:
                 raise ValueError("Each trial needs an observation after its prediction origin")
             grf = np.column_stack([np.interp(grid[:-1], trial.force_time_s, trial.grf_n[:, c]) for c in range(2)])
-            plans.append((count, _interp_plan(trial.time_s[observed], grid), trial.q[observed], grf))
+            observation = trial.force_observation
+            vibration = 0.0 if observation is None else observation.vibration_weight
+            observe = (
+                (0, (0.0,) * 5, 0.0) if observation is None else (1, observation.coefficients(dt), observation.gate_n)
+            )
+            stash = position + 6 * count + 2 * steps
+            plans.append(
+                (
+                    count,
+                    _interp_plan(trial.time_s[observed], grid),
+                    trial.q[observed],
+                    grf,
+                    (*observe, vibration, stash),
+                )
+            )
             offsets.append(position)
-            position += 6 * count + 2 * steps
+            position += 6 * count + 2 * steps * (2 if vibration > 0 else 1)
             interior = (trial.force_time_s > 0) & (trial.force_time_s < trial.duration_s)
             clock = np.concatenate(([0.0], trial.force_time_s[interior], [trial.duration_s]))
             self.measured_peak[index] = np.interp(clock, trial.force_time_s, trial.grf_n[:, 1]).max()
@@ -305,6 +424,7 @@ class GpuResiduals:
         padded_rows = _TILE * math.ceil(self.row_count / _TILE)
         padded_length = _COLUMN_BLOCK * math.ceil(position / _COLUMN_BLOCK)
         self.store = wp.zeros((padded_rows, padded_length), dtype=wp.float64, device=self.device)
+        self._observed = False
         self._targets = [
             self._upload([plans[i] for i in indices], [offsets[i] for i in indices], weight)
             for indices in self.group_trial_indices
@@ -316,19 +436,20 @@ class GpuResiduals:
     def _upload(self, plans, offsets, weight) -> _Targets:
         d = self.device
         width = max(count for count, *_ in plans)
-        length = max(len(grf) for *_, grf in plans)
+        length = max(len(grf) for _, _, _, grf, _ in plans)
         trigger = np.full((len(plans), width), -1, dtype=np.int32)
         node = np.zeros((len(plans), width), dtype=np.int32)
         offset = np.zeros((len(plans), width))
         dx = np.ones((len(plans), width))
         q = np.zeros((len(plans), width, 6))
         grf = np.zeros((len(plans), length, 2))
-        for s, (count, plan, observed, force) in enumerate(plans):
+        for s, (count, plan, observed, force, _) in enumerate(plans):
             trigger[s, :count], node[s, :count], offset[s, :count], dx[s, :count] = plan
             q[s, :count] = observed
             grf[s, : len(force)] = force
         counts = np.array([count for count, *_ in plans])
-        steps = np.array([len(force) for *_, force in plans])
+        steps = np.array([len(force) for _, _, _, force, _ in plans])
+        observe = [plan[-1] for plan in plans]
         targets = _Targets()
         targets.obs_count = wp.array(counts, dtype=int, device=d)
         targets.obs_trigger = wp.array(trigger, dtype=int, device=d)
@@ -344,6 +465,13 @@ class GpuResiduals:
         )
         targets.force_scale = wp.array([_FORCE_SCALE_N * math.sqrt(2 * n) for n in steps], dtype=wp.float64, device=d)
         targets.weight = weight
+        targets.observe = wp.array([flag for flag, *_ in observe], dtype=int, device=d)
+        targets.filter_b = wp.array([c[:3] for _, c, *_ in observe], dtype=wp.vec3d, device=d)
+        targets.filter_a = wp.array([c[3:] for _, c, *_ in observe], dtype=wp.vec2d, device=d)
+        targets.gate = wp.array([gate for _, _, gate, *_ in observe], dtype=wp.float64, device=d)
+        targets.vibration = wp.array([v for *_, v, _ in observe], dtype=wp.float64, device=d)
+        targets.vibration_offset = wp.array([o for *_, o in observe], dtype=int, device=d)
+        self._observed = self._observed or any(flag for flag, *_ in observe)
         return targets
 
     def _group(self, index: int, capacity: int) -> tuple[_Group, _Observer]:
@@ -397,6 +525,8 @@ class GpuResiduals:
                 chosen[: len(block)] = rows[start : start + len(block)]
                 observer.acc.rows.assign(chosen)
                 group.launch(block)
+                if self._observed:
+                    observer.finish()
                 self.rollouts += len(block) * len(indices)
                 size = len(block) * len(indices)
                 shape = (len(block), len(indices))

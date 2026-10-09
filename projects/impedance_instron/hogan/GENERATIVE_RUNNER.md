@@ -37,8 +37,11 @@ equilibrium angle, stiffness, and damping:
 
 Joint command is `K * (q_eq - q_joint) - D * qdot_joint`, with torque magnitude,
 slew, and first-order response bounds. Optional intrinsic damping bypasses the
-activation lag and defaults to zero. Phase advances autonomously with bounded
-simulated-load modulation; it never snaps to observed touchdown.
+activation lag and defaults to zero. With `immediate_damping` (`--immediate-damping`),
+only the spring torque passes through the response and slew bound and the
+scheduled `D` acts without lag; saved models keep the fully lagged command.
+Phase advances autonomously with bounded simulated-load modulation; it never
+snaps to observed touchdown.
 
 The equilibrium moves internally and can supply work. This is an active
 effective-actuation model, not a passivity or muscle-identification claim.
@@ -77,7 +80,9 @@ using training stances only. There are 119 active parameters at one speed, or
 slope stay fixed for single-speed training.
 
 The residual vector contains hip, angle, and GRF sample errors scaled by
-0.02 m, 0.05 rad, and 100 N, plus offset regularization. Reported
+0.02 m, 0.05 rad, and 100 N, plus offset regularization. With
+`--force-filter-hz`, the GRF errors use the observed simulated force and a
+second block holds the weighted physical minus observed force. Reported
 [`identify.score`](identify.py) also includes peak force, impulse, contact
 duration, and effort; those additional terms do not enter the LM residual.
 Evaluation observations never select parameters.
@@ -133,9 +138,71 @@ Profiles contain thigh/shank/foot masses, local COM offsets, sagittal inertias,
 and inertial provenance. Historical Cartesian gains and search limits are
 discarded on load, not reused as runner parameters.
 
+## GRF targets and force ripple (2026-10-09)
+
+The fitted vertical and fore-aft GRF showed a stance ripple against the original
+F01 targets: 10-40 Hz Fz RMS of 137, 74, and 42 N in the first 30 %, middle
+40 %, and last 30 % of contact over the 107 saved stances, against 14, 6, and
+3 N in the target. Two causes combine.
+
+**The original targets were over-smoothed.** Those Visual3D exports filtered the
+plate force with a zero-lag second-order Butterworth at 6 Hz (Winter-corrected),
+a walking setting, and zeroed both axes where filtered Fz fell below about 1 N.
+Reprocessing the raw `data/FR3_Metabolic.c3d` plate reproduces that export
+within 20 N RMS. The raw force carries a 1185 N impact peak about 40 ms after
+contact and 191/78/43 N of 10-40 Hz Fz content, as much as the simulation. The
+6 Hz filter moved the 50 N touchdown 21.7 ms early and lengthened contact by
+27 ms, so most of the earlier "contact ends about 40 ms early" was the filter.
+
+The F01 exports now use 20 Hz, the running convention (`9336e058`), with the
+measured 66.5 kg body mass (`0567b02d`). The 20 Hz export matches the raw plate
+within 12 N RMS, keeps the impact peak, and matches the raw contact timing to
+within 1 ms. Its 10-40 Hz Fz content is 150/45/10 N.
+
+**Part of the simulated vibration is a model artifact.** Differential impulse
+responses at mid-stance show a ~70 Hz foot-pitch mode on the foam (damping
+ratio 0.05-0.10) and a 20-27 Hz leg-on-foam mode (0.1-0.25). The foam's
+Maxwell branch (5 ms relaxation, 0.695 equilibrium fraction) adds little
+damping, and the fully lagged command keeps only `1 / (1 + (w T)^2)` of `D`
+(about 1/6 at 20 Hz and 1/57 at 70 Hz for T = 17 ms) while its lagged spring
+adds `-K T / (1 + (w T)^2)`. Halving the timestep, smoothing the sensory
+features, removing phase feedback, or lifting the slew bound leaves the
+ripple unchanged.
+
+Use both remedies:
+
+- `--force-filter-hz 20` scores simulated GRF as the target was measured, in
+  every GRF residual, peak, impulse, and contact term on CPU and CUDA. The
+  dynamics never see it. The residual also penalizes the physical minus observed
+  force, which the target cannot constrain (`--force-vibration-weight`,
+  default 1). Against the 6 Hz targets, LM without that penalty let the ripple
+  grow to 307/172/65 N.
+- `--immediate-damping` lets the scheduled damping act without the lag.
+
+Refits on the 20 Hz dataset with `--force-filter-hz 20`, warm-started from the
+frozen model for 15 LM iterations, and the frozen model itself, all scored the
+same way (held-out mean loss and GRF RMSE as measured; physical simulated Fz
+content over all 107 stances):
+
+| Fit | Held-out loss | Fx / Fz RMSE [N] | 10-40 Hz load / mid / late [N] | 40-150 Hz mid [N] |
+|---|---:|---:|---:|---:|
+| Raw plate force | - | - | 191 / 78 / 43 | 13 |
+| Frozen model, no refit | 11.66 | 108 / 118 | 152 / 82 / 46 | 37 |
+| Refit, lagged damping | 12.00 | 102 / 111 | 202 / 69 / 48 | 12 |
+| Refit, immediate damping | **11.48** | **103 / 107** | 209 / 65 / 34 | **5** |
+
+The combination generalizes best and removes the foot ringing; the remaining
+stance content is comparable to the raw plate's. On held-out stances, as
+measured, contact ends about 15 ms early, peak Fz is about 80 N low, and the
+propulsive Fx peak is about 160 N short of the measured 370 N. The frozen model
+shows similar gaps, and refitting with immediate damping does not close them.
+The unfitted seed with immediate damping bottoms out the shoe on 4 training
+stances, so start such fits from a completed model with `--model`.
+
 ## Known limitations
 
-- Contact ends about 40 ms early. A small 10-20 Hz force wiggle remains.
+- Against the 20 Hz targets, simulated contact ends about 15 ms early, and peak
+  vertical and propulsive force are about 80 N and 160 N low.
 - Impedance decomposition is not uniquely identified: equivalent K, D, and
   equilibrium schedules can produce similar motion and torque.
 - One modeled leg and a lumped rest-of-body omit bilateral running and

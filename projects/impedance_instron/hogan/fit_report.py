@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from ..cartesian import data as reference_data
-from .identify import load_trials, predict_many
+from .identify import force_observation, load_trials, observed_grf, predict_many
 from .report import _CSS, BASELINE, COORDINATE_INFO, MEASURED, RUN_COLORS, _figure, _plot, _Scene, _snapshots, _table
 from .runner import RolloutConfig, Runner
 
@@ -219,7 +219,14 @@ def _example(trial, fitted: dict, seed: dict, row: dict, title: str, why: str) -
         series = [("measured", 1e3 * trial.force_time_s[inside], trial.grf_n[inside, axis], MEASURED, "")]
         for label, trace, color, dash in (("seed", seed, BASELINE, "6 4"), ("fitted", fitted, FITTED, "")):
             n = len(trace["grf_n"])
-            series.append((label, 1e3 * trace["time_s"][:n], trace["grf_n"][:, axis], color, dash))
+            time = 1e3 * trace["time_s"][:n]
+            if trial.force_observation is None:
+                series.append((label, time, trace["grf_n"][:, axis], color, dash))
+                continue
+            # The target is a filtered plate force; show the physical force faintly behind its observation.
+            if label == "fitted":
+                series.append(("fitted contact force", time, trace["grf_n"][:, axis], "#9ecae1", ""))
+            series.append((f"{label} as measured", time, observed_grf(trace, trial)[:, axis], color, dash))
         figures.append(_figure(f"{name} GRF", _plot(series, xlabel="time [ms]", ylabel="force [N]", band=band)))
     for c, name in enumerate(COORDINATE_INFO):
         title_, unit, _, _ = COORDINATE_INFO[name]
@@ -276,6 +283,7 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
         height_offset_m=command["height_offset"],
         friction_model=command["friction_model"],
         limit_per_split=command["limit_per_split"],
+        force_observation=force_observation(command),
     )
     if [t.id for t in trials] != [entry["id"] for entry in summary["trials"]]:
         raise ValueError("Dataset trials no longer match the fit summary")
@@ -315,13 +323,45 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
     flags = [
         f"--{key.replace('_', '-')} {' '.join(map(str, value)) if isinstance(value, list) else value}"
         for key, value in command.items()
-        if key in ("dataset", "mount", "speed", "compression_limit", "method", "iterations", "chunk", "device")
+        if key
+        in (
+            "dataset",
+            "mount",
+            "speed",
+            "compression_limit",
+            "method",
+            "iterations",
+            "chunk",
+            "device",
+            "model",
+            "intrinsic_damping",
+            "force_filter_hz",
+        )
         and value is not None
     ]
+    if command.get("force_filter_hz") is not None:
+        flags.append(f"--force-gate-n {command.get('force_gate_n', 1.0)}")
+        flags.append(f"--force-vibration-weight {command.get('force_vibration_weight', 1.0)}")
+    if command.get("immediate_damping"):
+        flags.append("--immediate-damping")
     reproduce = "python -m projects.impedance_instron.hogan.identify fit \\\n    " + " \\\n    ".join(
         [*flags, f"--output {command['output']}"]
     )
     reproduce += f"\npython -m projects.impedance_instron.hogan.fit_report --run {run}"
+    # Fitting keeps the initial model's actuation mode; reports may be rebuilt without runner.json.
+    actuation = (
+        "only the spring torque passes through a first-order response and slew bound; the damping acts without lag"
+        if summary["initial_model"].get("immediate_damping", False)
+        else "torques pass through a first-order response and slew bound"
+    )
+    observation = chosen[0].force_observation
+    observation_note = (
+        ""
+        if observation is None
+        else f" Simulated GRF enters every force term as measured: through the target's {observation.cutoff_hz:g} Hz "
+        f"zero-lag Butterworth and {observation.gate_n:g} N gate. Content above that bandwidth, which the target "
+        f"cannot show, adds (vibration RMS / 100 N)² weighted by {observation.vibration_weight:g}²."
+    )
 
     def change(split_name):
         if split_name not in summary["splits"]:
@@ -349,6 +389,8 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
         total=len(summary["trials"]),
         optimizer=optimizer,
         objective=html.escape(summary.get("objective", "identify.score")),
+        actuation=actuation,
+        observation=html.escape(observation_note),
         convergence=_convergence(summary),
         wall=summary.get("wall_s", 0.0) / 60.0,
         reproduce=html.escape(reproduce),
@@ -387,9 +429,9 @@ _PAGE = """<!doctype html>
 </section>
 <section id="method"><h2>4. Method</h2>
 <div class="equation">&tau; = K(s) (q<sub>eq</sub>(s) &minus; q) &minus; D(s) q̇,&nbsp;&nbsp; s = (oscillator phase, filtered simulated load, posture, speed)</div>
-<p>Planar chain: hip x and z, lumped rest-of-body tilt, hip, knee, and ankle, with the column-bed digital shoe on the foot. Only the hip, knee, and ankle are actuated; torques pass through a first-order response and slew bound. The weights are shared by all stances; there are no stance-specific coefficients.</p>
+<p>Planar chain: hip x and z, lumped rest-of-body tilt, hip, knee, and ankle, with the column-bed digital shoe on the foot. Only the hip, knee, and ankle are actuated; {actuation}. The weights are shared by all stances; there are no stance-specific coefficients.</p>
 <p><b>Initialization.</b> Positions come from the three-frame flight prefix, and joint rates from backward quadratic differentiation. The hip velocity is set so the model&rsquo;s whole-body center of mass moves at the flight velocity integrated from the preceding stride&rsquo;s treadmill plate force ({flight}/{total} stances; the rest have no preceding stride and use the three-frame hip estimate). The swinging leg alone carries enough momentum to shift the COM by about 0.3 m/s, so matching the hip instead biases the start.</p>
-<p><b>Loss</b> per stance: mean over hip x, z of (RMSE / 0.02 m)&sup2; + mean over the four angles of (RMSE / 0.05 rad)&sup2; + mean over Fx, Fz of (RMSE / 100 N)&sup2; + (peak Fz error / 100 N)&sup2; + mean over axes of (impulse error / 20 N·s)&sup2; + (contact error / 0.02 s)&sup2; + 0.01 &times; normalized effort, plus a penalty for an unfinished rollout. Optimizer objective: {objective}.</p>
+<p><b>Loss</b> per stance: mean over hip x, z of (RMSE / 0.02 m)&sup2; + mean over the four angles of (RMSE / 0.05 rad)&sup2; + mean over Fx, Fz of (RMSE / 100 N)&sup2; + (peak Fz error / 100 N)&sup2; + mean over axes of (impulse error / 20 N·s)&sup2; + (contact error / 0.02 s)&sup2; + 0.01 &times; normalized effort, plus a penalty for an unfinished rollout.{observation} Optimizer objective: {objective}.</p>
 <p><b>Fit.</b> {optimizer}. Selection uses training stances only.</p>
 {convergence}
 </section>

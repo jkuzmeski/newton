@@ -12,6 +12,8 @@ hip, knee, and ankle are actuated.
 - Dataset: `outputs/impedance_instron/generative_fit_dataset_flight_20261008`.
 - Subject: 66 kg; belt: 3.65 m/s; 98 training and 9 held-out stances.
 - Mean loss: **16.079667862151016 train**, **14.796461691170371 held-out**.
+- Fitted to the original F01 exports (6 Hz plate filter, 66 kg); new fits use
+  the 20 Hz exports below.
 
 The saved model, scenarios, traces, summaries, and report are not rewritten by
 cleanup. Local motion and shoe assets are required; see
@@ -40,6 +42,24 @@ exact; `--exact-jacobian` replays the original rollouts exactly at about 20 s
 per iteration. `--chunk` (default 128) sets candidates integrated
 concurrently; 128 candidates over 98 stances need about 2.5 GB of GPU memory,
 so lower it on smaller GPUs. It changes speed, not results.
+
+The F01 force exports are now low-passed at 20 Hz, the running convention, and
+use the measured 66.5 kg body mass. New fits should score the simulated force
+the way the target was filtered and let the impedance damping act without the
+torque lag. See
+[GRF targets and force ripple](hogan/GENERATIVE_RUNNER.md#grf-targets-and-force-ripple-2026-10-09):
+
+```console
+uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_instron/generative_fit_dataset_20hz_20261009 --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --model projects/impedance_instron/hogan/baselines/generative_runner_f01_20261008.json --force-filter-hz 20 --immediate-damping --output outputs/impedance_instron/hogan_fit_20hz
+```
+
+That dataset repeats the 2026-10-08 recipe on the new exports:
+
+- `prepare --data-root data/F01 --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894`.
+- The shoe is `fr3_2_hogan_reference_sole/digital_shoe.json`.
+- The leg profile is mass-scaled to 66.5 kg.
+- The three stances whose relaxed shoe starts below ground are dropped;
+  `inspect` reports them.
 
 Leg profiles need only `masses_kg` (3), `com_local_m` (3 by 2),
 `inertias_kg_m2` (3), and `provenance.inertial`. Old gain/limit fields are

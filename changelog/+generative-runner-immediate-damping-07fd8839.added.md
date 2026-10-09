@@ -1,0 +1,1 @@
+Add an opt-in immediate-damping mode to the impedance_instron generative runner (`Runner(immediate_damping=True)`, `identify fit --immediate-damping`). Only the spring torque then passes through the torque response lag and slew bound, so the scheduled damping can damp stance foot and leg vibration on the shoe. Saved models keep the fully lagged command.
