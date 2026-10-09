@@ -326,14 +326,15 @@ def predict(runner: Runner, trial: Trial, config: RolloutConfig, *, device: str 
 
 
 def predict_many(models: list[Runner], trials: list[Trial], config: RolloutConfig, *, device: str) -> list:
-    """Predict concurrent candidates, streaming trial groups to bound trace memory."""
+    """Predict concurrent candidates, streaming trial blocks to bound trace memory."""
     if device == "cpu":
         return [[predict(model, trial, config) for trial in trials] for model in models]
     from .gpu_runner import GpuBatch  # noqa: PLC0415 - keep CPU inspection independent of CUDA modules
 
     result = [[] for _ in models]
-    for start in range(0, len(trials), 4):
-        group = trials[start : start + 4]
+    block = max(1, 128 // len(models))
+    for start in range(0, len(trials), block):
+        group = trials[start : start + block]
         batch = GpuBatch(
             [t.chain for t in group],
             [t.shoe for t in group],
@@ -517,7 +518,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit-per-split", type=int, help="Explicit small subset for implementation checks")
     parser.add_argument("--method", choices=("lm",), default="lm", help="Levenberg-Marquardt fit")
     parser.add_argument("--iterations", type=int, default=15, help="LM iterations")
-    parser.add_argument("--chunk", type=int, default=16, help="LM candidates per batched GPU rollout")
+    parser.add_argument("--chunk", type=int, default=128, help="LM candidates per batched GPU rollout")
     parser.add_argument("--central", action="store_true", help="LM central-difference Jacobian")
     parser.add_argument(
         "--intrinsic-damping",
@@ -595,6 +596,8 @@ def main(argv: list[str] | None = None) -> None:
         Path(__file__).with_name("generate.py"),
         Path(__file__).with_name("mechanics.py"),
         Path(__file__).with_name("gpu_runner.py"),
+        Path(__file__).with_name("gpu_residuals.py"),
+        Path(__file__).with_name("gpu_shoe.py"),
         Path(__file__).with_name("gpu_mechanics.py"),
         Path(__file__).with_name("least_squares.py"),
         project_root / "cartesian/shoe.py",

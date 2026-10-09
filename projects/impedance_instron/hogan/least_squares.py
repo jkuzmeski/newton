@@ -107,32 +107,14 @@ def _describe(metrics: dict) -> str:
 
 
 class _Rollouts:
-    """Evaluate stacked residual vectors, reusing GPU batches across calls."""
+    """Evaluate stacked residual vectors on the host reference backend."""
 
     def __init__(self, parameters: Parameterization, trials: list[Trial], config: RolloutConfig, device: str):
         self.parameters, self.trials, self.config, self.device = parameters, trials, config, device
-        self.batches = {}
         self.rollouts = 0
 
     def _predict(self, models: list[Runner]) -> list:
-        if self.device == "cpu":
-            return predict_many(models, self.trials, self.config, device="cpu")
-        from .gpu_runner import GpuBatch  # noqa: PLC0415 - optional execution backend
-
-        size = len(models)
-        if size not in self.batches:
-            t = self.trials
-            self.batches[size] = GpuBatch(
-                [x.chain for x in t],
-                [x.shoe for x in t],
-                [x.initial for x in t],
-                [x.task for x in t],
-                [x.duration_s for x in t],
-                candidates=size,
-                config=self.config,
-                device=self.device,
-            )
-        return self.batches[size].evaluate(models)
+        return predict_many(models, self.trials, self.config, device=self.device)
 
     def __call__(self, offsets: np.ndarray, chunk: int, *, metrics: bool = False) -> list[np.ndarray | None]:
         """Return one residual vector per offset row, ``None`` if any trial fails.
@@ -144,13 +126,10 @@ class _Rollouts:
         self.metrics = []
         for start in range(0, len(offsets), chunk):
             block = offsets[start : start + chunk]
-            # Pad to a fixed width so each persistent batch keeps its captured graph.
-            width = chunk if len(offsets) > chunk else len(block)
-            padded = np.vstack((block, np.repeat(block[-1:], width - len(block), axis=0)))
-            models = [self.parameters.model(x) for x in padded]
-            rows = self._predict(models)[: len(block)]
-            self.rollouts += len(padded) * len(self.trials)
-            for model, row in zip(models, rows, strict=False):
+            models = [self.parameters.model(x) for x in block]
+            rows = self._predict(models)
+            self.rollouts += len(block) * len(self.trials)
+            for model, row in zip(models, rows, strict=True):
                 if metrics:
                     self.metrics.append(
                         motion_metrics(
@@ -164,8 +143,119 @@ class _Rollouts:
         return result
 
 
-def _augment(r: np.ndarray, x: np.ndarray, regularization: float) -> np.ndarray:
-    return np.concatenate((r, math.sqrt(regularization / len(x)) * x))
+def _columns(size: int, step: float, central: bool, plus_ok, minus_ok):
+    """Choose each finite-difference column's operands; failed perturbations fall back."""
+    plus, minus, denominator = [], [], []
+    for i in range(size):
+        if plus_ok[i] and (not central or minus_ok[i]):
+            plus.append(("plus", i))
+            minus.append(("minus", i) if central else ("reference", i))
+            denominator.append(2 * step if central else step)
+        elif central and (plus_ok[i] or minus_ok[i]):
+            plus.append(("plus", i) if plus_ok[i] else ("reference", i))
+            minus.append(("reference", i) if plus_ok[i] else ("minus", i))
+            denominator.append(step)
+        else:
+            plus.append(None)
+            minus.append(None)
+            denominator.append(0.0)
+    return plus, minus, denominator
+
+
+class _HostEngine:
+    """Keep residual vectors and the Jacobian in host memory (CPU reference)."""
+
+    def __init__(self, parameters: Parameterization, trials: list[Trial], config: RolloutConfig, search: LMConfig):
+        self.parameters, self.search = parameters, search
+        self.rollouts_runner = _Rollouts(parameters, trials, config, "cpu")
+
+    @property
+    def rollouts(self) -> int:
+        return self.rollouts_runner.rollouts
+
+    def start(self, x: np.ndarray):
+        value = self.rollouts_runner(x[None], 1, metrics=True)[0]
+        if value is None:
+            return None
+        self.r0 = value
+        return float(value @ value), self.rollouts_runner.metrics[0]
+
+    def jacobian(self, x: np.ndarray):
+        size, search = self.parameters.size, self.search
+        eye = np.eye(size) * search.step
+        perturbed = np.vstack((x + eye, x - eye)) if search.central else x + eye
+        values = self.rollouts_runner(perturbed, search.chunk)
+        plus_ok = [v is not None for v in values[:size]]
+        minus_ok = [v is not None for v in values[size:]] if search.central else [True] * size
+        sources = {"plus": values[:size], "minus": values[size:], "reference": [self.r0] * size}
+        plus, minus, denominator = _columns(size, search.step, search.central, plus_ok, minus_ok)
+        jacobian = np.zeros((len(self.r0), size))
+        for i, (a, b, den) in enumerate(zip(plus, minus, denominator, strict=True)):
+            if den:
+                jacobian[:, i] = (sources[a[0]][i] - sources[b[0]][i]) / den
+        return jacobian.T @ jacobian, jacobian.T @ self.r0, sum(not den for den in denominator)
+
+    def trial(self, proposals: np.ndarray):
+        self._candidates = self.rollouts_runner(proposals, len(proposals), metrics=True)
+        sums = [math.inf if v is None else float(v @ v) for v in self._candidates]
+        return sums, self.rollouts_runner.metrics
+
+    def accept(self, index: int) -> None:
+        self.r0 = self._candidates[index]
+
+
+class _DeviceEngine:
+    """Keep residual rows, the Jacobian, and ``J^T J`` on the CUDA device."""
+
+    def __init__(
+        self, parameters: Parameterization, trials: list[Trial], config: RolloutConfig, search: LMConfig, device
+    ):
+        from .gpu_residuals import GpuResiduals  # noqa: PLC0415 - optional execution backend
+
+        self.parameters, self.search = parameters, search
+        size = parameters.size
+        jacobian_rows = 2 * size if search.central else size
+        # Row ``size`` briefly holds the reference for the fused J^T J / J^T r product.
+        self.ladder_row = max(jacobian_rows, size + 1)
+        self.reference_row = self.ladder_row + len(search.ladder)
+        self.objective = GpuResiduals(trials, config, rows=self.reference_row + 1, device=device, chunk=search.chunk)
+
+    @property
+    def rollouts(self) -> int:
+        return self.objective.rollouts
+
+    def _models(self, offsets):
+        return [self.parameters.model(x) for x in offsets]
+
+    def start(self, x: np.ndarray):
+        completed, sums, motion = self.objective.evaluate(self._models(x[None]), [self.reference_row], metrics=True)
+        if not completed[0]:
+            return None
+        return float(sums[0]), motion_metrics(motion[0])
+
+    def jacobian(self, x: np.ndarray):
+        size, search = self.parameters.size, self.search
+        eye = np.eye(size) * search.step
+        perturbed = np.vstack((x + eye, x - eye)) if search.central else x + eye
+        completed, _, _ = self.objective.evaluate(self._models(perturbed), np.arange(len(perturbed)))
+        plus_ok = completed[:size]
+        minus_ok = completed[size:] if search.central else np.ones(size, dtype=bool)
+        plus, minus, denominator = _columns(size, search.step, search.central, plus_ok, minus_ok)
+        rows = {"plus": lambda i: i, "minus": lambda i: size + i, "reference": lambda i: self.reference_row}
+        plus_rows = [0 if a is None else rows[a[0]](a[1]) for a in plus]
+        minus_rows = [0 if b is None else rows[b[0]](b[1]) for b in minus]
+        normal, gradient = self.objective.normal(plus_rows, minus_rows, denominator, self.reference_row)
+        return normal, gradient, sum(not den for den in denominator)
+
+    def trial(self, proposals: np.ndarray):
+        rows = self.ladder_row + np.arange(len(proposals))
+        completed, sums, motion = self.objective.evaluate(self._models(proposals), rows, metrics=True)
+        return [float(v) if ok else math.inf for ok, v in zip(completed, sums, strict=True)], [
+            motion_metrics(m) for m in motion
+        ]
+
+    def accept(self, index: int) -> None:
+        self.objective.copy_row(self.ladder_row + index, self.reference_row)
 
 
 def fit_lm(
@@ -182,7 +272,9 @@ def fit_lm(
     Each iteration evaluates the Jacobian and all damping-ladder proposals as
     batched rollouts, accepts the lowest-cost completed proposal if it improves
     the cost, and otherwise increases damping. Failed perturbations fall back to
-    a one-sided difference or a zero column for that iteration.
+    a one-sided difference or a zero column for that iteration. On CUDA, the
+    residuals, Jacobian, and ``J^T J`` stay on the device; only the small damped
+    normal-equation solve runs on the host.
     """
     cfg, search = config or RolloutConfig(), search or LMConfig()
     train = [trial for trial in trials if trial.split == "train"]
@@ -194,55 +286,52 @@ def fit_lm(
         raise ValueError(f"Input compatibility failed for {len(incompatible)} trials; run inspect before fitting")
     parameters = Parameterization(baseline, [trial.task.speed_m_s for trial in train])
     size, reg = parameters.size, search.regularization
-    rollouts = _Rollouts(parameters, train, cfg, device)
+    engine = (
+        _HostEngine(parameters, train, cfg, search)
+        if device == "cpu"
+        else _DeviceEngine(parameters, train, cfg, search, device)
+    )
+    penalty_scale = math.sqrt(reg / size)
+
+    def penalty(offsets: np.ndarray) -> float:
+        scaled = penalty_scale * offsets
+        return float(scaled @ scaled)
+
     x = np.zeros(size)
-    r0 = rollouts(x[None], 1, metrics=True)[0]
-    if r0 is None:
+    started = engine.start(x)
+    if started is None:
         raise ValueError("The initial model fails a training trial; LM needs a completed starting point")
-    r = _augment(r0, x, reg)
-    cost = float(r @ r)
+    sample, motion = started
+    cost = sample + penalty(x)
     initial_cost = cost
-    motion = initial_motion = rollouts.metrics[0]
+    initial_motion = motion
     print(f"lm 0/{search.iterations}: cost {cost:.4g} | {_describe(motion)}", flush=True)
     damping = search.damping
     history = []
     started = perf_counter()
     for iteration in range(search.iterations):
         tick = perf_counter()
-        eye = np.eye(size) * search.step
-        perturbed = np.vstack((x + eye, x - eye)) if search.central else x + eye
-        values = rollouts(perturbed, search.chunk)
-        jacobian = np.zeros((len(r0), size))
-        failed_columns = 0
-        for i in range(size):
-            plus = values[i]
-            minus = values[size + i] if search.central else r0
-            if plus is not None and minus is not None:
-                jacobian[:, i] = (plus - minus) / (2 * search.step if search.central else search.step)
-            elif search.central and (plus is not None or minus is not None):
-                jacobian[:, i] = (plus - r0) / search.step if plus is not None else (r0 - minus) / search.step
-            else:
-                failed_columns += 1
-        jacobian = np.vstack((jacobian, math.sqrt(reg / size) * np.eye(size)))
-        normal = jacobian.T @ jacobian
-        gradient = jacobian.T @ r
+        jtj, jtr, failed_columns = engine.jacobian(x)
+        # The offset penalty rows contribute penalty_scale * I to the augmented Jacobian.
+        normal = jtj + penalty_scale * penalty_scale * np.eye(size)
+        gradient = jtr + penalty_scale * (penalty_scale * x)
         scale = np.maximum(np.diag(normal), 1e-12 * max(np.diag(normal).max(), 1e-300))
         proposals = []
         for multiplier in search.ladder:
             delta = np.linalg.solve(normal + damping * multiplier * np.diag(scale), -gradient)
             proposals.append(np.clip(x + delta, -search.bound, search.bound))
         proposals = np.asarray(proposals)
-        costs = []
-        candidate_residuals = rollouts(proposals, len(proposals), metrics=True)
-        for p, value in zip(proposals, candidate_residuals, strict=True):
-            costs.append(math.inf if value is None else float(_augment(value, p, reg) @ _augment(value, p, reg)))
+        sums, motions = engine.trial(proposals)
+        costs = [
+            value + penalty(p) if math.isfinite(value) else math.inf for p, value in zip(proposals, sums, strict=True)
+        ]
         best = int(np.argmin(costs))
         accepted = costs[best] < cost
         improvement = (cost - costs[best]) / cost if accepted else 0.0
         if accepted:
-            x, r0 = proposals[best], candidate_residuals[best]
-            r, cost = _augment(r0, x, reg), costs[best]
-            motion = rollouts.metrics[best]
+            x, cost = proposals[best], costs[best]
+            engine.accept(best)
+            motion = motions[best]
             damping = max(damping * search.ladder[best] / 3.0, 1e-12)
         else:
             damping = min(damping * max(search.ladder) * 10.0, 1e12)
@@ -294,7 +383,7 @@ def fit_lm(
         "final_cost": cost,
         "initial_motion": initial_motion,
         "final_motion": motion,
-        "rollouts": rollouts.rollouts,
+        "rollouts": engine.rollouts,
         "wall_s": perf_counter() - started,
         "history": history,
         "incompatible_trials": incompatible,

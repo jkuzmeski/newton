@@ -28,12 +28,16 @@ uv run --no-sync -m projects.impedance_instron --help
 Reproduce the latest fit from its original seed, including the HTML report:
 
 ```console
-uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_instron/generative_fit_dataset_flight_20261008 --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --chunk 16 --output outputs/impedance_instron/hogan_fit
+uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_instron/generative_fit_dataset_flight_20261008 --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --output outputs/impedance_instron/hogan_fit
 ```
 
 Choose a new output directory. CUDA is the default; `--device cpu` selects the
 reference backend. Use `--limit-per-split 1 --iterations 1` for a small fit.
-The full baseline fit took about 82 minutes on an RTX A4000 Laptop GPU.
+The full baseline fit originally took about 82 minutes on an RTX A4000 Laptop
+GPU; the batched CUDA runtime replays the same rollouts at about 25 s per LM
+iteration. `--chunk` (default 128) sets candidates integrated concurrently; 128
+candidates over 98 stances need about 2.5 GB of GPU memory, so lower it on
+smaller GPUs. It changes speed, not results.
 
 Leg profiles need only `masses_kg` (3), `com_local_m` (3 by 2),
 `inertias_kg_m2` (3), and `provenance.inertial`. Old gain/limit fields are

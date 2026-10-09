@@ -16,7 +16,7 @@ import numpy as np
 import warp as wp
 
 from newton.tests.test_impedance_hogan import _chain, _reference, _tiny_shoe
-from projects.impedance_instron.hogan import generate, gpu_runner, identify, least_squares
+from projects.impedance_instron.hogan import generate, gpu_residuals, gpu_runner, identify, least_squares
 from projects.impedance_instron.hogan.least_squares import LMConfig, fit_lm
 from projects.impedance_instron.hogan.runner import RolloutConfig, Runner, State, Task, simulate
 
@@ -304,19 +304,23 @@ class TestGpuWorkflowCuda(_WorkflowFixture):
         cpu_model, cpu_report = fit_lm(baseline, trials, config=self.config, search=search, device="cpu")
         with (
             patch.object(
-                least_squares._Rollouts, "_predict", autospec=True, side_effect=least_squares._Rollouts._predict
-            ) as predicted,
+                gpu_residuals.GpuResiduals,
+                "evaluate",
+                autospec=True,
+                side_effect=gpu_residuals.GpuResiduals.evaluate,
+            ) as evaluated,
             patch.object(identify, "simulate", side_effect=AssertionError("CUDA fit fell back to CPU")),
+            patch.object(least_squares, "predict_many", side_effect=AssertionError("Host residuals on CUDA")),
         ):
             gpu_model, report = fit_lm(baseline, trials, config=self.config, search=search, device="cuda:0")
-        self.assertGreater(predicted.call_count, 1)
-        rollouts = predicted.call_args_list[0].args[0]
-        self.assertEqual(rollouts.device, "cuda:0")
-        self.assertEqual(len(rollouts.trials), 1)
-        self.assertIs(rollouts.trials[0], training)
-        self.assertEqual(set(rollouts.batches), {1, search.chunk, len(search.ladder)})
-        for call in predicted.call_args_list:
-            self.assertIs(call.args[0], rollouts)
+        self.assertGreater(evaluated.call_count, 1)
+        objective = evaluated.call_args_list[0].args[0]
+        self.assertEqual(objective.device, wp.get_device("cuda:0"))
+        self.assertEqual(len(objective.trials), 1)
+        self.assertIs(objective.trials[0], training)
+        self.assertEqual({capacity for _, capacity in objective._groups}, {1, search.chunk, len(search.ladder)})
+        for call in evaluated.call_args_list:
+            self.assertIs(call.args[0], objective)
         self.assertEqual(baseline.to_dict(), before)
         np.testing.assert_array_equal(training.initial.q, initial.q)
         np.testing.assert_array_equal(training.initial.v, initial.v)

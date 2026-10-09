@@ -26,6 +26,7 @@ from projects.digital_shoe.runtime import (
     _pasternak_coupling,
     _surround_balance,
     _surround_write_free_top,
+    maxwell_coefficients_numpy,
     surround_write_free_top,
 )
 
@@ -49,6 +50,8 @@ def _surround_world(
     body_q: wp.array[wp.transform],
     driven: wp.array[wp.int32],
     neighbors: wp.array2d[wp.int32],
+    lane_column: wp.array[wp.int32],
+    neighbor_slot: wp.array2d[wp.int32],
     anchor_local: wp.array[wp.vec3],
     z_free_rigid: wp.array[wp.float32],
     rest_len: wp.array[wp.float32],
@@ -67,7 +70,13 @@ def _surround_world(
     compression_in: wp.array[wp.float32],
     compression_out: wp.array[wp.float32],
 ):
-    """Exchange old compression through a tile before each unchanged Jacobi sweep."""
+    """Exchange old compression through a tile before each unchanged Jacobi sweep.
+
+    Lanes own columns through ``lane_column``, which packs undriven columns into
+    the leading warps so the expensive balance runs without idle driven lanes.
+    Jacobi sweeps are order independent, so the permutation leaves results bitwise
+    unchanged; ``neighbor_slot`` locates each neighbour in the permuted tile.
+    """
     p = params[world_index]
     gain = overstress_gain[world_index]
     c = _ColumnValues(0.0)
@@ -76,13 +85,15 @@ def _surround_world(
     column_area = _ColumnValues(0.0)
     overstress = _ColumnValues(0.0)
     driven_column = _ColumnFlags(0)
+    columns = _ColumnFlags(-1)
     neighbor_ids = _Neighbors(-1)
     couplings = _Couplings(0.0)
     coupling_sum = _ColumnValues(0.0)
     for row in range(_ROWS):
-        column = row * _BLOCK + lane
+        column = lane_column[row * _BLOCK + lane]
+        columns[row] = column
         i = world_index * column_count + column
-        if column < column_count:
+        if column >= 0:
             c[row] = compression_in[i]
             world = wp.transform_point(body_q[carrier[world_index]], anchor_local[column])
             rigid[row] = z_free_rigid[column] - world[2]
@@ -92,7 +103,7 @@ def _surround_world(
             overstress[row] = decay[world_index] * q_state[i] - gain * peq_prev[i]
             for side in range(4):
                 j = neighbors[column, side]
-                neighbor_ids[row, side] = j
+                neighbor_ids[row, side] = neighbor_slot[column, side]
                 if j >= 0:
                     coupling = coupling_scale * _pasternak_coupling(thickness[row], rest_len[j], p)
                     couplings[row, side] = coupling
@@ -104,8 +115,8 @@ def _surround_world(
         shared = wp.tile(c)
         next_c = c
         for row in range(_ROWS):
-            column = row * _BLOCK + lane
-            if column < column_count:
+            column = columns[row]
+            if column >= 0:
                 if driven_column[row] != 0:
                     next_c[row] = wp.max(rigid[row], 0.0)
                 else:
@@ -151,9 +162,9 @@ def _surround_world(
         penultimate = c
         c = next_c
     for row in range(_ROWS):
-        column = row * _BLOCK + lane
+        column = columns[row]
         i = world_index * column_count + column
-        if column < column_count:
+        if column >= 0:
             compression_in[i] = c[row]
             if sweeps % 2 == 0:
                 compression_out[i] = penultimate[row]
@@ -171,6 +182,8 @@ def _surround_fused(
     body_q: wp.array[wp.transform],
     driven: wp.array[wp.int32],
     neighbors: wp.array2d[wp.int32],
+    lane_column: wp.array[wp.int32],
+    neighbor_slot: wp.array2d[wp.int32],
     anchor_local: wp.array[wp.vec3],
     z_free_rigid: wp.array[wp.float32],
     rest_len: wp.array[wp.float32],
@@ -183,7 +196,7 @@ def _surround_fused(
     coupling_scale: wp.float32,
     attachment: wp.float32,
     max_strain: wp.float32,
-    relaxation: wp.float32,
+    relaxation: wp.array[wp.float32],
     carrier_bond: wp.int32,
     sweeps: int,
     compression_in: wp.array[wp.float32],
@@ -202,6 +215,8 @@ def _surround_fused(
         body_q,
         driven,
         neighbors,
+        lane_column,
+        neighbor_slot,
         anchor_local,
         z_free_rigid,
         rest_len,
@@ -214,7 +229,7 @@ def _surround_fused(
         coupling_scale,
         attachment,
         max_strain,
-        relaxation,
+        relaxation[world_index],
         carrier_bond,
         sweeps,
         compression_in,
@@ -233,6 +248,9 @@ class FoundationFused(MidsoleFoundation):
     blocks to avoid register spills and idle reduction lanes. World-coupled/custom
     adapters retain the shared runtime fallback. Attach or replace adapters before
     graph capture; existing settings arrays may be updated between replays.
+
+    Fused CUDA worlds may also advance with individual timesteps; see
+    :meth:`set_world_timesteps`.
     """
 
     @wp.struct
@@ -247,6 +265,8 @@ class FoundationFused(MidsoleFoundation):
         column_count: wp.int32
         driven: wp.array[wp.int32]
         neighbors: wp.array2d[wp.int32]
+        lane_column: wp.array[wp.int32]
+        neighbor_slot: wp.array2d[wp.int32]
         anchor_local: wp.array[wp.vec3]
         z_free_rigid: wp.array[wp.float32]
         rest_len: wp.array[wp.float32]
@@ -259,17 +279,17 @@ class FoundationFused(MidsoleFoundation):
         coupling_scale: wp.float32
         attachment: wp.float32
         max_strain: wp.float32
-        relaxation: wp.float32
+        world_relaxation: wp.array[wp.float32]
         carrier_bond: wp.int32
         sweeps: int
         surround_compression: wp.array[wp.float32]
         surround_scratch: wp.array[wp.float32]
-        inv_dt: wp.float32
+        world_inv_dt: wp.array[wp.float32]
         compression: wp.array[wp.float32]
         surround_previous: wp.array[wp.float32]
         z_free: wp.array[wp.float32]
         surround_rate: wp.array[wp.float32]
-        dt: wp.float32
+        world_dt: wp.array[wp.float32]
         base_pressure: wp.array[wp.float32]
         body_com: wp.array[wp.vec3]
         tangent_anchor: wp.array[wp.vec2]
@@ -323,11 +343,86 @@ class FoundationFused(MidsoleFoundation):
         self.enabled = wp.ones(self.world_count, dtype=int, device=self.device)
         self.fused_apply = True
         self._unique_carriers = len(np.unique(self.carrier.numpy())) == self.world_count
+        # Pack undriven columns into the leading surround lanes; see _surround_world.
+        driven = self.driven.numpy()
+        order = np.concatenate((np.flatnonzero(driven == 0), np.flatnonzero(driven != 0)))
+        slots = np.full(_ROWS * _BLOCK, -1, dtype=np.int32)
+        slots[: min(len(order), len(slots))] = order[: len(slots)]
+        position = np.empty(self.column_count, dtype=np.int32)
+        position[order] = np.arange(self.column_count, dtype=np.int32)
+        neighbors = self.neighbors.numpy()
+        self.lane_column = wp.array(slots, dtype=wp.int32, device=self.device)
+        self.neighbor_slot = wp.array(
+            np.where(neighbors >= 0, position[np.maximum(neighbors, 0)], -1).astype(np.int32),
+            dtype=wp.int32,
+            device=self.device,
+        )
+        w = self.world_count
+        self.world_dt = wp.zeros(w, dtype=wp.float32, device=self.device)
+        self.world_inv_dt = wp.zeros(w, dtype=wp.float32, device=self.device)
+        self.world_relaxation = wp.zeros(w, dtype=wp.float32, device=self.device)
+        self._timesteps = None
+        self._timestep_version = 0
+        self._timestep_key = None
 
-    def _refresh_surround_constants(self, dt: float) -> None:
+    def set_world_timesteps(self, dt_s) -> None:
+        """Give every fused CUDA world its own substep for :meth:`apply` with ``dt=None``.
+
+        Each world's Maxwell, surround and friction updates then match a uniform
+        :meth:`apply` at that world's substep bit for bit. Call before graph
+        capture; the per-world constants are copied to the device here.
+
+        Args:
+            dt_s: Positive substep per world [s], shape [world_count].
+        """
+        values = np.array(dt_s, dtype=np.float64, copy=True)
+        if values.shape != (self.world_count,) or not np.isfinite(values).all() or np.any(values <= 0):
+            raise ValueError("dt_s must contain one finite positive substep per world")
+        self._timesteps = values
+        self._timestep_version += 1
+        self._use_timesteps(None)
+
+    def _use_timesteps(self, dt: float | None) -> None:
+        """Publish uniform or per-world substep constants when they change."""
+        key = ("world", self._timestep_version) if dt is None else ("uniform", float(dt))
+        if key == self._timestep_key:
+            return
+        if dt is None:
+            if self._timesteps is None:
+                raise ValueError("Per-world substeps need set_world_timesteps first")
+            dts = self._timesteps
+        else:
+            dts = np.full(self.world_count, float(dt))
+        tau = float(self.surround.relaxation_time_s) if self.surround is not None else 0.0
+        sweeps = int(self.surround.sweeps) if self.surround is not None else 1
+        # Mirror the scalar host expressions so each world rounds exactly as before.
+        self.world_dt.assign(np.array([float(x) for x in dts], dtype=np.float32))
+        self.world_inv_dt.assign(np.array([float(1.0 / x) for x in dts], dtype=np.float32))
+        self.world_relaxation.assign(
+            np.array([1.0 if tau <= 0.0 else 1.0 - float(np.exp(-(x / sweeps) / tau)) for x in dts], dtype=np.float32)
+        )
+        self._timestep_key = key
+
+    def _refresh_surround_constants(self, dt: float | None) -> None:
         if self._materials_dirty:
             self._refresh_zero_pressure()
-        super()._refresh_surround_constants(dt)
+        if dt is not None:
+            super()._refresh_surround_constants(dt)
+            return
+        key = ("world", self._timestep_version)
+        if self._surround_dt_s == key and not self._materials_dirty:
+            return
+        decay = np.empty(self.world_count, np.float32)
+        gain = np.empty(self.world_count, np.float32)
+        for index, (block, step) in enumerate(zip(self.world_blocks, self._timesteps, strict=True)):
+            world_decay, ramp = maxwell_coefficients_numpy(float(step), block.tau_s)
+            decay[index] = world_decay
+            gain[index] = float(block.overstress * ramp)
+        self.surround_decay.assign(decay)
+        self.surround_gain.assign(gain)
+        # The base cache compares floats, so a tuple forces its next uniform refresh.
+        self._surround_dt_s = key
+        self._materials_dirty = False
 
     def _refresh_zero_pressure(self):
         wp.launch(
@@ -355,11 +450,21 @@ class FoundationFused(MidsoleFoundation):
             and self._unique_carriers
         )
 
-    def apply(self, state, dt: float, clear_body_force: bool = False) -> None:
-        """Fuse unchanged shoe stages within each world's CUDA block."""
+    def apply(self, state, dt: float | None, clear_body_force: bool = False) -> None:
+        """Fuse unchanged shoe stages within each world's CUDA block.
+
+        Args:
+            state: Carrier state with ``body_q``, ``body_qd`` and ``body_f``.
+            dt: Substep [s], or ``None`` for the fused-only per-world substeps of
+                :meth:`set_world_timesteps`.
+            clear_body_force: Overwrite rather than add the carrier wrench.
+        """
         if not self._fused_eligible or not clear_body_force:
+            if dt is None:
+                raise ValueError("Per-world substeps require the fused CUDA path with clear_body_force")
             super().apply(state, dt, clear_body_force)
             return
+        self._use_timesteps(dt)
         self._refresh_surround_constants(dt)
         cfg = self.surround
         data = self.Data()
@@ -371,6 +476,8 @@ class FoundationFused(MidsoleFoundation):
         data.column_count = self.column_count
         data.driven = self.driven
         data.neighbors = self.neighbors
+        data.lane_column = self.lane_column
+        data.neighbor_slot = self.neighbor_slot
         data.anchor_local = self.anchor_local
         data.rest_len = self.rest_len
         data.area = self.area
@@ -379,24 +486,22 @@ class FoundationFused(MidsoleFoundation):
         data.world_params = self.world_params
         data.surround_decay = self.surround_decay
         data.surround_gain = self.surround_gain
+        data.world_relaxation = self.world_relaxation
         if self.free_column_count:
             data.z_free_rigid = self.z_free_rigid
             data.coupling_scale = float(cfg.coupling_scale)
             data.attachment = float(cfg.attachment_n_m)
             data.max_strain = float(cfg.max_strain)
-            data.relaxation = (
-                1.0 if cfg.relaxation_time_s <= 0.0 else 1.0 - float(np.exp(-dt / cfg.sweeps / cfg.relaxation_time_s))
-            )
             data.carrier_bond = int(bool(cfg.carrier_bond))
             data.sweeps = int(cfg.sweeps)
             data.surround_compression = self.surround_compression
             data.surround_scratch = self.surround_scratch
             data.surround_previous = self.surround_previous
             data.surround_rate = self.surround_rate
-        data.inv_dt = float(1.0 / dt)
+        data.world_inv_dt = self.world_inv_dt
         data.compression = self.compression
         data.z_free = self.z_free
-        data.dt = float(dt)
+        data.world_dt = self.world_dt
         data.base_pressure = self.base_pressure
         data.body_com = self.body_com
         data.tangent_anchor = self.tangent_anchor
@@ -492,13 +597,10 @@ class FoundationFused(MidsoleFoundation):
             device=self.device,
         )
 
-    def _relax_surround_block(self, state, dt: float, *, mask_worlds=False) -> None:
+    def _relax_surround_block(self, state, dt: float | None, *, mask_worlds=False) -> None:
         """Keep sweep temporaries out of the friction kernel's register budget."""
         cfg = self.surround
-        sweeps = int(cfg.sweeps)
-        sub_dt = dt / sweeps
-        tau = float(cfg.relaxation_time_s)
-        relaxation = 1.0 if tau <= 0.0 else 1.0 - float(np.exp(-sub_dt / tau))
+        self._use_timesteps(dt)
         self._refresh_surround_constants(dt)
         wp.launch_tiled(
             _surround_fused,
@@ -513,6 +615,8 @@ class FoundationFused(MidsoleFoundation):
                 state.body_q,
                 self.driven,
                 self.neighbors,
+                self.lane_column,
+                self.neighbor_slot,
                 self.anchor_local,
                 self.z_free_rigid,
                 self.rest_len,
@@ -525,9 +629,9 @@ class FoundationFused(MidsoleFoundation):
                 float(cfg.coupling_scale),
                 float(cfg.attachment_n_m),
                 float(cfg.max_strain),
-                relaxation,
+                self.world_relaxation,
                 int(bool(cfg.carrier_bond)),
-                sweeps,
+                int(cfg.sweeps),
                 self.surround_compression,
                 self.surround_scratch,
             ],
@@ -558,6 +662,7 @@ def _apply_world_step(
     """Keep each world's shared-law stages and ordered reductions in one block."""
     if data.enabled[world_index] == 0:
         return
+    dt = data.world_dt[world_index]
     if lane == 0:
         body_f[data.carrier[world_index]] = wp.spatial_vector(wp.vec3(0.0), wp.vec3(0.0))
     if relax and data.free_column_count:
@@ -570,6 +675,8 @@ def _apply_world_step(
             body_q,
             data.driven,
             data.neighbors,
+            data.lane_column,
+            data.neighbor_slot,
             data.anchor_local,
             data.z_free_rigid,
             data.rest_len,
@@ -582,7 +689,7 @@ def _apply_world_step(
             data.coupling_scale,
             data.attachment,
             data.max_strain,
-            data.relaxation,
+            data.world_relaxation[world_index],
             data.carrier_bond,
             data.sweeps,
             data.surround_compression,
@@ -600,7 +707,7 @@ def _apply_world_step(
                     i,
                     data.carrier,
                     data.column_count,
-                    data.inv_dt,
+                    data.world_inv_dt[world_index],
                     body_q,
                     data.driven,
                     data.anchor_local,
@@ -614,7 +721,7 @@ def _apply_world_step(
                 i,
                 data.carrier,
                 data.column_count,
-                data.dt,
+                dt,
                 body_q,
                 data.anchor_local,
                 data.z_free,
@@ -634,7 +741,7 @@ def _apply_world_step(
                 i,
                 data.carrier,
                 data.column_count,
-                data.dt,
+                dt,
                 body_q,
                 body_qd,
                 data.body_com,
@@ -685,7 +792,7 @@ def _apply_world_step(
                     data.friction_stored_energy,
                     data.friction_column_diagnostics,
                     data.friction_step_diagnostics,
-                    data.dt,
+                    dt,
                 )
     if relax:
         _sync_threads()

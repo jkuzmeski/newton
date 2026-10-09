@@ -206,36 +206,18 @@ def _finite6(x: Vec6):
     return ok
 
 
-@wp.kernel
-def _stage(
-    params: wp.array[ChainParams],
-    cfg: Settings,
-    status: wp.array[int],
-    state: wp.array[Vec6],
-    velocity: wp.array[Vec6],
-    body_q: wp.array[wp.transform],
-    body_qd: wp.array[wp.spatial_vector],
-):
-    w = wp.tid()
-    if status[w] != 0:
-        return
-    q = state[w]
-    v = velocity[w]
-    position, jx, jz, angle = _ankle(q, params[w % cfg.stance_count])
-    half = (angle - cfg.pitch) / wp.float64(2.0)
-    body_q[w] = wp.transform(
+@wp.func
+def _carrier(q: Vec6, v: Vec6, p: ChainParams, pitch: wp.float64):
+    """Return the float32 shoe-carrier pose and twist of the foot segment."""
+    position, jx, jz, angle = _ankle(q, p)
+    half = (angle - pitch) / wp.float64(2.0)
+    transform = wp.transform(
         wp.vec3(wp.float32(position[0]), 0.0, wp.float32(position[1])),
         wp.quat(0.0, wp.float32(-wp.sin(half)), 0.0, wp.float32(wp.cos(half))),
     )
     omega = v[2] + v[3] + v[4] + v[5]
-    body_qd[w] = wp.spatial_vector(
-        wp.float32(wp.dot(jx, v)), 0.0, wp.float32(wp.dot(jz, v)), 0.0, wp.float32(-omega), 0.0
-    )
-
-
-@wp.kernel
-def _tick(clock: wp.array[int]):
-    clock[0] = clock[0] + 1
+    twist = wp.spatial_vector(wp.float32(wp.dot(jx, v)), 0.0, wp.float32(wp.dot(jz, v)), 0.0, wp.float32(-omega), 0.0)
+    return transform, twist
 
 
 def _chain_params(chain: Chain) -> ChainParams:

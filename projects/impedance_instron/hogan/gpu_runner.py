@@ -4,18 +4,23 @@
 """CUDA candidate rollouts of the causal runner, without tracking-plan inputs.
 
 The chain, actuator, oscillator, and load memory use float64; the unchanged shoe
-runtime uses float32. Worlds are candidate-major within each group. Groups share
-one shoe instance and an *exact* integration timestep, including the duration /
-ceil(duration / maximum_dt) adjustment. Different geometries and timesteps never
-silently inherit the first trial's settings.
+runtime uses float32. Worlds are candidate-major within each group, and a group
+shares one shoe instance. Every world keeps its own trial's *exact* integration
+timestep, duration / ceil(duration / maximum_dt), in both the chain and the shoe,
+so stances with different horizons integrate concurrently without inheriting
+another trial's settings.
 
-Only graph chunks are dispatched from Python during integration. Full traces
-remain resident until all groups finish; summaries and offline identification
-scores can then be computed on the host. Trace memory is O(candidates * trials *
-steps), not bounded by chunk_steps. max_trials_per_group bounds padding and the
-world count per group, not aggregate trace storage; callers should batch large
-datasets/populations themselves. Separate but equivalent Shoe objects are kept
-in separate groups deliberately, avoiding assumptions about mutable shoe setup.
+Only graph chunks are dispatched from Python during integration. Each step runs
+actuation with carrier staging, the shoe (the lean kernels of :mod:`.gpu_shoe`
+for elastic-Coulomb ground beds, otherwise the generic fused foundation plus a
+warp-per-world compression screen), and integration, plus optional observers
+such as the on-device LM objective of :mod:`.gpu_residuals`.
+Full traces remain resident until all groups finish; summaries and offline
+identification scores can then be computed on the host. Trace memory is
+O(candidates * trials * steps); max_trials_per_group bounds the world count per
+group, not aggregate trace storage. Separate but equivalent Shoe objects are
+kept in separate groups deliberately, avoiding assumptions about mutable shoe
+setup.
 """
 
 from __future__ import annotations
@@ -38,13 +43,13 @@ from .gpu_mechanics import (
     Vec6,
     _angular,
     _ankle,
+    _carrier,
     _chain_params,
     _cholesky_solve,
     _dynamics,
     _finite6,
-    _stage,
-    _tick,
 )
+from .gpu_shoe import apply_ground_shoe, ground_shoe, reset_ground_shoe
 from .mechanics import Chain
 from .runner import FEATURE_NAMES, RolloutConfig, Runner, State, Task, _summary
 
@@ -54,6 +59,7 @@ _FEATURE_COUNT = wp.constant(len(FEATURE_NAMES))
 _Features = wp.types.vector(_FEATURE_COUNT, wp.float64)
 _TWO_PI = wp.constant(wp.float64(2.0 * math.pi))
 _HALF_PI = wp.constant(wp.float64(math.pi / 2.0))
+_INACTIVE = wp.constant(10)
 _FAILURES = {
     2: "Hip height screen exceeded",
     3: "Numerical speed screen exceeded",
@@ -73,9 +79,7 @@ class _Model:
     stiffness: wp.vec3d
     damping: wp.vec3d
     torque_cap: wp.vec3d
-    torque_step: wp.vec3d
-    response_fraction: wp.float64
-    load_fraction: wp.float64
+    torque_rate: wp.vec3d
     frequency: wp.float64
     reference_speed: wp.float64
     speed_scale: wp.float64
@@ -100,14 +104,17 @@ class _Output:
 class _Buffers:
     state: wp.array[Vec6]
     velocity: wp.array[Vec6]
+    previous: wp.array[Vec6]
     torque: wp.array[wp.vec3d]
     sensory: wp.array[wp.vec2d]
+    load: wp.array[Vec6]
+    grf: wp.array[wp.vec2d]
     status: wp.array[int]
     recorded: wp.array[int]
-    clock: wp.array[int]
     enabled: wp.array[int]
     fraction: wp.array[wp.float64]
     invalid_compression: wp.array[int]
+    record: int
     states: wp.array2d[Vec6]
     velocities: wp.array2d[Vec6]
     senses: wp.array2d[wp.vec2d]
@@ -121,20 +128,28 @@ def _reset(
     torque0: wp.array[wp.vec3d],
     sensory0: wp.array[wp.vec2d],
     trials: int,
+    active: int,
     data: _Buffers,
 ):
     w = wp.tid()
     s = w % trials
     data.state[w] = q0[s]
     data.velocity[w] = v0[s]
+    data.previous[w] = q0[s]
     data.torque[w] = torque0[s]
     data.sensory[w] = sensory0[s]
-    data.status[w] = 0
     data.recorded[w] = 0
-    data.enabled[w] = 1
-    data.states[0, w] = q0[s]
-    data.velocities[0, w] = v0[s]
-    data.senses[0, w] = sensory0[s]
+    if w // trials < active:
+        data.status[w] = 0
+        data.enabled[w] = 1
+    else:
+        # Padding candidates never integrate, so smaller batches reuse the graph.
+        data.status[w] = _INACTIVE
+        data.enabled[w] = 0
+    if data.record != 0:
+        data.states[0, w] = q0[s]
+        data.velocities[0, w] = v0[s]
+        data.senses[0, w] = sensory0[s]
 
 
 @wp.func
@@ -152,15 +167,20 @@ def _actuate(
     weights: wp.array3d[wp.float64],
     speeds: wp.array[wp.float64],
     steps: wp.array[int],
+    dts: wp.array[wp.float64],
+    response: wp.array[wp.float64],
     cfg: Settings,
     data: _Buffers,
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
 ):
+    """Screen, command joint torque, and stage the shoe carrier for one step."""
     w = wp.tid()
     if data.status[w] != 0:
         return
     s = w % cfg.stance_count
     c = w // cfg.stance_count
-    k = data.clock[0]
+    k = data.recorded[w]
     code = int(0)
     q = data.state[w]
     v = data.velocity[w]
@@ -174,10 +194,9 @@ def _actuate(
         data.status[w] = code
         data.enabled[w] = 0
         return
-    data.fraction[w] = wp.float64(0.0)
-    data.invalid_compression[w] = 0
     p = params[s]
     m = models[c]
+    dt = dts[s]
     sense = data.sensory[w]
     ankle, _jx, _jz, _angle = _ankle(q, p)
     phase = sense[0]
@@ -217,22 +236,29 @@ def _actuate(
     load = Vec6(wp.float64(0.0))
     torque = data.torque[w]
     saturated = wp.vec3i(0)
+    rate = response[w]
     for j in range(3):
         raw = stiffness[j] * (equilibrium[j] - q[j + 3]) - damping[j] * v[j + 3]
         cap = m.torque_cap[j]
+        limit = m.torque_rate[j] * dt
         desired = wp.clamp(raw, -cap, cap)
-        change = wp.clamp(m.response_fraction * (desired - torque[j]), -m.torque_step[j], m.torque_step[j])
+        change = wp.clamp(rate * (desired - torque[j]), -limit, limit)
         torque[j] = wp.clamp(torque[j] + change, -cap, cap)
         load[j + 3] = wp.clamp(torque[j] - m.intrinsic_damping[j] * v[j + 3], -cap, cap)
         saturated[j] = int(wp.abs(raw) > cap)
     data.torque[w] = torque
-    out = _Output()
-    out.load = load
-    out.equilibrium_rad = equilibrium
-    out.stiffness_nm_rad = stiffness
-    out.damping_nms_rad = damping
-    out.torque_saturated = saturated
-    data.outputs[k, w] = out
+    data.load[w] = load
+    if data.record != 0:
+        out = _Output()
+        out.load = load
+        out.equilibrium_rad = equilibrium
+        out.stiffness_nm_rad = stiffness
+        out.damping_nms_rad = damping
+        out.torque_saturated = saturated
+        data.outputs[k, w] = out
+    transform, twist = _carrier(q, v, p, cfg.pitch)
+    body_q[w] = transform
+    body_qd[w] = twist
 
 
 @wp.kernel
@@ -243,17 +269,25 @@ def _compression(
     compression: wp.array[wp.float32],
     data: _Buffers,
 ):
-    i = wp.tid()
-    w = i // columns
-    c = i % columns
-    if data.status[w] != 0 or driven[c] == 0:
+    """Reduce the driven-column compression screen with one warp per world."""
+    w, lane = wp.tid()
+    if data.status[w] != 0:
         return
-    # The CPU divides float32 compression by the artifact's float64 thickness.
-    fraction = wp.float64(compression[i]) / rest[c]
-    if not wp.isfinite(fraction):
-        wp.atomic_max(data.invalid_compression, w, 1)
-    else:
-        wp.atomic_max(data.fraction, w, fraction)
+    largest = wp.float64(0.0)
+    invalid = int(0)
+    for index in range(lane, driven.shape[0], wp.block_dim()):
+        # The CPU divides float32 compression by the artifact's float64 thickness.
+        fraction = wp.float64(compression[w * columns + driven[index]]) / rest[index]
+        if not wp.isfinite(fraction):
+            invalid = 1
+        else:
+            largest = wp.max(largest, fraction)
+    # Every lane takes part in register-tile extraction, which synchronizes the block.
+    screen = wp.tile_max(wp.tile(largest))[0]
+    any_invalid = wp.tile_max(wp.tile(invalid))[0]
+    if lane == 0:
+        data.fraction[w] = screen
+        data.invalid_compression[w] = any_invalid
 
 
 @wp.kernel
@@ -262,8 +296,9 @@ def _advance(
     models: wp.array[_Model],
     speeds: wp.array[wp.float64],
     steps: wp.array[int],
+    dts: wp.array[wp.float64],
+    load_rate: wp.array[wp.float64],
     cfg: Settings,
-    dt: wp.float64,
     body_f: wp.array[wp.spatial_vector],
     data: _Buffers,
 ):
@@ -271,12 +306,13 @@ def _advance(
     if data.status[w] != 0:
         return
     s = w % cfg.stance_count
-    k = data.clock[0]
+    k = data.recorded[w]
     p = params[s]
     m = models[w // cfg.stance_count]
+    dt = dts[s]
     q = data.state[w]
     v = data.velocity[w]
-    out = data.outputs[k, w]
+    load = data.load[w]
     f = body_f[w]
     fx = wp.float64(f[0])
     fz = wp.float64(f[2])
@@ -284,7 +320,7 @@ def _advance(
     compression = data.fraction[w]
     code = int(0)
     if (
-        not _finite6(out.load)
+        not _finite6(load)
         or not (wp.isfinite(fx) and wp.isfinite(fz) and wp.isfinite(moment))
         or data.invalid_compression[w] != 0
     ):
@@ -299,7 +335,7 @@ def _advance(
         return
     mass, bias = _dynamics(q, v, p, cfg.gravity)
     _position, jx, jz, _angle = _ankle(q, p)
-    force = out.load + fx * jx + fz * jz + moment * _angular(3)
+    force = load + fx * jx + fz * jz + moment * _angular(3)
     acceleration, ok = _cholesky_solve(mass, force - bias)
     velocity = v + dt * acceleration
     position = q + dt * velocity
@@ -314,33 +350,37 @@ def _advance(
         data.enabled[w] = 0
         return
     # Commit only accepted intervals, then update sensors using this contact.
-    out.grf_n = wp.vec2d(fx, fz)
-    out.ankle_contact_moment_nm = moment
-    out.compression_fraction = compression
-    data.outputs[k, w] = out
     sense = data.sensory[w]
     weight = (p.masses[0] + p.masses[1] + p.masses[2] + p.masses[3]) * cfg.gravity
     load_bw = wp.max(fz, wp.float64(0.0)) / weight
-    filtered = sense[1] + m.load_fraction * (load_bw - sense[1])
+    filtered = sense[1] + load_rate[w] * (load_bw - sense[1])
     speed = wp.clamp((speeds[s] - m.reference_speed) / m.speed_scale, wp.float64(-2.0), wp.float64(2.0))
     frequency = m.frequency * wp.exp(wp.clamp(m.cadence_gain * speed, wp.float64(-2.0), wp.float64(2.0)))
     modulation = wp.float64(1.0) - m.phase_feedback * wp.min(filtered, wp.float64(1.0)) * wp.sin(sense[0])
     phase = sense[0] + _TWO_PI * frequency * modulation * dt
     phase = phase - wp.floor(phase / _TWO_PI) * _TWO_PI
     sense = wp.vec2d(phase, filtered)
+    data.previous[w] = q
+    data.grf[w] = wp.vec2d(fx, fz)
     data.state[w] = position
     data.velocity[w] = velocity
     data.sensory[w] = sense
-    data.states[k + 1, w] = position
-    data.velocities[k + 1, w] = velocity
-    data.senses[k + 1, w] = sense
+    if data.record != 0:
+        out = data.outputs[k, w]
+        out.grf_n = wp.vec2d(fx, fz)
+        out.ankle_contact_moment_nm = moment
+        out.compression_fraction = compression
+        data.outputs[k, w] = out
+        data.states[k + 1, w] = position
+        data.velocities[k + 1, w] = velocity
+        data.senses[k + 1, w] = sense
     data.recorded[w] = k + 1
     if k + 1 == steps[s]:
         data.status[w] = 1
         data.enabled[w] = 0
 
 
-def _model_params(model: Runner, dt: float) -> _Model:
+def _model_params(model: Runner) -> _Model:
     p = _Model()
     bounds = model.bounds
     p.lower = wp.vec3d(*bounds.equilibrium_lower_rad)
@@ -348,10 +388,7 @@ def _model_params(model: Runner, dt: float) -> _Model:
     p.stiffness = wp.vec3d(*bounds.stiffness_max_nm_rad)
     p.damping = wp.vec3d(*bounds.damping_max_nms_rad)
     p.torque_cap = wp.vec3d(*bounds.torque_max_nm)
-    p.torque_step = wp.vec3d(*(np.asarray(bounds.torque_rate_max_nm_s) * dt))
-    # expm1 is unavailable in Warp; compute these constant fractions exactly once.
-    p.response_fraction = -math.expm1(-dt / model.response_time_s)
-    p.load_fraction = -math.expm1(-dt / model.load_time_s)
+    p.torque_rate = wp.vec3d(*bounds.torque_rate_max_nm_s)
     p.frequency = model.frequency_hz
     p.reference_speed = model.reference_speed_m_s
     p.speed_scale = model.speed_scale_m_s
@@ -361,26 +398,46 @@ def _model_params(model: Runner, dt: float) -> _Model:
     return p
 
 
+def _rates(models: list[Runner], dts: np.ndarray, capacity: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return per-world torque-response and load-filter fractions, candidate-major.
+
+    Warp lacks expm1; the host evaluates these exact constants once per launch.
+    """
+    response = np.zeros((capacity, len(dts)))
+    load = np.zeros((capacity, len(dts)))
+    for c, model in enumerate(models):
+        response[c] = [-math.expm1(-dt / model.response_time_s) for dt in dts]
+        load[c] = [-math.expm1(-dt / model.load_time_s) for dt in dts]
+    return response.ravel(), load.ravel()
+
+
 class _Group:
-    def __init__(self, batch, indices, chains, shoes, initials, tasks):
+    """Persistent worlds for up to ``candidates`` models over one shoe's trials."""
+
+    def __init__(self, batch, indices, chains, shoes, initials, tasks, *, candidates=None, record=True, lean=True):
         self.indices = tuple(indices)
         self.device = batch.device
         self.config = batch.config
-        self.candidates = batch.candidates
+        self.candidates = int(candidates or batch.candidates)
         self.trial_count = len(indices)
         self.world_count = self.candidates * self.trial_count
         self.steps = batch.steps[list(indices)]
-        self.dt = float(batch.dts[indices[0]])
+        self.dts = batch.dts[list(indices)].copy()
         self.durations = batch.durations_s[list(indices)]
         self.chunk_steps = min(batch.chunk_steps, int(self.steps.max()))
         self.graph = None
         self.max_steps = int(self.steps.max())
+        self.active = self.candidates
+        self.observers = []
         d, w = self.device, self.world_count
         self.params = wp.array([_chain_params(chains[i]) for i in indices], dtype=ChainParams, device=d)
         self.models = wp.zeros(self.candidates, dtype=_Model, device=d)
         self.weights = wp.zeros((self.candidates, 9, _FEATURE_COUNT), dtype=wp.float64, device=d)
         self.speeds = wp.array([tasks[i].speed_m_s for i in indices], dtype=wp.float64, device=d)
         self.steps_d = wp.array(self.steps, dtype=int, device=d)
+        self.dts_d = wp.array(self.dts, dtype=wp.float64, device=d)
+        self.response = wp.zeros(w, dtype=wp.float64, device=d)
+        self.load_rate = wp.zeros(w, dtype=wp.float64, device=d)
         self.q0 = wp.array(np.array([initials[i].q for i in indices]), dtype=Vec6, device=d)
         self.v0 = wp.array(np.array([initials[i].v for i in indices]), dtype=Vec6, device=d)
         self.torque0 = wp.array(np.array([initials[i].torque_nm for i in indices]), dtype=wp.vec3d, device=d)
@@ -418,7 +475,13 @@ class _Group:
             adapter.settings.assign(np.repeat(source.friction_solver.settings.numpy(), w, axis=0))
             wp.copy(adapter.base_kt, source.friction_solver.base_kt)
             wp.copy(adapter.base_kv, source.friction_solver.base_kv)
-        self.rest = wp.array(bed.rest_length_m, dtype=wp.float64, device=d)
+        # World w = candidate * trials + trial advances with its trial's exact step.
+        foundation.set_world_timesteps(np.tile(self.dts, self.candidates))
+        driven = np.flatnonzero(foundation.driven.numpy())
+        self.driven = wp.array(driven, dtype=int, device=d)
+        self.rest = wp.array(np.asarray(bed.rest_length_m, dtype=np.float64)[driven], dtype=wp.float64, device=d)
+        # Elastic-Coulomb ground beds advance only physics history in one fused pass.
+        self.lean = ground_shoe(foundation, bed.rest_length_m) if lean else None
         self.carriers = SimpleNamespace(
             body_q=wp.zeros(w, dtype=wp.transform, device=d),
             body_qd=wp.zeros(w, dtype=wp.spatial_vector, device=d),
@@ -438,59 +501,68 @@ class _Group:
         data = _Buffers()
         data.state = wp.zeros(w, dtype=Vec6, device=d)
         data.velocity = wp.zeros(w, dtype=Vec6, device=d)
+        data.previous = wp.zeros(w, dtype=Vec6, device=d)
         data.torque = wp.zeros(w, dtype=wp.vec3d, device=d)
         data.sensory = wp.zeros(w, dtype=wp.vec2d, device=d)
+        data.load = wp.zeros(w, dtype=Vec6, device=d)
+        data.grf = wp.zeros(w, dtype=wp.vec2d, device=d)
         data.status = wp.zeros(w, dtype=int, device=d)
         data.recorded = wp.zeros(w, dtype=int, device=d)
-        data.clock = wp.zeros(1, dtype=int, device=d)
         data.enabled = self.foundation.enabled
         data.fraction = wp.zeros(w, dtype=wp.float64, device=d)
         data.invalid_compression = wp.zeros(w, dtype=int, device=d)
-        data.states = wp.zeros((self.max_steps + 1, w), dtype=Vec6, device=d)
-        data.velocities = wp.zeros((self.max_steps + 1, w), dtype=Vec6, device=d)
-        data.senses = wp.zeros((self.max_steps + 1, w), dtype=wp.vec2d, device=d)
-        data.outputs = wp.zeros((self.max_steps, w), dtype=_Output, device=d)
+        data.record = int(record)
+        if record:
+            data.states = wp.zeros((self.max_steps + 1, w), dtype=Vec6, device=d)
+            data.velocities = wp.zeros((self.max_steps + 1, w), dtype=Vec6, device=d)
+            data.senses = wp.zeros((self.max_steps + 1, w), dtype=wp.vec2d, device=d)
+            data.outputs = wp.zeros((self.max_steps, w), dtype=_Output, device=d)
         self.data = data
 
     def _reset(self):
         self.foundation.reset()
-        self.data.clock.zero_()
+        if self.lean is not None:
+            reset_ground_shoe(self.lean)
         wp.launch(
             _reset,
             dim=self.world_count,
-            inputs=[self.q0, self.v0, self.torque0, self.sensory0, self.trial_count, self.data],
+            inputs=[self.q0, self.v0, self.torque0, self.sensory0, self.trial_count, self.active, self.data],
             device=self.device,
         )
+        for observer in self.observers:
+            observer.reset()
 
     def _step(self):
         data, d = self.data, self.device
         wp.launch(
             _actuate,
             dim=self.world_count,
-            inputs=[self.params, self.models, self.weights, self.speeds, self.steps_d, self.settings, data],
-            device=d,
-        )
-        wp.launch(
-            _stage,
-            dim=self.world_count,
             inputs=[
                 self.params,
+                self.models,
+                self.weights,
+                self.speeds,
+                self.steps_d,
+                self.dts_d,
+                self.response,
                 self.settings,
-                data.status,
-                data.state,
-                data.velocity,
+                data,
                 self.carriers.body_q,
                 self.carriers.body_qd,
             ],
             device=d,
         )
-        self.foundation.apply(self.carriers, self.dt, clear_body_force=True)
-        wp.launch(
-            _compression,
-            dim=self.world_count * self.foundation.column_count,
-            inputs=[self.foundation.column_count, self.foundation.driven, self.rest, self.foundation.compression, data],
-            device=d,
-        )
+        if self.lean is not None:
+            apply_ground_shoe(self.foundation, self.lean, self.carriers, data.fraction, data.invalid_compression)
+        else:
+            self.foundation.apply(self.carriers, None, clear_body_force=True)
+            wp.launch_tiled(
+                _compression,
+                dim=self.world_count,
+                block_dim=32,
+                inputs=[self.foundation.column_count, self.driven, self.rest, self.foundation.compression, data],
+                device=d,
+            )
         wp.launch(
             _advance,
             dim=self.world_count,
@@ -499,21 +571,34 @@ class _Group:
                 self.models,
                 self.speeds,
                 self.steps_d,
+                self.dts_d,
+                self.load_rate,
                 self.settings,
-                self.dt,
                 self.carriers.body_f,
                 data,
             ],
             device=d,
         )
-        wp.launch(_tick, dim=1, inputs=[data.clock], device=d)
+        for observer in self.observers:
+            observer.step()
+
+    def set_models(self, models):
+        """Upload up to ``candidates`` models; later candidate slots stay idle."""
+        if not 1 <= len(models) <= self.candidates:
+            raise ValueError(f"Expected 1 to {self.candidates} Runner models")
+        self.active = len(models)
+        padded = list(models) + [models[-1]] * (self.candidates - len(models))
+        self.models.assign([_model_params(model) for model in padded])
+        self.weights.assign(np.array([model.weights.reshape(9, _FEATURE_COUNT) for model in padded]))
+        response, load = _rates(padded, self.dts, self.candidates)
+        self.response.assign(response)
+        self.load_rate.assign(load)
 
     def launch(self, models):
-        self.models.assign([_model_params(model, self.dt) for model in models])
-        self.weights.assign(np.array([model.weights.reshape(9, _FEATURE_COUNT) for model in models]))
+        self.set_models(models)
         self._reset()
         if self.graph is None:
-            # Settle compilation and shoe dt caches before capture, not at every step.
+            # Settle compilation and shoe caches before capture, not at every step.
             self._step()
             wp.synchronize_device(self.device)
             self._reset()
@@ -530,85 +615,45 @@ class _Group:
         states, velocities = data.states.numpy(), data.velocities.numpy()
         senses, outputs = data.senses.numpy(), data.outputs.numpy()
         result = []
-        for c in range(self.candidates):
+        for c in range(self.active):
             row = []
             for s in range(self.trial_count):
                 w = c * self.trial_count + s
                 count = int(counts[w])
+                dt = float(self.dts[s])
                 trace = {key: outputs[key][:count, w].copy() for key in outputs.dtype.names}
                 trace["torque_saturated"] = trace["torque_saturated"].astype(bool)
                 trace.update(
-                    time_s=np.arange(count + 1) * self.dt,
+                    time_s=np.arange(count + 1) * dt,
                     state=states[: count + 1, w].copy(),
                     velocity=velocities[: count + 1, w].copy(),
                     phase_rad=senses[: count + 1, w, 0].copy(),
                     normal_load_bw=senses[: count + 1, w, 1].copy(),
                 )
                 failure = None if status[w] == 1 else _FAILURES[int(status[w])]
-                row.append((trace, _summary(trace, failure, float(self.durations[s]), self.dt, self.config)))
+                row.append((trace, _summary(trace, failure, float(self.durations[s]), dt, self.config)))
             result.append(row)
         return result
 
 
-class GpuBatch:
-    """Evaluate candidate Runner models over fixed, independent predictive inputs.
+def _validate_models(models: list[Runner], initials) -> None:
+    for model in models:
+        if not isinstance(model, Runner):
+            raise TypeError("models must contain Runner instances")
+        if any(np.any(np.abs(initial.torque_nm) > model.bounds.torque_max_nm) for initial in initials):
+            raise ValueError("Initial torque exceeds the model bounds")
 
-    Each evaluation resets all runner and shoe history, never modifying supplied
-    shoes or initial states. Groups are dispatched sequentially on one CUDA stream,
-    but all candidate/trial worlds *within* a group run concurrently. No measured
-    trajectory, feedforward, target force, or reference event is accepted.
 
-    Args:
-        chains: Body mechanics, one per trial.
-        shoes: Ordinary ground-plane Shoe instances, one per trial. Reuse an
-            instance to batch trials with identical geometry/material/config.
-            Runtime material blocks and default-adapter settings are copied at
-            construction; custom friction adapters are not supported.
-        initials: Complete causal runner initial states, one per trial.
-        tasks: Known task inputs, one per trial.
-        durations_s: Positive prediction horizons [s], one per trial.
-        candidates: Exact number of models evaluated concurrently in each group.
-        config: Shared integration and numerical-screen settings.
-        device: CUDA device; CPU execution is deliberately not a fallback.
-        chunk_steps: Maximum steps per reusable captured graph.
-        max_trials_per_group: Limit trials per same-shoe, same-dt group.
+class _Inputs:
+    """Validated predictive inputs shared by trace and objective batches."""
 
-    Attributes:
-        group_trial_indices: Trial indices in each execution group.
-        steps: Exact integration step count for each trial.
-        dts: Actual integration timestep for each trial [s].
-        setup_wall_s: Constructor wall time [s], excluding lazy graph capture.
-        last_wall_s: Last evaluation wall time [s], including copies, summaries,
-            and first-use compilation/capture where applicable.
-    """
-
-    def __init__(
-        self,
-        chains: list[Chain],
-        shoes: list[Shoe],
-        initials: list[State],
-        tasks: list[Task],
-        durations_s,
-        *,
-        candidates: int,
-        config: RolloutConfig | None = None,
-        device: str = "cuda:0",
-        chunk_steps: int = 64,
-        max_trials_per_group: int = 16,
-    ):
-        started = perf_counter()
+    def __init__(self, chains, shoes, initials, tasks, durations_s, config, device, chunk_steps):
         self.config = config or RolloutConfig()
         self.trial_count = len(chains)
         if not self.trial_count or any(len(values) != self.trial_count for values in (shoes, initials, tasks)):
             raise ValueError("chains, shoes, initials, and tasks must be nonempty and have equal length")
-        for name, value in (
-            ("candidates", candidates),
-            ("chunk_steps", chunk_steps),
-            ("max_trials_per_group", max_trials_per_group),
-        ):
-            if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 1:
-                raise ValueError(f"{name} must be a positive integer")
-        self.candidates = int(candidates)
+        if isinstance(chunk_steps, bool) or not isinstance(chunk_steps, (int, np.integer)) or chunk_steps < 1:
+            raise ValueError("chunk_steps must be a positive integer")
         self.chunk_steps = int(chunk_steps)
         self.durations_s = np.array(durations_s, dtype=float, copy=True)
         if (
@@ -631,15 +676,82 @@ class GpuBatch:
                 raise ValueError("Custom friction adapters are not supported")
         self.device = wp.get_device(device)
         if not self.device.is_cuda:
-            raise ValueError("GpuBatch requires a CUDA device")
+            raise ValueError("GPU rollouts require a CUDA device")
+
+    def shoe_groups(self, shoes, max_trials: int) -> tuple[tuple[int, ...], ...]:
+        """Group trials by shoe instance, preserving input order within each group."""
         groups = {}
-        for i, (shoe, dt) in enumerate(zip(shoes, self.dts, strict=True)):
-            groups.setdefault((id(shoe), float(dt)), []).append(i)
-        self.group_trial_indices = tuple(
-            tuple(indices[start : start + max_trials_per_group])
+        for i, shoe in enumerate(shoes):
+            groups.setdefault(id(shoe), []).append(i)
+        return tuple(
+            tuple(indices[start : start + max_trials])
             for indices in groups.values()
-            for start in range(0, len(indices), max_trials_per_group)
+            for start in range(0, len(indices), max_trials)
         )
+
+
+class GpuBatch:
+    """Evaluate candidate Runner models over fixed, independent predictive inputs.
+
+    Each evaluation resets all runner and shoe history, never modifying supplied
+    shoes or initial states. Groups are dispatched sequentially on one CUDA stream,
+    but all candidate/trial worlds *within* a group run concurrently, each with its
+    own trial's exact timestep. No measured trajectory, feedforward, target force,
+    or reference event is accepted.
+
+    Args:
+        chains: Body mechanics, one per trial.
+        shoes: Ordinary ground-plane Shoe instances, one per trial. Reuse an
+            instance to batch trials with identical geometry/material/config.
+            Runtime material blocks and default-adapter settings are copied at
+            construction; custom friction adapters are not supported.
+        initials: Complete causal runner initial states, one per trial.
+        tasks: Known task inputs, one per trial.
+        durations_s: Positive prediction horizons [s], one per trial.
+        candidates: Exact number of models evaluated concurrently in each group.
+        config: Shared integration and numerical-screen settings.
+        device: CUDA device; CPU execution is deliberately not a fallback.
+        chunk_steps: Maximum steps per reusable captured graph.
+        max_trials_per_group: Limit trials per same-shoe group.
+
+    Attributes:
+        group_trial_indices: Trial indices in each execution group.
+        steps: Exact integration step count for each trial.
+        dts: Actual integration timestep for each trial [s].
+        setup_wall_s: Constructor wall time [s], excluding lazy graph capture.
+        last_wall_s: Last evaluation wall time [s], including copies, summaries,
+            and first-use compilation/capture where applicable.
+    """
+
+    def __init__(
+        self,
+        chains: list[Chain],
+        shoes: list[Shoe],
+        initials: list[State],
+        tasks: list[Task],
+        durations_s,
+        *,
+        candidates: int,
+        config: RolloutConfig | None = None,
+        device: str = "cuda:0",
+        chunk_steps: int = 64,
+        max_trials_per_group: int = 256,
+    ):
+        started = perf_counter()
+        for name, value in (("candidates", candidates), ("max_trials_per_group", max_trials_per_group)):
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        inputs = _Inputs(chains, shoes, initials, tasks, durations_s, config, device, chunk_steps)
+        self.config = inputs.config
+        self.trial_count = inputs.trial_count
+        self.candidates = int(candidates)
+        self.chunk_steps = inputs.chunk_steps
+        self.durations_s = inputs.durations_s
+        self.steps = inputs.steps
+        self.dts = inputs.dts
+        self.initials = inputs.initials
+        self.device = inputs.device
+        self.group_trial_indices = inputs.shoe_groups(shoes, int(max_trials_per_group))
         self._groups = [
             _Group(self, indices, chains, shoes, self.initials, tasks) for indices in self.group_trial_indices
         ]
@@ -657,11 +769,7 @@ class GpuBatch:
         """
         if len(models) != self.candidates:
             raise ValueError(f"Expected exactly {self.candidates} Runner models")
-        for model in models:
-            if not isinstance(model, Runner):
-                raise TypeError("models must contain Runner instances")
-            if any(np.any(np.abs(initial.torque_nm) > model.bounds.torque_max_nm) for initial in self.initials):
-                raise ValueError("Initial torque exceeds the model bounds")
+        _validate_models(models, self.initials)
         started = perf_counter()
         for group in self._groups:
             group.launch(models)

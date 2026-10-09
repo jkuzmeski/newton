@@ -104,6 +104,36 @@ class TestLeastSquares(unittest.TestCase):
             # The unchanged shoe law runs in float32 on both backends.
             np.testing.assert_allclose(b, a, rtol=1e-4, atol=1e-5)
 
+    @unittest.skipUnless(wp.is_cuda_available(), "CUDA required")
+    def test_device_objective_matches_host_residuals_and_normal_equations(self):
+        """Write CPU-equivalent residual rows, sums, and J^T J / J^T r entirely on CUDA."""
+        from projects.impedance_instron.hogan.gpu_residuals import GpuResiduals  # noqa: PLC0415
+
+        trials = [self.trial(), self.trial(split="train", duration=0.0061)]
+        offsets = np.random.default_rng(7).normal(0, 0.02, (3, self.parameters.size))
+        models = [self.parameters.model(x) for x in offsets]
+        gpu = least_squares._Rollouts(self.parameters, trials, self.config, "cuda:0")(offsets, 3)
+        cpu = least_squares._Rollouts(self.parameters, trials, self.config, "cpu")(offsets, 3)
+        # Two candidate slots exercise padding and a second chunk through one captured graph.
+        objective = GpuResiduals(trials, self.config, rows=6, chunk=2)
+        completed, sums, motion = objective.evaluate(models, [0, 1, 5], metrics=True)
+        self.assertTrue(completed.all())
+        self.assertEqual(objective.length, len(gpu[0]))
+        rows = objective.store.numpy()[:, : objective.length]
+        for row, expected, host, total in zip((0, 1, 5), gpu, cpu, sums, strict=True):
+            # Device residuals use the identical CUDA trajectory, so only rounding differs.
+            np.testing.assert_allclose(rows[row], expected, rtol=1e-12, atol=1e-15)
+            np.testing.assert_allclose(rows[row], host, rtol=1e-4, atol=1e-5)
+            self.assertAlmostEqual(total, float(expected @ expected), delta=1e-12 * max(1.0, total))
+        self.assertEqual(len(motion), 3)
+        self.assertEqual({m["status"] for m in motion[0]}, {"completed"})
+        jacobian = np.array([(gpu[i] - gpu[2]) / 0.01 for i in range(2)])
+        normal, gradient = objective.normal([0, 1], [5, 5], [0.01, 0.01], 5)
+        np.testing.assert_allclose(normal, jacobian @ jacobian.T, rtol=1e-10, atol=1e-12)
+        np.testing.assert_allclose(gradient, jacobian @ gpu[2], rtol=1e-10, atol=1e-12)
+        objective.copy_row(5, 3)
+        np.testing.assert_array_equal(objective.store.numpy()[3], objective.store.numpy()[5])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

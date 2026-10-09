@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -16,6 +17,7 @@ import warp as wp
 from newton.tests.test_impedance_hogan import _chain, _tiny_shoe
 from projects.digital_shoe.runtime import MidsoleFoundation, SurroundConfig
 from projects.impedance_instron.cartesian.shoe import Shoe
+from projects.impedance_instron.hogan import gpu_runner
 from projects.impedance_instron.hogan.gpu_runner import GpuBatch
 from projects.impedance_instron.hogan.identify import Trial, score
 from projects.impedance_instron.hogan.runner import Bounds, RolloutConfig, Runner, State, Task, simulate
@@ -189,7 +191,8 @@ class TestRunnerGpu(unittest.TestCase):
         np.testing.assert_array_equal(batch.steps, expected_steps)
         np.testing.assert_array_equal(batch.dts, np.asarray(durations) / expected_steps)
         self.assertNotEqual(batch.dts[0], batch.dts[1])
-        self.assertEqual(batch.group_trial_indices, ((0,), (1, 2), (3,)))
+        # Mixed exact timesteps share a shoe group; only distinct shoes split groups.
+        self.assertEqual(batch.group_trial_indices, ((0, 1, 2), (3,)))
         results = batch.evaluate(models)
         for c, model in enumerate(models):
             for s, duration in enumerate(durations):
@@ -301,6 +304,66 @@ class TestRunnerGpu(unittest.TestCase):
         for c in range(len(models)):
             for name in first[c][0][0]:
                 np.testing.assert_array_equal(first[c][0][0][name], repeated[c][0][0][name])
+
+    def _grid_shoe(self):
+        """Replace the tiny bed with a 600-column elastic-Coulomb bed and a passive rim."""
+        shoe = Shoe(self.shoe.artifact_path, [0, 0, 0.1], 0.0)
+        x, y = np.meshgrid((np.arange(30) - 14.5) * 0.005, (np.arange(20) - 9.5) * 0.005)
+        anchors = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, -0.1)))
+        rest = 0.02 + 0.001 * np.sin(np.arange(x.size))
+        neighbors = np.full((x.size, 4), -1, dtype=np.int32)
+        index = np.arange(x.size).reshape(x.shape)
+        neighbors[index[:, 1:].ravel(), 0] = index[:, :-1].ravel()
+        neighbors[index[:, :-1].ravel(), 1] = index[:, 1:].ravel()
+        neighbors[index[1:, :].ravel(), 2] = index[:-1, :].ravel()
+        neighbors[index[:-1, :].ravel(), 3] = index[1:, :].ravel()
+        driven = ((np.abs(anchors[:, 0]) < 0.05) & (np.abs(anchors[:, 1]) < 0.03)).astype(np.int32)
+        material = shoe.shoe.material
+        shoe.foundation = MidsoleFoundation(
+            anchors,
+            np.zeros(x.size),
+            rest,
+            np.full(x.size, 2.5e-5),
+            neighbors,
+            0.005,
+            material,
+            0,
+            shoe.model.body_com,
+            shoe.foundation.config,
+            shoe.device,
+            SurroundConfig(driven=driven, carrier_bond=True),
+        )
+        shoe.foundation.reset()
+        shoe.shoe = SimpleNamespace(column_bed=SimpleNamespace(rest_length_m=rest, spacing_m=0.005), material=material)
+        return shoe
+
+    def test_lean_ground_shoe_matches_generic_fused_foundation(self):
+        """Match generic fused-foundation traces bitwise with the lean elastic-Coulomb kernels.
+
+        The 600-column bed spans several contact rows per lane and a passive
+        surround, and one stance starts in flight so the pristine-shoe skip runs
+        before touchdown.
+        """
+        shoe, models = self._grid_shoe(), _models()
+        flight = _initial()
+        flight.q[1] += 0.004
+        initials = [flight, _initial()]
+        lean = self.batch(initials, [0.012, 0.012], models, shoes=[shoe, shoe])
+        self.assertIsNotNone(lean._groups[0].lean)
+        self.assertTrue(lean._groups[0].lean.fused_surround)
+        with patch.object(gpu_runner, "ground_shoe", return_value=None):
+            generic = self.batch(initials, [0.012, 0.012], models, shoes=[shoe, shoe])
+        self.assertIsNone(generic._groups[0].lean)
+        expected, actual = generic.evaluate(models), lean.evaluate(models)
+        for c in range(len(models)):
+            for s in range(len(initials)):
+                for name, values in expected[c][s][0].items():
+                    np.testing.assert_array_equal(actual[c][s][0][name], values, err_msg=name)
+                self.assertEqual(actual[c][s][1], expected[c][s][1])
+            grf = actual[c][0][0]["grf_n"][:, 1]
+            # The flight stance begins with an exactly zero, skipped shoe and then lands.
+            self.assertEqual(grf[0], 0.0)
+            self.assertGreater(grf.max(), 1.0)
 
     def test_validation_and_group_bound(self):
         """Reject invalid batches and initial torques before launching candidates."""
