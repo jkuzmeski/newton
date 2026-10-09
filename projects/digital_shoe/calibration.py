@@ -43,13 +43,18 @@ def _sweep(
     coupling_scale: wp.float32,
     attachment: wp.float32,
     max_strain: wp.float32,
+    free_index: wp.array[wp.int32],
     compression_out: wp.array2d[wp.float32],
 ):
-    """Read replaceable material constants for the shared surround sweep."""
-    frame, i = wp.tid()
+    """Read replaceable material constants for the shared surround sweep of the undriven columns.
+
+    Both buffers carry the imposed driven compression, which a sweep only copies,
+    so launching undriven columns alone leaves every value unchanged.
+    """
+    frame, k = wp.tid()
     _surround_sweep_cell(
         frame,
-        i,
+        free_index[k],
         compression_in,
         overstress,
         driven,
@@ -200,6 +205,8 @@ class CalibrationWorkspace:
         self._slack = wp.array(slack_m, dtype=wp.float32, device=self.device)
         self._dt = wp.array(dt_s, dtype=wp.float32, device=self.device)
         self._driven_index = wp.array(driven_index, dtype=wp.int32, device=self.device)
+        self._free_index = wp.array(np.flatnonzero(driven == 0).astype(np.int32), dtype=wp.int32, device=self.device)
+        self._sweep_shape = (frames, self._free_index.size)
         self._imposed = wp.array(imposed, dtype=wp.float32, device=self.device)
         self._current = wp.zeros(self.shape, dtype=wp.float32, device=self.device)
         self._scratch = wp.zeros_like(self._current)
@@ -245,7 +252,7 @@ class CalibrationWorkspace:
         for _ in range(sweeps):
             wp.launch(
                 _sweep,
-                dim=self.shape,
+                dim=self._sweep_shape,
                 inputs=[
                     current,
                     self._carried,
@@ -258,6 +265,7 @@ class CalibrationWorkspace:
                     self.coupling_scale,
                     self.attachment_n_m,
                     self.max_strain,
+                    self._free_index,
                     scratch,
                 ],
                 device=self.device,
@@ -353,12 +361,14 @@ class CalibrationWorkspace:
         scalar_checks = 0
         maximum = 0.0
         for outer in range(int(passes)):
-            wp.launch(
-                surround_seed_driven,
-                dim=(self.shape[0], self._driven_index.size),
-                inputs=[self._imposed, self._driven_index, self._current],
-                device=self.device,
-            )
+            # Sweeps launch only undriven columns, so both buffers carry the imposed field.
+            for field in (self._current, self._scratch):
+                wp.launch(
+                    surround_seed_driven,
+                    dim=(self.shape[0], self._driven_index.size),
+                    inputs=[self._imposed, self._driven_index, field],
+                    device=self.device,
+                )
             previous_update = float("inf")
             used = 0
             change = float("nan")

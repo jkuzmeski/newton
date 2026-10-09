@@ -11,7 +11,7 @@ import warp as wp
 
 from newton.tests.unittest_utils import get_test_devices
 from projects.digital_instron_v2 import core
-from projects.digital_shoe import material
+from projects.digital_shoe import material, runtime
 
 
 @wp.kernel
@@ -23,6 +23,22 @@ def _evaluate_material(params: wp.array[wp.float32], out: wp.array[wp.float32]):
     decay, ramp = material.maxwell_coefficients(params[8], params[9])
     out[0] = pressure
     out[1] = material.maxwell_step(params[10], pressure, params[11], params[12], decay, ramp)
+
+
+@wp.kernel
+def _shared_pressure(strain: wp.array[wp.float32], p: runtime.FoundationParams, out: wp.array[wp.float32]):
+    """Evaluate the differentiable shared law from a runtime parameter block."""
+    i = wp.tid()
+    out[i] = material.hyperfoam_pressure(
+        strain[i], p.g_eq, p.alpha, p.g_eq2, p.alpha2, p.beta, p.one_minus_two_poisson, p.stretch_floor
+    )
+
+
+@wp.kernel
+def _forward_pressure(strain: wp.array[wp.float32], p: runtime.FoundationParams, out: wp.array[wp.float32]):
+    """Evaluate the runtime's forward pressure entry point."""
+    i = wp.tid()
+    out[i] = runtime._hyperfoam_pressure(strain[i], p)
 
 
 def _host_values(params):
@@ -86,6 +102,34 @@ class TestDigitalShoeMaterial(unittest.TestCase):
         self.assertGreater(pressure[2], pressure[1])
         expected = 1.0e5 * (2.0 * strain - strain * strain) / (1.0 - strain)
         np.testing.assert_allclose(pressure, expected, rtol=2.0e-7, atol=1.0e-10)
+
+    def test_forward_pressure_matches_the_shared_law_bitwise(self):
+        """Skip only volumetric powers that are exactly one, on every backend and branch.
+
+        Zero-Poisson materials take the forward shortcut; the small-exponent limit, a
+        disabled second term, and a nonzero Poisson ratio keep the shared expression.
+        """
+        strain = np.linspace(-0.2, 1.2, 4001, dtype=np.float32)
+        for device in get_test_devices():
+            for g_eq2, alpha2, poisson in (
+                (12836.0, -0.586, 0.0),
+                (12836.0, 0.0005, 0.0),
+                (0.0, 4.0, 0.0),
+                (9000.0, -2.0, 0.2),
+            ):
+                with self.subTest(device=str(device), alpha2=alpha2, g_eq2=g_eq2, poisson=poisson):
+                    p = runtime.FoundationParams()
+                    p.g_eq, p.alpha, p.g_eq2, p.alpha2 = 176270.67, 18.077, g_eq2, alpha2
+                    p.beta = poisson / (1.0 - 2.0 * poisson)
+                    p.one_minus_two_poisson = 1.0 - 2.0 * poisson
+                    p.stretch_floor = 1.0e-3
+                    values = wp.array(strain, dtype=wp.float32, device=device)
+                    outputs = [wp.zeros_like(values) for _ in range(2)]
+                    for kernel, out in zip((_shared_pressure, _forward_pressure), outputs, strict=True):
+                        wp.launch(kernel, dim=len(strain), inputs=[values, p, out], device=device)
+                    shared, forward = (out.numpy() for out in outputs)
+                    self.assertTrue(np.all(np.isfinite(shared)))
+                    np.testing.assert_array_equal(forward, shared)
 
     def test_legacy_laplacian_warns_and_preserves_force(self):
         """Deprecate the old subset shear input without changing its force history."""

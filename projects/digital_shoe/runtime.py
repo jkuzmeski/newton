@@ -12,25 +12,22 @@ import numpy as np
 import warp as wp
 
 from .contact import (
+    _surround_balance_pressures,
     bristle_step,
     contact_kinematics,
     contact_wrench,
     normal_reaction,
     pasternak_coupling,
     pasternak_flux,
-    surround_balance,
 )
 from .contact import cone_viscous_scale as _cone_viscous_scale  # noqa: F401  # compatibility export
 from .material import (
-    HYPERFOAM_ALPHA_FLOOR,  # noqa: F401  # compatibility export
-    hyperfoam_pressure,
+    HYPERFOAM_ALPHA_FLOOR,
     maxwell_coefficients,
     maxwell_coefficients_numpy,
     maxwell_step,
 )
-from .material import (
-    ogden_hill_term as _hyperfoam_term,  # noqa: F401  # compatibility export
-)
+from .material import ogden_hill_term as _hyperfoam_term
 
 
 @dataclass(frozen=True)
@@ -117,6 +114,19 @@ class FoundationParams:
 
 
 @wp.func
+def _hyperfoam_series_term(stretch: wp.float32, mu: wp.float32, alpha: wp.float32, p: FoundationParams) -> wp.float32:
+    """Evaluate one :func:`ogden_hill_term` with its volumetric powers skipped when they are exactly one.
+
+    ``pow(J, -alpha * beta)`` with ``beta == 0`` is ``pow(J, +/-0)``, which IEEE and
+    CUDA define as exactly one for every ``J``, so ``J`` is not needed either. Other
+    materials and the small-alpha limit keep the shared expression unchanged.
+    """
+    if p.beta == 0.0 and wp.abs(alpha) >= HYPERFOAM_ALPHA_FLOOR:
+        return 2.0 * mu / (alpha * stretch) * (1.0 - stretch**alpha)
+    return _hyperfoam_term(stretch, stretch**p.one_minus_two_poisson, mu, alpha, p.beta)
+
+
+@wp.func
 def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
     """Positive uniaxial compression pressure from the two-term Hyperfoam law.
 
@@ -125,15 +135,14 @@ def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
     published foam tables and the 74-90% peak strains the bench fixtures reach;
     the second term restores that freedom without a second ``pow`` per term.
 
-    At the measured zero effective Poisson ratio ``beta`` is zero and
-    ``one_minus_two_poisson`` is one, so the volumetric factor is ``pow(x, 0)``
-    with ``x >= stretch_floor > 0``. That is exactly one on CPU and CUDA and
-    needs no special case; the stretch floor is what keeps it away from
-    ``pow(0, 0)``.
+    At the measured zero effective Poisson ratio ``beta`` is zero, so the
+    volumetric factor is ``pow(x, 0)`` with ``x >= stretch_floor > 0``. That is
+    exactly one on CPU and CUDA, and this forward entry point skips it bitwise;
+    the stretch floor is what keeps it away from ``pow(0, 0)``. Differentiable
+    callers use :func:`hyperfoam_pressure`, whose ``beta`` gradient is kept.
     """
-    return hyperfoam_pressure(
-        strain, p.g_eq, p.alpha, p.g_eq2, p.alpha2, p.beta, p.one_minus_two_poisson, p.stretch_floor
-    )
+    stretch = wp.max(1.0 - strain, p.stretch_floor)
+    return _hyperfoam_series_term(stretch, p.g_eq, p.alpha, p) + _hyperfoam_series_term(stretch, p.g_eq2, p.alpha2, p)
 
 
 def set_material_block(params: FoundationParams, material) -> None:
@@ -635,7 +644,11 @@ def _surround_balance(
     Returns:
         The updated column compression [m].
     """
-    return surround_balance(
+    # :func:`surround_balance`, with pressures from the forward :func:`_hyperfoam_pressure`.
+    peq = _hyperfoam_pressure(c / thickness, params)
+    step = 1.0e-3 * thickness
+    peq_ahead = _hyperfoam_pressure((c + step) / thickness, params)
+    return _surround_balance_pressures(
         c,
         rigid,
         pull,
@@ -643,18 +656,13 @@ def _surround_balance(
         thickness,
         overstress_base,
         overstress_gain,
-        params.g_eq,
-        params.alpha,
-        params.g_eq2,
-        params.alpha2,
-        params.beta,
-        params.one_minus_two_poisson,
-        params.stretch_floor,
         area,
         attachment,
         max_strain,
         relaxation,
         carrier_bond,
+        peq,
+        peq_ahead,
     )
 
 

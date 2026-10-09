@@ -27,8 +27,8 @@ import warp as wp
 from projects.digital_shoe.contact import _surround_balance_pressures, contact_kinematics, normal_reaction
 from projects.digital_shoe.friction_maxwell import bristle_elastic_coulomb_step, elastic_coulomb_stiffness
 from projects.digital_shoe.friction_parameter_adapter import FrictionParameterAdapter
-from projects.digital_shoe.material import HYPERFOAM_ALPHA_FLOOR, maxwell_coefficients, ogden_hill_term
-from projects.digital_shoe.runtime import FoundationParams, _pasternak_coupling
+from projects.digital_shoe.material import maxwell_coefficients
+from projects.digital_shoe.runtime import FoundationParams, _hyperfoam_pressure, _pasternak_coupling
 
 # Match the shared float32 shoe runtime, not the float64 leg module.
 wp.set_module_options({"enable_backward": False, "fuse_fp": True})
@@ -202,28 +202,6 @@ class GroundShoe:
 
 
 @wp.func
-def _ogden_hill(stretch: float, mu: float, alpha: float, beta: float, one_minus_two_poisson: float):
-    """Evaluate :func:`ogden_hill_term` with its volumetric power skipped when it is exactly one.
-
-    ``pow(J, -alpha * beta)`` with ``beta == 0`` is ``pow(J, +/-0)``, which IEEE and
-    CUDA define as exactly one for every ``J``. Other materials and the small-alpha
-    limit keep the shared expression unchanged.
-    """
-    if beta == 0.0 and wp.abs(alpha) >= HYPERFOAM_ALPHA_FLOOR:
-        return 2.0 * mu / (alpha * stretch) * (1.0 - stretch**alpha)
-    return ogden_hill_term(stretch, stretch**one_minus_two_poisson, mu, alpha, beta)
-
-
-@wp.func
-def _hyperfoam(strain: float, p: FoundationParams):
-    """Return :func:`_hyperfoam_pressure` bitwise, avoiding redundant powers [Pa]."""
-    stretch = wp.max(1.0 - strain, p.stretch_floor)
-    return _ogden_hill(stretch, p.g_eq, p.alpha, p.beta, p.one_minus_two_poisson) + _ogden_hill(
-        stretch, p.g_eq2, p.alpha2, p.beta, p.one_minus_two_poisson
-    )
-
-
-@wp.func
 def _relax_free_column(shoe: GroundShoe, w: int, lane: int, pose: wp.transform):
     """Run the surround Jacobi sweeps of ``_surround_world`` for one undriven column per lane.
 
@@ -310,8 +288,8 @@ def _relax_free_column(shoe: GroundShoe, w: int, lane: int, pose: wp.transform):
                     # The Newton step of contact.surround_balance with the shared material law.
                     if c != cached_c:
                         cached_c = c
-                        cached_peq = _hyperfoam(c / thickness, p)
-                        cached_ahead = _hyperfoam((c + step) / thickness, p)
+                        cached_peq = _hyperfoam_pressure(c / thickness, p)
+                        cached_ahead = _hyperfoam_pressure((c + step) / thickness, p)
                     peq = cached_peq
                     ahead = cached_ahead
                 next_c = _surround_balance_pressures(
@@ -487,7 +465,7 @@ def _ground_contact(
             thickness = shoe.rest_len[column]
             peq = peq_zero
             if comp != 0.0:
-                peq = _hyperfoam(comp / thickness, p)
+                peq = _hyperfoam_pressure(comp / thickness, p)
             q_old = shoe.q_state[i]
             peq_old = shoe.peq_prev[i]
             qn = _maxwell_update(q_old, peq, peq_old, p.overstress, decay, ramp)

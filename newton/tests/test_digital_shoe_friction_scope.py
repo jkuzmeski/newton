@@ -54,7 +54,8 @@ CONTACT_AST_SHA256 = {
 
 RUNTIME_AST_SHA256 = {
     "foundation_pressure": "d46ed6745528a932cdb4a90d8f491b9cca9a325dad07cc1ad41e371981fe0a3e",
-    "_surround_balance": "c801de14ffa20d529896a9040376e0e303c44a8a0c42b310ac8f2382d5223e17",
+    # Evaluates the shared balance with forward pressures; outputs stay bitwise identical.
+    "_surround_balance": "73e5b72c4eb0ccac18c50b31f68c707a5a03fde3d08358d72519f9d36f35440f",
     "_surround_sweep_cell": "50354222bc1367451113470a6d35188efdc5095c5c2e7a1877001a1a167d6daa",
     "surround_sweep": "9f35801ca9f71b37556fb64fe83f09053131dc0a67f573112cfa4374efd4bce8",
     "surround_relax": "ad1fd719252f4b33c377d32fcf9970018f3e581922d90fd4ae65be98f4defb23",
