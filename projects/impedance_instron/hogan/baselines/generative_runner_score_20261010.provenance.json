@@ -1,0 +1,108 @@
+{
+  "schema": "hogan-preserved-fit-v1",
+  "model": "generative_runner_score_20261010.json",
+  "model_sha256": "40e3b96550291bc4e356d6ef8da62c3f30992bf6095e380e0f60b4a5f215084a",
+  "run_id": "hogan_score_from_scratch_20261010",
+  "run_started_at": "2026-10-10T04:23:01.661436+00:00",
+  "run_finished_at": "2026-10-10T04:38:33.832199+00:00",
+  "initialization": "Independent unfitted Runner.seed engineering feature weights; initial frequency 2 Hz, response 0.015 s, immediate damping. No learned checkpoint loaded.",
+  "search": {
+    "iterations": 50,
+    "step": 0.01,
+    "central": false,
+    "damping": 0.01,
+    "ladder": [
+      0.01,
+      0.1,
+      1.0,
+      10.0,
+      100.0
+    ],
+    "bound": 3.0,
+    "regularization": 0.001,
+    "objective": "score",
+    "tolerance": 0.0,
+    "chunk": 128,
+    "fast_jacobian": true
+  },
+  "rollout": {
+    "dt_s": 0.000125,
+    "gravity_m_s2": 9.81,
+    "maximum_force_n": 6000.0,
+    "minimum_hip_height_m": 0.2,
+    "maximum_speed": 100.0,
+    "compression_limit": 0.99,
+    "contact_threshold_n": 50.0
+  },
+  "force_observation": {
+    "cutoff_hz": 20.0,
+    "gate_n": 1.0,
+    "vibration_weight": 1.0
+  },
+  "parameters": 119,
+  "iterations_completed": 50,
+  "accepted_updates": 26,
+  "train": {
+    "count": 98,
+    "mean_loss": 10.30854217799746,
+    "failed": 0
+  },
+  "eval": {
+    "count": 9,
+    "mean_loss": 10.16172407224562,
+    "failed": 0
+  },
+  "selection_rule": "Lowest finite common training loss with zero training failures among unfitted engineering baseline and final fitted models. Eval never selects. Each LM accepts only improving objective steps.",
+  "held_out_used_for_selection": false,
+  "source_revision": "a45059bfdd99e1a342ecb745d507cdc8f917dbb9",
+  "source_sha256": {
+    "impedance_instron/hogan/identify.py": "dd705adf574ddf08d0eaea16759e00aae6aa749be410b6c6aba5dedbad7f38df",
+    "impedance_instron/hogan/runner.py": "cd600322d393c448724a6f5d2b348af26331108083282d7c85073b8791736ef2",
+    "impedance_instron/hogan/generate.py": "cf8b296377e11b1c50a574e0a97a1a68a4725f84840311c77ee39efaae365edc",
+    "impedance_instron/hogan/mechanics.py": "892842fbdf5f5b1f0634be677050e0fb6cca8f03c369e881622678d53601e9f6",
+    "impedance_instron/hogan/gpu_runner.py": "766e0133385cad2a0934a50508fdbde000fcdc0ae8512407524988e38243ac0b",
+    "impedance_instron/hogan/gpu_residuals.py": "8c5672f755ba451ddf69b5a5dfebf833a25da1d1b15c84b37ac130eddb219eed",
+    "impedance_instron/hogan/gpu_shoe.py": "9d1a053078e1435825aa3cbf3a5f5b747c6c98079637152396659d3eaf255723",
+    "impedance_instron/hogan/gpu_mechanics.py": "2803df39b338d8b329844ddef6d4706712964300c1e47d1fc5e249d677e5a8e0",
+    "impedance_instron/hogan/least_squares.py": "fab087d5e01fc0d37facc36656ef191b82fefeefc14c49d8c5740d91e48305ba",
+    "impedance_instron/cartesian/shoe.py": "50966066834ed0b77f1adc48bf815387db443d498a0c46dbd9faea7ebca567b8",
+    "impedance_instron/cartesian/data.py": "969b2b5bca3ec4af3aee69b066f283ab9df31268e928cff1416479986cb9a4e6",
+    "impedance_instron/cartesian/profile.py": "0c4f238d34f26ac3f919dfc5ea4c2994e0158d6f86d0a2949eed223298a49db8",
+    "impedance_instron/cartesian/gpu/foundation.py": "1a07e2508e6c06760ea4403191ae6146f87857b037b4a88d765d423d783f59a9",
+    "digital_shoe/friction_law.py": "a999b5bc2d7834f38f27ef7def8be3796ce509e0be549e702ee919a4ee1efcc9",
+    "digital_shoe/rendering.py": "ccc5fb6a9697471bc10ce968a63221637b4445d34ec9fb3fe644ea8f9a4feb9c",
+    "digital_shoe/record_gifs.py": "13439f6d1955efc58fe168e231fe1582fece6914761e9648bb7d7994b3946b57",
+    "digital_shoe/__main__.py": "85eb408d4b5941c6911244f46ac52e75da32bc5e72422f1e625f150112ab2911",
+    "digital_shoe/report.py": "0dc372aff8d97fa9e41689cd87aca8ce7e3acb4e835d42445d26f65e8f250578",
+    "digital_shoe/contact.py": "ea850ee6b00dc23f3ecf79f02b3135fba34126669f68dacf4e21fb1f1e58d1f5",
+    "digital_shoe/artifact.py": "684db4e16589426897922142d8a0ec53c0865f628fb6aefb5c9bb225a40b2bb6",
+    "digital_shoe/friction_maxwell.py": "0ee6889a1e079be2159cb6b7cf3ec776cf1bb3afc29e145d848ae6e685e2d669",
+    "digital_shoe/friction_slip_history.py": "5eb55be1605bf42c6dda417f6a31f7c7e8720a19e45b28a5aaf1ea9f5b4627c6",
+    "digital_shoe/__init__.py": "51fb012072575166e0efaa702cc82d5ca3b830c1ffade80fb5685bb41bb23c41",
+    "digital_shoe/friction_stribeck.py": "2ab2b7e87a165252758cda829dc7871635f296bfd722966edbf05b2d5271ab12",
+    "digital_shoe/acquisition.py": "f6932e8a0513bea22db80914dfa2b4440a1b204ae31ee265662761bf6ff7c46d",
+    "digital_shoe/provenance.py": "074e1a29de9d980af42f4c8ee3c92b71483d0da8f41c4c5093cf0529af3eab46",
+    "digital_shoe/showcase.py": "57493f4922b625c82dc8838bee5e740f53c48a7c912360f79b906a3522ed39d3",
+    "digital_shoe/friction_parameter_adapter.py": "19a36a42eb9f0a6b0fe7e9b08d8bef109b530e578d77392f9a4c58a424b58fc8",
+    "digital_shoe/friction_observation.py": "fea84c994692673bce411bffbdb0f0f227fcc0d47c42bb7be91bd63cb3d628da",
+    "digital_shoe/friction_report.py": "12f722fd9379ef83a780dc653ddafad5fb45a076a0ea0d88442cbf251dd19baf",
+    "digital_shoe/friction_pressure.py": "7564674888ee1d616dd5b9c42e26587be6a8ed63bfe683879ac87640d1860af5",
+    "digital_shoe/material.py": "b35478d605e800560c041450b278fd63fbdef8f59561f47057caa90c9811b154",
+    "digital_shoe/runtime.py": "436d6df3312dd6e8c708dc84f4989dadbd64b9e37f0a09522349f7454efb8dca",
+    "digital_shoe/friction_adapter.py": "137c3769d16da524e374a75b6f29a504a4c18e2b1070ef115b15d40d46904096",
+    "digital_shoe/friction_solver.py": "1138f20840bbeb570e017a3e6092a3c58ec2a0304f86cdb0de58dafe593d569a",
+    "digital_shoe/calibration.py": "8834e855f9f9c20539756f050e3a7bc0e46a5ecfe7fcb88a896308570f7854d9",
+    "digital_shoe/friction_example.py": "36528f08ad75ba71573e3cde6fac40ba86812a720336a850a92f764fc0ea3538",
+    "digital_shoe/friction_deflection.py": "6e728395a4f34d311f07ae05820f323804ee337e81ff46b42b286d73187c6a3b"
+  },
+  "dataset_manifest_sha256": "74d2bfad0ad2bcf2d2d4844820814f8db6d0d8edd500d9c1432022cdd9ee1691",
+  "local_artifacts": {
+    "run": "outputs/impedance_instron/hogan_score_from_scratch_20261010",
+    "report": "outputs/reports/impedance-instron/hogan-score-from-scratch-20261010/report.html"
+  },
+  "limitations": [
+    "Single subject and speed, fixed calibrated shoe and rescaled inertial profile.",
+    "Force and contact errors improved while hip and angle tracking worsened slightly relative to the sample objective.",
+    "The fit plateaued despite a full iteration budget; no global optimum or physiological validity claim."
+  ]
+}

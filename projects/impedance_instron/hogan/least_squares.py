@@ -3,9 +3,10 @@
 
 """Levenberg-Marquardt identification of shared runner parameters.
 
-The cost is the sample part of :func:`~projects.impedance_instron.hogan.identify.score`
+The default cost is the sample part of :func:`~projects.impedance_instron.hogan.identify.score`
 (coordinate and GRF mean squares, averaged over trials) plus offset
-regularization, written as a residual vector. Finite-difference Jacobians and
+regularization. The optional score objective includes every reported loss term.
+Finite-difference Jacobians and
 the parallel damping ladder each run as one batched rollout; only the small
 damped normal-equation solve runs on the host.
 
@@ -45,6 +46,8 @@ class LMConfig:
     """Damping multipliers evaluated in parallel each iteration."""
     bound: float = 1.5
     regularization: float = 0.01
+    objective: str = "sample"
+    """``sample`` fits coordinate/GRF samples; ``score`` fits every score term."""
     tolerance: float = 1e-4
     """Stop when an accepted step improves the cost by less than this fraction."""
     chunk: int = 128
@@ -55,6 +58,8 @@ class LMConfig:
     exact; only the search direction carries float32 intrinsic rounding."""
 
     def __post_init__(self):
+        if self.objective not in ("sample", "score"):
+            raise ValueError("LM objective must be 'sample' or 'score'")
         if self.iterations < 1 or self.chunk < 1 or not self.ladder:
             raise ValueError("iterations, chunk, and ladder must be positive and nonempty")
         values = (self.step, self.damping, self.bound, self.regularization, self.tolerance, *self.ladder)
@@ -64,16 +69,20 @@ class LMConfig:
             raise ValueError("regularization and tolerance must be nonnegative")
 
 
-def residuals(trace: dict, summary: dict, trial: Trial) -> np.ndarray | None:
-    """Return weighted sample residuals whose squared sum equals the score's sample terms.
+def residuals(
+    trace: dict, summary: dict, trial: Trial, runner: Runner | None = None, *, objective: str = "sample"
+) -> np.ndarray | None:
+    """Return residuals whose squared sum equals the selected score terms.
 
     Matches the coordinate and GRF mean-square terms of :func:`identify.score`;
-    peak, impulse, contact-duration and effort terms are excluded. The GRF is
+    peak, impulse, contact-duration and effort terms are included by ``score``. The GRF is
     compared through the trial's force observation, if any, followed by its
     weighted unobservable vibration. Returns ``None`` for failed rollouts.
     """
     if summary["status"] != "completed":
         return None
+    if objective not in ("sample", "score"):
+        raise ValueError("LM objective must be 'sample' or 'score'")
     time = trace["time_s"]
     observed = (trial.time_s > 0) & (trial.time_s <= time[-1] + 1e-12)
     parts = []
@@ -92,6 +101,16 @@ def residuals(trace: dict, summary: dict, trial: Trial) -> np.ndarray | None:
         weight = vibration_weight(trial)
         if weight > 0:
             parts.append((weight * (trace["grf_n"] - grf) / scale).ravel())
+    if objective == "score":
+        if runner is None:
+            raise ValueError("Score residuals require a runner for torque bounds")
+        result = score(trace, summary, trial, runner)
+        parts.append(np.array([result["peak_fz_error_n"] / 100.0]))
+        parts.append(np.asarray(result["impulse_error_ns"]) / (20.0 * math.sqrt(2.0)))
+        parts.append(np.array([result["contact_duration_error_s"] / 0.02]))
+        if steps:
+            caps = np.asarray(runner.bounds.torque_max_nm)
+            parts.append((math.sqrt(0.01 / (3 * steps)) * trace["load"][:, 3:] / caps).ravel())
     return np.concatenate(parts) if parts else np.zeros(0)
 
 
@@ -119,8 +138,22 @@ def _describe(metrics: dict) -> str:
 class _Rollouts:
     """Evaluate stacked residual vectors on the host reference backend."""
 
-    def __init__(self, parameters: Parameterization, trials: list[Trial], config: RolloutConfig, device: str):
-        self.parameters, self.trials, self.config, self.device = parameters, trials, config, device
+    def __init__(
+        self,
+        parameters: Parameterization,
+        trials: list[Trial],
+        config: RolloutConfig,
+        device: str,
+        *,
+        objective: str = "sample",
+    ):
+        self.parameters, self.trials, self.config, self.device, self.objective = (
+            parameters,
+            trials,
+            config,
+            device,
+            objective,
+        )
         self.rollouts = 0
 
     def _predict(self, models: list[Runner]) -> list:
@@ -147,7 +180,8 @@ class _Rollouts:
                         )
                     )
                 values = [
-                    residuals(trace, summary, trial) for trial, (trace, summary) in zip(self.trials, row, strict=True)
+                    residuals(trace, summary, trial, model, objective=self.objective)
+                    for trial, (trace, summary) in zip(self.trials, row, strict=True)
                 ]
                 result.append(None if any(v is None for v in values) else weight * np.concatenate(values))
         return result
@@ -177,7 +211,7 @@ class _HostEngine:
 
     def __init__(self, parameters: Parameterization, trials: list[Trial], config: RolloutConfig, search: LMConfig):
         self.parameters, self.search = parameters, search
-        self.rollouts_runner = _Rollouts(parameters, trials, config, "cpu")
+        self.rollouts_runner = _Rollouts(parameters, trials, config, "cpu", objective=search.objective)
 
     @property
     def rollouts(self) -> int:
@@ -231,7 +265,12 @@ class _DeviceEngine:
         # Fast differences need a reference with the same numerics as their perturbations.
         self.fast_reference_row = self.reference_row + 1
         self.objective = GpuResiduals(
-            trials, config, rows=self.fast_reference_row + 1, device=device, chunk=search.chunk
+            trials,
+            config,
+            rows=self.fast_reference_row + 1,
+            device=device,
+            chunk=search.chunk,
+            objective=search.objective,
         )
 
     @property
@@ -409,7 +448,12 @@ def fit_lm(
         "device": device,
         "selection_split": "train",
         "method": "levenberg_marquardt",
-        "objective": "coordinate and GRF mean squares of identify.score plus offset regularization"
+        "objective": (
+            "all terms of identify.score"
+            if search.objective == "score"
+            else "coordinate and GRF mean squares of identify.score"
+        )
+        + " plus offset regularization"
         + (
             ""
             if observation is None

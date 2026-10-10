@@ -85,6 +85,7 @@ docs/_static/viser/
 
 # Local impedance rig inputs, reports, and recordings (restricted derivatives).
 /outputs/impedance_instron/
+/outputs/reports/impedance-instron/
 
 # Generated footwear mechanics report (restricted measurement/geometry derivatives).
 /outputs/footwear_contact_material_report/

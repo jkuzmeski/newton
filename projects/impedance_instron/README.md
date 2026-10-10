@@ -7,6 +7,23 @@ hip, knee, and ankle are actuated.
 
 ## Preserved full-run baseline
 
+The latest retained controller is the
+[full-score runner](hogan/baselines/generative_runner_score_20261010.json), with
+[saved fit provenance](hogan/baselines/generative_runner_score_20261010.provenance.json).
+It was fitted independently from unfitted engineering weights for all 50 LM
+iterations, using `--lm-objective score --lm-tolerance 0 --lm-bound 3
+--lm-regularization 0.001`, 20 Hz force observation, vibration weight 1, and
+immediate damping. Its unchanged common score is **10.30854217799746 train**
+and **10.16172407224562 held-out**, with zero rollout failures across 98 training
+and 9 held-out stances. Held-out results did not select the controller. Force
+and contact matching improved; hip and angle tracking were slightly worse than
+the paired sample-objective fit. Local matching motion, deformation, charts,
+and fitting histories remain in
+`outputs/impedance_instron/hogan_score_from_scratch_20261010`; the comparison is
+in `outputs/reports/impedance-instron/hogan-score-from-scratch-20261010/report.html`.
+
+The original full-run baseline remains available:
+
 - Model: [F01 runner](hogan/baselines/generative_runner_f01_20261008.json).
 - Saved run: `outputs/impedance_instron/generative_fit_lm_flightcom_20261008`.
 - Dataset: `outputs/impedance_instron/generative_fit_dataset_flight_20261008`.
@@ -60,6 +77,10 @@ That dataset repeats the 2026-10-08 recipe on the new exports:
 - The leg profile is mass-scaled to 66.5 kg.
 - The three stances whose relaxed shoe starts below ground are dropped;
   `inspect` reports them.
+
+For a small balanced motion/GRF tuning pilot, see the
+[Hogan sweep setup](hogan/SWEEP.md). It saves a plan before running candidates
+and evaluates every fitted model with the same force-scoring settings.
 
 Leg profiles need only `masses_kg` (3), `com_local_m` (3 by 2),
 `inertias_kg_m2` (3), and `provenance.inertial`. Old gain/limit fields are

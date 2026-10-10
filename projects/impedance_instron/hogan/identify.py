@@ -663,6 +663,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--method", choices=("lm",), default="lm", help="Levenberg-Marquardt fit")
     parser.add_argument("--iterations", type=int, default=15, help="LM iterations")
     parser.add_argument("--chunk", type=int, default=128, help="LM candidates per batched GPU rollout")
+    parser.add_argument("--lm-step", type=float, default=0.01, help="LM finite-difference step in offset units")
+    parser.add_argument("--lm-damping", type=float, default=1e-2, help="Initial LM damping")
+    parser.add_argument("--lm-bound", type=float, default=1.5, help="LM parameter offset bound")
+    parser.add_argument("--lm-regularization", type=float, default=0.01, help="LM offset regularization")
+    parser.add_argument("--lm-objective", choices=("sample", "score"), default="sample", help="LM residual objective")
+    parser.add_argument("--lm-tolerance", type=float, default=1e-4, help="Relative improvement stopping tolerance")
     parser.add_argument("--central", action="store_true", help="LM central-difference Jacobian")
     parser.add_argument(
         "--exact-jacobian",
@@ -748,7 +754,13 @@ def main(argv: list[str] | None = None) -> None:
             config=cfg,
             search=LMConfig(
                 iterations=args.iterations,
+                step=args.lm_step,
                 chunk=args.chunk,
+                damping=args.lm_damping,
+                bound=args.lm_bound,
+                regularization=args.lm_regularization,
+                objective=args.lm_objective,
+                tolerance=args.lm_tolerance,
                 central=args.central,
                 fast_jacobian=not args.exact_jacobian,
             ),

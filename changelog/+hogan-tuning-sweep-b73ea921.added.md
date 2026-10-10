@@ -1,0 +1,1 @@
+Add reproducible Hogan pilot and parameter searches with serial GPU fits, fixed common scoring, training-only model selection, and saved experiment plans. Add independent full fits initialized directly from unfitted engineering seeds.

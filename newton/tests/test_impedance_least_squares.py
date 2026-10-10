@@ -76,6 +76,45 @@ class TestLeastSquares(unittest.TestCase):
         self.assertAlmostEqual(float(r @ r), float(expected), places=10)
         self.assertIsNone(least_squares.residuals(trace, summary | {"status": "failed"}, trial))
 
+    def test_score_objective_residuals_match_reported_loss(self):
+        """Match every score term, including force summaries and bounded torque effort."""
+        for observation in (None, ForceObservation(400.0, 1.0, 0.7)):
+            with self.subTest(observation=observation):
+                trial = self.trial(observation=observation)
+                trial.q[1:] += np.array([0.003, -0.002, 0.01, -0.02, 0.015, 0.005])
+                trial.grf_n[:, 1] += 30.0
+                trace, summary = predict(self.baseline, trial, self.config)
+                vector = least_squares.residuals(trace, summary, trial, self.baseline, objective="score")
+                self.assertAlmostEqual(
+                    float(vector @ vector), score(trace, summary, trial, self.baseline)["loss"], places=10
+                )
+
+    @unittest.skipUnless(wp.is_cuda_available(), "CUDA required")
+    def test_device_score_objective_matches_reported_loss(self):
+        """Match CUDA score residual rows and sums for raw and observed force."""
+        from projects.impedance_instron.hogan.gpu_residuals import GpuResiduals  # noqa: PLC0415
+        from projects.impedance_instron.hogan.identify import predict_many  # noqa: PLC0415
+
+        trials = [self.trial(), self.trial(observation=ForceObservation(400.0, 1.0, 0.7))]
+        models = [self.baseline, self.parameters.model(np.full(self.parameters.size, 0.01))]
+        predictions = predict_many(models, trials, self.config, device="cuda:0")
+        objective = GpuResiduals(trials, self.config, rows=2, chunk=2, objective="score")
+        completed, sums, _ = objective.evaluate(models, [0, 1])
+        self.assertTrue(completed.all())
+        rows = objective.store.numpy()[:, : objective.length]
+        for index, (model, predictions_for_model) in enumerate(zip(models, predictions, strict=True)):
+            expected = np.concatenate(
+                [
+                    least_squares.residuals(*pair, trial, model, objective="score") / math.sqrt(len(trials))
+                    for trial, pair in zip(trials, predictions_for_model, strict=True)
+                ]
+            )
+            np.testing.assert_allclose(rows[index], expected, rtol=1e-10, atol=1e-10)
+            loss = np.mean(
+                [score(*pair, trial, model)["loss"] for trial, pair in zip(trials, predictions_for_model, strict=True)]
+            )
+            self.assertAlmostEqual(sums[index], loss, delta=1e-9 * max(1.0, loss))
+
     def test_force_observation_reproduces_target_processing(self):
         """Filter with unit gain, zero lag, and -3 dB at the nominal two-pass cutoff, then gate both axes."""
         self.assertEqual(ForceObservation().cutoff_hz, 20.0)

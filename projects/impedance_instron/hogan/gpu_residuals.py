@@ -23,7 +23,7 @@ import numpy as np
 import warp as wp
 
 from .gpu_mechanics import Vec6
-from .gpu_runner import _Buffers, _Group, _Inputs, _validate_models
+from .gpu_runner import _Buffers, _Group, _Inputs, _Model, _validate_models
 from .runner import RolloutConfig, Runner
 
 wp.set_module_options({"enable_backward": False, "fuse_fp": False})
@@ -59,6 +59,14 @@ class _Targets:
     # Weight and first column of each trial's unobservable-vibration residuals (weight 0: no block).
     vibration: wp.array[wp.float64]
     vibration_offset: wp.array[int]
+    score_offset: wp.array[int]
+    score: int
+    dt: wp.array[wp.float64]
+    threshold: wp.float64
+    target_peak: wp.array[wp.float64]
+    target_impulse: wp.array[wp.vec2d]
+    target_contact: wp.array[wp.float64]
+    effort_scale: wp.array[wp.float64]
 
 
 @wp.struct
@@ -73,6 +81,8 @@ class _Accumulators:
     residuals: wp.array2d[wp.float64]
     filter_z1: wp.array[wp.vec2d]
     filter_z2: wp.array[wp.vec2d]
+    impulse: wp.array[wp.vec2d]
+    contact: wp.array[int]
 
 
 @wp.kernel
@@ -86,6 +96,8 @@ def _clear(acc: _Accumulators):
     acc.peak[w] = wp.float64(-1.0e300)
     acc.filter_z1[w] = wp.vec2d(wp.float64(0.0))
     acc.filter_z2[w] = wp.vec2d(wp.float64(0.0))
+    acc.impulse[w] = wp.vec2d(wp.float64(0.0))
+    acc.contact[w] = 0
 
 
 @wp.func
@@ -100,7 +112,7 @@ def _biquad_step(
 
 
 @wp.kernel
-def _observe(trials: int, data: _Buffers, targets: _Targets, acc: _Accumulators):
+def _observe(trials: int, data: _Buffers, models: wp.array[_Model], targets: _Targets, acc: _Accumulators):
     """Write residuals of the newly accepted interval, mirroring ``np.interp`` exactly."""
     w = wp.tid()
     k = acc.seen[w]
@@ -116,6 +128,18 @@ def _observe(trials: int, data: _Buffers, targets: _Targets, acc: _Accumulators)
     grf = data.grf[w]
     column = base + 6 * count + 2 * k
     total = acc.sumsq[w]
+    if targets.score != 0:
+        if targets.observe[s] == 0:
+            acc.impulse[w] = acc.impulse[w] + grf
+            if grf[1] > targets.threshold:
+                acc.contact[w] = acc.contact[w] + 1
+        cap = models[c].torque_cap
+        load = data.load[w]
+        scale = weight * targets.effort_scale[s]
+        for m in range(3):
+            r = scale * load[m + 3] / cap[m]
+            acc.residuals[row, targets.score_offset[s] + 4 + 3 * k + m] = r
+            total += r * r
     if targets.observe[s] != 0:
         # Stash the forward filter pass (and the raw force for the vibration block);
         # _finish_observed forms these residuals after the rollout.
@@ -136,7 +160,7 @@ def _observe(trials: int, data: _Buffers, targets: _Targets, acc: _Accumulators)
         rz = weight * (ez / targets.force_scale[s])
         acc.residuals[row, column] = rx
         acc.residuals[row, column + 1] = rz
-        total = acc.sumsq[w] + rx * rx + rz * rz
+        total += rx * rx + rz * rz
         acc.force[w] = acc.force[w] + wp.vec2d(ex * ex, ez * ez)
         acc.peak[w] = wp.max(acc.peak[w], grf[1])
     q0 = data.previous[w]
@@ -212,6 +236,10 @@ def _finish_observed(trials: int, data: _Buffers, targets: _Targets, acc: _Accum
         total += rx * rx + rz * rz
         force = force + wp.vec2d(ex * ex, ez * ez)
         peak = wp.max(peak, y[1])
+        if targets.score != 0:
+            acc.impulse[w] = acc.impulse[w] + y
+            if y[1] > targets.threshold:
+                acc.contact[w] = acc.contact[w] + 1
         if vibration > wp.float64(0.0):
             j = stash + 2 * k
             vx = weight * ((vibration * (acc.residuals[row, j] - y[0])) / scale)
@@ -222,6 +250,28 @@ def _finish_observed(trials: int, data: _Buffers, targets: _Targets, acc: _Accum
     acc.sumsq[w] = total
     acc.force[w] = force
     acc.peak[w] = peak
+
+
+@wp.kernel
+def _finish_score(trials: int, data: _Buffers, targets: _Targets, acc: _Accumulators):
+    w = wp.tid()
+    if data.status[w] != 1:
+        return
+    s = w % trials
+    row = acc.rows[w // trials]
+    column = targets.score_offset[s]
+    weight = targets.weight
+    impulse = acc.impulse[w] * targets.dt[s] - targets.target_impulse[s]
+    contact = wp.float64(acc.contact[w]) * targets.dt[s] - targets.target_contact[s]
+    r0 = weight * (acc.peak[w] - targets.target_peak[s]) / wp.float64(100.0)
+    r1 = weight * impulse[0] / (wp.float64(20.0) * wp.sqrt(wp.float64(2.0)))
+    r2 = weight * impulse[1] / (wp.float64(20.0) * wp.sqrt(wp.float64(2.0)))
+    r3 = weight * contact / wp.float64(0.02)
+    acc.residuals[row, column] = r0
+    acc.residuals[row, column + 1] = r1
+    acc.residuals[row, column + 2] = r2
+    acc.residuals[row, column + 3] = r3
+    acc.sumsq[w] = acc.sumsq[w] + r0 * r0 + r1 * r1 + r2 * r2 + r3 * r3
 
 
 @wp.kernel
@@ -286,6 +336,8 @@ class _Observer:
         acc.residuals = store
         acc.filter_z1 = wp.zeros(w, dtype=wp.vec2d, device=d)
         acc.filter_z2 = wp.zeros(w, dtype=wp.vec2d, device=d)
+        acc.impulse = wp.zeros(w, dtype=wp.vec2d, device=d)
+        acc.contact = wp.zeros(w, dtype=int, device=d)
         self.acc = acc
 
     def reset(self):
@@ -300,13 +352,20 @@ class _Observer:
             inputs=[g.trial_count, g.data, self.targets, self.acc],
             device=g.device,
         )
+        if self.targets.score:
+            wp.launch(
+                _finish_score,
+                dim=g.world_count,
+                inputs=[g.trial_count, g.data, self.targets, self.acc],
+                device=g.device,
+            )
 
     def step(self):
         g = self.group
         wp.launch(
             _observe,
             dim=g.world_count,
-            inputs=[g.trial_count, g.data, self.targets, self.acc],
+            inputs=[g.trial_count, g.data, g.models, self.targets, self.acc],
             device=g.device,
         )
 
@@ -363,7 +422,11 @@ class GpuResiduals:
         device: str = "cuda:0",
         chunk: int = 128,
         chunk_steps: int = 64,
+        objective: str = "sample",
     ):
+        if objective not in ("sample", "score"):
+            raise ValueError("LM objective must be 'sample' or 'score'")
+        self.objective = objective
         if isinstance(chunk, bool) or not isinstance(chunk, (int, np.integer)) or chunk < 1:
             raise ValueError("chunk must be a positive integer")
         self.trials = list(trials)
@@ -402,6 +465,12 @@ class GpuResiduals:
                 (0, (0.0,) * 5, 0.0) if observation is None else (1, observation.coefficients(dt), observation.gate_n)
             )
             stash = position + 6 * count + 2 * steps
+            score_offset = stash + (2 * steps if vibration > 0 else 0)
+            interior = (trial.force_time_s > 0) & (trial.force_time_s < trial.duration_s)
+            clock = np.concatenate(([0.0], trial.force_time_s[interior], [trial.duration_s]))
+            target = np.column_stack([np.interp(clock, trial.force_time_s, trial.grf_n[:, c]) for c in range(2)])
+            target_impulse = np.sum(0.5 * (target[1:] + target[:-1]) * np.diff(clock)[:, None], axis=0)
+            target_contact = float(np.sum(np.diff(clock) * (target[:-1, 1] > config.contact_threshold_n)))
             plans.append(
                 (
                     count,
@@ -409,13 +478,21 @@ class GpuResiduals:
                     trial.q[observed],
                     grf,
                     (*observe, vibration, stash),
+                    (
+                        score_offset,
+                        dt,
+                        float(target[:, 1].max()),
+                        target_impulse,
+                        target_contact,
+                        math.sqrt(0.01 / (3 * steps)),
+                    ),
                 )
             )
             offsets.append(position)
             position += 6 * count + 2 * steps * (2 if vibration > 0 else 1)
-            interior = (trial.force_time_s > 0) & (trial.force_time_s < trial.duration_s)
-            clock = np.concatenate(([0.0], trial.force_time_s[interior], [trial.duration_s]))
-            self.measured_peak[index] = np.interp(clock, trial.force_time_s, trial.grf_n[:, 1]).max()
+            if objective == "score":
+                position += 4 + 3 * steps
+            self.measured_peak[index] = target[:, 1].max()
         self.length = position
         self.offsets = np.asarray(offsets)
         self.row_count = int(rows)
@@ -436,20 +513,21 @@ class GpuResiduals:
     def _upload(self, plans, offsets, weight) -> _Targets:
         d = self.device
         width = max(count for count, *_ in plans)
-        length = max(len(grf) for _, _, _, grf, _ in plans)
+        length = max(len(grf) for _, _, _, grf, *_ in plans)
         trigger = np.full((len(plans), width), -1, dtype=np.int32)
         node = np.zeros((len(plans), width), dtype=np.int32)
         offset = np.zeros((len(plans), width))
         dx = np.ones((len(plans), width))
         q = np.zeros((len(plans), width, 6))
         grf = np.zeros((len(plans), length, 2))
-        for s, (count, plan, observed, force, _) in enumerate(plans):
+        for s, (count, plan, observed, force, *_) in enumerate(plans):
             trigger[s, :count], node[s, :count], offset[s, :count], dx[s, :count] = plan
             q[s, :count] = observed
             grf[s, : len(force)] = force
         counts = np.array([count for count, *_ in plans])
-        steps = np.array([len(force) for _, _, _, force, _ in plans])
-        observe = [plan[-1] for plan in plans]
+        steps = np.array([len(force) for _, _, _, force, *_ in plans])
+        observe = [plan[-2] for plan in plans]
+        score_data = [plan[-1] for plan in plans]
         targets = _Targets()
         targets.obs_count = wp.array(counts, dtype=int, device=d)
         targets.obs_trigger = wp.array(trigger, dtype=int, device=d)
@@ -471,6 +549,14 @@ class GpuResiduals:
         targets.gate = wp.array([gate for _, _, gate, *_ in observe], dtype=wp.float64, device=d)
         targets.vibration = wp.array([v for *_, v, _ in observe], dtype=wp.float64, device=d)
         targets.vibration_offset = wp.array([o for *_, o in observe], dtype=int, device=d)
+        targets.score = int(self.objective == "score")
+        targets.score_offset = wp.array([item[0] for item in score_data], dtype=int, device=d)
+        targets.dt = wp.array([item[1] for item in score_data], dtype=wp.float64, device=d)
+        targets.threshold = self.config.contact_threshold_n
+        targets.target_peak = wp.array([item[2] for item in score_data], dtype=wp.float64, device=d)
+        targets.target_impulse = wp.array([item[3] for item in score_data], dtype=wp.vec2d, device=d)
+        targets.target_contact = wp.array([item[4] for item in score_data], dtype=wp.float64, device=d)
+        targets.effort_scale = wp.array([item[5] for item in score_data], dtype=wp.float64, device=d)
         self._observed = self._observed or any(flag for flag, *_ in observe)
         return targets
 
@@ -525,7 +611,7 @@ class GpuResiduals:
                 chosen[: len(block)] = rows[start : start + len(block)]
                 observer.acc.rows.assign(chosen)
                 group.launch(block)
-                if self._observed:
+                if self._observed or self.objective == "score":
                     observer.finish()
                 self.rollouts += len(block) * len(indices)
                 size = len(block) * len(indices)

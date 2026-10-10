@@ -14,13 +14,14 @@ import argparse
 import datetime
 import html
 import json
+import re
 from pathlib import Path
 
 import numpy as np
 
-from ..cartesian import data as reference_data
 from .identify import force_observation, load_trials, observed_grf, predict_many
-from .report import _CSS, BASELINE, COORDINATE_INFO, MEASURED, RUN_COLORS, _figure, _plot, _Scene, _snapshots, _table
+from .motion_gif import image_markup, write_motion_gif
+from .report import _CSS, BASELINE, COORDINATE_INFO, MEASURED, RUN_COLORS, _figure, _plot, _table
 from .runner import RolloutConfig, Runner
 
 FITTED = RUN_COLORS[0]
@@ -194,30 +195,34 @@ def _view(trace: dict, trial) -> dict:
     }
 
 
-def _example(trial, fitted: dict, seed: dict, row: dict, title: str, why: str) -> str:
+def _example(trial, fitted: dict, seed: dict | None, row: dict, title: str, why: str, run: Path) -> str:
     contact = _contact(trial)
-    cop = reference_data.load(Path(trial.provenance["reference"]))["cop_target_m"]
-    reference = {"grf_time_s": trial.force_time_s, "grf_target_n": trial.grf_n, "cop_target_m": cop}
     view = _view(fitted, trial)
     parts = [
         f"<h3>{html.escape(title)}: {html.escape(trial.id)}</h3>",
         f'<p class="note">{why} Loss {row["loss"]:.2f}; hip RMSE {1e3 * row["tracking_rmse"][0]:.0f} / '
         f"{1e3 * row['tracking_rmse'][1]:.0f} mm; Fz RMSE {row['grf_rmse_n'][1]:.0f} N; "
-        f"contact {1e3 * row['contact_duration_error_s']:+.0f} ms. Solid blue: fitted model. "
-        "Dashed grey: measured pose. Arrows: measured (brown) and simulated (orange) ground force.</p>",
+        f"contact {1e3 * row['contact_duration_error_s']:+.0f} ms. The animation overlays the saved fitted rollout "
+        "(blue) with measured pose (grey), shoe outline, and measured/simulated GRF through the stance.</p>",
     ]
+    gif_path = run / "motion_gifs" / f"{trial.id}.gif"
+    write_motion_gif(trial, view, gif_path, title=f"{title}: {trial.id}")
+    parts.append(
+        image_markup(
+            Path("motion_gifs") / gif_path.name, alt=f"{title}: {trial.id}, measured versus fitted stance motion"
+        )
+    )
     band = None
     if contact is not None:
-        touchdown, toeoff, peak = contact
-        band = (1e3 * touchdown, 1e3 * toeoff)
-        times = [touchdown, touchdown + 0.3 * (toeoff - touchdown), peak, touchdown + 0.85 * (toeoff - touchdown)]
-        scene = _Scene(trial.chain, trial.shoe, trial.provenance["rest_of_body"]["com_local_m"])
-        parts.append(_snapshots(scene, reference, view, times, label=f"{trial.id} stance snapshots"))
+        band = (1e3 * contact[0], 1e3 * contact[1])
     inside = _inside(trial)
     figures = []
     for axis, name in ((1, "Vertical"), (0, "Horizontal")):
         series = [("measured", 1e3 * trial.force_time_s[inside], trial.grf_n[inside, axis], MEASURED, "")]
-        for label, trace, color, dash in (("seed", seed, BASELINE, "6 4"), ("fitted", fitted, FITTED, "")):
+        traces = [("fitted", fitted, FITTED, "")]
+        if seed is not None:
+            traces.insert(0, ("seed", seed, BASELINE, "6 4"))
+        for label, trace, color, dash in traces:
             n = len(trace["grf_n"])
             time = 1e3 * trace["time_s"][:n]
             if trial.force_observation is None:
@@ -236,7 +241,10 @@ def _example(trial, fitted: dict, seed: dict, row: dict, title: str, why: str) -
         if c == 0:
             title_ += ", minus belt-speed travel"
         series = [("measured", 1e3 * trial.time_s, scale * (trial.q[:, c] - drift * trial.time_s), MEASURED, "")]
-        for label, trace, color, dash in (("seed", seed, BASELINE, "6 4"), ("fitted", fitted, FITTED, "")):
+        traces = [("fitted", fitted, FITTED, "")]
+        if seed is not None:
+            traces.insert(0, ("seed", seed, BASELINE, "6 4"))
+        for label, trace, color, dash in traces:
             values = scale * (trace["state"][:, c] - drift * trace["time_s"])
             series.append((label, 1e3 * trace["time_s"], values, color, dash))
         figures.append(_figure(title_, _plot(series, xlabel="time [ms]", ylabel=f"{name} [{unit}]", band=band)))
@@ -307,7 +315,7 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
     for (row, title, why), trial, seed in zip(picks, chosen, seed_traces, strict=True):
         with np.load(run / by_id[trial.id][1]["trace"]) as archive:
             fitted = {key: archive[key] for key in archive.files}
-        examples.append(_example(trial, fitted, seed, row, title, why))
+        examples.append(_example(trial, fitted, seed, row, title, why, run))
         if not impedance:
             impedance = _impedance(trial, fitted)
 
@@ -399,7 +407,90 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
     )
     path = run / "report.html"
     path.write_text(document, encoding="utf-8")
-    return path
+    from .presentation import format_report  # noqa: PLC0415 - report presentation is a separate layer
+
+    return format_report(run)
+
+
+def rebuild_motion_from_saved_traces(run: Path) -> Path:
+    """Replace a fit report's motion section using only its saved fitted traces.
+
+    This supports old reports without repeating the seed-model rollout used by
+    :func:`write_report` for comparison plots.
+    """
+    run = Path(run)
+    report_path = run / "report.html"
+    if not report_path.is_file():
+        raise FileNotFoundError(f"Cannot rebuild saved motion; report is missing: {report_path}")
+    summary = json.loads((run / "summary.json").read_text(encoding="utf-8"))
+    command = summary["command"]
+    trials = load_trials(
+        command["dataset"],
+        mount_m=command["mount"],
+        pitch_rad=command["pitch"],
+        speed_m_s=command["speed"],
+        height_offset_m=command["height_offset"],
+        friction_model=command["friction_model"],
+        limit_per_split=command["limit_per_split"],
+        force_observation=force_observation(command),
+    )
+    entries = summary["trials"]
+    if [trial.id for trial in trials] != [entry["id"] for entry in entries]:
+        raise ValueError("Dataset trials no longer match the fit summary")
+    split = "eval" if "eval" in summary["splits"] else "train"
+    rows = _rows(summary, split, "learned")
+    order = np.argsort([row["loss"] for row in rows])
+    picks = [
+        (rows[int(order[0])], "Best motion", f"Lowest {split} loss of {len(rows)} stances."),
+        (rows[int(order[len(order) // 2])], "Typical motion", f"Median {split} loss of {len(rows)} stances."),
+    ]
+    if picks[0][0]["id"] == picks[1][0]["id"]:
+        picks = picks[:1]
+    by_id = {trial.id: (trial, entry) for trial, entry in zip(trials, entries, strict=True)}
+    examples = []
+    for row, title, why in picks:
+        trial, entry = by_id[row["id"]]
+        trace_path = run / entry["trace"]
+        if not trace_path.is_file():
+            raise FileNotFoundError(f"Saved fitted trace for {trial.id} is missing: {trace_path}")
+        with np.load(trace_path) as archive:
+            fitted = {key: archive[key] for key in archive.files}
+        examples.append(_example(trial, fitted, None, row, title, why, run))
+    motion = (
+        '<section id="motion"><h2>2. Motion</h2>'
+        "<p>Motion is replayed from the saved fitted trace over the full stance. Solid blue shows the fitted model; "
+        "grey shows measured pose. The digital shoe outline and measured/simulated ground reaction force remain visible.</p>"
+        + "".join(examples)
+        + "</section>"
+    )
+    document = report_path.read_text(encoding="utf-8")
+    previous = re.search(r'<section id="motion">.*?</section>', document, flags=re.S)
+    snapshot_pattern = r'(<h3>.*?</h3><p class="note">.*?</p>).*?(?=<div class="grid">)'
+    if previous and len(re.findall(snapshot_pattern, previous.group(), flags=re.S)) == len(examples):
+        # Keep existing seed comparison curves; only replace the snapshot blocks.
+        animations = iter(
+            re.search(r'<figure class="motion-gif">.*?</figure>', item, flags=re.S).group() for item in examples
+        )
+
+        def replace_snapshot(match):
+            note = re.sub(
+                r"Solid blue:.*?</p>",
+                "Blue: saved simulated pose; grey: measured pose. The GIF includes the measured and simulated GRF.</p>",
+                match.group(1),
+                flags=re.S,
+            )
+            return note + next(animations)
+
+        motion = re.sub(snapshot_pattern, replace_snapshot, previous.group(), flags=re.S)
+        motion = motion.replace(
+            "Snapshots are at measured touchdown, 30% of contact, measured peak Fz, and 85% of contact.",
+            "Looping GIFs replay the saved fitted motion against the measured pose.",
+        )
+    updated, count = re.subn(r'<section id="motion">.*?</section>', lambda _: motion, document, count=1, flags=re.S)
+    if count != 1:
+        raise ValueError(f"Could not find one motion section in {report_path}")
+    report_path.write_text(updated, encoding="utf-8")
+    return report_path
 
 
 _PAGE = """<!doctype html>
@@ -420,7 +511,7 @@ _PAGE = """<!doctype html>
 {stance_table}
 </section>
 <section id="motion"><h2>2. Motion</h2>
-<p>Stances are picked after the fit; the choice does not affect the model. Snapshots are at measured touchdown, 30% of contact, measured peak Fz, and 85% of contact. Shaded band: measured contact (Fz &gt; 50 N).</p>
+<p>Stances are picked after the fit; the choice does not affect the model. Looping GIFs replay the fitted motion against the measured pose. Shaded plot band: measured contact (Fz &gt; 50 N).</p>
 {examples}
 </section>
 <section id="impedance"><h2>3. Learned impedance on {impedance_id}</h2>
@@ -449,8 +540,18 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0", help="Device for the seed comparison rollouts")
+    parser.add_argument(
+        "--saved-traces", action="store_true", help="Upgrade an existing report without rerunning dynamics"
+    )
     args = parser.parse_args(argv)
-    print(write_report(args.run, device=args.device))
+    if args.saved_traces:
+        from .presentation import format_report  # noqa: PLC0415
+
+        if 'data-generative-layout="shared"' not in (args.run / "report.html").read_text():
+            rebuild_motion_from_saved_traces(args.run)
+        print(format_report(args.run))
+    else:
+        print(write_report(args.run, device=args.device))
 
 
 if __name__ == "__main__":
