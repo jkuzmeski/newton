@@ -41,6 +41,13 @@ def _forward_pressure(strain: wp.array[wp.float32], p: runtime.FoundationParams,
     out[i] = runtime._hyperfoam_pressure(strain[i], p)
 
 
+@wp.kernel
+def _shear_and_pasternak(p: runtime.FoundationParams, out: wp.array[wp.float32]):
+    """Expose the effective shear modulus and a Pasternak coefficient for tests."""
+    out[0] = runtime.material_shear_modulus(p)
+    out[1] = runtime._pasternak_coupling(0.02, 0.02, p)
+
+
 def _host_values(params):
     """Evaluate both observables with the shared float64 NumPy backend."""
     pressure = material.hyperfoam_pressure_numpy(*params[:8])
@@ -155,6 +162,34 @@ class TestDigitalShoeMaterial(unittest.TestCase):
         np.testing.assert_allclose(actual, expected, rtol=1.0e-14, atol=1.0e-12)
         uncoupled = replace(trial, compression_laplacian_m_inv=None)
         np.testing.assert_allclose(core.predict(uncoupled, foam), np.sum(areas * np.maximum(pressure, 0.0), axis=1))
+
+    def test_independent_equilibrium_shear_override_preserves_pressure_law(self):
+        """Keep zero-override arithmetic and change shear coupling independently of compression."""
+        legacy = runtime.ShoeMaterial(100000.0, 2.0, 0.6, 0.0, instantaneous_shear_modulus_2_pa=20000.0)
+        overridden = replace(legacy, equilibrium_shear_modulus_override_pa=117160.0)
+        legacy_params, override_params = runtime.FoundationParams(), runtime.FoundationParams()
+        runtime.set_material_block(legacy_params, legacy)
+        runtime.set_material_block(override_params, overridden)
+        legacy_params.stretch_floor = override_params.stretch_floor = 1.0e-3
+        strain = np.array([0.0, 0.1, 0.5], dtype=np.float32)
+        out = []
+        for params in (legacy_params, override_params):
+            values = wp.zeros(2, dtype=wp.float32, device="cpu")
+            pressure = wp.zeros(len(strain), dtype=wp.float32, device="cpu")
+            wp.launch(_shear_and_pasternak, dim=1, inputs=[params, values], device="cpu")
+            wp.launch(
+                _forward_pressure,
+                dim=len(strain),
+                inputs=[wp.array(strain, dtype=wp.float32, device="cpu"), params, pressure],
+                device="cpu",
+            )
+            out.append((values.numpy(), pressure.numpy()))
+        np.testing.assert_array_equal(out[0][0], [72000.0, out[0][0][0] * 0.02])
+        self.assertEqual(out[1][0][0], 117160.0)
+        self.assertNotEqual(out[0][0][1], out[1][0][1])
+        np.testing.assert_array_equal(out[0][1], out[1][1])
+        self.assertEqual(legacy.equilibrium_shear_modulus_pa, out[0][0][0])
+        self.assertEqual(overridden.equilibrium_shear_modulus_pa, 117160.0)
 
     def test_warp_values_and_material_gradients(self):
         """Compare CPU and CUDA Tape with float64 finite differences of the same law."""

@@ -57,6 +57,7 @@ class ShoeMaterial:
     maxwell_relaxation_time_s: float = 0.08
     instantaneous_shear_modulus_2_pa: float = 0.0
     hyperfoam_exponent_2: float = 1.0
+    equilibrium_shear_modulus_override_pa: float = 0.0
 
     def __post_init__(self) -> None:
         values = tuple(self.__dict__.values())
@@ -66,6 +67,8 @@ class ShoeMaterial:
             raise ValueError("shear modulus and Hyperfoam exponent must be positive")
         if self.instantaneous_shear_modulus_2_pa < 0.0:
             raise ValueError("second Ogden-Hill shear modulus must be nonnegative")
+        if self.equilibrium_shear_modulus_override_pa < 0.0:
+            raise ValueError("equilibrium shear modulus override must be nonnegative")
         if not 0.0 < self.equilibrium_fraction <= 1.0:
             raise ValueError("equilibrium fraction must be in (0, 1]")
         if self.pasternak_n_per_m < 0.0:
@@ -77,16 +80,17 @@ class ShoeMaterial:
 
     @property
     def equilibrium_shear_modulus_pa(self) -> float:
-        """Equilibrium Ogden-Hill shear modulus, the SUM over both terms [Pa].
+        """Equilibrium shear modulus used by shear-layer and tangential laws [Pa].
 
         ``mu_eq = (G_1 + G_2) * f_eq``. Every term of an Ogden-Hill series adds
         ``2 mu_n`` to the small-strain compressive tangent regardless of its
-        exponent, so the series modulus is the sum and this is the quantity the
-        per-column Pasternak rule ``k_i = mu_eq * t_i`` uses.
+        exponent, so the default is the series sum. A positive explicit override
+        decouples shear response from the pressure-fit series while leaving normal
+        compression unchanged.
         """
-        return (self.instantaneous_shear_modulus_pa + self.instantaneous_shear_modulus_2_pa) * (
-            self.equilibrium_fraction
-        )
+        if self.equilibrium_shear_modulus_override_pa > 0.0:
+            return self.equilibrium_shear_modulus_override_pa
+        return (self.instantaneous_shear_modulus_pa + self.instantaneous_shear_modulus_2_pa) * self.equilibrium_fraction
 
 
 @wp.struct
@@ -96,6 +100,7 @@ class FoundationParams:
     g_eq: wp.float32  # first-term equilibrium shear modulus G_inst * equilibrium_fraction [Pa]
     alpha: wp.float32  # first-term Hyperfoam exponent
     g_eq2: wp.float32  # second-term equilibrium shear modulus [Pa]; zero disables the term
+    shear_override: wp.float32  # independent equilibrium shear modulus [Pa]; zero derives it from the series
     alpha2: wp.float32  # second-term Hyperfoam exponent
     beta: wp.float32  # poisson / (1 - 2 poisson)
     one_minus_two_poisson: wp.float32  # volumetric stretch exponent
@@ -195,6 +200,15 @@ def set_hyperfoam_series(params: FoundationParams, material) -> None:
     params.alpha = float(material.hyperfoam_exponent)
     params.g_eq2 = float(material.instantaneous_shear_modulus_2_pa) * fraction
     params.alpha2 = float(material.hyperfoam_exponent_2)
+    params.shear_override = float(getattr(material, "equilibrium_shear_modulus_override_pa", 0.0))
+
+
+@wp.func
+def material_shear_modulus(p: FoundationParams) -> wp.float32:
+    """Return the equilibrium shear modulus used by tangential and shear-layer laws [Pa]."""
+    if p.shear_override > 0.0:
+        return p.shear_override
+    return p.g_eq + p.g_eq2
 
 
 @wp.func
@@ -209,7 +223,7 @@ def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -
     flux summed over the bed is exactly zero and the layer can only move load,
     never create it.
     """
-    return pasternak_coupling(t_i, t_j, p.g_eq + p.g_eq2)
+    return pasternak_coupling(t_i, t_j, material_shear_modulus(p))
 
 
 @wp.func
@@ -318,7 +332,7 @@ def _foundation_column_forces(
     column = i - base
     p = params[world_index]
     ci = compression[i]
-    flux = pasternak_flux(column, base, compression, rest_len, neighbors, p.g_eq + p.g_eq2)
+    flux = pasternak_flux(column, base, compression, rest_len, neighbors, material_shear_modulus(p))
 
     body = carrier[world_index]
     point, _com_world, point_vel, gap = contact_kinematics(

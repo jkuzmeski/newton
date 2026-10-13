@@ -27,7 +27,7 @@ from projects.digital_shoe.friction_maxwell import (
 from projects.digital_shoe.friction_pressure import bristle_pressure_step, pressure_coefficient
 from projects.digital_shoe.friction_slip_history import bristle_slip_history_step, slip_history_coefficient
 from projects.digital_shoe.friction_stribeck import bristle_stribeck_step, stribeck_coefficient
-from projects.digital_shoe.runtime import FoundationParams
+from projects.digital_shoe.runtime import FoundationParams, material_shear_modulus
 
 wp.set_module_options({"enable_backward": False})
 
@@ -105,7 +105,7 @@ def _friction_column_step(
 
     if method == 9:
         p = world_params[w]
-        kt = elastic_coulomb_stiffness(p.g_eq + p.g_eq2, area[c], rest_len[c]) * settings[w, 2]
+        kt = elastic_coulomb_stiffness(material_shear_modulus(p), area[c], rest_len[c]) * settings[w, 2]
         force, _jac, z, s, elapsed = bristle_elastic_coulomb_step(v, dt, n, kt, mu, release, z, s, elapsed)
         maxwell_force[i] = wp.vec2(0.0)
         a = pos + dt * v - z
@@ -131,7 +131,7 @@ def _friction_column_step(
         p = world_params[w]
         shear_tau = p.friction_relaxation_time_s
         kt, kv = column_maxwell_parameters(
-            p.g_eq + p.g_eq2,
+            material_shear_modulus(p),
             p.overstress,
             area[c],
             rest_len[c],

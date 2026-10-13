@@ -5,6 +5,46 @@ Levenberg-Marquardt, and predict from its frozen model. No measured trajectory,
 force target, or inverse-dynamics feedforward enters the simulation. Only the
 hip, knee, and ankle are actuated.
 
+## Experiment reports
+
+Open `outputs/index.html` for the results dashboard, with separate
+`outputs/controller-testing/index.html` and `outputs/materials-testing/index.html`
+catalogs. Each study links to its individual report and available saved motion.
+Material-condition pages show the geometry and results for that specific run.
+The dashboard keeps controller fitting scores separate from held-out mechanical
+work and conditional marathon estimates; missing results remain marked.
+
+Rebuild the dashboard and catalogs from saved artifacts without running physics:
+
+```console
+uv run --no-project python -m projects.impedance_instron.report_catalog --outputs outputs
+```
+
+Upgrade a qualified replay with the experiment's actual spring geometry:
+
+```console
+uv run --no-project python -m projects.impedance_instron.hogan.spring_viewer_report CONDITION_DIRECTORY
+```
+
+This reconstructs display endpoints from saved poses, shoe geometry, and captured
+compression without integrating physics. It retains the original viewer and
+records the display provenance in `replay_evidence/spring-geometry.json`.
+Material report generators run this step before packaging their viewers.
+
+The motion pane offers a shoe/run selector and a purple dashed comparison
+overlay for the same saved example. Drag the 3D spring close-up to orbit, use
+Side/Top/End presets, and zoom with the wheel or buttons. Camera position stays
+fixed through playback and scrubbing. Overlays match elapsed time and center
+the spring geometry on each shoe; they do not alter the simulation or metrics.
+Build the saved comparison selector with:
+
+```console
+uv run --no-project python -m projects.impedance_instron.hogan.comparison_viewer_report --run RUN_DIRECTORY --default CONDITION_ID
+```
+
+The installed Instron report renderer dispatches catalog rebuilding to this
+repository generator. Existing report URLs and experiment artifacts are retained.
+
 ## Preserved full-run baseline
 
 The latest retained controller is the
@@ -125,3 +165,7 @@ full-run traces when the local dataset and CUDA are available:
 ```console
 uv run --no-sync -m unittest newton.tests.test_impedance_pipeline newton.tests.test_impedance_profile newton.tests.test_impedance_hogan newton.tests.test_impedance_runner newton.tests.test_impedance_runner_gpu newton.tests.test_impedance_least_squares newton.tests.test_impedance_gpu_workflow
 ```
+
+For frozen-controller comparisons of paper-derived foam properties, see
+[Materials testing](hogan/MATERIALS.md). These reports compare matched joint
+work, power, and contact performance, with separate material-fit diagnostics.

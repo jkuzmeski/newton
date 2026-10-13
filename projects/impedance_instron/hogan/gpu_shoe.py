@@ -28,7 +28,12 @@ from projects.digital_shoe.contact import _surround_balance_pressures, contact_k
 from projects.digital_shoe.friction_maxwell import bristle_elastic_coulomb_step, elastic_coulomb_stiffness
 from projects.digital_shoe.friction_parameter_adapter import FrictionParameterAdapter
 from projects.digital_shoe.material import maxwell_coefficients
-from projects.digital_shoe.runtime import FoundationParams, _hyperfoam_pressure, _pasternak_coupling
+from projects.digital_shoe.runtime import (
+    FoundationParams,
+    _hyperfoam_pressure,
+    _pasternak_coupling,
+    material_shear_modulus,
+)
 
 # Match the shared float32 shoe runtime, not the float64 leg module.
 wp.set_module_options({"enable_backward": False, "fuse_fp": True})
@@ -337,7 +342,7 @@ def _replay_lifted(shoe: GroundShoe, w: int, lane: int, steps: int):
     dt = shoe.world_dt[w]
     decay, ramp = maxwell_coefficients(dt, p.tau_s)
     peq_zero = shoe.zero_pressure[w * count][0]
-    shear = p.g_eq + p.g_eq2
+    shear = material_shear_modulus(p)
     mu = shoe.settings[w, 1]
     kt_scale = shoe.settings[w, 2]
     release = shoe.settings[w, 5]
@@ -437,7 +442,7 @@ def _ground_contact(
     mu = shoe.settings[w, 1]
     kt_scale = shoe.settings[w, 2]
     release = shoe.settings[w, 5]
-    shear = p.g_eq + p.g_eq2
+    shear = material_shear_modulus(p)
     # Zero strain means unit stretch for every thickness, so the generic path's cached
     # zero-compression pressure serves all columns.
     peq_zero = shoe.zero_pressure[w * count][0]
