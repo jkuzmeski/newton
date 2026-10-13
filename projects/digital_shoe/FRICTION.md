@@ -124,8 +124,8 @@ from projects.digital_shoe import FrictionAdapter, MidsoleFoundation
 # Attach the adapter to an existing MidsoleFoundation instance
 friction = FrictionAdapter(
     foundation,
-    mobility=mobility,             # wp.array[wp.spatial_matrix], shape [world_count]
-    mode="implicit_deflection",   # or "deflection", "implicit_bristle", "regularized"
+    mobility=mobility,  # wp.array[wp.spatial_matrix], shape [world_count]
+    mode="implicit_deflection",  # or "deflection", "implicit_bristle", "regularized"
     iterations=8,
 )
 

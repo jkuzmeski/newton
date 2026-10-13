@@ -14,11 +14,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import patch
 
 import numpy as np
 import warp as wp
 
+from newton.tests.unittest_utils import patch_sys_module
 from projects.impedance_instron import __main__ as pipeline
 from projects.impedance_instron.hogan import __main__ as hogan_pipeline
 from projects.impedance_instron.hogan.fit_report import write_report
@@ -40,7 +40,7 @@ class TestHoganCommands(unittest.TestCase):
                 module.main = lambda seen=seen: seen.append(sys.argv[1:])
                 arguments = [command, "--output", "new-run"]
                 original = sys.argv
-                with patch.dict(sys.modules, {name: module}):
+                with patch_sys_module(name, module):
                     pipeline.main(arguments)
                 prefix = [command] if command in pipeline._IDENTIFY_COMMANDS else []
                 self.assertEqual(seen, [[*prefix, "--output", "new-run"]])

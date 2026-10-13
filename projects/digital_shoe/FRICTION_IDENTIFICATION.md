@@ -54,13 +54,13 @@ or 12. The first seven fields are:
 
 ```python
 PARAMETER_NAMES = (
-    "method",           # Exact integer adapter code
-    "mu",               # Nonnegative Coulomb coefficient
-    "kt_scale",         # Positive stiffness multiplier
-    "kv_scale",         # Nonnegative viscosity/damping multiplier
-    "viscous_ratio",    # Nonnegative direct damping cap fraction
+    "method",  # Exact integer adapter code
+    "mu",  # Nonnegative Coulomb coefficient
+    "kt_scale",  # Positive stiffness multiplier
+    "kv_scale",  # Nonnegative viscosity/damping multiplier
+    "viscous_ratio",  # Nonnegative direct damping cap fraction
     "release_dwell_s",  # Nonnegative unloaded history dwell [s]
-    "yield_width",      # Must be exactly 0.0
+    "yield_width",  # Must be exactly 0.0
 )
 ```
 

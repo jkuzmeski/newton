@@ -79,12 +79,39 @@ to locate a joint's slice in the per-DOF arrays.
 
 For free and D6 joints, Newton stores linear DOFs before angular DOFs in per-axis arrays. In
 particular, floating-base slices of :attr:`newton.State.joint_qd`, :attr:`newton.Control.joint_f`,
-:attr:`newton.Control.joint_target_q`, and :attr:`newton.Control.joint_target_qd` use
+and :attr:`newton.Control.joint_target_qd` use
 ``(linear, angular)`` ordering, whereas ``warp.sim`` used ``(ang_vel, lin_vel)``.
-For public ``FREE`` and ``DISTANCE`` joints, :attr:`newton.State.joint_qd`
+:attr:`newton.Control.joint_target_q` keeps that ordering but follows :attr:`newton.State.joint_q`:
+a free joint occupies 7 coordinates ``(position, quaternion)``, not 6 DOFs. It is DOF-shaped like
+the others only under the deprecated layout; see :ref:`joint-target-layout`.
+For public ``FREE``, ``DISTANCE``, and ``ROD`` joints, :attr:`newton.State.joint_qd`
 stores the child-COM twist in the joint parent frame, while
 :attr:`newton.Control.joint_f` stores the world-frame COM wrench
 ``(f_world, tau_com_world)``.
+
+Rod joints now use seven ``joint_q`` coordinates for relative position and
+orientation and six ``joint_qd`` entries for relative linear and angular
+velocity. Their material-axis order is ``[shear_x, shear_y, stretch_z,
+bend_x, bend_y, twist_z]``. Migrate old ``[stretch, shear, bend, twist]``
+offsets ``[0, 1, 2, 3]`` to ``[2, (0, 1), (3, 4), 5]``, and use
+:attr:`newton.Model.joint_q_start` and
+:attr:`newton.Model.joint_qd_start` to locate each Rod slice.
+
+Rod angular rest is stored in :attr:`newton.Model.joint_target_q`; after
+editing it, call :meth:`newton.solvers.SolverVBD.notify_model_changed` with
+:attr:`newton.ModelFlags.JOINT_REFERENCE_POSE_PROPERTIES`. Editing
+:attr:`newton.Model.body_q` no longer changes angular rest.
+
+Code that wrote the old bend offset ``qd_start + 2`` now silently sets stretch.
+The shear/bend isotropy check cannot detect every outdated offset; audit
+direct Rod ``joint_target_ke``/``joint_target_kd`` indexing.
+
+:func:`newton.eval_fk` now reconstructs Rod body state from ``joint_q`` and
+``joint_qd`` like free joints.
+:class:`newton.solvers.SolverVBD` advances Rod bodies in maximal coordinates
+without updating these arrays. Before calling ``eval_fk`` during the simulation,
+exclude the rod articulations with ``mask``/``indices`` or use
+:func:`newton.eval_ik` to update the coordinate arrays passed to ``eval_fk``.
 
 +------------------------------------------------------------------+-----------------------------------------------------------------------------------------------------------------------+
 | **warp.sim**                                                     | **Newton**                                                                                                            |
@@ -148,18 +175,15 @@ Joint-target layout (``newton.use_coord_layout_targets``)
 
 In ``warp.sim`` the target array was DOF-shaped like ``joint_qd``. Newton is moving position
 targets to the coordinate layout of :attr:`~newton.State.joint_q` instead, since that is what a
-position semantically is: the two layouts diverge whenever an articulation contains a free or
-distance joint (7 coords vs. 6 DOFs) or ball joint (4 coords vs. 3 DOFs), and under the DOF layout
-every actuated DOF downstream of such a joint is indexed with the wrong stride.
+position semantically is: the two layouts diverge whenever an articulation contains a free,
+distance, or rod joint (7 coords vs. 6 DOFs) or ball joint (4 coords vs. 3 DOFs), and under the
+DOF layout every actuated DOF downstream of such a joint is indexed with the wrong stride.
 
-New code should opt into the coordinate layout, which will become the only layout in a future
-release:
+The coordinate layout is the default and will become the only layout in a future release:
 
 .. code-block:: python
 
    import newton
-
-   newton.use_coord_layout_targets = True  # set once, before building any model
 
    builder = newton.ModelBuilder()
    # ... build articulation ...
@@ -181,11 +205,11 @@ translation for free joints), matching ``joint_q``. Migration notes coming from 
 - When constructing an :class:`Actuator` with a custom ``pos_indices``, drop the
   ``target_pos_indices`` argument: with the coord layout it defaults to ``pos_indices``.
 
-The default is still the legacy DOF-shaped layout for backward compatibility with existing Newton
-code, but it is deprecated: building a model whose joint coordinate and DOF counts differ
-(free/ball/distance joints) under ``use_coord_layout_targets = False`` emits a
-:class:`DeprecationWarning` from ``finalize()``. For models without such joints the two layouts
-are identical, so no warning is emitted and the switch is invisible.
+Code that is not migrated yet can restore the legacy DOF-shaped layout with
+``newton.use_coord_layout_targets = False``, set once before building any model. That layout is
+deprecated: building a model whose joint coordinate and DOF counts differ (free/ball/distance/rod
+joints) under it emits a :class:`DeprecationWarning` from ``finalize()``. For models without such
+joints the two layouts are identical, so no warning is emitted and the switch is invisible.
 
 
 ``ModelBuilder``
