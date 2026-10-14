@@ -68,6 +68,11 @@ BODY_POINTS = ("knee_r", "ankle_r", "heel_r", "toe_r", "knee_l", "ankle_l", "hee
 """Tracked leg points, relative to the mid-hip root."""
 
 
+def response_fraction(dt_s: float, response_time_s: float) -> float:
+    """Per-substep first-order torque response; a nonpositive time constant means no lag."""
+    return 1.0 if response_time_s <= 0 else -math.expm1(-dt_s / response_time_s)
+
+
 def observation_names(config: EnvConfig) -> tuple[str, ...]:
     """Return the policy inputs for a configuration; previous actions are optional."""
     if config.previous_action_obs:
@@ -86,7 +91,10 @@ class EnvConfig:
     response_time_s: float = 0.005334445782959161
     """Joint torque response time [s], from the fitted single-leg runner
     (``hogan/baselines/generative_runner_score_20261010.json``). The unfitted seed's
-    25 ms makes the 0.01 kg m^2 foot a lightly damped ~6 Hz resonator."""
+    25 ms makes the 0.01 kg m^2 foot a lightly damped ~6 Hz resonator. Zero applies
+    the impedance torque without lag."""
+    torque_slew_limit: bool = True
+    """Bound the joint torque rate by ``Bounds.torque_rate_max_nm_s``; ``False`` removes it."""
     load_time_s: float = 0.02
     frequency_hz: float = 1.5
     phase_feedback: float = 0.2
@@ -374,7 +382,9 @@ class BilateralEnv:
         settings.stiffness_max = both(self.bounds.stiffness_max_nm_rad)
         settings.damping_max = both(self.bounds.damping_max_nms_rad)
         settings.torque_cap = both(self.bounds.torque_max_nm)
-        settings.torque_rate = both(self.bounds.torque_rate_max_nm_s)
+        settings.torque_rate = (
+            both(self.bounds.torque_rate_max_nm_s) if cfg.torque_slew_limit else gpu.Vec6(*([1.0e12] * 6))
+        )
         settings.pitch_r = shoes["right"].static_pitch_rad
         settings.pitch_l = shoes["left"].static_pitch_rad
         settings.max_force = cfg.maximum_force_n
@@ -392,7 +402,7 @@ class BilateralEnv:
         data.status = wp.zeros(w, dtype=int, device=d)
         data.speed = wp.zeros(w, dtype=wp.float64, device=d)
         data.frequency = wp.full(w, cfg.frequency_hz, dtype=wp.float64, device=d)
-        data.response = wp.full(w, -math.expm1(-cfg.dt_s / cfg.response_time_s), dtype=wp.float64, device=d)
+        data.response = wp.full(w, response_fraction(cfg.dt_s, cfg.response_time_s), dtype=wp.float64, device=d)
         data.equilibrium = wp.zeros(w, dtype=gpu.Vec6, device=d)
         data.stiffness = wp.zeros(w, dtype=gpu.Vec6, device=d)
         data.damping = wp.zeros(w, dtype=gpu.Vec6, device=d)

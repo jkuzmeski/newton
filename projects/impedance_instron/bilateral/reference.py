@@ -44,12 +44,12 @@ def step(
     dt = config.dt_s
     equilibrium, stiffness, damping = impedance
     cap = np.tile(bounds.torque_max_nm, 2)
-    rate = np.tile(bounds.torque_rate_max_nm_s, 2) * dt
+    rate = np.tile(bounds.torque_rate_max_nm_s, 2) * dt if config.torque_slew_limit else np.full(6, np.inf)
     q, v = state.q, state.v
     spring = stiffness * (equilibrium - q[3:])
     command = spring if config.immediate_damping else spring - damping * v[3:]
     immediate = damping if config.immediate_damping else np.zeros(6)
-    response = -math.expm1(-dt / config.response_time_s)
+    response = 1.0 if config.response_time_s <= 0 else -math.expm1(-dt / config.response_time_s)
     change = np.clip(response * (np.clip(command, -cap, cap) - state.torque_nm), -rate, rate)
     state.torque_nm = np.clip(state.torque_nm + change, -cap, cap)
     load = np.clip(state.torque_nm - immediate * v[3:], -cap, cap)

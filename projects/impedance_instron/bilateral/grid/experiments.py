@@ -49,6 +49,14 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
         Run(f"all_terms_seed{seed}", PLANAR, (*_BASE[:-1], str(seed), *_RUN4, *_BODY, *_REGULARIZERS))
         for seed in (1, 2, 3)
     ),
+    # Torque lag and slew limit on the best recipe so far (pm_ablation index 2).
+    # Neither is fitted to the data: the single-leg fit pushed the lag to its 5 ms floor.
+    "actuation": (
+        Run("lag5ms_slew", PLANAR, _BASE + _RUN4 + _REGULARIZERS),
+        Run("nolag_slew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0")),
+        Run("nolag_noslew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0", "--no-slew-limit")),
+        Run("lag25ms_slew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0.025")),
+    ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
         Run(
