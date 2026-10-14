@@ -240,7 +240,7 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             smoke_args=_SPATIAL_SMOKE,
         ),
     ),
-    # Gait scores and a 1 km run for the finished fine-tunes against the 100 Hz base.
+    # Gait scores and a 1 km run for the finished fine-tunes and MuJoCo runs against the 100 Hz base.
     "finetune_eval": tuple(
         Run(
             f"{test}_{name}",
@@ -255,6 +255,13 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             *(
                 (tag, f"runs/spatial_finetune/16684704/{index}_ft100_{tag}/policy_01500.pt")
                 for index, tag in (("00", "pose"), ("01", "pose_smooth"), ("02", "pose_noeffort"))
+            ),
+            *(
+                (tag, f"runs/spatial_mujoco/16685657/{index}_{run}/policy_01500.pt")
+                for index, tag, run in (
+                    ("00", "mujoco_ft", "ft100_mujoco"),
+                    ("01", "mujoco_scratch", "pacer_100hz_mujoco"),
+                )
             ),
         )
         for test, args in (
