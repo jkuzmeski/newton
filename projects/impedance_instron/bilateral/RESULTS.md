@@ -224,3 +224,41 @@ target that, made the spike worse at these weights (`01_body_terms`, 948 N).
 These are single-seed results. `pm_seeds` (three seeds of `03_all_terms`) is
 defined for sizing the run-to-run spread.
 
+## Torque lag and slew (job 16683559)
+
+The question is whether the first-order torque lag and the slew limit are
+needed at all, given that the goal is the control strategy that reproduces the
+data, not a muscle model. All four runs use the `02_regularizers` recipe from
+code `a4c125de`, seed 0, with 1,500 iterations. Graphs and `report.md` are in
+`Z:\newton_grid\runs\actuation\16683559\` (the per-run `report/` folders and
+the job's `report/` folder).
+
+| run | response time | slew limit | held-out loss | failed | peak Fz error [N] | late-swing ankle RMSE [deg] | touchdown peak excess [N] |
+|---|---:|---|---:|---:|---:|---:|---:|
+| `00_lag5ms_slew` | 5.3 ms | yes | **40.3** | 0/6 | 484 | **3.5** | 1121 |
+| `01_nolag_slew` | none | yes | 57.3 | 0/6 | 505 | 4.6 | 1066 |
+| `02_nolag_noslew` | none | no | 55.7 | 0/6 | 510 | 3.9 | 1207 |
+| `03_lag25ms_slew` | 25 ms | yes | 73.3 | 0/6 | **245** | 28.5 | **691** |
+
+`00_lag5ms_slew` reproduces `02_regularizers` exactly. Training is
+deterministic for a fixed configuration and seed.
+
+- **Removing the lag does not improve the fit.** With and without the slew
+  limit, the no-lag runs are worse on loss (56-57 vs. 40) and leave the
+  impact peak unchanged. The 5.3 ms lag is close to instantaneous at a 500 Hz
+  policy, so it is not what limits the strategy.
+- **The 25 ms lag halves the peak force error and brings back the bad
+  ankle.** As in run 1 (also 25 ms, 336 N), the slow lag lets the policy
+  touch down compliantly. The delivered torque cannot stiffen within the first
+  25 ms of contact, so the impact is softer (touchdown excess 691 N vs.
+  1,121 N). The right ankle, however, swings 60-90 deg dorsiflexed
+  (40 deg right-ankle RMSE).
+- **Reading.** The spike is what an ankle that is effectively stiff at
+  touchdown produces. With a fast actuator, the policy could command low K
+  for the first 20-30 ms itself, but it does not find that strategy. At 25 ms
+  the actuator imposes the compliance, but the policy pays for it in swing.
+  The lead to follow is a strategy question, getting the policy to soften the
+  stance ankle at contact, not an actuator model.
+
+Single seed; the 40 vs. 56 difference is not yet separated from seed spread.
+
