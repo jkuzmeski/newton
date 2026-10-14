@@ -119,6 +119,27 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
         )
         for hz, substeps in ((100, 40), (50, 80))
     ),
+    # 100 Hz with a 2 s discount horizon, and with the larger network.
+    "spatial_rate_b": (
+        Run(
+            "pacer_100hz_g995",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "0"),
+                *("--dt-s", "2.5e-4", "--substeps", "40", "--gamma", "0.995"),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+        Run(
+            "pacer_100hz_512x512x256",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "0"),
+                *("--dt-s", "2.5e-4", "--substeps", "40", "--hidden", "512", "512", "256"),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+    ),
     # Larger actor and critic at the 500 Hz policy rate.
     "spatial_capacity": (
         Run(
