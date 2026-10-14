@@ -645,7 +645,25 @@ class BilateralEnv3D:
                 self.model, angular_damping=0.0, update_mass_matrix_interval=cfg.mass_matrix_interval
             )
         elif cfg.solver == "mujoco":
-            self.solver = newton.solvers.SolverMuJoCo(self.model, disable_contacts=True)
+            import mujoco  # noqa: PLC0415
+
+            # The model has no MuJoCo constraints, so njmax=0 takes the solver's exact
+            # qacc = qacc_smooth path and drops the constraint solve and its host readbacks.
+            # That path never writes efc.Ma, which Euler's implicit joint damping reads; the
+            # joints have no springs or damping, so disabling those terms is exact.
+            self.solver = newton.solvers.SolverMuJoCo(
+                self.model,
+                disable_contacts=True,
+                integrator="euler",
+                jacobian="dense",
+                njmax=0,
+                iterations=1,
+                ls_iterations=1,
+            )
+            disabled = mujoco.mjtDisableBit
+            self.solver.mjw_model.opt.disableflags |= int(
+                disabled.mjDSBL_SPRING | disabled.mjDSBL_DAMPER | disabled.mjDSBL_EULERDAMP
+            )
         else:
             raise ValueError(f"unknown solver {cfg.solver!r}; expected 'featherstone' or 'mujoco'")
         self.states = [self.model.state(), self.model.state()]
