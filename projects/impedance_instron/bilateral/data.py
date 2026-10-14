@@ -18,7 +18,11 @@ the fixed segment lengths; the measured joint angles then keep the knee from
 snapping straight, and each record reports the remaining ankle error. A planar
 model attaches both thighs at one point, so pelvic rotation and obliquity
 (several centimeters of sagittal hip offset) move each ankle by that offset;
-each record reports its peak. No force enters this kinematic processing.
+each record reports its peak.
+
+The shoe mount height comes from the static trials: with the intrinsic shoe
+level, the ankle center sits at its measured standing height above the floor.
+No force enters this kinematic processing.
 
 Splits are contiguous source-time blocks per trial: one evaluation block with a
 one-segment guard on either side, the rest for training.
@@ -52,7 +56,8 @@ REFERENCE_SCHEMA = "bilateral_reference_1"
 DATASET_SCHEMA = "bilateral_runner_dataset_1"
 TRIALS = ("FR3_1", "FR3_2")
 DEFAULT_SHOE_PITCH_RAD = -0.24446041090480894
-DEFAULT_MOUNT_M = (-0.03186147427106201, 0.0, 0.10943209684347802)
+MOUNT_X_M = -0.03186147427106201
+"""Ankle x in the intrinsic shoe frame [m], kept from the single-leg runner's registration."""
 SEED = 20261013
 FOOT_MARKERS = ("CAL1", "CAL2", "CAL3", "MT1H", "MT5H", "TOE")
 
@@ -149,6 +154,34 @@ def _mid_hip(trial_root: Path, trial) -> np.ndarray:
     hip = 0.5 * (centers[:, ids[0]] + centers[:, ids[1]])
     hip[~(valid[:, ids[0]] & valid[:, ids[1]])] = np.nan
     return hip
+
+
+def static_mount(data_root: Path, trials: tuple[str, ...]) -> tuple[tuple[float, float, float], dict[str, Any]]:
+    """Return the shoe mount from the static trials and its calibration record.
+
+    The intrinsic shoe is level in the static calibration and its lowest point is
+    at z = 0, so the mount height is the ankle center's height above the floor
+    while standing, averaged over trials and sides. The shoe's compression under
+    standing load is not credited: the shoe model's standing compression is
+    outside its identified range, and treating the standing sole as unloaded
+    matches the plate-force onset in the running trials.
+    """
+    heights = {}
+    for trial in trials:
+        root = data_root / trial
+        manifest = json.loads((root / "visual3d_manifest.json").read_text(encoding="utf-8"))
+        labels, centers, valid = _read_triplets(root / "static_joint_centers.txt", manifest)
+        heights[trial] = {}
+        for side in SIDES:
+            index = labels.index(("R" if side == "right" else "L") + "ANKLE")
+            if not valid[:, index].all():
+                raise ValueError(f"{trial}: static {side} ankle center has missing samples")
+            heights[trial][side] = float(centers[:, index, 2].mean())
+    height = float(np.mean([h for sides in heights.values() for h in sides.values()]))
+    return (MOUNT_X_M, 0.0, height), {
+        "method": "static ankle height, shoe level and unloaded",
+        "ankle_height_m": heights,
+    }
 
 
 @lru_cache(maxsize=4)
@@ -461,7 +494,7 @@ def build_dataset(
     eval_fraction: float = 0.1,
     seed: int = SEED,
     pitch: float = DEFAULT_SHOE_PITCH_RAD,
-    mount_m: tuple[float, float, float] = DEFAULT_MOUNT_M,
+    mount_m: tuple[float, float, float] | None = None,
     foot_reference: str = "sole_markers",
     hat: HeadArmsTrunk | None = None,
     rule: ContactRule | None = None,
@@ -474,8 +507,13 @@ def build_dataset(
         windows_from: Reuse the windows, IDs, and splits of a single-leg
             ``peak_hip_stance_dataset_1`` instead of cutting multi-stride
             segments, so two-leg models score on the single-leg baseline's stances.
+        mount_m: Ankle location in the intrinsic shoe frame [m]; ``None``
+            calibrates it from the static trials, see :func:`static_mount`.
     """
     hat, rule = hat or HeadArmsTrunk(), rule or ContactRule()
+    calibration = None
+    if mount_m is None:
+        mount_m, calibration = static_mount(data_root, trials)
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite existing dataset: {output}")
     building = output.with_name(f".{output.name}.{os.getpid()}.building")
@@ -552,7 +590,7 @@ def build_dataset(
         },
         "subject_id": "F01",
         "head_arms_trunk": asdict(hat),
-        "shoe": {"mount_m": list(mount_m), "pitch_rad": pitch},
+        "shoe": {"mount_m": list(mount_m), "pitch_rad": pitch, "static_calibration": calibration},
         "shared_assets": {
             name: {"file": f"assets/{name}", "sha256": _sha256(assets / name)}
             for name in ("profile.json", "digital_shoe_left.json", "digital_shoe_right.json")
@@ -583,7 +621,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--eval-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--shoe-static-pitch-rad", type=float, default=DEFAULT_SHOE_PITCH_RAD)
-    parser.add_argument("--mount", type=float, nargs=3, default=list(DEFAULT_MOUNT_M))
+    parser.add_argument(
+        "--mount", type=float, nargs=3, help="Ankle location in the shoe frame [m]; defaults to the static calibration."
+    )
     parser.add_argument(
         "--virtual-foot-reference", choices=("sole_markers", "reconstructed_ground"), default="sole_markers"
     )
@@ -601,7 +641,7 @@ def main(argv: list[str] | None = None) -> None:
             eval_fraction=args.eval_fraction,
             seed=args.seed,
             pitch=args.shoe_static_pitch_rad,
-            mount_m=tuple(args.mount),
+            mount_m=None if args.mount is None else tuple(args.mount),
             foot_reference=args.virtual_foot_reference,
             limit=args.limit,
             windows_from=args.windows_from,

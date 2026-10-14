@@ -30,40 +30,58 @@ class Run:
 
 PLANAR = "dataset_6step"
 SPATIAL = "dataset_3d"
+PLANAR_STATIC = "dataset_6step_static"
+SPATIAL_STATIC = "dataset_3d_static"
 _BASE = ("--worlds", "4096", "--iterations", "1500", "--save-every", "100", "--seed", "0")
 _RUN4 = ("--reward-kernels", "pooled", "--force-penalty", "0")
 _BODY = ("--body-position-weight", "0.3", "--body-velocity-weight", "0.1")
 _REGULARIZERS = ("--contact-match-penalty", "0.1", "--action-smoothness-penalty", "0.02", "--previous-action-obs")
+_FITTED_ACTUATION = ("--response-time-s", "0.005334445782959161", "--slew-limit")
+"""Actuation of the runs before the no-lag, no-slew decision; the environment default is now bare."""
+_SPATIAL = ("--kind", "3d", "--worlds", "1024", "--iterations", "1500", "--save-every", "100", "--seed", "0")
+_SPATIAL_SMOKE = ("--iterations", "3", "--worlds", "256", "--save-every", "3")
 
 EXPERIMENTS: dict[str, tuple[Run, ...]] = {
     # From-scratch ablation of the ProtoMotions-style terms on the planar model
     # (no symmetry loss, fitted 5.3 ms torque response). Index 3 is the run 5 recipe.
     "pm_ablation": (
-        Run("baseline", PLANAR, _BASE + _RUN4),
-        Run("body_terms", PLANAR, _BASE + _RUN4 + _BODY),
-        Run("regularizers", PLANAR, _BASE + _RUN4 + _REGULARIZERS),
-        Run("all_terms", PLANAR, _BASE + _RUN4 + _BODY + _REGULARIZERS),
+        Run("baseline", PLANAR, _BASE + _RUN4 + _FITTED_ACTUATION),
+        Run("body_terms", PLANAR, _BASE + _RUN4 + _BODY + _FITTED_ACTUATION),
+        Run("regularizers", PLANAR, _BASE + _RUN4 + _REGULARIZERS + _FITTED_ACTUATION),
+        Run("all_terms", PLANAR, _BASE + _RUN4 + _BODY + _REGULARIZERS + _FITTED_ACTUATION),
     ),
     # Seed replicates of the full recipe, to size the run-to-run spread.
     "pm_seeds": tuple(
-        Run(f"all_terms_seed{seed}", PLANAR, (*_BASE[:-1], str(seed), *_RUN4, *_BODY, *_REGULARIZERS))
+        Run(
+            f"all_terms_seed{seed}",
+            PLANAR,
+            (*_BASE[:-1], str(seed), *_RUN4, *_BODY, *_REGULARIZERS, *_FITTED_ACTUATION),
+        )
         for seed in (1, 2, 3)
     ),
     # Torque lag and slew limit on the best recipe so far (pm_ablation index 2).
     # Neither is fitted to the data: the single-leg fit pushed the lag to its 5 ms floor.
     "actuation": (
-        Run("lag5ms_slew", PLANAR, _BASE + _RUN4 + _REGULARIZERS),
-        Run("nolag_slew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0")),
+        Run("lag5ms_slew", PLANAR, _BASE + _RUN4 + _REGULARIZERS + _FITTED_ACTUATION),
+        Run("nolag_slew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0", "--slew-limit")),
         Run("nolag_noslew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0", "--no-slew-limit")),
-        Run("lag25ms_slew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0.025")),
+        Run("lag25ms_slew", PLANAR, (*_BASE, *_RUN4, *_REGULARIZERS, "--response-time-s", "0.025", "--slew-limit")),
+    ),
+    # Static-trial shoe mount (z 89.5 mm instead of 109.4 mm), no torque lag or
+    # slew. Index 0 repeats the actuation study's nolag_noslew run on the new
+    # mount; indices 1 and 2 separate the mount's effect in 3D.
+    "static_mount": (
+        Run("planar_static", PLANAR_STATIC, _BASE + _RUN4 + _REGULARIZERS),
+        Run("spatial_static", SPATIAL_STATIC, _SPATIAL, smoke_args=_SPATIAL_SMOKE),
+        Run("spatial_old_mount", SPATIAL, _SPATIAL, smoke_args=_SPATIAL_SMOKE),
     ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
         Run(
             "spatial_baseline",
             SPATIAL,
-            ("--kind", "3d", "--worlds", "1024", "--iterations", "1500", "--save-every", "100"),
-            smoke_args=("--iterations", "3", "--worlds", "256", "--save-every", "3"),
+            _SPATIAL[:-2],
+            smoke_args=_SPATIAL_SMOKE,
         ),
     ),
 }
