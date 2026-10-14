@@ -119,6 +119,18 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
         )
         for hz, substeps in ((100, 40), (50, 80))
     ),
+    # Larger actor and critic at the 500 Hz policy rate.
+    "spatial_capacity": (
+        Run(
+            "pacer_512x512x256",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "6000", "--save-every", "100", "--seed", "0"),
+                *("--dt-s", "2.5e-4", "--substeps", "8", "--hidden", "512", "512", "256"),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+    ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
         Run(
