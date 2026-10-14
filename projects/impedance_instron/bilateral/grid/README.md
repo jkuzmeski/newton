@@ -9,7 +9,8 @@ snapshots. The `Z:` share and the grid home are the same files
 | `code/<commit>/` | Read-only code snapshots (`newton/`, `projects/`, `pyproject.toml`), one per pushed commit |
 | `data/<dataset>/` | Prepared datasets, copied once; immutable (a changed dataset needs a new name) |
 | `venv/` | LLSC `conda/Python-ML-2026a-pytorch` module plus `warp-lang` matching the workstation |
-| `runs/<experiment>/<job>/<index>_<name>/` | Training outputs, with `<index>_<name>.run.json` beside each |
+| `runs/<experiment>/<job>/<index>_<name>/` | Training outputs, with `<index>_<name>.run.json` beside each and graphs in `report/` |
+| `runs/<experiment>/<job>/report/` | Experiment comparison: `report.md` and graphs |
 | `tb/<experiment>/<job>/<index>_<name>/` | TensorBoard scalars |
 | `logs/<experiment>-<job>_<task>.out` | SLURM task logs |
 | `warp_cache/` | Shared Warp kernel cache |
@@ -27,6 +28,7 @@ uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client subm
 uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client status <job>
 uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client tail <job> --task 1
 uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client load
+uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client report <job>
 ```
 
 - **Experiments** are flat, indexed run lists in [`experiments.py`](experiments.py);
@@ -47,6 +49,24 @@ uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client load
 - **Results.** Outputs are readable on `Z:` from the workstation, so
   evaluation tools such as `evaluate-bilateral` run locally against
   `Z:\newton_grid\runs\...`.
+- **Graphs.** After training, each task evaluates its policy (train and eval
+  splits, eval only for smoke runs) with [`../report.py`](../report.py) and
+  writes `<run>/report/`:
+  - `training.png`: training curves;
+  - `segment_<split>_<i>.png`: joint angles and per-foot GRF against the measurement;
+  - `ankle_<split>.png`: ankle error by gait phase, split into command error
+    (`q_eq - q_ref`) and following error (`q - q_eq`), plus median K;
+  - `touchdowns_<split>_0.png`: ankle `q`/`q_eq`, K, D, torque, and Fz around
+    each touchdown;
+  - `metrics.json`, `summary.json`, and the traces.
+
+  `submit` also queues a CPU job (`report.sbatch`, `--dependency=afterany`).
+  When the array ends, it compares the runs in `runs/<experiment>/<job>/report/`:
+  `report.md`, overlaid training curves, metric bars, and the ankle phases. A
+  failed report is written to `report/ERROR.txt` and does not fail the task.
+  - `client report <job>` rebuilds the comparison locally from `Z:`.
+  - `client report <job> --evaluate` re-evaluates an earlier job's runs on
+    the grid with the current code. Use it for runs trained before reports existed.
 
 ## Guard rails (from the LLSC skill)
 

@@ -134,6 +134,11 @@ uv run --no-sync --extra torch-cu12 -m projects.impedance_instron evaluate-bilat
   touchdown, or the swing ankle aimed at the measured angle.
 - [`compare.py`](compare.py) scores models on the single-leg stances that lie
   outside every bilateral training segment.
+- [`report.py`](report.py) evaluates a trained run and writes its graphs
+  (training curves, segments, ankle phases, touchdown impedance) to
+  `<run>/report/` (`report run --run-dir ... --dataset ...`). It also compares
+  an experiment's runs (`report experiment --dir ...`). Grid jobs run both
+  automatically.
 
 ## Linear Hogan baseline
 

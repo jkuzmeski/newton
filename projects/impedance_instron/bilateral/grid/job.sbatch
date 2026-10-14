@@ -1,8 +1,9 @@
 #!/bin/bash
 # One SLURM array task = one indexed run of a bilateral experiment, 1 H100 per task.
+# After training the task evaluates its policy and writes <run>/report (graphs).
 # Submitted by projects/impedance_instron/bilateral/grid/client.py, which passes
-# GRID_ROOT, GRID_CODE_DIR, GRID_CODE_COMMIT, GRID_CODE_LABEL, EXPERIMENT, and SMOKE
-# with --export, and the array range, time limit, job name, and log paths on the
+# GRID_ROOT, GRID_CODE_DIR, GRID_CODE_COMMIT, GRID_CODE_LABEL, EXPERIMENT, SMOKE, and
+# optionally REPORT_JOB with --export, and the array range, time limit, job name, and log paths on the
 # sbatch command line.
 #SBATCH --partition=e9-h100nvl
 #SBATCH --gres=gpu:h100:1
@@ -34,9 +35,13 @@ LOCAL="$TMPDIR/data"
 mkdir -p "$LOCAL"
 cp -r "$GRID_ROOT/data/$DATASET" "$LOCAL/"
 
-SMOKE_FLAG=()
+RUN_FLAGS=()
 if [[ "${SMOKE:-0}" == "1" ]]; then
-    SMOKE_FLAG=(--smoke)
+    RUN_FLAGS=(--smoke)
+fi
+# REPORT_JOB=<earlier array job>: only rebuild that job's run reports, no training.
+if [[ -n "${REPORT_JOB:-}" ]]; then
+    RUN_FLAGS+=(--report-job "$REPORT_JOB")
 fi
 
 python -u -m projects.impedance_instron.bilateral.grid.run \
@@ -45,6 +50,6 @@ python -u -m projects.impedance_instron.bilateral.grid.run \
     --data-root "$LOCAL" \
     --out-root "$GRID_ROOT/runs" \
     --tensorboard-root "$GRID_ROOT/tb" \
-    "${SMOKE_FLAG[@]}"
+    "${RUN_FLAGS[@]}"
 
 echo "done: $(date)"

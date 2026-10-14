@@ -13,6 +13,13 @@ Typical use from the repository root::
     uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client submit pm_ablation --time 04:00:00
     uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client status
     uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client tail <job> --task 0
+    uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client report <job>
+
+Every training task evaluates its policy and writes graphs to ``<run>/report``;
+``submit`` also queues a CPU job that, after the array ends, compares the runs
+in ``<runs>/<experiment>/<job>/report/report.md``. ``report <job>`` rebuilds
+that comparison locally; ``report <job> --evaluate`` re-evaluates an earlier
+job's runs with the current code (for jobs trained before the reports existed).
 
 ``push`` (and every ``submit``) snapshots the working tree, including
 uncommitted and untracked, non-ignored files, as a commit object kept under
@@ -53,6 +60,7 @@ SNAPSHOT_PATHS = (
     ":(exclude)projects/gait_c3d/assets",
 )
 JOB_SCRIPT = "projects/impedance_instron/bilateral/grid/job.sbatch"
+REPORT_SCRIPT = "projects/impedance_instron/bilateral/grid/report.sbatch"
 MAX_GPUS_WITHOUT_CONFIRMATION = 4
 
 
@@ -210,67 +218,166 @@ def _parse_indices(text: str | None, count: int) -> list[int]:
     return sorted(set(indices))
 
 
-def submit(args: argparse.Namespace) -> None:
-    runs = get(args.experiment)
-    indices = _parse_indices(args.indices, len(runs))
-    if len(indices) > MAX_GPUS_WITHOUT_CONFIRMATION and not args.allow_large:
+def _array_job(
+    experiment: str,
+    indices: list[int],
+    *,
+    smoke: bool,
+    time_limit: str,
+    throttle: int,
+    snap: Snapshot,
+    report_job: str | None = None,
+) -> str:
+    """Submit one array of training tasks, or of report-only tasks for ``report_job``; return the job id."""
+    array = f"{','.join(str(index) for index in indices)}%{throttle}"
+    group = experiment + ("-smoke" if smoke else "")
+    name = f"bil-{group}" + ("-report" if report_job else "")
+    log = f"{REMOTE_ROOT}/logs/{group}{'-report' if report_job else ''}-%A_%a.out"
+    exports = [
+        "ALL",
+        f"GRID_ROOT={REMOTE_ROOT}",
+        f"GRID_CODE_DIR={snap.remote_dir}",
+        f"GRID_CODE_COMMIT={snap.commit}",
+        f"GRID_CODE_LABEL={snap.label}",
+        f"EXPERIMENT={experiment}",
+        f"SMOKE={int(smoke)}",
+    ]
+    if report_job:
+        exports.append(f"REPORT_JOB={int(report_job)}")
+    command = (
+        f"cd {REMOTE_ROOT} && sbatch --parsable --job-name={name} --array={array} --time={time_limit} "
+        f"--output={log} --error={log} --export={','.join(exports)} {snap.remote_dir}/{JOB_SCRIPT}"
+    )
+    return _job_id(ssh(command))
+
+
+def _experiment_report_job(experiment: str, runs_job: str, *, smoke: bool, snap: Snapshot, after: str) -> str:
+    """Submit the CPU job that compares the runs of ``runs_job`` once every task of ``after`` has ended."""
+    group = experiment + ("-smoke" if smoke else "")
+    log = f"{REMOTE_ROOT}/logs/{group}-experiment-report-{runs_job}-%j.out"
+    exports = (
+        f"ALL,GRID_ROOT={REMOTE_ROOT},GRID_CODE_DIR={snap.remote_dir},RUNS_DIR={REMOTE_ROOT}/runs/{group}/{runs_job}"
+    )
+    command = (
+        f"cd {REMOTE_ROOT} && sbatch --parsable --job-name=bil-{group}-compare --dependency=afterany:{int(after)} "
+        f"--time=00:20:00 --output={log} --error={log} --export={exports} {snap.remote_dir}/{REPORT_SCRIPT}"
+    )
+    return _job_id(ssh(command))
+
+
+def _job_id(output: str) -> str:
+    job = output.strip().split(";")[0]
+    if not re.fullmatch(r"\d+", job):
+        raise RuntimeError(f"unexpected sbatch output: {output!r}")
+    return job
+
+
+def _check_gpus(count: int, time_limit: str, allow_large: bool, queue_anyway: bool) -> None:
+    if count > MAX_GPUS_WITHOUT_CONFIRMATION and not allow_large:
         raise SystemExit(
-            f"{len(indices)} GPUs requested; confirm with the team and pass --allow-large "
+            f"{count} GPUs requested; confirm with the team and pass --allow-large "
             f"(more than {MAX_GPUS_WITHOUT_CONFIRMATION} GPUs)"
         )
-    hours, minutes, _ = (int(part) for part in args.time.split(":"))
-    if hours * 60 + minutes > 8 * 60 and not args.allow_large:
+    hours, minutes, _ = (int(part) for part in time_limit.split(":"))
+    if hours * 60 + minutes > 8 * 60 and not allow_large:
         raise SystemExit("more than 8 h per task; pass --allow-large after confirming")
     free = free_h100_gpus()
     print(f"LLfree: {free if free is not None else 'unknown'} free H100 GPUs on e9-h100nvl")
-    if free == 0 and not args.queue_anyway:
+    if free == 0 and not queue_anyway:
         raise SystemExit("no free H100 GPUs; wait, or pass --queue-anyway")
-    snap = Snapshot(args.code, args.code) if args.code else push_code()
-    if args.code:
-        label = (LOCAL_ROOT / "code" / args.code / "GRID_LABEL").read_text(encoding="utf-8").strip()
-        commit = (LOCAL_ROOT / "code" / args.code / "GRID_COMMIT").read_text(encoding="utf-8").strip()
-        snap = Snapshot(commit, label)
-    sync_data(sorted({runs[index].dataset for index in indices}))
-    throttle = args.throttle or len(indices)
-    array = f"{','.join(str(index) for index in indices)}%{throttle}"
-    name = f"bil-{args.experiment}" + ("-smoke" if args.smoke else "")
-    log = f"{REMOTE_ROOT}/logs/{args.experiment}{'-smoke' if args.smoke else ''}-%A_%a.out"
-    exports = ",".join(
-        (
-            "ALL",
-            f"GRID_ROOT={REMOTE_ROOT}",
-            f"GRID_CODE_DIR={snap.remote_dir}",
-            f"GRID_CODE_COMMIT={snap.commit}",
-            f"GRID_CODE_LABEL={snap.label}",
-            f"EXPERIMENT={args.experiment}",
-            f"SMOKE={int(args.smoke)}",
-        )
-    )
-    command = (
-        f"cd {REMOTE_ROOT} && sbatch --parsable --job-name={name} --array={array} --time={args.time} "
-        f"--output={log} --error={log} --export={exports} {snap.remote_dir}/{JOB_SCRIPT}"
-    )
-    job = ssh(command).strip().split(";")[0]
-    if not re.fullmatch(r"\d+", job):
-        raise RuntimeError(f"unexpected sbatch output: {job!r}")
-    record = {
-        "job": job,
-        "experiment": args.experiment,
-        "indices": indices,
-        "runs": [runs[index].name for index in indices],
-        "smoke": args.smoke,
-        "time": args.time,
-        "throttle": throttle,
-        "code_commit": snap.commit,
-        "code_label": snap.label,
-        "submitted": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-    }
+
+
+def _snapshot(code: str | None) -> Snapshot:
+    if not code:
+        return push_code()
+    label = (LOCAL_ROOT / "code" / code / "GRID_LABEL").read_text(encoding="utf-8").strip()
+    commit = (LOCAL_ROOT / "code" / code / "GRID_COMMIT").read_text(encoding="utf-8").strip()
+    return Snapshot(commit, label)
+
+
+def _record(record: dict) -> None:
     with (LOCAL_ROOT / "submissions.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record) + "\n")
-    print(f"submitted job {job}: {args.experiment} indices {indices} code {snap.short} ({snap.label})")
-    print(
-        f"logs: {LOCAL_ROOT / 'logs'} ; outputs: {LOCAL_ROOT / 'runs' / (args.experiment + ('-smoke' if args.smoke else '')) / job}"
+
+
+def submit(args: argparse.Namespace) -> None:
+    runs = get(args.experiment)
+    indices = _parse_indices(args.indices, len(runs))
+    _check_gpus(len(indices), args.time, args.allow_large, args.queue_anyway)
+    snap = _snapshot(args.code)
+    sync_data(sorted({runs[index].dataset for index in indices}))
+    throttle = args.throttle or len(indices)
+    job = _array_job(args.experiment, indices, smoke=args.smoke, time_limit=args.time, throttle=throttle, snap=snap)
+    compare = None
+    if not args.no_report:
+        compare = _experiment_report_job(args.experiment, job, smoke=args.smoke, snap=snap, after=job)
+    _record(
+        {
+            "job": job,
+            "experiment": args.experiment,
+            "indices": indices,
+            "runs": [runs[index].name for index in indices],
+            "smoke": args.smoke,
+            "time": args.time,
+            "throttle": throttle,
+            "code_commit": snap.commit,
+            "code_label": snap.label,
+            "report_job": compare,
+            "submitted": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
     )
+    group = args.experiment + ("-smoke" if args.smoke else "")
+    print(f"submitted job {job}: {args.experiment} indices {indices} code {snap.short} ({snap.label})")
+    if compare:
+        print(f"experiment report job {compare} runs after {job} ends")
+    print(f"logs: {LOCAL_ROOT / 'logs'} ; outputs: {LOCAL_ROOT / 'runs' / group / job}")
+    print(f"graphs: <run>/report/*.png per run; {LOCAL_ROOT / 'runs' / group / job / 'report' / 'report.md'}")
+
+
+def report(args: argparse.Namespace) -> None:
+    """Rebuild an earlier job's experiment report locally, or with --evaluate re-evaluate its runs on the grid."""
+    records = [record for record in submissions() if record["job"] == str(int(args.job)) and "report_of" not in record]
+    if not records:
+        raise SystemExit(f"job {args.job} is not in {LOCAL_ROOT / 'submissions.jsonl'}")
+    record = records[-1]
+    group = record["experiment"] + ("-smoke" if record["smoke"] else "")
+    directory = LOCAL_ROOT / "runs" / group / record["job"]
+    if not args.evaluate:
+        from ..report import experiment_report  # noqa: PLC0415
+
+        print(experiment_report(directory))
+        return
+    indices = record["indices"]
+    _check_gpus(len(indices), args.time, args.allow_large, args.queue_anyway)
+    snap = _snapshot(args.code)
+    runs = get(record["experiment"])
+    sync_data(sorted({runs[index].dataset for index in indices}))
+    job = _array_job(
+        record["experiment"],
+        indices,
+        smoke=record["smoke"],
+        time_limit=args.time,
+        throttle=len(indices),
+        snap=snap,
+        report_job=record["job"],
+    )
+    compare = _experiment_report_job(record["experiment"], record["job"], smoke=record["smoke"], snap=snap, after=job)
+    _record(
+        {
+            "job": job,
+            "experiment": record["experiment"],
+            "indices": indices,
+            "runs": record["runs"],
+            "smoke": record["smoke"],
+            "time": args.time,
+            "report_of": record["job"],
+            "report_job": compare,
+            "code_commit": snap.commit,
+            "code_label": snap.label,
+            "submitted": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+    )
+    print(f"submitted report job {job} for {directory} (code {snap.short}); experiment report job {compare}")
 
 
 def submissions() -> list[dict]:
@@ -329,6 +436,14 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_argument("--code", help="Reuse an existing grid code snapshot (12-character commit) instead of pushing.")
     sub.add_argument("--allow-large", action="store_true", help="Permit > 4 GPUs or > 8 h per task.")
     sub.add_argument("--queue-anyway", action="store_true", help="Submit even if LLfree reports no free H100.")
+    sub.add_argument("--no-report", action="store_true", help="Do not queue the experiment comparison report job.")
+    rp = commands.add_parser("report", help="Rebuild a job's experiment report from Z:, or --evaluate its runs again.")
+    rp.add_argument("job")
+    rp.add_argument("--evaluate", action="store_true", help="Re-evaluate every run on the grid (GPU) first.")
+    rp.add_argument("--time", default="00:30:00", help="Time limit per report task with --evaluate.")
+    rp.add_argument("--code", help="Grid code snapshot to evaluate with; default pushes the working tree.")
+    rp.add_argument("--allow-large", action="store_true", help="Permit > 4 GPUs.")
+    rp.add_argument("--queue-anyway", action="store_true", help="Submit even if LLfree reports no free H100.")
     st = commands.add_parser("status", help="LLstat, or sacct for one job.")
     st.add_argument("job", nargs="?")
     tl = commands.add_parser("tail", help="Show the end of a task log.")
@@ -349,6 +464,8 @@ def main(argv: list[str] | None = None) -> None:
         sync_data(args.names)
     elif args.command == "submit":
         submit(args)
+    elif args.command == "report":
+        report(args)
     elif args.command == "status":
         status(args.job)
     elif args.command == "tail":
