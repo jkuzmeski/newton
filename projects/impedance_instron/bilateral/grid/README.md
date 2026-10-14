@@ -29,6 +29,7 @@ uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client stat
 uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client tail <job> --task 1
 uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client load
 uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client report <job>
+uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client tensorboard
 ```
 
 - **Experiments** are flat, indexed run lists in [`experiments.py`](experiments.py);
@@ -67,6 +68,17 @@ uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client repo
   - `client report <job>` rebuilds the comparison locally from `Z:`.
   - `client report <job> --evaluate` re-evaluates an earlier job's runs on
     the grid with the current code. Use it for runs trained before reports existed.
+
+## TensorBoard
+
+`client tensorboard` serves `tb/` (every experiment, job, and run) at
+`https://<user>-tensorboard.fn.txg-portal.llgrid.ll.mit.edu/`. Log in at
+<https://txg-portal.llgrid.ll.mit.edu/> first. It runs
+[`tensorboard.sbatch`](tensorboard.sbatch) as a CPU job on `xeon-p8` with a
+reserved port, for 8 h by default (`--time`). The portal has one TensorBoard
+URL per user, so the command reuses a running instance. `--stop` cancels it
+once you are done. New runs appear within 30 s; TensorBoard rereads the
+logdir, so it does not need a restart.
 
 ## Guard rails (from the LLSC skill)
 

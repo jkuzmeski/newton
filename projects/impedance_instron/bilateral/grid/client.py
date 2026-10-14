@@ -61,6 +61,8 @@ SNAPSHOT_PATHS = (
 )
 JOB_SCRIPT = "projects/impedance_instron/bilateral/grid/job.sbatch"
 REPORT_SCRIPT = "projects/impedance_instron/bilateral/grid/report.sbatch"
+TENSORBOARD_SCRIPT = "projects/impedance_instron/bilateral/grid/tensorboard.sbatch"
+TENSORBOARD_JOB = "bil-tensorboard"
 MAX_GPUS_WITHOUT_CONFIRMATION = 4
 
 
@@ -413,6 +415,27 @@ def tail(job: str, task: int, lines: int) -> None:
     print("\n".join(text[-lines:]))
 
 
+def tensorboard(time_limit: str, code: str | None, stop: bool) -> None:
+    """Serve the TensorBoard of every run on the LLSC portal, reusing a running instance."""
+    running = ssh(f"squeue -h -u $USER -n {TENSORBOARD_JOB} -t PENDING,RUNNING -o %i", check=False).split()
+    url = f"https://{USER.lower()}-tensorboard.fn.txg-portal.llgrid.ll.mit.edu/"
+    if stop:
+        for job in running:
+            print(ssh(f"scancel {int(job)}", check=False) or f"cancelled TensorBoard job {job}")
+        return
+    if running:
+        print(f"TensorBoard job {running[0]} already serves {url}")
+        return
+    snap = _snapshot(code)
+    log = f"{REMOTE_ROOT}/logs/tensorboard-%j.out"
+    command = (
+        f"cd {REMOTE_ROOT} && sbatch --parsable --job-name={TENSORBOARD_JOB} --time={time_limit} "
+        f"--output={log} --error={log} --export=ALL,GRID_ROOT={REMOTE_ROOT} {snap.remote_dir}/{TENSORBOARD_SCRIPT}"
+    )
+    job = _job_id(ssh(command))
+    print(f"TensorBoard job {job} serves {REMOTE_ROOT}/tb at {url} once it starts (log in to the portal first)")
+
+
 def cancel(job: str, force: bool) -> None:
     known = {record["job"] for record in submissions()}
     if str(int(job)) not in known and not force:
@@ -455,6 +478,10 @@ def main(argv: list[str] | None = None) -> None:
     cn.add_argument("job")
     cn.add_argument("--force", action="store_true")
     commands.add_parser("list", help="List experiments and past submissions.")
+    tb = commands.add_parser("tensorboard", help="Serve TensorBoard of all runs on the LLSC portal (CPU job).")
+    tb.add_argument("--time", default="08:00:00", help="Time limit of the TensorBoard job (HH:MM:SS).")
+    tb.add_argument("--code", help="Grid code snapshot holding the job script; default pushes the working tree.")
+    tb.add_argument("--stop", action="store_true", help="Cancel the running TensorBoard job.")
     args = parser.parse_args(argv)
     if args.command == "setup":
         setup()
@@ -474,6 +501,8 @@ def main(argv: list[str] | None = None) -> None:
         print(ssh("source /etc/profile >/dev/null 2>&1; LLload -g", check=False))
     elif args.command == "cancel":
         cancel(args.job, args.force)
+    elif args.command == "tensorboard":
+        tensorboard(args.time, args.code, args.stop)
     elif args.command == "list":
         from .experiments import main as list_experiments  # noqa: PLC0415
 
