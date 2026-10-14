@@ -64,3 +64,9 @@ uv run --no-sync python -m projects.impedance_instron.bilateral.grid.client load
   driver 580, CUDA 13.0, Warp 1.18.0, torch 2.9.1. 1,024 worlds ran at about
   85k samples/s after warm-up, with the environment taking 83% of each
   iteration. Peak memory was 2.4 GB; the task took 30 s for 5 iterations.
+- **2026-10-14, job 16683462 (`pm_ablation`, 4 runs, code `6e926e32`).**
+  Each run used 4,096 worlds at 130-170k samples/s and completed 1,500
+  iterations in 20-26 min, against about 1.5 h each on the workstation.
+  GPU load was 1.64-1.69 per two-GPU node. Two tasks shared each node.
+  Results are in [`../RESULTS.md`](../RESULTS.md).
+

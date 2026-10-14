@@ -169,3 +169,58 @@ To resume:
 ```console
 uv run --no-sync --extra torch-cu12 -m projects.impedance_instron train-policy --dataset outputs/bilateral/dataset_6step --output outputs/bilateral/ppo_run5b --resume outputs/bilateral/ppo_run5/checkpoint.pt --reward-kernels pooled --force-penalty 0 --body-position-weight 0.3 --body-velocity-weight 0.1 --contact-match-penalty 0.1 --action-smoothness-penalty 0.02 --previous-action-obs
 ```
+
+## Grid ablation of the ProtoMotions-style terms (job 16683462)
+
+Four from-scratch runs ran on the LLSC grid, one H100 each, from code commit
+`6e926e32`. Each took 1,500 iterations in 20-26 min, at 130-170k samples/s.
+The recipe is run 4's: no symmetry loss, 5.3 ms torque response, pooled
+kernels, no force penalty, seed 0. Evaluation runs locally from `Z:`, with
+outputs under `outputs/bilateral/grid_eval/pm_ablation_16683462/`.
+
+| run | added terms | train loss | held-out loss | failed (train / held-out) | held-out peak Fz error [N] |
+|---|---|---:|---:|---:|---:|
+| `00_baseline` | none | 1621 | 1695 | 47 / 6 | 699 |
+| `01_body_terms` | leg-point position 0.3, velocity 0.1 | 124.3 | 118.4 | 0 / 0 | 948 |
+| `02_regularizers` | contact match 0.1, smoothness 0.02, previous action | **39.7** | **40.3** | 0 / 0 | 484 |
+| `03_all_terms` | both | 94.1 | 86.4 | 0 / 0 | 732 |
+
+For reference, run 1 (with the symmetry loss and the 25 ms lag) scores 46.4
+held-out, with a 336 N peak error.
+
+On the 18 clean single-leg stances
+([`compare.py`](compare.py); the single-leg runner scores 9.8 in-sample):
+
+| run | loss | angles | GRF | peak | hip / knee / ankle RMSE [deg] | Fz RMSE [N] |
+|---|---:|---:|---:|---:|---|---:|
+| run 1 | 27.7 | 15.05 | 7.61 | 4.14 | 7.0 / 6.2 / 19.0 | 340 |
+| `00_baseline` | 25.2 | 13.00 | 6.01 | 4.66 | 8.1 / 5.8 / 16.7 | 285 |
+| `01_body_terms` | 62.4 | 10.94 | 14.61 | 30.27 | 5.2 / 8.1 / 14.9 | 495 |
+| `02_regularizers` | 60.6 | 9.10 | 6.32 | 43.46 | 9.4 / 5.0 / 12.2 | 305 |
+| `03_all_terms` | 69.9 | 14.53 | 9.78 | 41.37 | 8.3 / 5.8 / 17.7 | 402 |
+
+The baseline completes these short single-stance windows but fails the 2-s
+segments. Single stances do not test multi-stride stability.
+
+### Ankle control fixed, impact spike not
+
+`02_regularizers` removes the dorsiflexed-swing strategy.
+[`ankle_diagnosis.py`](ankle_diagnosis.py) over the 50 training segments:
+
+| phase | run 1 ankle RMSE [deg] | `02_regularizers` ankle RMSE [deg] | run 1 q_eq bias [deg] | `02_regularizers` q_eq bias [deg] |
+|---|---:|---:|---:|---:|
+| stance | 16.6 | 9.1 | ?22.2 | ?14.2 |
+| early swing | 14.0 | 5.8 | +41.9 | +1.3 |
+| late swing | 37.3 | **3.3** | +27.6 | +1.2 |
+| last 30 ms before touchdown | 4.3 | 3.5 | +6.0 | +4.5 |
+
+The touchdown peak excess, however, rises from 860 N to **1,119 N**. Tracking
+the ankle through swing does not reduce the spike; the policy loses the
+dorsiflexed landing it used as a shock absorber. This agrees with the
+touchdown-velocity decomposition above: the heel arrives about 0.5 m/s too
+fast, mostly through the knee and pelvis. The leg-point body terms, meant to
+target that, made the spike worse at these weights (`01_body_terms`, 948 N).
+
+These are single-seed results. `pm_seeds` (three seeds of `03_all_terms`) is
+defined for sizing the run-to-run spread.
+
