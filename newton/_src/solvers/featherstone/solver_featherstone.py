@@ -38,7 +38,7 @@ from .kernels import (
     create_inertia_matrix_cholesky_kernel,
     create_inertia_matrix_kernel,
     eval_dense_cholesky_batched,
-    eval_dense_gemm_batched,
+    eval_dense_gemm_batched_parallel,
     eval_dense_solve_batched,
     eval_fk_with_velocity_conversion,
     eval_fk_with_velocity_conversion_from_joint_starts,
@@ -371,6 +371,9 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
             self.articulation_J_rows = wp.array(articulation_J_rows, dtype=wp.int32, device=model.device)
             self.articulation_J_cols = wp.array(articulation_J_cols, dtype=wp.int32, device=model.device)
 
+            # Widest product of any articulation, for the element-parallel GEMM launch.
+            self.gemm_max_rows = max(articulation_M_rows)
+            self.gemm_max_cols = max(articulation_J_cols)
             self.articulation_dof_start = wp.array(articulation_dof_start, dtype=wp.int32, device=model.device)
             self.articulation_coord_start = wp.array(articulation_coord_start, dtype=wp.int32, device=model.device)
 
@@ -888,8 +891,8 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
                         else:
                             # form P = M*J
                             wp.launch(
-                                eval_dense_gemm_batched,
-                                dim=model.articulation_count,
+                                eval_dense_gemm_batched_parallel,
+                                dim=(model.articulation_count, self.gemm_max_rows, self.gemm_max_cols),
                                 inputs=[
                                     self.articulation_M_rows,
                                     self.articulation_J_cols,
@@ -909,8 +912,8 @@ class SolverFeatherstone(SolverBase, CouplingInterface):
 
                             # form H = J^T*P
                             wp.launch(
-                                eval_dense_gemm_batched,
-                                dim=model.articulation_count,
+                                eval_dense_gemm_batched_parallel,
+                                dim=(model.articulation_count, self.gemm_max_cols, self.gemm_max_cols),
                                 inputs=[
                                     self.articulation_J_cols,
                                     self.articulation_J_cols,

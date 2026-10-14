@@ -1804,6 +1804,51 @@ def eval_dense_gemm_batched(
     )
 
 
+@wp.kernel
+def eval_dense_gemm_batched_parallel(
+    m: wp.array[int],
+    n: wp.array[int],
+    p: wp.array[int],
+    transpose_A: bool,
+    transpose_B: bool,
+    A_start: wp.array[int],
+    B_start: wp.array[int],
+    C_start: wp.array[int],
+    A: wp.array[float],
+    B: wp.array[float],
+    C: wp.array[float],
+):
+    """One output element of ``C = op(A) op(B)`` per thread instead of one per batch.
+
+    ``eval_dense_gemm_batched`` runs the whole matrix product in a single thread, so a
+    model with few articulations leaves the GPU idle: the launch width is the
+    articulation count. This variant keeps the ascending-k accumulation of
+    :func:`dense_gemm` element by element, so results are unchanged bit for bit.
+    Launch with ``dim=(articulation_count, max m, max n)``; threads past an
+    articulation own dimensions exit.
+    """
+    batch, i, j = wp.tid()
+    rows = m[batch]
+    cols = n[batch]
+    inner = p[batch]
+    if i >= rows or j >= cols:
+        return
+    a_base = A_start[batch]
+    b_base = B_start[batch]
+    total = float(0.0)
+    for k in range(inner):
+        if transpose_A:
+            a_i = k * rows + i
+        else:
+            a_i = i * inner + k
+        if transpose_B:
+            b_j = j * inner + k
+        else:
+            b_j = k * cols + j
+        total += A[a_base + a_i] * B[b_base + b_j]
+    C[C_start[batch] + i * cols + j] = total
+
+
 @wp.func
 def dense_cholesky(
     n: int,
