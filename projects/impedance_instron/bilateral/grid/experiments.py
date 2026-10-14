@@ -105,6 +105,20 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             smoke_args=_SPATIAL_SMOKE,
         ),
     ),
+    # Lower policy rates over the same 0.25 ms substep. The impedance law still runs
+    # every substep; gamma 0.99 then looks about 1 s (100 Hz) or 2 s (50 Hz) ahead.
+    "spatial_rate": tuple(
+        Run(
+            f"pacer_{hz}hz",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "0"),
+                *("--dt-s", "2.5e-4", "--substeps", str(substeps)),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        )
+        for hz, substeps in ((100, 40), (50, 80))
+    ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
         Run(
