@@ -126,11 +126,16 @@ def train(
         action_names=interface.ACTION_NAMES,
         seed_logits=seed_logits,
     ).to(torch_device)
-    if resume is not None:
-        # Fine-tune: keep actor, critic, and normalizers; the critic re-fits the new reward.
-        model.load_state_dict(torch.load(resume, map_location=torch_device, weights_only=True)["model"])
     optimizer = torch.optim.Adam(model.parameters(), lr=ppo.learning_rate)
     learning_rate = ppo.learning_rate
+    if resume is not None:
+        # Fine-tune: keep actor, critic, normalizers, and the optimizer with its adapted
+        # learning rate; a fresh Adam at the initial rate moves a converged, narrow policy
+        # so far in one update that the KL schedule collapses the rate to its floor.
+        checkpoint = torch.load(resume, map_location=torch_device, weights_only=True)
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        learning_rate = optimizer.param_groups[0]["lr"]
     provenance = {
         "dataset": str(root),
         "manifest_sha256": hashlib.sha256((root / "manifest.json").read_bytes()).hexdigest(),
@@ -332,6 +337,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--kind", choices=("planar", "3d"), default="planar")
     parser.add_argument("--resume", type=Path, help="Initialize from a run's checkpoint.pt (fine-tuning).")
+    parser.add_argument(
+        "--reward-weights",
+        type=float,
+        nargs=6,
+        help="3D only: weights of the pose, velocity, position, force, effort, and smoothness terms.",
+    )
     parser.add_argument("--reward-kernels", choices=("hybrid", "per_term", "pooled"), default="hybrid")
     parser.add_argument("--force-penalty", type=float, default=EnvConfig.force_penalty)
     parser.add_argument(
@@ -366,6 +377,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.kind == "3d":
         from .env3d import Env3DConfig  # noqa: PLC0415
 
+        if args.reward_weights is not None:
+            common["reward_weights"] = tuple(args.reward_weights)
         env_config = Env3DConfig(
             **common,
             response_time_s=args.response_time_s,

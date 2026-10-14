@@ -189,6 +189,26 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             "pacer_200g995_it1000",
         )
     ),
+    # Fine-tune the 100 Hz run's iteration 1200 toward the measured motion. The base run
+    # continuing to 3000 iterations is the control for "more training".
+    "spatial_finetune": tuple(
+        Run(
+            f"ft100_{name}",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "1500", "--save-every", "100", "--seed", "1"),
+                *("--dt-s", "2.5e-4", "--substeps", "40"),
+                *("--resume", "/home/gridsan/JO31399/newton_grid/policies/pacer_100hz_checkpoint.pt"),
+                *("--reward-weights", *weights),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        )
+        for name, weights in (
+            ("pose", ("0.5", "0.1", "0.15", "0.15", "0.05", "0.05")),
+            ("pose_smooth", ("0.45", "0.1", "0.15", "0.1", "0.05", "0.15")),
+            ("pose_noeffort", ("0.55", "0.1", "0.15", "0.15", "0", "0.05")),
+        )
+    ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
         Run(
