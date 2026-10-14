@@ -85,6 +85,7 @@ OBSERVATION_NAMES = (
     "heading_cos",
 )
 ACTION_NAMES = tuple(f"{output}_{name}" for output in ("equilibrium", "stiffness", "damping") for name in JOINT_NAMES)
+REWARD_NAMES = ("pose", "velocity", "position", "force", "effort", "smoothness")
 
 
 @dataclass(frozen=True)
@@ -632,7 +633,10 @@ class BilateralEnv3D:
         self.worlds = int(worlds)
         self.device = wp.get_device(device)
         self.torch_device = wp.device_to_torch(self.device)
-        torch.cuda.set_stream(wp.stream_to_torch(self.device.stream))
+        # Warp launches on its own stream, and a torch capture records only the stream it
+        # captures, so :meth:`capture` records on this one to keep the forward kinematics.
+        self._stream = wp.stream_to_torch(self.device.stream)
+        torch.cuda.set_stream(self._stream)
         self.generator = torch.Generator(device=self.torch_device)
         self.generator.manual_seed(seed)
         w, d = self.worlds, self.device
@@ -762,6 +766,23 @@ class BilateralEnv3D:
         self.initial_table = table
         self.initial_lengths = torch.tensor(widths, dtype=torch.long, device=dev)[self.world_trials]
         self._graph = None
+        # A captured control step replays into the addresses it recorded, so the action it acts
+        # on, the reset draw, and everything the caller reads back are fixed buffers here.
+        self._action = torch.zeros(w, self.action_size, device=dev)
+        self._pick = torch.zeros(w, dtype=torch.long, device=dev)
+        self._observation = torch.zeros(w, self.observation_size, device=dev)
+        self._privileged = torch.zeros(w, self.privileged_size, device=dev)
+        self._reward = torch.zeros(w, device=dev)
+        self._terminated = torch.zeros(w, dtype=torch.bool, device=dev)
+        self._truncated = torch.zeros(w, dtype=torch.bool, device=dev)
+        self._terms = {name: torch.zeros((), device=dev) for name in REWARD_NAMES}
+        self._info = {
+            "terms": self._terms,
+            "failed": torch.zeros((), device=dev),
+            "final_observation": torch.zeros(w, self.observation_size, device=dev),
+            "final_privileged": torch.zeros(w, self.privileged_size, device=dev),
+        }
+        self._pre_graph = self._step_graph = self._advance_graph = None
 
     # ----- views -----
 
@@ -829,11 +850,15 @@ class BilateralEnv3D:
         for k in range(count):
             self._substep(self.states[k % 2], self.states[(k + 1) % 2])
 
-    def integrate(self):
-        """Advance every running world by one control step (an even number of substeps)."""
+    def _clear_interval(self):
+        """Empty the accumulators :meth:`integrate` sums one control step of forces into."""
         for name in ("grf", "effort", "power_positive", "power_negative"):
             getattr(self.t, name).zero_()
         self.t.substeps.zero_()
+
+    def integrate(self):
+        """Advance every running world by one control step (an even number of substeps)."""
+        self._clear_interval()
         substeps = self.config.substeps
         if substeps % 2:
             raise ValueError("The 3D environment alternates two states and needs an even substep count")
@@ -950,8 +975,7 @@ class BilateralEnv3D:
         smoothness = torch.mean(self.jump**2, dim=1) / cfg.smoothness_scale**2
         terms = torch.exp(-torch.stack((pose, velocity, position, force, effort, smoothness)))
         weights = self._reward_weights
-        names = ("pose", "velocity", "position", "force", "effort", "smoothness")
-        return (weights * terms).sum(0), {name: terms[i].mean() for i, name in enumerate(names)}
+        return (weights * terms).sum(0), {name: terms[i].mean() for i, name in enumerate(REWARD_NAMES)}
 
     def _departed(self) -> torch.Tensor:
         cfg = self.config
@@ -987,7 +1011,7 @@ class BilateralEnv3D:
             rates.copy_(torch.where(where, qd, rates))
         self.pacer_start.copy_(torch.where(where, q[:, :2], self.pacer_start))
         self.offset.masked_fill_(where, 0.0)
-        self.steps = torch.where(mask, torch.zeros_like(self.steps), self.steps)
+        self.steps.copy_(torch.where(mask, torch.zeros_like(self.steps), self.steps))
         t = self.t
         t.phase.copy_(torch.where(mask, phase, t.phase))
         t.torque.masked_fill_(where, 0.0)
@@ -1010,13 +1034,20 @@ class BilateralEnv3D:
         return torch.remainder(torch.atan2(-qd[:, 7] / 8.0, q[:, 7]), 2 * math.pi)
 
     def reset(self, mask: torch.Tensor | None = None):
+        self._draw()
+        self._reset(mask)
+
+    def _draw(self):
+        """Pick one airborne start frame per world into the buffer the step reads."""
+        # Each world keeps its trial geometry, so it draws only from that trial's pool;
+        # a uniform draw modulo the pool width is uniform over the pool.
+        torch.randint(0, 1 << 30, (self.worlds,), generator=self.generator, out=self._pick)
+
+    def _reset(self, mask: torch.Tensor | None = None):
         if mask is None:
             mask = torch.ones(self.worlds, dtype=torch.bool, device=self.torch_device)
         lib = self.library
-        # Each world keeps its trial geometry, so it draws only from that trial's pool;
-        # a uniform draw modulo the pool width is uniform over the pool.
-        pick = torch.randint(0, 1 << 30, (self.worlds,), generator=self.generator, device=self.torch_device)
-        rows = self.initial_table[self.world_trials, pick % self.initial_lengths]
+        rows = self.initial_table[self.world_trials, self._pick % self.initial_lengths]
         segment, index = lib.initial_candidates[rows].unbind(1)
         k = lib.starts[segment] + index
         q = lib.q[k].clone()
@@ -1024,10 +1055,10 @@ class BilateralEnv3D:
         origin[:, 2] = 0.0
         q[:, :2] = 0.0
         where = mask[:, None]
-        self.segment = torch.where(mask, segment, self.segment)
-        self.index = torch.where(mask, index, self.index)
-        self.origin = torch.where(where, origin, self.origin)
-        self.speed = torch.where(mask, lib.speeds[segment], self.speed)
+        self.segment.copy_(torch.where(mask, segment, self.segment))
+        self.index.copy_(torch.where(mask, index, self.index))
+        self.origin.copy_(torch.where(where, origin, self.origin))
+        self.speed.copy_(torch.where(mask, lib.speeds[segment], self.speed))
         self.write_state(mask, q, self._root_velocity(q, lib.qd[k]), self.kinematic_phase(lib.q[k], lib.qd[k]))
 
     def _command(self) -> torch.Tensor:
@@ -1066,6 +1097,27 @@ class BilateralEnv3D:
         wp.copy(self.states[1].body_q, self.states[0].body_q)
         wp.copy(self.states[1].body_qd, self.states[0].body_qd)
 
+    def _stage(self, action: torch.Tensor):
+        """Copy ``action`` into the buffer the recorded graphs read."""
+        self._action.copy_(action)
+
+    def _pre(self):
+        """The torch work between an action and the substeps: the impedance command and the shift."""
+        before = self._command()
+        self.set_impedance(self._action)
+        jump = (self._command() - before) / self.jump_unit
+        self.jump.copy_(torch.where((self.steps > 0)[:, None], jump, torch.zeros_like(jump)))
+        self.recenter()
+
+    def _post(self):
+        """The torch work after the substeps: walk the reference and the episode counters forward."""
+        self.index += 1
+        self.steps += 1
+        ended = self.index >= self.library.lengths[self.segment]
+        following = self.library.successor[self.segment]
+        self.segment.copy_(torch.where(ended, following[:, 0], self.segment))
+        self.index.copy_(torch.where(ended, following[:, 1], self.index))
+
     def advance(self, action: torch.Tensor):
         """Apply one action for one control step and advance the reference and the pacer.
 
@@ -1073,33 +1125,87 @@ class BilateralEnv3D:
         control step; a new action changes it stepwise only at the boundary. That step,
         relative to the torque rate bound over one control step, is kept in :attr:`jump`.
         """
-        before = self._command()
-        self.set_impedance(action)
-        jump = (self._command() - before) / self.jump_unit
-        self.jump = torch.where((self.steps > 0)[:, None], jump, torch.zeros_like(jump))
-        self.recenter()
+        self._stage(action)
+        if self._pre_graph is None:
+            self._pre()
+            self.integrate()
+            self._post()
+            return
+        self._pre_graph.replay()
         self.integrate()
-        self.index += 1
-        self.steps += 1
-        ended = self.index >= self.library.lengths[self.segment]
-        following = self.library.successor[self.segment]
-        self.segment = torch.where(ended, following[:, 0], self.segment)
-        self.index = torch.where(ended, following[:, 1], self.index)
+        self._advance_graph.replay()
 
-    def step(self, action: torch.Tensor):
-        self.advance(action)
+    def _step_tail(self) -> tuple:
+        """The work after the substeps that :meth:`step` adds: reward, end of episode, next reset."""
+        self._post()
         reward, terms = self.reward()
         failed = self.t.status != 0
         terminated = failed | self._departed()
         truncated = ~terminated & (self.steps >= self.max_steps)
-        info = {
-            "terms": terms,
-            "failed": failed.float().mean(),
-            "final_observation": self.observe(),
-            "final_privileged": self.privileged(),
-        }
-        self.reset(terminated | truncated)
-        return self.observe(), self.privileged(), reward, terminated, truncated, info
+        info = self._info
+        info["final_observation"].copy_(self.observe())
+        info["final_privileged"].copy_(self.privileged())
+        info["failed"].copy_(failed.float().mean())
+        for name, value in terms.items():
+            self._terms[name].copy_(value)
+        self._reward.copy_(reward)
+        self._terminated.copy_(terminated)
+        self._truncated.copy_(truncated)
+        self._reset(terminated | truncated)
+        self._observation.copy_(self.observe())
+        self._privileged.copy_(self.privileged())
+
+    def step(self, action: torch.Tensor):
+        """Reward the step just taken, reset the worlds that ended, and return the next observation.
+
+        The returned tensors are the environment's own buffers, valid until the next call.
+        """
+        self._stage(action)
+        self._draw()
+        if self._pre_graph is None:
+            self._pre()
+            self.integrate()
+            self._step_tail()
+        else:
+            self._pre_graph.replay()
+            self.integrate()
+            self._step_graph.replay()
+        return (self._observation, self._privileged, self._reward, self._terminated, self._truncated, self._info)
+
+    def capture(self, warmup: int = 3):
+        """Record the torch work of one control step into CUDA graphs around the substeps.
+
+        :meth:`integrate` keeps its own Warp graph, replayed between the two torch graphs: a torch
+        capture drops a Warp graph launched inside it, and drops any Warp kernel that runs on a
+        stream other than the one being captured, so recording happens on :attr:`_stream`. Recording
+        needs live warm-up steps, so this resets the worlds, runs ``warmup`` of them, and puts both
+        RNG streams back; call it before the worlds are set up. Afterwards every step writes the
+        same buffers, and a step returns views of them, valid until the next call.
+        """
+        if self._pre_graph is not None:
+            return self
+        # Neither RNG stream may move: the warm-up steps draw reset candidates from the
+        # environment's generator, and every torch capture seeds a graph's philox state from the
+        # default generator, so both are put back once the graphs are recorded.
+        default = torch.cuda.default_generators[torch.device(self.torch_device).index]
+        draw, default_draw = self.generator.get_state(), default.get_state()
+        self.reset()
+        for _ in range(warmup):
+            self.step(self._action)
+        pre, stepped, advanced = (torch.cuda.CUDAGraph() for _ in range(3))
+        with torch.cuda.graph(pre, stream=self._stream):
+            self._pre()
+        with torch.cuda.graph(stepped, stream=self._stream):
+            self._step_tail()
+        with torch.cuda.graph(advanced, stream=self._stream):
+            self._post()
+        self._pre_graph, self._step_graph, self._advance_graph = pre, stepped, advanced
+        # The warm-up's last control step left its force sums in the interval accumulators, which a
+        # world that has not been integrated yet reports as zero.
+        self._clear_interval()
+        self.generator.set_state(draw)
+        default.set_state(default_draw)
+        return self
 
     def describe(self) -> dict:
         return {

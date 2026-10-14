@@ -216,6 +216,8 @@ def run(
     cfg = config or EnduranceConfig()
     dt = env.config.control_dt_s
     device, worlds = env.torch_device, env.worlds
+    # capture runs its warm-up steps on a reset of its own, so it comes first.
+    env.capture()
     reset_once(env)
     nominal = float(env.speed.mean())
     limit = cfg.time_limit_s if cfg.time_limit_s is not None else 1.5 * cfg.distance_m / max(nominal, 1e-6)

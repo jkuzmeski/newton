@@ -94,6 +94,8 @@ def train(
         env_config = env_config or env3d.Env3DConfig()
         library = env3d.ReferenceLibrary3D(dataset, ("train",), env_config.control_dt_s, device)
         env = env3d.BilateralEnv3D(library, ppo.worlds, env_config, device=device, seed=ppo.seed)
+        # Record the step's torch work on capture's own reset, before the worlds are set up.
+        env.capture()
         interface = env3d
         seed_logits = env3d.seed_action(env.bounds)
     elif kind == "planar":
