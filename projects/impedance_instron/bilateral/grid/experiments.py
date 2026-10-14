@@ -178,7 +178,13 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             entry="projects.impedance_instron.bilateral.endurance3d",
             smoke_args=("--distance-m", "5"),
         )
-        for policy in ("pacer_100hz_it344",)
+        for policy in (
+            "pacer_100hz_it344",
+            "pacer_100hz_it800",
+            "pacer_100g995_it600",
+            "pacer_100big_it500",
+            "pacer_200g995_it1000",
+        )
     ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
