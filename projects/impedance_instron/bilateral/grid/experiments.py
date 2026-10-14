@@ -240,6 +240,28 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             smoke_args=_SPATIAL_SMOKE,
         ),
     ),
+    # Gait scores and a 1 km run for the finished fine-tunes against the 100 Hz base.
+    "finetune_eval": tuple(
+        Run(
+            f"{test}_{name}",
+            SPATIAL_STATIC,
+            (*("--policy", f"/home/gridsan/JO31399/newton_grid/{policy}"), *args),
+            entry=f"projects.impedance_instron.bilateral.{test}",
+            smoke_args=("--seconds", "3") if test == "gait3d" else ("--distance-m", "5"),
+            tensorboard=False,
+        )
+        for name, policy in (
+            ("base_it1400", "policies/pacer_100hz_it1400.pt"),
+            *(
+                (tag, f"runs/spatial_finetune/16684704/{index}_ft100_{tag}/policy_01500.pt")
+                for index, tag in (("00", "pose"), ("01", "pose_smooth"), ("02", "pose_noeffort"))
+            ),
+        )
+        for test, args in (
+            ("gait3d", ("--worlds", "64", "--seconds", "10")),
+            ("endurance3d", ("--distance-m", "1000", "--worlds", "64", "--dt-s", "1.25e-4", "--quiet")),
+        )
+    ),
     # Fine-tune the 100 Hz run's iteration 1200 toward the measured motion. The base run
     # continuing to 3000 iterations is the control for "more training".
     "spatial_finetune": tuple(
