@@ -153,6 +153,8 @@ uv run --no-sync -m projects.impedance_instron generate --model projects/impedan
 - `hogan/`: CPU/CUDA dynamics, LM identification, frozen generation, and reporting.
 - `cartesian/`: retained measurement/profile preparation and shoe attachment;
   `cartesian/gpu/foundation.py` is the shared batched shoe adapter, not another runner model.
+- [`bilateral/`](bilateral/README.md): two legs in the sagittal plane, a PPO-trained
+  neural impedance policy, the shared linear baseline, and the 3D Newton articulation.
 
 The retired Cartesian equilibrium searches, reference-tracking Hogan schedules,
 CEM optimizer, quick-fit/recovery experiments, old controller bundles, and their

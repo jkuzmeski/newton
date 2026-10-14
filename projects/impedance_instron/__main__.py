@@ -20,6 +20,28 @@ _COMMANDS = {
     "report": ("projects.impedance_instron.hogan.fit_report", "Rebuild a saved LM fit's HTML report."),
     "visual3d": ("projects.impedance_instron.cartesian.visual3d", "Inspect or import processed measurements."),
     "prepare-visual3d": ("projects.impedance_instron.cartesian.prepare_visual3d", "Prepare a Visual3D reference."),
+    "prepare-bilateral": (
+        "projects.impedance_instron.bilateral.data",
+        "Prepare continuous two-leg multi-stride segments.",
+    ),
+    "mirror-shoe": ("projects.impedance_instron.bilateral.shoes", "Mirror a shoe artifact for the other foot."),
+    "fit-bilateral": (
+        "projects.impedance_instron.bilateral.linear",
+        "Fit the shared two-leg linear Hogan baseline with LM.",
+    ),
+    "train-policy": ("projects.impedance_instron.bilateral.ppo", "Train the two-leg neural impedance policy (PPO)."),
+    "evaluate-bilateral": (
+        "projects.impedance_instron.bilateral.evaluate",
+        "Score a frozen two-leg policy or linear runner.",
+    ),
+    "prepare-bilateral-3d": (
+        "projects.impedance_instron.bilateral.data3d",
+        "Prepare 3D two-leg segments on a planar dataset's windows.",
+    ),
+    "evaluate-bilateral-3d": (
+        "projects.impedance_instron.bilateral.evaluate3d",
+        "Score a frozen 3D two-leg policy.",
+    ),
 }
 
 
