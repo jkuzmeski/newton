@@ -26,6 +26,8 @@ class Run:
     entry: str = "projects.impedance_instron.bilateral.ppo"
     smoke_args: tuple[str, ...] = field(default=("--iterations", "5", "--worlds", "1024", "--save-every", "5"))
     """Arguments appended for a smoke test; later flags override earlier ones."""
+    tensorboard: bool = True
+    """Pass the entry a ``--tensorboard`` log directory; only training entries take one."""
 
 
 PLANAR = "dataset_6step"
@@ -177,6 +179,7 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             ),
             entry="projects.impedance_instron.bilateral.endurance3d",
             smoke_args=("--distance-m", "5"),
+            tensorboard=False,
         )
         for policy in (
             "pacer_100hz_it344",

@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> None:
     command = ["--dataset", str(args.data_root / run.dataset), "--output", str(output), *run.args]
     if args.smoke:
         command += list(run.smoke_args)
-    if args.tensorboard_root is not None:
+    if args.tensorboard_root is not None and run.tensorboard:
         command += ["--tensorboard", str(args.tensorboard_root / output.relative_to(args.out_root))]
     if output.exists():
         raise SystemExit(f"{output} already exists; each array task needs a fresh run directory")
