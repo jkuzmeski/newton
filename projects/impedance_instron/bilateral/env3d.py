@@ -37,6 +37,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 import warp as wp
+from scipy.spatial import ConvexHull
 
 import newton
 
@@ -673,8 +674,13 @@ class BilateralEnv3D:
         self.shoe_metadata = {side: shoes[side].metadata for side in SIDES}
         self.shoes = {side: _fused_shoe(shoes[side], w, cfg.dt_s, d, cfg.compression_limit) for side in SIDES}
         for shoe in self.shoes.values():
-            # The 3D foot rolls and yaws, so every column is a flight candidate.
-            shoe.lean.flight_columns = wp.array(np.arange(shoe.foundation.column_count), dtype=int, device=d)
+            # The screen tests whether the lowest column is near the flat ground. The foot rolls
+            # and yaws, but the lowest point of a rigid point set is always a convex-hull vertex.
+            anchors = shoe.lean.anchor_local.numpy()
+            if np.ptp(shoe.lean.z_free_rigid.numpy()) != 0.0:
+                raise ValueError("the flight screen's hull candidates need flat ground under every column")
+            hull = np.unique(ConvexHull(anchors).vertices)
+            shoe.lean.flight_columns = wp.array(hull.astype(np.int32), dtype=int, device=d)
         b = self.bounds
         self.body_weight_n = float(self.model.body_mass.numpy()[:7].sum()) * 9.81
         self.params = _params(cfg, b, self.body_weight_n)
