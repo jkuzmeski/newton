@@ -4,8 +4,8 @@
 """Time the 3D environment's control step per solver and world count.
 
 Each case drives a frozen policy for warm-up steps, then times whole control steps
-(policy, observation, and the CUDA-graph integration) and one eager control step's
-kernels.
+(policy, observation, and the CUDA-graph integration) and the kernels of one eager
+control step.
 """
 
 import argparse
@@ -41,18 +41,13 @@ def measure(dataset: Path, policy: Path, worlds: int, solver: str, dt_s: float, 
             env.advance(actor(env.observe()))
         torch.cuda.synchronize()
         control = (time.perf_counter() - start) / steps
-        start = time.perf_counter()
-        for _ in range(steps):
-            env.integrate()
-        torch.cuda.synchronize()
-        integrate = (time.perf_counter() - start) / steps
+        alive = int((env.t.status == 0).sum())
         wp.timing_begin(cuda_filter=wp.TIMING_ALL)
         env._substeps(config.substeps)
         results = wp.timing_end()
     total = collections.Counter()
     for result in results:
         total[result.name] += result.elapsed
-    alive = int((env.t.status == 0).sum())
     return {
         "worlds": worlds,
         "solver": solver,
@@ -60,7 +55,6 @@ def measure(dataset: Path, policy: Path, worlds: int, solver: str, dt_s: float, 
         "substeps": config.substeps,
         "alive": alive,
         "control_step_ms": round(control * 1e3, 3),
-        "integrate_ms": round(integrate * 1e3, 3),
         "world_steps_per_s": round(worlds / control, 1),
         "realtime_factor_total": round(worlds * config.control_dt_s / control, 2),
         "kernels_ms_per_control_step": {name: round(ms, 4) for name, ms in total.most_common(30)},

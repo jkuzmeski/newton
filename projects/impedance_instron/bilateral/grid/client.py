@@ -178,14 +178,15 @@ def setup() -> None:
     """Create the grid directories and the venv (LLSC PyTorch module + matching warp-lang)."""
     for name in ("code", "data", "runs", "tb", "logs", "warp_cache"):
         (LOCAL_ROOT / name).mkdir(parents=True, exist_ok=True)
-    warp = version("warp-lang")
+    warp, mujoco, mujoco_warp = version("warp-lang"), version("mujoco"), version("mujoco-warp")
     ssh(
         "source /etc/profile >/dev/null 2>&1; "
         f"module load {MODULE} >/dev/null 2>&1; "
         f"if [ ! -x {REMOTE_ROOT}/venv/bin/python ]; then python -m venv --system-site-packages {REMOTE_ROOT}/venv; fi; "
         "module load proxy-mitll >/dev/null 2>&1; unset PYTHONPATH; "
-        f"{REMOTE_ROOT}/venv/bin/python -m pip install --quiet --no-cache-dir 'warp-lang=={warp}'; "
-        f"{REMOTE_ROOT}/venv/bin/python -c 'import warp, torch, numpy; "
+        f"{REMOTE_ROOT}/venv/bin/python -m pip install --quiet --no-cache-dir 'warp-lang=={warp}' "
+        f"'mujoco=={mujoco}' 'mujoco-warp=={mujoco_warp}'; "
+        f"{REMOTE_ROOT}/venv/bin/python -c 'import warp, torch, numpy, mujoco_warp; "
         'print("warp", warp.__version__, "torch", torch.__version__, "numpy", numpy.__version__)\''
     )
     print(ssh(f"{REMOTE_ROOT}/venv/bin/python -c 'import warp; print(warp.__version__)' 2>/dev/null").strip())
