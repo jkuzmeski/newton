@@ -219,6 +219,17 @@ def run(
     # capture runs its warm-up steps on a reset of its own, so it comes first.
     env.capture()
     reset_once(env)
+    # Recorded before the run: the segment advances and recentering moves the pacer start.
+    starts = [
+        {
+            "world": w,
+            "trial": env.library.trials[int(env.world_trials[w])],
+            "segment": env.library.members[int(env.segment[w])]["id"],
+            "speed_m_s": round(float(env.speed[w]), 3),
+            "pacer_start_m": [round(float(v), 4) for v in env.pacer_start[w]],
+        }
+        for w in range(worlds)
+    ]
     nominal = float(env.speed.mean())
     limit = cfg.time_limit_s if cfg.time_limit_s is not None else 1.5 * cfg.distance_m / max(nominal, 1e-6)
     max_steps = max(int(math.ceil(limit / dt)), 1)
@@ -272,16 +283,7 @@ def run(
         "causes": causes.cpu().tolist(),
         "fall_steps": falls.cpu().tolist(),
         "finish_steps": finishes.cpu().tolist(),
-        "starts": [
-            {
-                "world": w,
-                "trial": env.library.trials[int(env.world_trials[w])],
-                "segment": env.library.members[int(env.segment[w])]["id"],
-                "speed_m_s": round(float(env.speed[w]), 3),
-                "pacer_start_m": [round(float(v), 4) for v in env.pacer_start[w]],
-            }
-            for w in range(worlds)
-        ],
+        "starts": starts,
         "timing": {
             "wall_s": elapsed,
             "simulated_s": steps * dt,
