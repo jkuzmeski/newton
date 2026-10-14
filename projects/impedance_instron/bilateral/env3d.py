@@ -198,6 +198,8 @@ class Worlds3D:
     invalid_l: wp.array[int]
     enabled_r: wp.array[int]
     enabled_l: wp.array[int]
+    shift_r: wp.array[wp.vec3]
+    shift_l: wp.array[wp.vec3]
 
 
 def _params(cfg: Env3DConfig, bounds: Bounds3D, body_weight_n: float) -> Params3D:
@@ -261,14 +263,21 @@ def _actuate(
 
 @wp.func
 def _carrier(
-    body_q: wp.array[wp.transform], body_qd: wp.array[wp.spatial_vector], body_com: wp.array[wp.vec3], body: int
+    body_q: wp.array[wp.transform],
+    body_qd: wp.array[wp.spatial_vector],
+    body_com: wp.array[wp.vec3],
+    body: int,
+    shift: wp.vec3,
 ):
+    """Shoe carrier pose and twist: the foot frame moved by the world's mount shift."""
     pose = body_q[body]
     twist = body_qd[body]
     omega = wp.spatial_bottom(twist)
-    offset = wp.transform_vector(pose, body_com[body])
-    linear = wp.spatial_top(twist) - wp.cross(omega, offset)
-    return pose, wp.spatial_vector(linear, omega)
+    arm = wp.transform_vector(pose, shift - body_com[body])
+    linear = wp.spatial_top(twist) + wp.cross(omega, arm)
+    return wp.transform(wp.transform_point(pose, shift), wp.transform_get_rotation(pose)), wp.spatial_vector(
+        linear, omega
+    )
 
 
 @wp.kernel
@@ -290,10 +299,10 @@ def _stage(
         carrier_qd_r[w] = wp.spatial_vector()
         carrier_qd_l[w] = wp.spatial_vector()
         return
-    pose, twist = _carrier(body_q, body_qd, body_com, w * 7 + 3)
+    pose, twist = _carrier(body_q, body_qd, body_com, w * 7 + 3, data.shift_r[w])
     carrier_q_r[w] = pose
     carrier_qd_r[w] = twist
-    pose, twist = _carrier(body_q, body_qd, body_com, w * 7 + 6)
+    pose, twist = _carrier(body_q, body_qd, body_com, w * 7 + 6, data.shift_l[w])
     carrier_q_l[w] = pose
     carrier_qd_l[w] = twist
 
@@ -304,11 +313,13 @@ def _apply(
     body_com: wp.array[wp.vec3],
     body_f: wp.array[wp.spatial_vector],
     body: int,
+    shift: wp.vec3,
     wrench: wp.spatial_vector,
 ):
+    """Apply a carrier wrench, given about the shifted carrier origin, at the body's COM."""
     force = wp.spatial_top(wrench)
-    offset = wp.transform_vector(body_q[body], body_com[body])
-    body_f[body] = wp.spatial_vector(force, wp.spatial_bottom(wrench) - wp.cross(offset, force))
+    arm = wp.transform_vector(body_q[body], shift - body_com[body])
+    body_f[body] = wp.spatial_vector(force, wp.spatial_bottom(wrench) + wp.cross(arm, force))
 
 
 @wp.kernel
@@ -348,8 +359,8 @@ def _contact(
         data.enabled_r[w] = 0
         data.enabled_l[w] = 0
         return
-    _apply(body_q, body_com, body_f, w * 7 + 3, fr)
-    _apply(body_q, body_com, body_f, w * 7 + 6, fl)
+    _apply(body_q, body_com, body_f, w * 7 + 3, data.shift_r[w], fr)
+    _apply(body_q, body_com, body_f, w * 7 + 6, data.shift_l[w], fl)
     data.grf[w, 0] = data.grf[w, 0] + wp.spatial_top(fr)
     data.grf[w, 1] = data.grf[w, 1] + wp.spatial_top(fl)
     sense = data.sense[w]
@@ -571,6 +582,25 @@ class ReferenceLibrary3D:
         return path if path.is_absolute() else self.root / path
 
 
+def _mount_shifts(library: ReferenceLibrary3D, world_trials: np.ndarray) -> np.ndarray:
+    """Per-world, per-side shoe shifts in the foot frame, shape [worlds, 2 (right, left), 3].
+
+    The shared shoe geometry uses the dataset's mean static ankle height. Each world
+    moves its shoes so the ankle sits at its own trial and side's static height.
+    Datasets without a static calibration use the shared mount unchanged.
+    """
+    shoe = library.manifest["shoe"]
+    shifts = np.zeros((len(world_trials), len(SIDES), 3), dtype=np.float32)
+    calibration = shoe.get("static_calibration")
+    if calibration is None:
+        return shifts
+    heights = calibration["ankle_height_m"]
+    for world, trial in enumerate(world_trials):
+        for k, side in enumerate(SIDES):
+            shifts[world, k, 2] = shoe["mount_m"][2] - heights[library.trials[trial]][side]
+    return shifts
+
+
 class BilateralEnv3D:
     """Vectorized 3D bilateral runner worlds with the planar environment's interface."""
 
@@ -641,6 +671,9 @@ class BilateralEnv3D:
         data.grf = wp.zeros((w, 2), dtype=wp.vec3, device=d)
         data.enabled_r = self.shoes["right"].foundation.enabled
         data.enabled_l = self.shoes["left"].foundation.enabled
+        self.mount_shift_m = _mount_shifts(library, world_trials)
+        data.shift_r = wp.array(self.mount_shift_m[:, 0], dtype=wp.vec3, device=d)
+        data.shift_l = wp.array(self.mount_shift_m[:, 1], dtype=wp.vec3, device=d)
         self.data = data
         names = [
             "status",

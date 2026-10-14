@@ -168,14 +168,17 @@ uv run --no-sync --extra torch-cu12 -m projects.impedance_instron evaluate-bilat
 
 - **Model** ([`model3d.py`](model3d.py)): seven bodies per world. Each foot
   body has its origin at the ankle and uses the intrinsic shoe axes, so the
-  shoe foundation attaches directly. Masses, COMs, and sagittal inertias match
+  shoe foundation attaches directly. Each world shifts each shoe along the
+  foot's z axis so the ankle sits at its trial and side's static height;
+  the shared shoe geometry uses their mean. Masses, COMs, and sagittal inertias match
   the planar profile; frontal and axial inertias are engineering assumptions.
   The model has no collision shapes.
 - **Environment** ([`env3d.py`](env3d.py)): uses
   `SolverFeatherstone` and refreshes the mass matrix every second substep
   (0.25 ms). The shoes run the lean contact kernels with every column as a
   flight candidate, because the 3D foot rolls and yaws. Ten joints are driven
-  by the same impedance law, giving 51 observations and 30 actions. The mirror
+  by the same impedance law, giving 55 observations (including the offset from
+  the pacer and the heading) and 30 actions. The mirror
   operation also negates lateral components.
 - **Throughput**: the articulated solver dominates the cost. 3D training runs
   well below the planar environment's roughly 45k samples/s.

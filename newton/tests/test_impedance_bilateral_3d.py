@@ -230,5 +230,71 @@ class TestActuation(unittest.TestCase):
         self.assertLess(ramped, bounds.torque_rate_max_nm_s[0] * config.dt_s + 1e-3)
 
 
+class TestMountShift(unittest.TestCase):
+    """Per-side mounts shift each world's shoe carrier within the foot frame."""
+
+    def test_shift_places_the_ankle_at_each_side_static_height(self):
+        """A taller static ankle moves the shoe down in the foot frame."""
+        from types import SimpleNamespace  # noqa: PLC0415
+
+        from projects.impedance_instron.bilateral import env3d  # noqa: PLC0415
+
+        heights = {"A": {"right": 0.090, "left": 0.094}, "B": {"right": 0.086, "left": 0.090}}
+        shoe = {"mount_m": [-0.03, 0.0, 0.090], "static_calibration": {"ankle_height_m": heights}}
+        library = SimpleNamespace(manifest={"shoe": shoe}, trials=["A", "B"])
+        shifts = env3d._mount_shifts(library, np.array([0, 1, 1]))
+        np.testing.assert_allclose(shifts[:, :, 2], [[0.0, -0.004], [0.004, 0.0], [0.004, 0.0]], atol=1e-7)
+        np.testing.assert_array_equal(shifts[:, :, :2], 0.0)
+
+    def test_shifted_carrier_moves_with_the_foot_and_transfers_its_wrench(self):
+        """The carrier twist is the foot's velocity at the shifted origin, and its wrench reaches the COM."""
+        import warp as wp  # noqa: PLC0415
+
+        from projects.impedance_instron.bilateral import env3d  # noqa: PLC0415
+
+        @wp.kernel
+        def probe(
+            body_q: wp.array[wp.transform],
+            body_qd: wp.array[wp.spatial_vector],
+            body_com: wp.array[wp.vec3],
+            shift: wp.vec3,
+            wrench: wp.spatial_vector,
+            carrier_q: wp.array[wp.transform],
+            carrier_qd: wp.array[wp.spatial_vector],
+            body_f: wp.array[wp.spatial_vector],
+        ):
+            pose, twist = env3d._carrier(body_q, body_qd, body_com, 0, shift)
+            carrier_q[0] = pose
+            carrier_qd[0] = twist
+            env3d._apply(body_q, body_com, body_f, 0, shift, wrench)
+
+        rotation = wp.quat_from_axis_angle(wp.normalize(wp.vec3(0.3, -0.5, 0.8)), 0.7)
+        pose = wp.transform(wp.vec3(0.4, -0.1, 0.2), rotation)
+        com, shift = np.array([0.02, 0.01, -0.03]), np.array([0.0, 0.0, -0.004])
+        velocity, omega = np.array([3.0, 0.2, -1.0]), np.array([0.5, -4.0, 1.5])
+        force, torque = np.array([30.0, -20.0, 900.0]), np.array([1.0, 2.0, -0.5])
+        arrays = [
+            wp.array([pose], dtype=wp.transform, device="cpu"),
+            wp.array([wp.spatial_vector(*velocity, *omega)], dtype=wp.spatial_vector, device="cpu"),
+            wp.array([wp.vec3(*com)], dtype=wp.vec3, device="cpu"),
+        ]
+        carrier_q = wp.zeros(1, dtype=wp.transform, device="cpu")
+        carrier_qd = wp.zeros(1, dtype=wp.spatial_vector, device="cpu")
+        body_f = wp.zeros(1, dtype=wp.spatial_vector, device="cpu")
+        wp.launch(
+            probe,
+            dim=1,
+            inputs=[*arrays, wp.vec3(*shift), wp.spatial_vector(*force, *torque), carrier_q, carrier_qd, body_f],
+            device="cpu",
+        )
+        R = np.array(wp.quat_to_matrix(rotation)).reshape(3, 3)
+        origin = np.array(pose.p) + R @ shift
+        np.testing.assert_allclose(carrier_q.numpy()[0][:3], origin, atol=1e-6)
+        # body_qd carries the COM velocity; the carrier origin sits at R (shift - com) from the COM.
+        arm = R @ (shift - com)
+        np.testing.assert_allclose(carrier_qd.numpy()[0][:3], velocity + np.cross(omega, arm), atol=1e-5)
+        np.testing.assert_allclose(body_f.numpy()[0][3:], torque + np.cross(arm, force), atol=1e-4)
+
+
 if __name__ == "__main__":
     unittest.main()

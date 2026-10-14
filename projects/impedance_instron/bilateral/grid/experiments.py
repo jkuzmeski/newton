@@ -84,6 +84,12 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             ("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "0"),
             smoke_args=_SPATIAL_SMOKE,
         ),
+        Run(
+            "pacer_4096_s1",
+            SPATIAL_STATIC,
+            ("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "1"),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
     ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
