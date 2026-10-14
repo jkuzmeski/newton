@@ -401,7 +401,7 @@ class ReferenceLibrary3D:
             raise ValueError(f"No members in splits {splits}")
         self.trials = sorted(manifest["calibrations"])
         self.calibrations = [data3d.calibration_from_dict(manifest["calibrations"][t]) for t in self.trials]
-        self.profile = json.loads(Path(manifest["shared_assets"]["profile.json"]["file"]).read_text(encoding="utf-8"))
+        self.profile = json.loads(self.asset("profile.json").read_text(encoding="utf-8"))
         self.hat = HeadArmsTrunk(**manifest["head_arms_trunk"])
         q, qd, grf, starts, lengths, flight, trial_of, references = [], [], [], [], [], [], [], []
         for member in self.members:
@@ -461,6 +461,11 @@ class ReferenceLibrary3D:
     def __len__(self) -> int:
         return len(self.members)
 
+    def asset(self, name: str) -> Path:
+        """Resolve a shared asset relative to the dataset; older manifests stored absolute local paths."""
+        path = Path(self.manifest["shared_assets"][name]["file"])
+        return path if path.is_absolute() else self.root / path
+
 
 class BilateralEnv3D:
     """Vectorized 3D bilateral runner worlds with the planar environment's interface."""
@@ -499,9 +504,8 @@ class BilateralEnv3D:
         )
         self.states = [self.model.state(), self.model.state()]
         self.control = self.model.control()
-        assets = library.manifest["shared_assets"]
         mount, pitch = library.manifest["shoe"]["mount_m"], library.manifest["shoe"]["pitch_rad"]
-        shoes = {side: Shoe(assets[f"digital_shoe_{side}.json"]["file"], mount, pitch) for side in SIDES}
+        shoes = {side: Shoe(library.asset(f"digital_shoe_{side}.json"), mount, pitch) for side in SIDES}
         self.shoe_metadata = {side: shoes[side].metadata for side in SIDES}
         self.shoes = {side: _fused_shoe(shoes[side], w, cfg.dt_s, d, cfg.compression_limit) for side in SIDES}
         for shoe in self.shoes.values():

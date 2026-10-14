@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 
@@ -156,6 +157,12 @@ def build_dataset(planar_dataset: Path, output: Path, *, data_root: Path = plana
     trials = sorted({member["trial"] for member in source["members"]})
     calibrations = {trial: calibrate(data_root / trial) for trial in trials}
     members, rejected = [], []
+    # Copy the shared assets so the dataset is self-contained and portable between machines.
+    (building / "assets").mkdir()
+    shared_assets = {}
+    for name, entry in source["shared_assets"].items():
+        shutil.copyfile(planar_dataset / entry["file"], building / "assets" / name)
+        shared_assets[name] = {"file": f"assets/{name}", "sha256": entry["sha256"]}
     for member in source["members"]:
         trial_root = data_root / member["trial"]
         try:
@@ -175,16 +182,13 @@ def build_dataset(planar_dataset: Path, output: Path, *, data_root: Path = plana
         print(member["id"], member["split"], record["leg_fit"]["right"]["ankle_error_peak_m"], flush=True)
     manifest = {
         "schema": DATASET_SCHEMA,
-        "planar_dataset": str(planar_dataset),
+        "planar_dataset": planar_dataset.name,
         "planar_manifest_sha256": hashlib.sha256((planar_dataset / "manifest.json").read_bytes()).hexdigest(),
         "subject_id": source.get("subject_id"),
         "subject_mass_kg": float(planar.load(planar_dataset / source["members"][0]["reference"])["subject_mass_kg"]),
         "head_arms_trunk": source["head_arms_trunk"],
         "shoe": source["shoe"],
-        "shared_assets": {
-            name: {"file": str((planar_dataset / entry["file"]).resolve()), "sha256": entry["sha256"]}
-            for name, entry in source["shared_assets"].items()
-        },
+        "shared_assets": shared_assets,
         "calibrations": {trial: calibration_to_dict(value) for trial, value in calibrations.items()},
         "contact_rule": asdict(rule),
         "coordinates": list(COORDINATE_NAMES),

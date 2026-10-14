@@ -171,6 +171,11 @@ uv run --no-sync --extra torch-cu12 -m projects.impedance_instron evaluate-bilat
 - **Throughput**: the articulated solver dominates the cost. 3D training runs
   well below the planar environment's roughly 45k samples/s.
 
+## Running on the LLSC grid
+
+See [grid/README.md](grid/README.md): immutable code snapshots, datasets on `Z:`, and
+throttled H100 array jobs for the experiments in [grid/experiments.py](grid/experiments.py).
+
 ## Results
 
 See [`RESULTS.md`](RESULTS.md).

@@ -74,6 +74,7 @@ def train(
     device: str = "cuda:0",
     kind: str = "planar",
     resume: Path | None = None,
+    tensorboard: Path | None = None,
 ) -> Path:
     """Train a policy on the dataset's training segments and write checkpoints to ``output``.
 
@@ -156,6 +157,11 @@ def train(
     finished_returns, finished_lengths, finished_failures = [], [], []
     log_path = output / "progress.csv"
     writer = None
+    board = None
+    if tensorboard is not None:
+        from torch.utils.tensorboard import SummaryWriter  # noqa: PLC0415
+
+        board = SummaryWriter(log_dir=str(tensorboard))
     best = -float("inf")
     for iteration in range(1, ppo.iterations + 1):
         start = time.perf_counter()
@@ -266,6 +272,10 @@ def train(
                 writer = list(row)
                 csv.DictWriter(handle, fieldnames=writer).writeheader()
             csv.DictWriter(handle, fieldnames=writer).writerow(row)
+        if board is not None:
+            for name, value in row.items():
+                if name not in ("iteration", "samples"):
+                    board.add_scalar(name, value, row["samples"])
         if iteration % 10 == 0 or iteration == 1:
             print(
                 f"it {iteration:5d} reward {row['mean_step_reward']:.3f} len {row['episode_length_s']:.2f} s "
@@ -295,6 +305,8 @@ def train(
             best = row["episode_return"]
             save_policy(model.actor, output / "policy_best_train.pt", metadata)
     final = save_policy(model.actor, output / "policy.pt", metadata)
+    if board is not None:
+        board.close()
     return final
 
 
@@ -324,6 +336,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--contact-match-penalty", type=float, default=EnvConfig.contact_match_penalty)
     parser.add_argument("--action-smoothness-penalty", type=float, default=EnvConfig.action_smoothness_penalty)
     parser.add_argument("--previous-action-obs", action="store_true")
+    parser.add_argument("--tensorboard", type=Path, help="Also log the progress scalars to this TensorBoard directory.")
     args = parser.parse_args(argv)
     ppo = PPOConfig(
         worlds=args.worlds,
@@ -362,6 +375,7 @@ def main(argv: list[str] | None = None) -> None:
             device=args.device,
             kind=args.kind,
             resume=args.resume,
+            tensorboard=args.tensorboard,
         )
     )
 
