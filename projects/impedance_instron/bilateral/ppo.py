@@ -324,7 +324,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--seed", type=int, default=PPOConfig.seed)
     parser.add_argument("--save-every", type=int, default=PPOConfig.save_every)
     parser.add_argument("--substeps", type=int, default=EnvConfig.substeps)
-    parser.add_argument("--episode-s", type=float, default=EnvConfig.episode_s)
+    parser.add_argument("--episode-s", type=float, help="Episode length [s]; defaults to the environment's.")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--kind", choices=("planar", "3d"), default="planar")
     parser.add_argument("--resume", type=Path, help="Initialize from a run's checkpoint.pt (fine-tuning).")
@@ -357,19 +357,20 @@ def main(argv: list[str] | None = None) -> None:
         seed=args.seed,
         save_every=args.save_every,
     )
+    episode = {} if args.episode_s is None else {"episode_s": args.episode_s}
     if args.kind == "3d":
         from .env3d import Env3DConfig  # noqa: PLC0415
 
         env_config = Env3DConfig(
             substeps=args.substeps,
-            episode_s=args.episode_s,
+            **episode,
             response_time_s=args.response_time_s,
             torque_slew_limit=args.slew_limit,
         )
     else:
         env_config = EnvConfig(
             substeps=args.substeps,
-            episode_s=args.episode_s,
+            **episode,
             reward_kernels=args.reward_kernels,
             force_penalty=args.force_penalty,
             response_time_s=args.response_time_s,

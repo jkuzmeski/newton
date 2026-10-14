@@ -75,6 +75,16 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
         Run("spatial_static", SPATIAL_STATIC, _SPATIAL, smoke_args=_SPATIAL_SMOKE),
         Run("spatial_old_mount", SPATIAL, _SPATIAL, smoke_args=_SPATIAL_SMOKE),
     ),
+    # 3D runner for open-ended running: 10 s episodes that continue the reference
+    # across segments and follow a pacer, with 4096 worlds.
+    "spatial_pacer": (
+        Run(
+            "pacer_4096",
+            SPATIAL_STATIC,
+            ("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "0"),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+    ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
         Run(

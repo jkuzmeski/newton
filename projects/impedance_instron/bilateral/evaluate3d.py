@@ -63,8 +63,7 @@ def rollout(env: BilateralEnv3D, actor) -> dict:
         for k in range(int(horizon.max())):
             stopped = (horizon <= k) & (env.t.status == 0)
             env.t.status[stopped] = 1
-            env.set_impedance(actor(env.observe()))
-            env.integrate()
+            env.advance(actor(env.observe()))
             newly = (env.t.status > 1) & (failed < 0)
             failed[newly] = k
             traces["q"].append(env.joint_q.clone() + torch.nn.functional.pad(origin, (0, 14)))

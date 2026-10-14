@@ -17,6 +17,13 @@ pitch-plane candidates of the planar runner, because the 3D foot also rolls and
 yaws. Observations hold only simulated state, internal phase, filtered foot
 loads, and torques; measurements enter rewards, terminations, initial states,
 and critic inputs.
+
+Episodes outlast the measured segments: the reference continues into the next
+segment of the same trial, or at the best-matching frame where the measurement
+ends. Horizontally the runner follows a pacer, like a treadmill: a point that
+starts at the initial pelvis position and moves along +x at the task speed. The
+actor observes its offset from the pacer and its heading, so the same policy
+can run open-ended without a reference.
 """
 
 from __future__ import annotations
@@ -71,6 +78,10 @@ OBSERVATION_NAMES = (
     "sin_phase",
     "cos_phase",
     "task_speed_offset",
+    "pacer_x_m",
+    "pacer_y_m",
+    "heading_sin",
+    "heading_cos",
 )
 ACTION_NAMES = tuple(f"{output}_{name}" for output in ("equilibrium", "stiffness", "damping") for name in JOINT_NAMES)
 
@@ -126,10 +137,14 @@ class Env3DConfig:
     compression_limit: float = 0.99
     mass_matrix_interval: int = 2
     """Featherstone mass-matrix refresh interval [substeps]; the matrix changes little over 0.25 ms."""
-    episode_s: float = 2.0
+    episode_s: float = 10.0
+    """Episode length [s]; the reference continues across segments, see :class:`ReferenceLibrary3D`."""
     termination_height_m: float = 0.15
     termination_orientation_rad: float = 0.6
-    termination_horizontal_m: float = 0.35
+    termination_horizontal_m: float = 0.5
+    """Largest horizontal distance from the pacer [m]."""
+    pacer_scale_m: float = 0.15
+    """Horizontal distance from the pacer in the position reward [m]."""
     reward_weights: tuple[float, float, float, float, float] = (0.35, 0.1, 0.2, 0.25, 0.1)
     pose_scale_rad: float = 0.15
     velocity_scale_rad_s: float = 3.0
@@ -419,8 +434,62 @@ def _quat_multiply(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     )
 
 
+def _successors(members, q, qd, grf, control_dt_s: float, body_weight_n: float) -> list[tuple[int, int]]:
+    """Return the segment and frame that continue each segment after its last frame.
+
+    A segment whose source window is followed directly by another loaded segment
+    of the same trial continues into it. Otherwise it continues at the frame of
+    the same trial whose joint angles and rates, pelvis height, tilt, and vertical
+    rate, and per-foot vertical force best match its last frame, at least 0.5 s
+    before the end of that frame's segment.
+    """
+
+    def features(segment: int, frames) -> np.ndarray:
+        position, rate = q[segment][frames], qd[segment][frames]
+        return np.column_stack(
+            (
+                position[:, 7:] / 0.1,
+                rate[:, 7:] / 2.0,
+                position[:, 2:3] / 0.02,
+                position[:, 3:5] / 0.05,
+                rate[:, 2:3] / 0.2,
+                grf[segment][frames][:, [2, 5]] / (0.2 * body_weight_n),
+            )
+        )
+
+    margin = int(round(0.5 / control_dt_s))
+    result = []
+    for s, member in enumerate(members):
+        last = len(q[s]) - 1
+        following = [
+            t
+            for t, other in enumerate(members)
+            if other["trial"] == member["trial"] and abs(other["start_s"] - member["end_s"]) < 1e-3
+        ]
+        if following:
+            t = following[0]
+            frame = int(round((member["start_s"] + (last + 1) * control_dt_s - members[t]["start_s"]) / control_dt_s))
+            result.append((t, max(frame, 0)))
+            continue
+        target = features(s, [last])[0]
+        best = (np.inf, s, 0)
+        for t, other in enumerate(members):
+            if other["trial"] != member["trial"]:
+                continue
+            frames = np.arange(3, len(q[t]) - margin)
+            distance = np.sum((features(t, frames) - target) ** 2, axis=1)
+            k = int(np.argmin(distance))
+            best = min(best, (float(distance[k]), t, int(frames[k])))
+        result.append(best[1:])
+    return result
+
+
 class ReferenceLibrary3D:
-    """Measured 3D segments resampled to the control clock on the GPU."""
+    """Measured 3D segments resampled to the control clock on the GPU.
+
+    ``successor[s]`` is the segment and frame that continue segment ``s`` after its
+    last frame, so an episode can follow the reference for longer than one segment.
+    """
 
     def __init__(self, dataset: str | Path, splits: tuple[str, ...], control_dt_s: float, device):
         root = Path(dataset).resolve()
@@ -480,6 +549,9 @@ class ReferenceLibrary3D:
         self.starts = torch.tensor(starts, dtype=torch.long, device=device)
         self.lengths = torch.tensor(lengths, dtype=torch.long, device=device)
         self.trial_of = torch.tensor(trial_of, dtype=torch.long, device=device)
+        self.successor = torch.tensor(
+            _successors(self.members, q, qd, grf, control_dt_s, self.body_weight_n), dtype=torch.long, device=device
+        )
         flight_all = np.concatenate(flight)
         minimum = int(round(0.25 / control_dt_s))
         candidates = [
@@ -598,6 +670,7 @@ class BilateralEnv3D:
         self.origin = torch.zeros(w, 3, device=dev)
         self.steps = torch.zeros(w, dtype=torch.long, device=dev)
         self.speed = torch.zeros(w, device=dev)
+        self.pacer_start = torch.zeros(w, 2, device=dev)
         self.max_steps = int(round(cfg.episode_s / cfg.control_dt_s))
         self.pelvis_com = torch.tensor(self.model.body_com.numpy()[0], device=dev)
         self._graph = None
@@ -707,6 +780,7 @@ class BilateralEnv3D:
         ankles = torch.stack(
             [torch.einsum("nji,nj->ni", heading, bodies[:, b, :3] - q[:, :3]) for b in (3, 6)], dim=1
         ).reshape(-1, 6)
+        pacer = torch.einsum("nji,nj->ni", heading[:, :2, :2], self.pacer() - q[:, :2])
         return torch.cat(
             (
                 q[:, 2:3],
@@ -721,9 +795,17 @@ class BilateralEnv3D:
                 torch.sin(self.t.phase)[:, None],
                 torch.cos(self.t.phase)[:, None],
                 ((self.speed - self.config.reference_speed_m_s) / self.config.speed_scale_m_s)[:, None],
+                pacer,
+                heading[:, 1, 0:1],
+                heading[:, 0, 0:1],
             ),
             dim=1,
         )
+
+    def pacer(self) -> torch.Tensor:
+        """Horizontal pacer position [m]: the start position moving along +x at the task speed."""
+        travel = self.speed * self.steps.float() * self.config.control_dt_s
+        return self.pacer_start + torch.stack((travel, torch.zeros_like(travel)), dim=1)
 
     def _reference(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         k = self.library.starts[self.segment] + self.index
@@ -748,11 +830,12 @@ class BilateralEnv3D:
         q_ref, qd_ref, grf_ref = self._reference()
         q, qd = self.joint_q, self.joint_qd
         weight = self.body_weight_n
-        remaining = (self.library.lengths[self.segment] - self.index).float() * self.config.control_dt_s
+        remaining = (self.max_steps - self.steps).float() * self.config.control_dt_s
         return torch.cat(
             (
                 q_ref[:, 7:] - q[:, 7:],
-                q_ref[:, :3] - q[:, :3],
+                self.pacer() - q[:, :2],
+                q_ref[:, 2:3] - q[:, 2:3],
                 self._orientation_error(q[:, 3:7], q_ref[:, 3:7]),
                 (qd_ref[:, 7:] - qd[:, 6:]) / 10.0,
                 grf_ref / weight,
@@ -770,7 +853,9 @@ class BilateralEnv3D:
         orientation = self._orientation_error(q[:, 3:7], q_ref[:, 3:7]).norm(dim=1)
         pose = (torch.sum((q[:, 7:] - q_ref[:, 7:]) ** 2, dim=1) + orientation**2) / 11 / cfg.pose_scale_rad**2
         velocity = torch.mean((qd[:, 6:] - qd_ref[:, 7:]) ** 2, dim=1) / cfg.velocity_scale_rad_s**2
-        position = torch.sum((q[:, :3] - q_ref[:, :3]) ** 2, dim=1) / cfg.position_scale_m**2
+        position = ((q[:, 2] - q_ref[:, 2]) / cfg.position_scale_m) ** 2 + torch.sum(
+            (q[:, :2] - self.pacer()) ** 2, dim=1
+        ) / cfg.pacer_scale_m**2
         force = (
             torch.mean((self._interval_force() - grf_ref) ** 2, dim=1) / (cfg.force_scale_bw * self.body_weight_n) ** 2
         )
@@ -790,7 +875,7 @@ class BilateralEnv3D:
         return (
             ((q[:, 2] - q_ref[:, 2]).abs() > cfg.termination_height_m)
             | (orientation > cfg.termination_orientation_rad)
-            | ((q[:, :2] - q_ref[:, :2]).norm(dim=1) > cfg.termination_horizontal_m)
+            | ((q[:, :2] - self.pacer()).norm(dim=1) > cfg.termination_horizontal_m)
         )
 
     # ----- resets -----
@@ -809,6 +894,8 @@ class BilateralEnv3D:
         for state in self.states:
             wp.to_torch(state.joint_q).view(self.worlds, 17)[mask] = q
             wp.to_torch(state.joint_qd).view(self.worlds, 16)[mask] = qd
+        self.pacer_start[mask] = q[:, :2]
+        self.steps[mask] = 0
         t = self.t
         t.phase[mask] = phase
         t.torque[mask] = 0.0
@@ -854,21 +941,26 @@ class BilateralEnv3D:
         self.segment[mask] = segment
         self.index[mask] = index
         self.origin[mask] = origin
-        self.steps[mask] = 0
         self.speed[mask] = lib.speeds[segment]
         self.write_state(mask, q, qd, self.kinematic_phase(lib.q[k], lib.qd[k]))
 
-    def step(self, action: torch.Tensor):
+    def advance(self, action: torch.Tensor):
+        """Apply one action for one control step and advance the reference and the pacer."""
         self.set_impedance(action)
         self.integrate()
         self.index += 1
         self.steps += 1
+        ended = self.index >= self.library.lengths[self.segment]
+        if ended.any():
+            following = self.library.successor[self.segment[ended]]
+            self.segment[ended], self.index[ended] = following.unbind(1)
+
+    def step(self, action: torch.Tensor):
+        self.advance(action)
         reward, terms = self.reward()
         failed = self.t.status != 0
         terminated = failed | self._departed()
-        truncated = ~terminated & (
-            (self.steps >= self.max_steps) | (self.index >= self.library.lengths[self.segment] - 1)
-        )
+        truncated = ~terminated & (self.steps >= self.max_steps)
         info = {
             "terms": terms,
             "failed": failed.float().mean().item(),
