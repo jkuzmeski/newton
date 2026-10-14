@@ -153,10 +153,11 @@ def _state(env: BilateralEnv3D, alive: torch.Tensor) -> torch.Tensor:
     velocity = qd[:, :3]
     force = env.t.grf[:, :, 2] / env.t.substeps.clamp(min=1)[:, None]
     pacer = env.pacer() - q[:, :2]
+    position = env.position()
     return torch.stack(
         (
-            q[:, 0],
-            q[:, 1],
+            position[:, 0],
+            position[:, 1],
             q[:, 2],
             yaw,
             tilt,
@@ -224,7 +225,7 @@ def run(
     causes = torch.zeros(worlds, dtype=torch.long, device=device)
     falls = torch.full((worlds,), -1, dtype=torch.long, device=device)
     finishes = torch.full((worlds,), -1, dtype=torch.long, device=device)
-    start = env.joint_q[:, 0].clone()
+    start = env.position()[:, 0].clone()
     records[0] = _state(env, alive)
     every = max(1, int(round(5.0 / (dt * cfg.check_every_steps))))
     wall = time.perf_counter()
@@ -238,7 +239,7 @@ def run(
             continue
         q = env.joint_q
         _, tilt = heading(q[:, 3:7])
-        traveled = q[:, 0] - start
+        traveled = env.position()[:, 0] - start
         low = q[:, 2] < cfg.minimum_pelvis_height_m
         fallen = (env.t.status != 0) | low | (tilt > cfg.maximum_pelvis_tilt_rad)
         fresh = fallen & alive

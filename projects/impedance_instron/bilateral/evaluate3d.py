@@ -66,7 +66,9 @@ def rollout(env: BilateralEnv3D, actor) -> dict:
             env.advance(actor(env.observe()))
             newly = (env.t.status > 1) & (failed < 0)
             failed[newly] = k
-            traces["q"].append(env.joint_q.clone() + torch.nn.functional.pad(origin, (0, 14)))
+            q = env.joint_q.clone()
+            q[:, :2] = env.position()
+            traces["q"].append(q + torch.nn.functional.pad(origin, (0, 14)))
             traces["grf_n"].append(env._interval_force())
             traces["effort"].append(env.t.effort / env.t.substeps.clamp(min=1)[:, None])
     result = {name: torch.stack(values).cpu().numpy() for name, values in traces.items()}

@@ -710,6 +710,8 @@ class BilateralEnv3D:
         self.steps = torch.zeros(w, dtype=torch.long, device=dev)
         self.speed = torch.zeros(w, device=dev)
         self.pacer_start = torch.zeros(w, 2, device=dev)
+        self.offset = torch.zeros(w, 2, device=dev)
+        """Horizontal shift [m] that :meth:`recenter` removed from each world's coordinates."""
         self.max_steps = int(round(cfg.episode_s / cfg.control_dt_s))
         self.pelvis_com = torch.tensor(self.model.body_com.numpy()[0], device=dev)
         # Padded table of each trial's airborne start frames, so ``reset`` can draw one
@@ -948,6 +950,7 @@ class BilateralEnv3D:
             positions.copy_(torch.where(where, q, positions))
             rates.copy_(torch.where(where, qd, rates))
         self.pacer_start.copy_(torch.where(where, q[:, :2], self.pacer_start))
+        self.offset.masked_fill_(where, 0.0)
         self.steps = torch.where(mask, torch.zeros_like(self.steps), self.steps)
         t = self.t
         t.phase.copy_(torch.where(mask, phase, t.phase))
@@ -997,6 +1000,36 @@ class BilateralEnv3D:
         torque = t.stiffness * (t.equilibrium - q) - t.damping * qd
         return torch.maximum(torch.minimum(torque, self.torque_cap), -self.torque_cap)
 
+    def position(self) -> torch.Tensor:
+        """Horizontal pelvis position [m] in the frame the world started in."""
+        return self.joint_q[:, :2] + self.offset
+
+    def recenter(self):
+        """Move every pelvis back over the origin in x and y.
+
+        SolverFeatherstone works in world coordinates in float32, so far from the origin
+        rounding swamps the limb inertias: started 100 m out, every world of a policy that
+        runs fine at the origin turned non-finite within 10 s. The ground is flat, so
+        shifting the root, the shoes' world-frame friction anchors and contact points, the
+        pacer, and the reference origin together changes nothing physical.
+        """
+        shift = self.joint_q[:, :2].clone()
+        for state in self.states:
+            wp.to_torch(state.joint_q).view(self.worlds, 17)[:, :2] -= shift
+        for shoe in self.shoes.values():
+            foundation = shoe.foundation
+            columns = foundation.column_count
+            anchors = [foundation.tangent_anchor, foundation.friction_solver.scratch_anchor]
+            for array in anchors:
+                wp.to_torch(array).view(self.worlds, columns, 2).sub_(shift[:, None, :])
+            wp.to_torch(foundation.contact_point).view(self.worlds, columns, 3)[:, :, :2] -= shift[:, None, :]
+        self.offset += shift
+        self.pacer_start -= shift
+        self.origin[:, :2] += shift
+        newton.eval_fk(self.model, self.states[0].joint_q, self.states[0].joint_qd, self.states[0])
+        wp.copy(self.states[1].body_q, self.states[0].body_q)
+        wp.copy(self.states[1].body_qd, self.states[0].body_qd)
+
     def advance(self, action: torch.Tensor):
         """Apply one action for one control step and advance the reference and the pacer.
 
@@ -1008,6 +1041,7 @@ class BilateralEnv3D:
         self.set_impedance(action)
         jump = (self._command() - before) / self.jump_unit
         self.jump = torch.where((self.steps > 0)[:, None], jump, torch.zeros_like(jump))
+        self.recenter()
         self.integrate()
         self.index += 1
         self.steps += 1
