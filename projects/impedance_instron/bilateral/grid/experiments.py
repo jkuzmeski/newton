@@ -189,6 +189,57 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             "pacer_200g995_it1000",
         )
     ),
+    # Solver throughput: Featherstone against MuJoCo Warp over world counts.
+    "solver_bench": (
+        Run(
+            "bench_dt250us",
+            SPATIAL_STATIC,
+            (
+                *("--policy", "/home/gridsan/JO31399/newton_grid/policies/pacer_100hz_it1400.pt"),
+                *("--worlds", "64", "1024", "4096", "16384", "32768", "--dt-s", "2.5e-4"),
+            ),
+            entry="projects.impedance_instron.bilateral.benchmark3d",
+            smoke_args=("--worlds", "64"),
+            tensorboard=False,
+        ),
+    ),
+    # The Featherstone-trained 100 Hz policy run on each solver for 100 m.
+    "endurance_solver": tuple(
+        Run(
+            f"it1400_{solver}",
+            SPATIAL_STATIC,
+            (
+                *("--policy", "/home/gridsan/JO31399/newton_grid/policies/pacer_100hz_it1400.pt"),
+                *("--distance-m", "100", "--worlds", "64", "--dt-s", "1.25e-4", "--solver", solver, "--quiet"),
+            ),
+            entry="projects.impedance_instron.bilateral.endurance3d",
+            smoke_args=("--distance-m", "5"),
+            tensorboard=False,
+        )
+        for solver in ("featherstone", "mujoco")
+    ),
+    # Training on MuJoCo Warp: fine-tuned from the Featherstone 100 Hz run, and from scratch.
+    "spatial_mujoco": (
+        Run(
+            "ft100_mujoco",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "1500", "--save-every", "100", "--seed", "2"),
+                *("--dt-s", "2.5e-4", "--substeps", "40", "--solver", "mujoco"),
+                *("--resume", "/home/gridsan/JO31399/newton_grid/policies/pacer_100hz_checkpoint_mj.pt"),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+        Run(
+            "pacer_100hz_mujoco",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "0"),
+                *("--dt-s", "2.5e-4", "--substeps", "40", "--solver", "mujoco"),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+    ),
     # Fine-tune the 100 Hz run's iteration 1200 toward the measured motion. The base run
     # continuing to 3000 iterations is the control for "more training".
     "spatial_finetune": tuple(

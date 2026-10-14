@@ -607,6 +607,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dt-s", type=float, help="Physics substep [s]; the substep count scales to keep the policy's control step."
     )
+    parser.add_argument("--solver", choices=("featherstone", "mujoco"), help="Override the policy's solver.")
     parser.add_argument("--quiet", action="store_true", help="Only print the final summary.")
     return parser
 
@@ -626,6 +627,8 @@ def main(argv: list[str] | None = None) -> None:
         if not math.isclose(substeps * args.dt_s, config.control_dt_s, rel_tol=1e-6):
             raise SystemExit(f"--dt-s {args.dt_s} does not divide the control step {config.control_dt_s}")
         config = replace(config, dt_s=args.dt_s, substeps=substeps)
+    if args.solver is not None:
+        config = replace(config, solver=args.solver)
     library = ReferenceLibrary3D(args.dataset, tuple(args.splits), config.control_dt_s, args.device)
     env = BilateralEnv3D(library, args.worlds, config, bounds, device=args.device, seed=args.seed)
     if actor is None:

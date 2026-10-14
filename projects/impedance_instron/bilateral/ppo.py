@@ -337,6 +337,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--kind", choices=("planar", "3d"), default="planar")
     parser.add_argument("--resume", type=Path, help="Initialize from a run's checkpoint.pt (fine-tuning).")
+    parser.add_argument("--solver", choices=("featherstone", "mujoco"), help="3D only: Newton solver.")
     parser.add_argument(
         "--reward-weights",
         type=float,
@@ -379,6 +380,8 @@ def main(argv: list[str] | None = None) -> None:
 
         if args.reward_weights is not None:
             common["reward_weights"] = tuple(args.reward_weights)
+        if args.solver is not None:
+            common["solver"] = args.solver
         env_config = Env3DConfig(
             **common,
             response_time_s=args.response_time_s,

@@ -135,6 +135,9 @@ class Env3DConfig:
     maximum_force_n: float = 6000.0
     minimum_hip_height_m: float = 0.3
     compression_limit: float = 0.99
+    solver: str = "featherstone"
+    """Newton solver of the articulation: ``"featherstone"`` or ``"mujoco"`` (MuJoCo Warp with
+    its own contacts disabled; the shoes apply every ground force)."""
     mass_matrix_interval: int = 2
     """Featherstone mass-matrix refresh interval [substeps]; the matrix changes little over 0.25 ms."""
     episode_s: float = 10.0
@@ -637,9 +640,14 @@ class BilateralEnv3D:
         self.world_trials = torch.tensor(world_trials, dtype=torch.long, device=self.torch_device)
         subject = float(library.manifest["subject_mass_kg"])
         self.model = model3d.build_worlds(library.calibrations, world_trials, library.profile, subject, library.hat, d)
-        self.solver = newton.solvers.SolverFeatherstone(
-            self.model, angular_damping=0.0, update_mass_matrix_interval=cfg.mass_matrix_interval
-        )
+        if cfg.solver == "featherstone":
+            self.solver = newton.solvers.SolverFeatherstone(
+                self.model, angular_damping=0.0, update_mass_matrix_interval=cfg.mass_matrix_interval
+            )
+        elif cfg.solver == "mujoco":
+            self.solver = newton.solvers.SolverMuJoCo(self.model, disable_contacts=True)
+        else:
+            raise ValueError(f"unknown solver {cfg.solver!r}; expected 'featherstone' or 'mujoco'")
         self.states = [self.model.state(), self.model.state()]
         self.control = self.model.control()
         mount, pitch = library.manifest["shoe"]["mount_m"], library.manifest["shoe"]["pitch_rad"]
@@ -1074,5 +1082,5 @@ class BilateralEnv3D:
             "actions": list(ACTION_NAMES),
             "worlds": self.worlds,
             "trials": self.library.trials,
-            "solver": "SolverFeatherstone",
+            "solver": type(self.solver).__name__,
         }
