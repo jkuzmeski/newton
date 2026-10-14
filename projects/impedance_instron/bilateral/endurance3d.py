@@ -361,6 +361,10 @@ def summarize(traces: dict, config: EnduranceConfig) -> list[dict]:
         if alive.all() and finish >= 0:
             row = min(row, int(math.ceil(finish / config.record_every_steps)))
         window = record[: row + 1]
+        # A world that turned non-finite ends at its last finite frame.
+        finite = np.isfinite(window).all(axis=1)
+        if not finite.all():
+            window = window[: max(int(np.argmin(finite)), 1)]
         x, y, z = (window[:, column[name]] for name in ("x_m", "y_m", "z_m"))
         yaw = _wrap(window[:, column["yaw_rad"]] - record[0, column["yaw_rad"]])
         stance = {side: _stances(window[:, column[f"fz_{side}_n"]], config, dt) for side in ("r", "l")}

@@ -123,6 +123,16 @@ class TestSummarize(unittest.TestCase):
         self.assertAlmostEqual(row["distance_x_m"], 6 * 0.0365, places=2)
         self.assertEqual(row["time_s"], 0.06)
 
+    def test_non_finite_world_keeps_its_last_finite_distance(self):
+        """A world that blew up reports the distance of its last finite frame."""
+        records = _records(11, 1)
+        column = {name: i for i, name in enumerate(end.RECORDS)}
+        records[:, 0, column["x_m"]] = np.arange(11) * 0.0365
+        records[6:, 0, :] = np.nan
+        records[7:, 0, column["alive"]] = 0.0
+        row = end.summarize(_traces(records, causes=[8], fall_steps=[120]), self.config)[0]
+        self.assertAlmostEqual(row["distance_x_m"], 5 * 0.0365, places=2)
+
     def test_finished_world_stops_at_the_distance(self):
         """A world that reaches the distance reports the crossing frame, not the run end."""
         records = _records(11, 2)
