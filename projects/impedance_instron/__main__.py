@@ -42,6 +42,10 @@ _COMMANDS = {
         "projects.impedance_instron.bilateral.evaluate3d",
         "Score a frozen 3D two-leg policy.",
     ),
+    "endurance-bilateral-3d": (
+        "projects.impedance_instron.bilateral.endurance3d",
+        "Run a frozen 3D two-leg policy open-ended over a target distance.",
+    ),
 }
 
 

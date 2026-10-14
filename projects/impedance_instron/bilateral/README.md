@@ -164,7 +164,13 @@ policy.
 ```console
 uv run --no-sync --extra torch-cu12 -m projects.impedance_instron train-policy --kind 3d --dataset outputs/bilateral/dataset_3d --output outputs/bilateral/ppo3d
 uv run --no-sync --extra torch-cu12 -m projects.impedance_instron evaluate-bilateral-3d --model outputs/bilateral/ppo3d/policy.pt --dataset outputs/bilateral/dataset_3d --output outputs/bilateral/eval_ppo3d
+uv run --no-sync --extra torch-cu12 -m projects.impedance_instron endurance-bilateral-3d --policy outputs/bilateral/ppo3d/policy.pt --dataset outputs/bilateral/dataset_3d_static --output outputs/bilateral/endurance_ppo3d --distance-m 1000 --worlds 8
 ```
+
+`endurance-bilateral-3d` runs the deterministic policy open-ended from dataset
+flight starts until each world falls or covers the distance, and reports
+distance, fall cause, speed, heading and lateral drift, cadence, and stance
+GRF peaks.
 
 - **Model** ([`model3d.py`](model3d.py)): seven bodies per world. Each foot
   body has its origin at the ankle and uses the intrinsic shoe axes, so the
