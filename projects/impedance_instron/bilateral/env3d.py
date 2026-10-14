@@ -683,6 +683,11 @@ class BilateralEnv3D:
             shoe.lean.flight_columns = wp.array(hull.astype(np.int32), dtype=int, device=d)
         b = self.bounds
         self.body_weight_n = float(self.model.body_mass.numpy()[:7].sum()) * 9.81
+        # Constants of the per-step torch maths, built once: a tensor from a Python list is
+        # copied from pageable memory, which stalls the host behind the queued substeps.
+        self._down = torch.tensor((0.0, 0.0, -1.0), device=self.torch_device)
+        self._conjugate = torch.tensor((-1.0, -1.0, -1.0, 1.0), device=self.torch_device)
+        self._reward_weights = torch.tensor(cfg.reward_weights, device=self.torch_device)[:, None]
         self.params = _params(cfg, b, self.body_weight_n)
         data = Worlds3D()
         for name, dtype in (
@@ -854,7 +859,7 @@ class BilateralEnv3D:
         q, qd = self.joint_q, self.joint_qd
         rotation = _quat_to_matrix(q[:, 3:7])
         heading = _heading(rotation)
-        gravity = torch.einsum("nji,j->ni", rotation, torch.tensor([0.0, 0.0, -1.0], device=q.device))
+        gravity = torch.einsum("nji,j->ni", rotation, self._down)
         omega = qd[:, 3:6]
         com_velocity = qd[:, :3]
         local_velocity = torch.einsum("nji,nj->ni", heading, com_velocity)
@@ -899,10 +904,9 @@ class BilateralEnv3D:
     def _interval_force(self) -> torch.Tensor:
         return (self.t.grf / self.t.substeps.clamp(min=1)[:, None, None]).reshape(-1, 6)
 
-    @staticmethod
-    def _orientation_error(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    def _orientation_error(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         """Rotation vector of ``a^-1 b`` for xyzw quaternions [rad]."""
-        conj = a * torch.tensor([-1.0, -1.0, -1.0, 1.0], device=a.device)
+        conj = a * self._conjugate
         r = _quat_multiply(conj, b)
         r = torch.where(r[:, 3:4] < 0, -r, r)
         angle = 2 * torch.atan2(r[:, :3].norm(dim=1), r[:, 3].clamp(min=1e-9))
@@ -945,7 +949,7 @@ class BilateralEnv3D:
         effort = torch.mean(self.t.effort / cfg.substeps / self.torque_cap**2, dim=1) / cfg.effort_scale
         smoothness = torch.mean(self.jump**2, dim=1) / cfg.smoothness_scale**2
         terms = torch.exp(-torch.stack((pose, velocity, position, force, effort, smoothness)))
-        weights = torch.tensor(cfg.reward_weights, device=q.device)[:, None]
+        weights = self._reward_weights
         names = ("pose", "velocity", "position", "force", "effort", "smoothness")
         return (weights * terms).sum(0), {name: terms[i].mean() for i, name in enumerate(names)}
 
@@ -966,7 +970,7 @@ class BilateralEnv3D:
         """Free-joint velocity (COM linear, world angular) from reference coordinate rates."""
         quat = q[:, 3:7]
         rate = qd_ref[:, 3:7]
-        conj = quat * torch.tensor([-1.0, -1.0, -1.0, 1.0], device=q.device)
+        conj = quat * self._conjugate
         omega = 2 * _quat_multiply(rate, conj)[:, :3]
         offset = torch.einsum("nij,j->ni", _quat_to_matrix(quat), self.pelvis_com)
         linear = qd_ref[:, :3] + torch.cross(omega, offset, dim=1)

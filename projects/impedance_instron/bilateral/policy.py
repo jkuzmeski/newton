@@ -131,7 +131,8 @@ class ActorCritic(nn.Module):
 
     def distribution(self, observation: torch.Tensor) -> torch.distributions.Normal:
         mean = self.actor(observation)
-        return torch.distributions.Normal(mean, self.log_std.exp().expand_as(mean))
+        # Argument validation reads the support checks back to the host on every sample.
+        return torch.distributions.Normal(mean, self.log_std.exp().expand_as(mean), validate_args=False)
 
     def value(self, observation: torch.Tensor, privileged: torch.Tensor) -> torch.Tensor:
         return self.critic(self.critic_normalizer(torch.cat((observation, privileged), dim=-1))).squeeze(-1)
