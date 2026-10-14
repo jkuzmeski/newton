@@ -165,6 +165,21 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             smoke_args=_SPATIAL_SMOKE,
         ),
     ),
+    # One kilometre of deterministic inference at the acceptance substep (0.125 ms).
+    # Policies are copied to <grid root>/policies before submission.
+    "endurance_1km": tuple(
+        Run(
+            policy,
+            SPATIAL_STATIC,
+            (
+                *("--policy", f"/home/gridsan/JO31399/newton_grid/policies/{policy}.pt", "--distance-m", "1000"),
+                *("--worlds", "64", "--dt-s", "1.25e-4", "--quiet"),
+            ),
+            entry="projects.impedance_instron.bilateral.endurance3d",
+            smoke_args=("--distance-m", "5"),
+        )
+        for policy in ("pacer_100hz_it344",)
+    ),
     # Three-dimensional articulation, engineering-seed start.
     "spatial_baseline": (
         Run(
