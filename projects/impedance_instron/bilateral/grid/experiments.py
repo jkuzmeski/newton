@@ -119,6 +119,19 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
         )
         for hz, substeps in ((100, 40), (50, 80))
     ),
+    # 200 Hz with the same 1 s discount horizon as 100 Hz at gamma 0.99: half the
+    # boundary torque steps of 100 Hz.
+    "spatial_rate_c": (
+        Run(
+            "pacer_200hz_g995",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "4000", "--save-every", "100", "--seed", "0"),
+                *("--dt-s", "2.5e-4", "--substeps", "20", "--gamma", "0.995"),
+            ),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+    ),
     # 100 Hz with a 2 s discount horizon, and with the larger network.
     "spatial_rate_b": (
         Run(
