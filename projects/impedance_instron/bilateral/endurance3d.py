@@ -40,7 +40,7 @@ import json
 import math
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -599,6 +599,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--stance-force-n", type=float, default=EnduranceConfig.stance_force_n)
     parser.add_argument("--check-every-steps", type=int, default=EnduranceConfig.check_every_steps)
     parser.add_argument("--record-every-steps", type=int, default=EnduranceConfig.record_every_steps)
+    parser.add_argument(
+        "--dt-s", type=float, help="Physics substep [s]; the substep count scales to keep the policy's control step."
+    )
     parser.add_argument("--quiet", action="store_true", help="Only print the final summary.")
     return parser
 
@@ -613,6 +616,11 @@ def main(argv: list[str] | None = None) -> None:
         environment = meta["environment"]
         config = stored(Env3DConfig, environment["config"])
         bounds = stored(Bounds3D, environment["bounds"])
+    if args.dt_s is not None:
+        substeps = round(config.control_dt_s / args.dt_s)
+        if not math.isclose(substeps * args.dt_s, config.control_dt_s, rel_tol=1e-6):
+            raise SystemExit(f"--dt-s {args.dt_s} does not divide the control step {config.control_dt_s}")
+        config = replace(config, dt_s=args.dt_s, substeps=substeps)
     library = ReferenceLibrary3D(args.dataset, tuple(args.splits), config.control_dt_s, args.device)
     env = BilateralEnv3D(library, args.worlds, config, bounds, device=args.device, seed=args.seed)
     if actor is None:

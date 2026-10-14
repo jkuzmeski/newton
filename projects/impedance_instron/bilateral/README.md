@@ -170,7 +170,8 @@ uv run --no-sync --extra torch-cu12 -m projects.impedance_instron endurance-bila
 `endurance-bilateral-3d` runs the deterministic policy open-ended from dataset
 flight starts until each world falls or covers the distance, and reports
 distance, fall cause, speed, heading and lateral drift, cadence, and stance
-GRF peaks.
+GRF peaks. `--dt-s` reruns the policy at a finer substep with the same control
+step, for example `--dt-s 1.25e-4` for a policy trained at 2.5e-4.
 
 - **Model** ([`model3d.py`](model3d.py)): seven bodies per world. Each foot
   body has its origin at the ankle and uses the intrinsic shoe axes, so the
