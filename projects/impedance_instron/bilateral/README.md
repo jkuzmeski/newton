@@ -71,10 +71,14 @@ are anthropometric estimates.
 kernels in [`gpu.py`](gpu.py) and the lean elastic-Coulomb shoe kernels, with
 one foundation per foot. Shoe history persists across contacts, and a
 terminated world's history is cleared on its own. The policy runs at 500 Hz;
-the physics substep stays at 1.25e-4 s, and torque lag, slew, and caps act on
-every substep. The torque response time is the fitted single-leg runner's
-5.3 ms. Runs 1-3 used the unfitted seed's 25 ms, which turned the 0.0097 kg m^2
-foot into a lightly damped ~6 Hz resonator; see [`RESULTS.md`](RESULTS.md).
+the physics substep stays at 1.25e-4 s, and the torque cap acts on every
+substep. Actuation has no torque lag and no slew limit by default, in the planar
+and the 3D environment alike: `response_time_s=0` applies the impedance torque
+directly, and `torque_slew_limit=False` removes the rate bound. Both options stay
+for reproducing older runs, which saved their own values in the run config.
+[`RESULTS.md`](RESULTS.md) compares the fitted single-leg runner's 5.3 ms lag, no
+lag, and the unfitted seed's 25 ms, which turned the 0.0097 kg m^2 foot into a
+lightly damped ~6 Hz resonator ("Torque lag and slew").
 Scheduled damping is applied immediately (`immediate_damping`), following the
 GRF ripple study. A NumPy/CPU-shoe
 reference ([`reference.py`](reference.py)) reproduces a CUDA world through

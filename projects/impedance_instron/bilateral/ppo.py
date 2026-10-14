@@ -333,7 +333,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--response-time-s", type=float, default=EnvConfig.response_time_s, help="Torque lag [s]; 0 disables it."
     )
-    parser.add_argument("--no-slew-limit", action="store_true", help="Remove the joint torque rate bound.")
+    parser.add_argument(
+        "--slew-limit",
+        action=argparse.BooleanOptionalAction,
+        default=EnvConfig.torque_slew_limit,
+        help="Bound the joint torque rate; --no-slew-limit, the default, removes the bound.",
+    )
     parser.add_argument("--body-position-weight", type=float, default=EnvConfig.body_position_weight)
     parser.add_argument("--body-velocity-weight", type=float, default=EnvConfig.body_velocity_weight)
     parser.add_argument("--contact-match-penalty", type=float, default=EnvConfig.contact_match_penalty)
@@ -355,7 +360,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.kind == "3d":
         from .env3d import Env3DConfig  # noqa: PLC0415
 
-        env_config = Env3DConfig(substeps=args.substeps, episode_s=args.episode_s)
+        env_config = Env3DConfig(
+            substeps=args.substeps,
+            episode_s=args.episode_s,
+            response_time_s=args.response_time_s,
+            torque_slew_limit=args.slew_limit,
+        )
     else:
         env_config = EnvConfig(
             substeps=args.substeps,
@@ -363,7 +373,7 @@ def main(argv: list[str] | None = None) -> None:
             reward_kernels=args.reward_kernels,
             force_penalty=args.force_penalty,
             response_time_s=args.response_time_s,
-            torque_slew_limit=not args.no_slew_limit,
+            torque_slew_limit=args.slew_limit,
             body_position_weight=args.body_position_weight,
             body_velocity_weight=args.body_velocity_weight,
             contact_match_penalty=args.contact_match_penalty,

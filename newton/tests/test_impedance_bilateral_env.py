@@ -131,7 +131,9 @@ class TestBilateralEnvironment(unittest.TestCase):
         torch = self.torch
         env = self.env
         right_ankle_z = env.chain.ankle(_pose(0.0), "right")[0][1]
-        q = torch.tensor(_pose(0.1005 - right_ankle_z), dtype=torch.float64, device=env.torch_device)
+        # Start 1 mm inside the 20 mm test columns so the compared window contains contact;
+        # an actuator with no lag holds the body up from a start that only touches down.
+        q = torch.tensor(_pose(0.099 - right_ankle_z), dtype=torch.float64, device=env.torch_device)
         v = torch.zeros(9, dtype=torch.float64, device=env.torch_device)
         v[0], v[1] = 0.3, -0.4
         count = int(mask.sum())
@@ -185,6 +187,15 @@ class TestBilateralEnvironment(unittest.TestCase):
         np.testing.assert_allclose(gpu_states[:, 1], gpu_states[:, 0], atol=0.0)
         np.testing.assert_allclose(env.t.phase.cpu().numpy()[0], state.phase_rad, atol=1e-6)
         np.testing.assert_allclose(env.t.sense.cpu().numpy()[0], state.load_bw, atol=1e-5)
+
+    def test_default_actuation_is_immediate_and_unlimited(self):
+        """A zero response time leaves the torque undelayed in every world and sets no rate bound."""
+        from projects.impedance_instron.bilateral.env import EnvConfig  # noqa: PLC0415
+
+        self.assertEqual(EnvConfig().response_time_s, 0.0)
+        self.assertFalse(EnvConfig().torque_slew_limit)
+        self.assertAlmostEqual(float(self.env.t.response.max()), 1.0)
+        self.assertGreater(float(min(self.env.settings.torque_rate)), 1e3 * max(self.env.bounds.torque_rate_max_nm_s))
 
     def test_world_reset_clears_shoe_history(self):
         """Resetting one loaded world reproduces a fresh rollout while the other world continues."""

@@ -175,5 +175,60 @@ class TestKinematics3D(unittest.TestCase):
         self.assertTrue(math.isfinite(float(env3d.seed_action().sum())))
 
 
+class TestActuation(unittest.TestCase):
+    """The 3D actuation follows the planar decision: no torque lag and no slew bound."""
+
+    SPRING_STIFFNESS_NM_RAD = 400.0
+    EQUILIBRIUM_RAD = 0.5
+
+    def _one_substep(self, params):
+        """Actuate one substep of a world held at zero position error and command the joint torque."""
+        import warp as wp  # noqa: PLC0415
+
+        from projects.impedance_instron.bilateral import env3d, model3d  # noqa: PLC0415
+
+        joints = model3d.ACTUATED
+        data = env3d.Worlds3D()
+        for name, dtype in (
+            ("status", int),
+            ("torque", env3d.VecJ),
+            ("load", env3d.VecJ),
+            ("equilibrium", env3d.VecJ),
+            ("stiffness", env3d.VecJ),
+            ("damping", env3d.VecJ),
+        ):
+            setattr(data, name, wp.zeros(1, dtype=dtype, device="cpu"))
+        # The hip flexion spring alone commands stiffness * equilibrium, well above what
+        # Bounds3D.torque_rate_max_nm_s allows in one 1.25e-4 s substep.
+        equilibrium = np.zeros(joints)
+        equilibrium[0] = self.EQUILIBRIUM_RAD
+        stiffness = np.zeros(joints)
+        stiffness[0] = self.SPRING_STIFFNESS_NM_RAD
+        data.equilibrium.assign(equilibrium[None].astype(np.float32))
+        data.stiffness.assign(stiffness[None].astype(np.float32))
+        joint_q = wp.zeros(7 + joints, dtype=float, device="cpu")
+        joint_qd = wp.zeros(6 + joints, dtype=float, device="cpu")
+        joint_f = wp.zeros(6 + joints, dtype=float, device="cpu")
+        wp.launch(env3d._actuate, dim=1, inputs=[params, data, joint_q, joint_qd, joint_f], device="cpu")
+        return float(data.torque.numpy()[0][0]), float(joint_f.numpy()[6])
+
+    def test_default_config_delivers_the_commanded_torque_in_one_substep(self):
+        """Zero response time and no slew limit apply the impedance command without a ramp."""
+        from dataclasses import replace  # noqa: PLC0415
+
+        from projects.impedance_instron.bilateral import env3d  # noqa: PLC0415
+
+        config = env3d.Env3DConfig()
+        bounds = env3d.Bounds3D()
+        command = self.SPRING_STIFFNESS_NM_RAD * self.EQUILIBRIUM_RAD
+        torque, load = self._one_substep(env3d._params(config, bounds, 700.0))
+        self.assertAlmostEqual(torque, command, delta=1e-3)
+        self.assertAlmostEqual(load, command, delta=1e-3)
+
+        limited = env3d._params(replace(config, torque_slew_limit=True), bounds, 700.0)
+        ramped, _ = self._one_substep(limited)
+        self.assertLess(ramped, bounds.torque_rate_max_nm_s[0] * config.dt_s + 1e-3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -5,12 +5,12 @@
 
 Every world integrates the bilateral chain with two persistent shoes at the
 existing 1.25e-4 s substep. A control step holds one equilibrium, stiffness, and
-damping command per joint for ``substeps`` substeps; torque lag, slew, and caps
-remain in the physics. Observations contain only simulated state, internal
-oscillator phase, filtered simulated foot loads, filtered torques, and the task
-speed. Measured references enter only the rewards, terminations, reference
-state initialization, and the critic's privileged inputs, which the deployed
-policy never sees.
+damping command per joint for ``substeps`` substeps; the torque cap acts on every
+substep, and no torque lag or rate bound applies unless :class:`EnvConfig` asks
+for one. Observations contain only simulated state, internal oscillator phase,
+filtered simulated foot loads, filtered torques, and the task speed. Measured
+references enter only the rewards, terminations, reference state initialization,
+and the critic's privileged inputs, which the deployed policy never sees.
 
 Episodes start in flight from a measured training state, continue through many
 contacts without resetting the shoes, and end on a screen failure, a large
@@ -88,13 +88,14 @@ class EnvConfig:
     """Physics substep [s]."""
     substeps: int = 16
     """Substeps per control step; 16 gives a 500 Hz policy."""
-    response_time_s: float = 0.005334445782959161
-    """Joint torque response time [s], from the fitted single-leg runner
-    (``hogan/baselines/generative_runner_score_20261010.json``). The unfitted seed's
-    25 ms makes the 0.01 kg m^2 foot a lightly damped ~6 Hz resonator. Zero applies
-    the impedance torque without lag."""
-    torque_slew_limit: bool = True
-    """Bound the joint torque rate by ``Bounds.torque_rate_max_nm_s``; ``False`` removes it."""
+    response_time_s: float = 0.0
+    """Joint torque response time [s]; zero, the default, applies the impedance torque
+    without lag. The lag and slew comparison is the "Torque lag and slew" study in
+    ``RESULTS.md``; the runs there recorded their own value, such as the fitted single-leg
+    runner's 5.3 ms (``hogan/baselines/generative_runner_score_20261010.json``)."""
+    torque_slew_limit: bool = False
+    """Bound the joint torque rate by ``Bounds.torque_rate_max_nm_s``; ``False``, the
+    default, removes it. The ``RESULTS.md`` runs were trained with ``True``."""
     load_time_s: float = 0.02
     frequency_hz: float = 1.5
     phase_feedback: float = 0.2

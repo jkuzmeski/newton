@@ -8,8 +8,9 @@ integrated by :class:`newton.solvers.SolverFeatherstone` at the 1.25e-4 s
 substep, with one persistent shoe foundation per foot applying its full 3D
 wrench to the foot body. Ten joints (three-axis hips, knees, ankles) are driven
 by the same bounded impedance law as the planar model: the policy sets
-equilibrium, stiffness, and damping per joint each control step; torque lag,
-slew, and caps act every substep. The floating pelvis is unactuated.
+equilibrium, stiffness, and damping per joint each control step, and the torque
+cap acts every substep. As in :class:`.env.EnvConfig`, the torque lag and rate
+bound are off by default. The floating pelvis is unactuated.
 
 The shoe's lean contact kernels screen flight over every column, not only the
 pitch-plane candidates of the planar runner, because the 3D foot also rolls and
@@ -34,7 +35,7 @@ import newton
 
 from ..cartesian.shoe import Shoe
 from . import data3d, model3d
-from .env import _fused_shoe
+from .env import _fused_shoe, response_fraction
 from .kinematics3d import JOINT_NAMES
 from .mechanics import SIDES, HeadArmsTrunk
 
@@ -108,7 +109,12 @@ def seed_action(bounds: Bounds3D | None = None) -> np.ndarray:
 class Env3DConfig:
     dt_s: float = 1.25e-4
     substeps: int = 16
-    response_time_s: float = 0.025
+    response_time_s: float = 0.0
+    """Joint torque response time [s]; zero, the default, applies the impedance torque
+    without lag, as in :attr:`.env.EnvConfig.response_time_s`."""
+    torque_slew_limit: bool = False
+    """Bound the joint torque rate by :attr:`Bounds3D.torque_rate_max_nm_s`; ``False``,
+    the default, removes it."""
     load_time_s: float = 0.02
     frequency_hz: float = 1.5
     phase_feedback: float = 0.2
@@ -177,6 +183,32 @@ class Worlds3D:
     invalid_l: wp.array[int]
     enabled_r: wp.array[int]
     enabled_l: wp.array[int]
+
+
+def _params(cfg: Env3DConfig, bounds: Bounds3D, body_weight_n: float) -> Params3D:
+    """Kernel settings of one configuration.
+
+    The torque response fraction and rate bound follow the planar environment, so the
+    default configuration applies the impedance command without lag or a rate limit.
+    """
+    params = Params3D()
+    params.dt = cfg.dt_s
+    params.response = response_fraction(cfg.dt_s, cfg.response_time_s)
+    params.load_rate = -math.expm1(-cfg.dt_s / cfg.load_time_s)
+    params.frequency = cfg.frequency_hz
+    params.phase_feedback = cfg.phase_feedback
+    params.immediate_damping = int(cfg.immediate_damping)
+    params.max_force = cfg.maximum_force_n
+    params.hip_floor = cfg.minimum_hip_height_m
+    params.compression_limit = cfg.compression_limit
+    params.body_weight = body_weight_n
+    both = lambda values: VecJ(*values, *values)  # noqa: E731
+    params.lower, params.upper = both(bounds.equilibrium_lower_rad), both(bounds.equilibrium_upper_rad)
+    params.stiffness_max, params.damping_max = both(bounds.stiffness_max_nm_rad), both(bounds.damping_max_nms_rad)
+    params.cap = both(bounds.torque_max_nm)
+    rate = bounds.torque_rate_max_nm_s if cfg.torque_slew_limit else (1.0e12,) * len(bounds.torque_rate_max_nm_s)
+    params.rate = both(rate)
+    return params
 
 
 @wp.kernel
@@ -512,23 +544,8 @@ class BilateralEnv3D:
             # The 3D foot rolls and yaws, so every column is a flight candidate.
             shoe.lean.flight_columns = wp.array(np.arange(shoe.foundation.column_count), dtype=int, device=d)
         b = self.bounds
-        params = Params3D()
-        params.dt = cfg.dt_s
-        params.response = -math.expm1(-cfg.dt_s / cfg.response_time_s)
-        params.load_rate = -math.expm1(-cfg.dt_s / cfg.load_time_s)
-        params.frequency = cfg.frequency_hz
-        params.phase_feedback = cfg.phase_feedback
-        params.immediate_damping = int(cfg.immediate_damping)
-        params.max_force = cfg.maximum_force_n
-        params.hip_floor = cfg.minimum_hip_height_m
-        params.compression_limit = cfg.compression_limit
         self.body_weight_n = float(self.model.body_mass.numpy()[:7].sum()) * 9.81
-        params.body_weight = self.body_weight_n
-        both = lambda values: VecJ(*values, *values)  # noqa: E731
-        params.lower, params.upper = both(b.equilibrium_lower_rad), both(b.equilibrium_upper_rad)
-        params.stiffness_max, params.damping_max = both(b.stiffness_max_nm_rad), both(b.damping_max_nms_rad)
-        params.cap, params.rate = both(b.torque_max_nm), both(b.torque_rate_max_nm_s)
-        self.params = params
+        self.params = _params(cfg, b, self.body_weight_n)
         data = Worlds3D()
         for name, dtype in (
             ("status", int),
