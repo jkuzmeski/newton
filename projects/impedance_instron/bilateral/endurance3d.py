@@ -82,9 +82,12 @@ RECORDS = (
     "pacer_y_m",
     "fz_r_n",
     "fz_l_n",
+    "torque_jump",
     "alive",
 )
-"""Columns of one recorded frame; ``pacer_*_m`` is the pacer position minus the pelvis."""
+"""Columns of one recorded frame; ``pacer_*_m`` is the pacer position minus the pelvis, and
+``torque_jump`` is the largest joint torque step at the last control boundary, see
+:attr:`.env3d.BilateralEnv3D.jump`."""
 
 
 @dataclass(frozen=True)
@@ -164,6 +167,7 @@ def _state(env: BilateralEnv3D, alive: torch.Tensor) -> torch.Tensor:
             pacer[:, 1],
             force[:, 0],
             force[:, 1],
+            env.jump.abs().amax(dim=1),
             alive.float(),
         ),
         dim=-1,

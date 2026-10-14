@@ -145,12 +145,16 @@ class Env3DConfig:
     """Largest horizontal distance from the pacer [m]."""
     pacer_scale_m: float = 0.15
     """Horizontal distance from the pacer in the position reward [m]."""
-    reward_weights: tuple[float, float, float, float, float] = (0.35, 0.1, 0.2, 0.25, 0.1)
+    reward_weights: tuple[float, float, float, float, float, float] = (0.35, 0.1, 0.2, 0.25, 0.1, 0.1)
+    """Weights of the pose, velocity, position, force, effort, and smoothness terms."""
     pose_scale_rad: float = 0.15
     velocity_scale_rad_s: float = 3.0
     position_scale_m: float = 0.05
     force_scale_bw: float = 0.3
     effort_scale: float = 0.15
+    smoothness_scale: float = 1.0
+    """Joint torque jump at a control step boundary, in units of the joint's torque rate
+    bound (:attr:`Bounds3D.torque_rate_max_nm_s`) over one control step."""
 
     @property
     def control_dt_s(self) -> float:
@@ -698,6 +702,8 @@ class BilateralEnv3D:
         self.stiffness_max = torch.tensor(b.stiffness_max_nm_rad * 2, device=dev)
         self.damping_max = torch.tensor(b.damping_max_nms_rad * 2, device=dev)
         self.torque_cap = torch.tensor(b.torque_max_nm * 2, device=dev)
+        self.jump_unit = torch.tensor(b.torque_rate_max_nm_s * 2, device=dev) * cfg.control_dt_s
+        self.jump = torch.zeros(w, len(ACTION_NAMES) // 3, device=dev)
         self.segment = torch.zeros(w, dtype=torch.long, device=dev)
         self.index = torch.zeros(w, dtype=torch.long, device=dev)
         self.origin = torch.zeros(w, 3, device=dev)
@@ -903,11 +909,10 @@ class BilateralEnv3D:
             torch.mean((self._interval_force() - grf_ref) ** 2, dim=1) / (cfg.force_scale_bw * self.body_weight_n) ** 2
         )
         effort = torch.mean(self.t.effort / cfg.substeps / self.torque_cap**2, dim=1) / cfg.effort_scale
-        terms = torch.stack(
-            (torch.exp(-pose), torch.exp(-velocity), torch.exp(-position), torch.exp(-force), torch.exp(-effort))
-        )
+        smoothness = torch.mean(self.jump**2, dim=1) / cfg.smoothness_scale**2
+        terms = torch.exp(-torch.stack((pose, velocity, position, force, effort, smoothness)))
         weights = torch.tensor(cfg.reward_weights, device=q.device)[:, None]
-        names = ("pose", "velocity", "position", "force", "effort")
+        names = ("pose", "velocity", "position", "force", "effort", "smoothness")
         return (weights * terms).sum(0), {name: terms[i].mean() for i, name in enumerate(names)}
 
     def _departed(self) -> torch.Tensor:
@@ -986,9 +991,23 @@ class BilateralEnv3D:
         self.speed = torch.where(mask, lib.speeds[segment], self.speed)
         self.write_state(mask, q, self._root_velocity(q, lib.qd[k]), self.kinematic_phase(lib.q[k], lib.qd[k]))
 
+    def _command(self) -> torch.Tensor:
+        """Joint torque the current impedance commands at the current state [N m]."""
+        q, qd, t = self.joint_q[:, 7:], self.joint_qd[:, 6:], self.t
+        torque = t.stiffness * (t.equilibrium - q) - t.damping * qd
+        return torch.maximum(torch.minimum(torque, self.torque_cap), -self.torque_cap)
+
     def advance(self, action: torch.Tensor):
-        """Apply one action for one control step and advance the reference and the pacer."""
+        """Apply one action for one control step and advance the reference and the pacer.
+
+        The impedance law runs every substep, so the torque follows the state within a
+        control step; a new action changes it stepwise only at the boundary. That step,
+        relative to the torque rate bound over one control step, is kept in :attr:`jump`.
+        """
+        before = self._command()
         self.set_impedance(action)
+        jump = (self._command() - before) / self.jump_unit
+        self.jump = torch.where((self.steps > 0)[:, None], jump, torch.zeros_like(jump))
         self.integrate()
         self.index += 1
         self.steps += 1
