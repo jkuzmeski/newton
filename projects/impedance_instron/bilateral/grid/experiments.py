@@ -78,6 +78,7 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
     # 3D runner for open-ended running: 10 s episodes that continue the reference
     # across segments and follow a pacer, with 4096 worlds. The 0.25 ms substep
     # doubles throughput (0.8% GRF impulse change); the 0.125 ms run is its control.
+    # gamma 0.99 at 500 Hz looks 0.2 s ahead; the g998 run looks about 1 s ahead.
     "spatial_pacer": (
         Run(
             "pacer_dt250us",
@@ -92,6 +93,15 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             "pacer_dt125us",
             SPATIAL_STATIC,
             ("--kind", "3d", "--worlds", "4096", "--iterations", "6000", "--save-every", "100", "--seed", "0"),
+            smoke_args=_SPATIAL_SMOKE,
+        ),
+        Run(
+            "pacer_dt250us_g998",
+            SPATIAL_STATIC,
+            (
+                *("--kind", "3d", "--worlds", "4096", "--iterations", "3000", "--save-every", "100", "--seed", "0"),
+                *("--dt-s", "2.5e-4", "--substeps", "8", "--gamma", "0.998", "--horizon", "64"),
+            ),
             smoke_args=_SPATIAL_SMOKE,
         ),
     ),
