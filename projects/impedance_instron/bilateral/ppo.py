@@ -200,6 +200,9 @@ def train(
                 for name, value in info["terms"].items():
                     terms_sum[name] = terms_sum.get(name, 0.0) + value / H
                 failed_sum += info["failed"] / H
+            # The 3D environment keeps its logged terms on the device until here.
+            terms_sum = {name: float(value) for name, value in terms_sum.items()}
+            failed_sum = float(failed_sum)
             last_value = model.value(observation, privileged)
             advantages, returns = _gae(reward_buf, value_buf, done_buf, last_value, ppo.gamma, ppo.lam)
         collect_s = time.perf_counter() - start
@@ -323,7 +326,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--hidden", type=int, nargs="+", default=list(PPOConfig.hidden))
     parser.add_argument("--seed", type=int, default=PPOConfig.seed)
     parser.add_argument("--save-every", type=int, default=PPOConfig.save_every)
-    parser.add_argument("--substeps", type=int, default=EnvConfig.substeps)
+    parser.add_argument("--substeps", type=int, help="Substeps per control step; defaults to the environment's.")
+    parser.add_argument("--dt-s", type=float, help="Substep [s]; defaults to the environment's.")
     parser.add_argument("--episode-s", type=float, help="Episode length [s]; defaults to the environment's.")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--kind", choices=("planar", "3d"), default="planar")
@@ -357,20 +361,19 @@ def main(argv: list[str] | None = None) -> None:
         seed=args.seed,
         save_every=args.save_every,
     )
-    episode = {} if args.episode_s is None else {"episode_s": args.episode_s}
+    overrides = {"dt_s": args.dt_s, "substeps": args.substeps, "episode_s": args.episode_s}
+    common = {name: value for name, value in overrides.items() if value is not None}
     if args.kind == "3d":
         from .env3d import Env3DConfig  # noqa: PLC0415
 
         env_config = Env3DConfig(
-            substeps=args.substeps,
-            **episode,
+            **common,
             response_time_s=args.response_time_s,
             torque_slew_limit=args.slew_limit,
         )
     else:
         env_config = EnvConfig(
-            substeps=args.substeps,
-            **episode,
+            **common,
             reward_kernels=args.reward_kernels,
             force_penalty=args.force_penalty,
             response_time_s=args.response_time_s,

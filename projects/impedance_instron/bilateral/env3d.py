@@ -706,6 +706,16 @@ class BilateralEnv3D:
         self.pacer_start = torch.zeros(w, 2, device=dev)
         self.max_steps = int(round(cfg.episode_s / cfg.control_dt_s))
         self.pelvis_com = torch.tensor(self.model.body_com.numpy()[0], device=dev)
+        # Padded table of each trial's airborne start frames, so ``reset`` can draw one
+        # candidate per world without a Python loop over trials or a ``nonzero``.
+        candidates = library.initial_candidates
+        trial_of = library.trial_of[candidates[:, 0]]
+        widths = [int((trial_of == trial).sum()) for trial in range(len(library.trials))]
+        table = torch.zeros(len(widths), max(widths), dtype=torch.long, device=dev)
+        for trial, size in enumerate(widths):
+            table[trial, :size] = torch.nonzero(trial_of == trial).squeeze(1)[:size]
+        self.initial_table = table
+        self.initial_lengths = torch.tensor(widths, dtype=torch.long, device=dev)[self.world_trials]
         self._graph = None
 
     # ----- views -----
@@ -898,7 +908,7 @@ class BilateralEnv3D:
         )
         weights = torch.tensor(cfg.reward_weights, device=q.device)[:, None]
         names = ("pose", "velocity", "position", "force", "effort")
-        return (weights * terms).sum(0), {name: terms[i].mean().item() for i, name in enumerate(names)}
+        return (weights * terms).sum(0), {name: terms[i].mean() for i, name in enumerate(names)}
 
     def _departed(self) -> torch.Tensor:
         cfg = self.config
@@ -924,23 +934,31 @@ class BilateralEnv3D:
         return torch.cat((linear, omega, qd_ref[:, 7:]), dim=1)
 
     def write_state(self, mask: torch.Tensor, q: torch.Tensor, qd: torch.Tensor, phase: torch.Tensor):
+        # Blending replaces boolean indexing: every ``view[mask] = ...`` is a ``nonzero``
+        # plus a host round trip, and ``reset`` issued about forty of them.
+        where = mask[:, None]
         for state in self.states:
-            wp.to_torch(state.joint_q).view(self.worlds, 17)[mask] = q
-            wp.to_torch(state.joint_qd).view(self.worlds, 16)[mask] = qd
-        self.pacer_start[mask] = q[:, :2]
-        self.steps[mask] = 0
+            positions = wp.to_torch(state.joint_q).view(self.worlds, 17)
+            rates = wp.to_torch(state.joint_qd).view(self.worlds, 16)
+            positions.copy_(torch.where(where, q, positions))
+            rates.copy_(torch.where(where, qd, rates))
+        self.pacer_start.copy_(torch.where(where, q[:, :2], self.pacer_start))
+        self.steps = torch.where(mask, torch.zeros_like(self.steps), self.steps)
         t = self.t
-        t.phase[mask] = phase
-        t.torque[mask] = 0.0
-        t.sense[mask] = 0.0
-        t.status[mask] = 0
-        t.enabled_r[mask] = 1
-        t.enabled_l[mask] = 1
+        t.phase.copy_(torch.where(mask, phase, t.phase))
+        t.torque.masked_fill_(where, 0.0)
+        t.sense.masked_fill_(where, 0.0)
+        t.status.masked_fill_(mask, 0)
+        t.enabled_r.masked_fill_(mask, 1)
+        t.enabled_l.masked_fill_(mask, 1)
         for shoe in self.shoes.values():
             for view in shoe.history:
-                view[mask] = 0
-        for state in self.states:
-            newton.eval_fk(self.model, state.joint_q, state.joint_qd, state)
+                view.masked_fill_(mask.reshape((self.worlds,) + (1,) * (view.dim() - 1)), 0.0)
+        # Both states hold the same coordinates after the write, so forward kinematics
+        # runs once and the body arrays are copied.
+        newton.eval_fk(self.model, self.states[0].joint_q, self.states[0].joint_qd, self.states[0])
+        wp.copy(self.states[1].body_q, self.states[0].body_q)
+        wp.copy(self.states[1].body_qd, self.states[0].body_qd)
 
     @staticmethod
     def kinematic_phase(q: torch.Tensor, qd: torch.Tensor) -> torch.Tensor:
@@ -950,32 +968,23 @@ class BilateralEnv3D:
     def reset(self, mask: torch.Tensor | None = None):
         if mask is None:
             mask = torch.ones(self.worlds, dtype=torch.bool, device=self.torch_device)
-        count = int(mask.sum())
-        if count == 0:
-            return
         lib = self.library
-        trials = self.world_trials[mask]
-        candidates = lib.initial_candidates
-        # Each world keeps its trial geometry, so it starts only from that trial's segments.
-        segment_trial = lib.trial_of[candidates[:, 0]]
-        choice = torch.empty(count, dtype=torch.long, device=self.torch_device)
-        for trial in trials.unique():
-            rows = torch.nonzero(trials == trial).squeeze(1)
-            pool = torch.nonzero(segment_trial == trial).squeeze(1)
-            pick = torch.randint(len(pool), (len(rows),), generator=self.generator, device=self.torch_device)
-            choice[rows] = pool[pick]
-        segment, index = candidates[choice].unbind(1)
+        # Each world keeps its trial geometry, so it draws only from that trial's pool;
+        # a uniform draw modulo the pool width is uniform over the pool.
+        pick = torch.randint(0, 1 << 30, (self.worlds,), generator=self.generator, device=self.torch_device)
+        rows = self.initial_table[self.world_trials, pick % self.initial_lengths]
+        segment, index = lib.initial_candidates[rows].unbind(1)
         k = lib.starts[segment] + index
         q = lib.q[k].clone()
         origin = q[:, :3].clone()
         origin[:, 2] = 0.0
-        q[:, :3] -= origin
-        qd = self._root_velocity(q, lib.qd[k])
-        self.segment[mask] = segment
-        self.index[mask] = index
-        self.origin[mask] = origin
-        self.speed[mask] = lib.speeds[segment]
-        self.write_state(mask, q, qd, self.kinematic_phase(lib.q[k], lib.qd[k]))
+        q[:, :2] = 0.0
+        where = mask[:, None]
+        self.segment = torch.where(mask, segment, self.segment)
+        self.index = torch.where(mask, index, self.index)
+        self.origin = torch.where(where, origin, self.origin)
+        self.speed = torch.where(mask, lib.speeds[segment], self.speed)
+        self.write_state(mask, q, self._root_velocity(q, lib.qd[k]), self.kinematic_phase(lib.q[k], lib.qd[k]))
 
     def advance(self, action: torch.Tensor):
         """Apply one action for one control step and advance the reference and the pacer."""
@@ -984,9 +993,9 @@ class BilateralEnv3D:
         self.index += 1
         self.steps += 1
         ended = self.index >= self.library.lengths[self.segment]
-        if ended.any():
-            following = self.library.successor[self.segment[ended]]
-            self.segment[ended], self.index[ended] = following.unbind(1)
+        following = self.library.successor[self.segment]
+        self.segment = torch.where(ended, following[:, 0], self.segment)
+        self.index = torch.where(ended, following[:, 1], self.index)
 
     def step(self, action: torch.Tensor):
         self.advance(action)
@@ -996,7 +1005,7 @@ class BilateralEnv3D:
         truncated = ~terminated & (self.steps >= self.max_steps)
         info = {
             "terms": terms,
-            "failed": failed.float().mean().item(),
+            "failed": failed.float().mean(),
             "final_observation": self.observe(),
             "final_privileged": self.privileged(),
         }
