@@ -240,6 +240,23 @@ EXPERIMENTS: dict[str, tuple[Run, ...]] = {
             smoke_args=_SPATIAL_SMOKE,
         ),
     ),
+    # Full gait recordings (kinematics, kinetics, body transforms) for the biomechanics report.
+    "biomech_gait": tuple(
+        Run(
+            f"gait_{name}",
+            SPATIAL_STATIC,
+            (*("--policy", f"/home/gridsan/JO31399/newton_grid/{policy}"), "--worlds", "64", "--seconds", "12"),
+            entry="projects.impedance_instron.bilateral.gait3d",
+            smoke_args=("--seconds", "3"),
+            tensorboard=False,
+        )
+        for name, policy in (
+            ("base_it1400", "policies/pacer_100hz_it1400.pt"),
+            ("pose", "runs/spatial_finetune/16684704/00_ft100_pose/policy_01500.pt"),
+            ("mujoco_ft", "runs/spatial_mujoco/16685657/00_ft100_mujoco/policy_01500.pt"),
+            ("mujoco_scratch", "runs/spatial_mujoco/16685657/01_pacer_100hz_mujoco/policy_03000.pt"),
+        )
+    ),
     # Gait scores and a 1 km run for the finished fine-tunes and MuJoCo runs against the 100 Hz base.
     "finetune_eval": tuple(
         Run(

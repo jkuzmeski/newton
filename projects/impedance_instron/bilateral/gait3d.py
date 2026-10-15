@@ -3,7 +3,9 @@
 
 """Record a deterministic 3D policy rollout beside its reference and score the gait.
 
-Writes ``gait.npz`` (joint coordinates, reference, GRF, action jumps per control step)
+Writes ``gait.npz`` (per control step: joint coordinates and rates with their reference,
+GRF, joint torque and mean power, body transforms with the recentering offset, and action
+jumps)
 and ``gait.json``: cadence and GRF peak against the reference, and the per-joint RMS
 error of the motion, over the worlds that stay up.
 """
@@ -32,20 +34,27 @@ def record(dataset: Path, policy: Path, worlds: int, seconds: float, dt_s: float
     library = env3d.ReferenceLibrary3D(dataset, ("train",), config.control_dt_s, "cuda:0")
     env = env3d.BilateralEnv3D(library, worlds, config, seed=3)
     reset_once(env)
-    traces = {name: [] for name in ("q", "q_ref", "grf", "grf_ref", "alive", "jump")}
+    traces = {}
     with torch.no_grad():
         for _ in range(round(seconds / config.control_dt_s)):
             env.advance(actor(env.observe()))
-            q_ref, _, grf_ref = env._reference()
+            q_ref, qd_ref, grf_ref = env._reference()
+            substeps = env.t.substeps.clamp(min=1)[:, None]
             for name, value in (
                 ("q", env.joint_q),
+                ("qd", env.joint_qd),
                 ("q_ref", q_ref),
+                ("qd_ref", qd_ref),
                 ("grf", env._interval_force()),
                 ("grf_ref", grf_ref),
+                ("torque", env.t.load),
+                ("power", (env.t.power_positive + env.t.power_negative) / substeps),
+                ("body_q", env.body_positions()),
+                ("offset", env.offset),
                 ("alive", env.t.status == 0),
                 ("jump", env.jump),
             ):
-                traces[name].append(value.clone())
+                traces.setdefault(name, []).append(value.clone())
     arrays = {name: torch.stack(values).cpu().numpy() for name, values in traces.items()}
     return {"control_dt_s": config.control_dt_s, **arrays}
 
