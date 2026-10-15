@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import warp as wp
 
 from . import env3d
 from .endurance3d import reset_once, stored
@@ -34,6 +35,7 @@ def record(dataset: Path, policy: Path, worlds: int, seconds: float, dt_s: float
     library = env3d.ReferenceLibrary3D(dataset, ("train",), config.control_dt_s, "cuda:0")
     env = env3d.BilateralEnv3D(library, worlds, config, seed=3)
     reset_once(env)
+    load = wp.to_torch(env.data.load)
     traces = {}
     with torch.no_grad():
         for _ in range(round(seconds / config.control_dt_s)):
@@ -47,7 +49,7 @@ def record(dataset: Path, policy: Path, worlds: int, seconds: float, dt_s: float
                 ("qd_ref", qd_ref),
                 ("grf", env._interval_force()),
                 ("grf_ref", grf_ref),
-                ("torque", env.t.load),
+                ("torque", load),
                 ("power", (env.t.power_positive + env.t.power_negative) / substeps),
                 ("body_q", env.body_positions()),
                 ("offset", env.offset),
