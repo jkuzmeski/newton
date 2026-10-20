@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<InstronFile xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" FileSections="1" Version="1.0.0">
+  <Section index="0">
+    <Node name="AllTests">
+      <Item name="Tests">
+        <Value xsi:type="ArrayOfString">
+          <string>130ms_fullfoot_test1\130ms_fullfoot_test1.im_gpf</string>
+          <string>140ms_fullfoot_test2\140ms_fullfoot_test2.im_gpf</string>
+          <string>140ms_fullfoot_test3\140ms_fullfoot_test3.im_gpf</string>
+          <string>140ms_fullfoot_test4\140ms_fullfoot_test4.im_gpf</string>
+          <string>140ms_fullfoot_test5\140ms_fullfoot_test5.im_gpf</string>
+          <string>140ms_fullfoot_test6\140ms_fullfoot_test6.im_gpf</string>
+          <string>140ms_fullfoot_test7\140ms_fullfoot_test7.im_gpf</string>
+          <string>10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep\10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep.im_gpf</string>
+          <string>10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1\10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1.im_gpf</string>
+          <string>10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep\10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep.im_gpf</string>
+          <string>10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep\10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep.im_gpf</string>
+        </Value>
+      </Item>
+    </Node>
+    <Node name="InterruptedTests">
+      <Item name="Tests">
+        <Value xsi:type="ArrayOfString" />
+      </Item>
+    </Node>
+  </Section>
+</InstronFile>

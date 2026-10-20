@@ -1,0 +1,36 @@
+{
+  "slug": "puma-fast-r-nitro-elite-3",
+  "product_name": "PUMA Fast-R NITRO Elite 3",
+  "geometry_status": "ready",
+  "right": {
+    "columns": 917,
+    "min_thickness_mm": 5.36714328126237,
+    "median_thickness_mm": 31.598666380489046,
+    "max_thickness_mm": 44.04701173847599
+  },
+  "left": {
+    "columns": 917,
+    "min_thickness_mm": 5.36714328126237,
+    "median_thickness_mm": 31.598666380489046,
+    "max_thickness_mm": 44.04701173847599,
+    "mirrored_from_right": true
+  },
+  "right_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-fast-r-nitro-elite-3\\right\\column_grid.npz",
+  "left_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-fast-r-nitro-elite-3\\left\\column_grid.npz",
+  "geometry_source": "D:\\PlantarPressure\\rtings_internal_models\\puma-fast-r-nitro-elite-3-3d-internal.glb",
+  "source_link": "hardlink",
+  "source_side_assumption": "Treated as right-foot input; RTINGS does not label model side here.",
+  "heel_toe_orientation_verified": false,
+  "plate": {
+    "slug": "puma-fast-r-nitro-elite-3",
+    "product_name": "PUMA Fast-R NITRO Elite 3",
+    "product_page_url": "https://www.rtings.com/running-shoes/reviews/puma/fast-r-nitro-elite-3",
+    "plate_status": "present_reported",
+    "plate_material_reported": "Carbon Fiber",
+    "plate_field_reported": "Carbon Fiber",
+    "source": "RTINGS featured item field: Plate",
+    "alternate_urls_tried": []
+  },
+  "side": "right",
+  "mirrored_from_right": false
+}

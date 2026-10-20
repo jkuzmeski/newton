@@ -102,3 +102,8 @@ outputs/digital_shoe_friction/
 /outputs/friction_identification/
 
 /outputs/friction_qualification/
+
+# Local Digital Instron refit and catalog viewer outputs
+/outputs/digital_instron/
+/outputs/index.html
+/outputs/report-ui/

@@ -1,0 +1,36 @@
+{
+  "slug": "puma-deviate-nitro-elite-3",
+  "product_name": "PUMA Deviate NITRO Elite 3",
+  "geometry_status": "ready",
+  "right": {
+    "columns": 937,
+    "min_thickness_mm": 5.470638934147918,
+    "median_thickness_mm": 32.36787224535221,
+    "max_thickness_mm": 49.446982895519746
+  },
+  "left": {
+    "columns": 937,
+    "min_thickness_mm": 5.470638934147918,
+    "median_thickness_mm": 32.36787224535221,
+    "max_thickness_mm": 49.446982895519746,
+    "mirrored_from_right": true
+  },
+  "right_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-deviate-nitro-elite-3\\right\\column_grid.npz",
+  "left_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-deviate-nitro-elite-3\\left\\column_grid.npz",
+  "geometry_source": "D:\\PlantarPressure\\rtings_internal_models\\puma-deviate-nitro-elite-3-3d-internal.glb",
+  "source_link": "hardlink",
+  "source_side_assumption": "Treated as right-foot input; RTINGS does not label model side here.",
+  "heel_toe_orientation_verified": false,
+  "plate": {
+    "slug": "puma-deviate-nitro-elite-3",
+    "product_name": "PUMA Deviate NITRO Elite 3",
+    "product_page_url": "https://www.rtings.com/running-shoes/reviews/puma/deviate-nitro-elite-3",
+    "plate_status": "present_reported",
+    "plate_material_reported": "Carbon Fiber",
+    "plate_field_reported": "Carbon Fiber",
+    "source": "RTINGS featured item field: Plate",
+    "alternate_urls_tried": []
+  },
+  "side": "right",
+  "mirrored_from_right": false
+}

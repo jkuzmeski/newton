@@ -1,0 +1,242 @@
+10/5/2026,10:38:57 PM,FoamSweep,,60101,Log File Created
+10/5/2026,10:38:57 PM,FoamSweep,,60104,Software Version,3.0.23284.0
+10/5/2026,10:38:57 PM,FoamSweep,,60105,Console Version,10.4.22340.1
+10/5/2026,10:38:57 PM,FoamSweep,,60106,Controller Version,26.00.20220510
+10/5/2026,10:38:57 PM,FoamSweep,,60107,User Name,jkuzmeski
+10/5/2026,10:38:57 PM,FoamSweep,,60108,Computer Name,IALS-198589
+10/5/2026,10:38:57 PM,FoamSweep,,60109,System Name,
+10/5/2026,10:38:57 PM,FoamSweep,,60110,Frame Serial Number (System ID),E10BMTB11618
+10/5/2026,10:39:18 PM,FoamSweep,Test1,300003,ElectroPuls (10.0.0.2 : 0) cannot be automatically mapped to hardware device
+10/5/2026,10:39:18 PM,FoamSweep,Test1,300003,ElectroPuls (10.0.0.2 : 1) cannot be automatically mapped to hardware device
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60110,Test Started
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 72.64
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/5/2026,10:40:01 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/5/2026,10:57:11 PM,FoamSweep,130ms_fullfoot_test1,8800120,A limit has been tripped (Console)
+10/5/2026,10:57:12 PM,FoamSweep,130ms_fullfoot_test1,60201,Test Status,Test Paused Unexpectedly
+10/5/2026,10:57:12 PM,FoamSweep,130ms_fullfoot_test1,60120,Total Time,1030.399
+10/5/2026,10:57:12 PM,FoamSweep,130ms_fullfoot_test1,60121,Total Cycle Count,923.75
+10/5/2026,10:57:12 PM,FoamSweep,130ms_fullfoot_test1,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/5/2026,10:57:12 PM,FoamSweep,130ms_fullfoot_test1,60122,Step,29,Step 29
+10/5/2026,10:57:12 PM,FoamSweep,130ms_fullfoot_test1,60111,Test Paused
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60113,Test Resumed
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 72.64
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/5/2026,10:58:13 PM,FoamSweep,130ms_fullfoot_test1,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/5/2026,11:08:26 PM,FoamSweep,130ms_fullfoot_test1,60200,Test Status,Test Ended Normally
+10/5/2026,11:08:26 PM,FoamSweep,130ms_fullfoot_test1,60120,Total Time,1636.095
+10/5/2026,11:08:26 PM,FoamSweep,130ms_fullfoot_test1,60121,Total Cycle Count,1503.5
+10/5/2026,11:08:26 PM,FoamSweep,130ms_fullfoot_test1,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/5/2026,11:08:26 PM,FoamSweep,130ms_fullfoot_test1,62000,SHA-256,130ms_fullfoot_test1.steps.tracking.csv,C0B997025537B932B1BCC77F44E57680F8679D81776F7EEE96F84C8D51873CD3
+10/5/2026,11:08:26 PM,FoamSweep,130ms_fullfoot_test1,62000,SHA-256,130ms_fullfoot_test1.steps.trends.csv,C334FA7E464867F2B685F7036632CCEC545D6B6F0E83179C2F8FD2B22D1CDDE3
+10/5/2026,11:08:27 PM,FoamSweep,130ms_fullfoot_test1,62000,SHA-256,130ms_fullfoot_test1.Stop.csv,29501187076F85E222C7C2B7B2CBFD269A567ED6FD93D48B2F6D22EDC2B03B8F
+10/5/2026,11:08:27 PM,FoamSweep,130ms_fullfoot_test1,60112,Test Finished
+10/6/2026,2:34:42 PM,FoamSweep,,60102,Opened
+10/6/2026,2:34:42 PM,FoamSweep,,60104,Software Version,3.0.23284.0
+10/6/2026,2:34:42 PM,FoamSweep,,60105,Console Version,10.4.22340.1
+10/6/2026,2:34:42 PM,FoamSweep,,60106,Controller Version,26.00.20220510
+10/6/2026,2:34:42 PM,FoamSweep,,60107,User Name,jkuzmeski
+10/6/2026,2:34:42 PM,FoamSweep,,60108,Computer Name,IALS-198589
+10/6/2026,2:34:42 PM,FoamSweep,,60109,System Name,
+10/6/2026,2:34:42 PM,FoamSweep,,60110,Frame Serial Number (System ID),E10BMTB11618
+10/6/2026,2:45:36 PM,FoamSweep,1062026_FullSweep_FastR3,300003,ElectroPuls (10.0.0.2 : 0) cannot be automatically mapped to hardware device
+10/6/2026,2:45:36 PM,FoamSweep,1062026_FullSweep_FastR3,300003,ElectroPuls (10.0.0.2 : 1) cannot be automatically mapped to hardware device
+10/13/2026,5:36:39 PM,FoamSweep,,60102,Opened
+10/13/2026,5:36:39 PM,FoamSweep,,60104,Software Version,3.0.23284.0
+10/13/2026,5:36:39 PM,FoamSweep,,60105,Console Version,10.4.22340.1
+10/13/2026,5:36:39 PM,FoamSweep,,60106,Controller Version,26.00.20220510
+10/13/2026,5:36:39 PM,FoamSweep,,60107,User Name,jkuzmeski
+10/13/2026,5:36:39 PM,FoamSweep,,60108,Computer Name,IALS-198589
+10/13/2026,5:36:39 PM,FoamSweep,,60109,System Name,
+10/13/2026,5:36:39 PM,FoamSweep,,60110,Frame Serial Number (System ID),E10BMTB11618
+10/13/2026,5:55:06 PM,FoamSweep,140ms_fullfoot_test2,300003,ElectroPuls (10.0.0.2 : 0) cannot be automatically mapped to hardware device
+10/13/2026,5:55:06 PM,FoamSweep,140ms_fullfoot_test2,300003,ElectroPuls (10.0.0.2 : 1) cannot be automatically mapped to hardware device
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60110,Test Started
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,5:55:46 PM,FoamSweep,140ms_fullfoot_test2,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,60205,Test Status,Test Ended by User
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,60120,Total Time,80.383
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,60121,Total Cycle Count,144
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,60122,Step,2,Step 2
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,60123,140ms force sweep(1),2
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,62000,SHA-256,140ms_fullfoot_test2.steps.tracking.csv,310260DEAA598568087E34F0327D29C4100974035C4C07DDB42BC1EBE3D51B0F
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,62000,SHA-256,140ms_fullfoot_test2.steps.trends.csv,30983857671847115E5CC6D062C29F007C564C5A4E2668E3E81C3282D1482FB1
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,62000,SHA-256,140ms_fullfoot_test2.Stop.csv,61D143B9479DC1FA3D1337DBE5DF85760D44FD96BDCE09F2B092CECAD92918CA
+10/13/2026,5:57:07 PM,FoamSweep,140ms_fullfoot_test2,60112,Test Finished
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60110,Test Started
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,5:57:40 PM,FoamSweep,140ms_fullfoot_test3,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,60200,Test Status,Test Ended Normally
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,60120,Total Time,163.327
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,60121,Total Cycle Count,300.75
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,62000,SHA-256,140ms_fullfoot_test3.steps.tracking.csv,35C2A87820CD65FCDEAA7E4DF13FE72560B0FB377E925CB2C971E3F5C3DEB2F1
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,62000,SHA-256,140ms_fullfoot_test3.steps.trends.csv,01D966EA95C5D114E815969F7D9956197E551D76E254EDD97D7CF1D15B54497A
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,62000,SHA-256,140ms_fullfoot_test3.Stop.csv,578BA479C68DBAB75C721EF37B2C6CB51A5566B69B85A5BC102238614B77D329
+10/13/2026,6:00:23 PM,FoamSweep,140ms_fullfoot_test3,60112,Test Finished
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60110,Test Started
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:06:02 PM,FoamSweep,140ms_fullfoot_test4,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,60205,Test Status,Test Ended by User
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,60120,Total Time,83.199
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,60121,Total Cycle Count,133.75
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,60122,Step,3,Step 3
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,60123,Wait(1),2
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,62000,SHA-256,140ms_fullfoot_test4.steps.tracking.csv,2E55EAE7712906EAB9218B6DD232B08C6A55A6EF87EA14A81C2397B61BD7F3E6
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,62000,SHA-256,140ms_fullfoot_test4.steps.trends.csv,837B53DEE8117569CFD7BA84EF98A856A28A1126177C30AB9669D638379E066F
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,62000,SHA-256,140ms_fullfoot_test4.Stop.csv,FC268890066B398F15EF750629FCA966D4643C10275273FA49E6C9B892AEC0A4
+10/13/2026,6:07:26 PM,FoamSweep,140ms_fullfoot_test4,60112,Test Finished
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60110,Test Started
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:23:06 PM,FoamSweep,140ms_fullfoot_test5,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,60205,Test Status,Test Ended by User
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,60120,Total Time,20.991
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,60121,Total Cycle Count,26.5
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,60122,Step,3,Step 3
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,60123,160ms Loop(1),1
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,62000,SHA-256,140ms_fullfoot_test5.steps.tracking.csv,3FEADCC4DB3CF0E79568959D813B359E367CDD8E31EC4B069EE1E75D8465255A
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,62000,SHA-256,140ms_fullfoot_test5.steps.trends.csv,29CD1F1172BBCEC700D92F591A00F714124E5B059F4702A9A929E7932096C5F7
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,62000,SHA-256,140ms_fullfoot_test5.Stop.csv,B5B2E812387736AC63D0B934D70B59939B6F013D86ED850376C5E51FBE151E06
+10/13/2026,6:23:27 PM,FoamSweep,140ms_fullfoot_test5,60112,Test Finished
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60110,Test Started
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:24:19 PM,FoamSweep,140ms_fullfoot_test6,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,60205,Test Status,Test Ended by User
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,60120,Total Time,153.918
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,60121,Total Cycle Count,259.75
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,60122,Step,6,Step 6
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,60123,200ms Loop(2),1
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,62000,SHA-256,140ms_fullfoot_test6.steps.tracking.csv,F0DE7241AC88538FE4C47DCB7D17FCAE0C1F5499C186F4EA8E43D9C2C31609CF
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,62000,SHA-256,140ms_fullfoot_test6.steps.trends.csv,BC5A7DD56B078632FCFE8EABA8223762A57B77F0B0DD90919EEC76383D5E03BE
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,62000,SHA-256,140ms_fullfoot_test6.Stop.csv,510629A2E9428CDD9ED4487450516B88ECE1898DDAA0CBA8890DAA25067FAE53
+10/13/2026,6:26:53 PM,FoamSweep,140ms_fullfoot_test6,60112,Test Finished
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60110,Test Started
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:27:46 PM,FoamSweep,140ms_fullfoot_test7,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,60200,Test Status,Test Ended Normally
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,60120,Total Time,235.263
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,60121,Total Cycle Count,401
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,62000,SHA-256,140ms_fullfoot_test7.steps.tracking.csv,C4C2AE634DF45274E2018C8968E490A7D3F0B8D4A05E0F7B39DAB44E0516076A
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,62000,SHA-256,140ms_fullfoot_test7.steps.trends.csv,0A829BB26C3ED5A5B0D2ED78EDFED6A0661D0A1B2E06477C8C14BE65DCBD3529
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,62000,SHA-256,140ms_fullfoot_test7.Stop.csv,6996ECE964BBC0681E29674AA3E0B4A77C5F408D0BF2A9803E915815A45172F7
+10/13/2026,6:31:41 PM,FoamSweep,140ms_fullfoot_test7,60112,Test Finished
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60110,Test Started
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,6:41:17 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60200,Test Status,Test Ended Normally
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60120,Total Time,1771.007
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60121,Total Cycle Count,3007.5
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep.steps.tracking.csv,00D1CCF208723E8C226405FB3A688C8A74A6C99DF8235E37444C54CB55CA84A0
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep.steps.trends.csv,0943EC7D8F748A42B3EE453BF80D001EC288FB3C8D08B53B593EEFCB72F3285E
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep.Stop.csv,16F35EC7AB5BBED153E6F5B5E512F6CB9198CBBE48B486111617E3EF4239D3BE
+10/13/2026,7:10:49 PM,FoamSweep,10_26_2026_Dev3Elite_160-40-320ms_800-400-3200N_Sweep,60112,Test Finished
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60110,Test Started
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,8:22:33 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,8:22:38 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60205,Test Status,Test Ended by User
+10/13/2026,8:22:38 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60120,Total Time,2.815
+10/13/2026,8:22:38 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60121,Total Cycle Count,0
+10/13/2026,8:22:38 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,8:22:38 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60122,Step,2,Step 2
+10/13/2026,8:22:38 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep1,60112,Test Finished
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60110,Test Started
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 79.812
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,8:22:47 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60200,Test Status,Test Ended Normally
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60120,Total Time,1771.024
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60121,Total Cycle Count,3007.5
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep.steps.tracking.csv,43E6172AC4823EF839AD82DB9FCE66930AF2AAA5BC25DF59141F9D6FC37CBDDD
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep.steps.trends.csv,14C9BC1932935BC81504CEED13FF411E78D0B08382AB69DD11EB2A0317E629F3
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep.Stop.csv,EC72D2C99AD9264CF6F42E826880F4A0860571992C90A36BD06DAC52AC80332A
+10/13/2026,8:52:20 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60112,Test Finished
+10/13/2026,9:01:18 PM,FoamSweep,10_26_2026_FR3_160-40-320ms_800-400-3200N_Sweep,8800383,ElectroPuls (10.0.0.2 : 0):Load - Test method expected to exceed limit set in Console.
+10/13/2026,9:01:42 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,8800383,ElectroPuls (10.0.0.2 : 0):Load - Test method expected to exceed limit set in Console.
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,8800383,ElectroPuls (10.0.0.2 : 0):Load - Test method expected to exceed limit set in Console.
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60110,Test Started
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear) - Load String Stiffness(N/mm) = 81.746
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Position) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Load) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Linear:Digital Position) - Stiffness Based Tuning state = AutoTuned  : Optimized Gain(dB) = 0.0 
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary) - Load String Stiffness(Nm/deg) = 0.0
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Rotation) - Stiffness Based Tuning state = FixedTuning  
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Torque) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,9:01:48 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60300,Tuning Settings (Rotary:Digital Rotation) - Stiffness Based Tuning state = DefaultTuned  
+10/13/2026,9:31:20 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60200,Test Status,Test Ended Normally
+10/13/2026,9:31:20 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60120,Total Time,1771.007
+10/13/2026,9:31:20 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60121,Total Cycle Count,3007.5
+10/13/2026,9:31:20 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60121,Total Cycle Count(ElectroPuls (10.0.0.2 : 1) Waveform),0
+10/13/2026,9:31:21 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep.steps.tracking.csv,6693877ADFACAB1FCE458660A00F393A8EE423CC77E124468DF41BCC75049D2F
+10/13/2026,9:31:21 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep.steps.trends.csv,5973AEA508973DE1F1A334C5DE90321C31487CE2DBB27770EA1177CA706AA354
+10/13/2026,9:31:21 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,62000,SHA-256,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep.Stop.csv,7CAB6659CC569ECDEF51EB789D499E819D926E36112486A9F7441CE04A9AE106
+10/13/2026,9:31:21 PM,FoamSweep,10_13_2026_FR3_160-40-320ms_800-400-3200N_Sweep,60112,Test Finished

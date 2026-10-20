@@ -1,0 +1,9 @@
+{
+  "midsole_mesh": "../source.glb",
+  "grid": {
+    "coarse_spacing_m": 0.005
+  },
+  "column_grid_cache": "column_grid.npz",
+  "geometry_preflight": "preflight.json",
+  "midsole_mirror_axis": 1
+}
