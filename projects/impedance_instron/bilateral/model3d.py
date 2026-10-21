@@ -8,8 +8,9 @@ and per leg a thigh, shank, and shoe-aligned foot. Joints follow
 :mod:`.kinematics3d`: three-axis hips with anatomical zero, and hinge knees and
 ankles whose constant static offsets are in their child frames. Each foot body
 origin is the ankle center with the intrinsic shoe axes, so the shoe foundation
-attaches to it directly. There are no collision shapes; only the two shoes touch
-the ground.
+attaches to it directly. There are no ground shapes; only the two shoes touch the
+ground. The legs carry capsule collision shapes only when asked
+(:func:`.leg_contact.add_capsules`), and those collide right leg against left only.
 
 Segment masses, centers of mass, and sagittal inertias come from the leg profile
 (the same as the planar model). Frontal inertias equal the sagittal ones, and
@@ -24,6 +25,7 @@ import warp as wp
 
 import newton
 
+from . import leg_contact
 from .kinematics3d import ANKLE_AXIS, KNEE_AXIS, SIDES, Calibration, hip_axes
 from .mechanics import HeadArmsTrunk
 
@@ -54,9 +56,13 @@ def leg_inertials(profile: dict) -> list[tuple[float, np.ndarray, np.ndarray]]:
 
 
 def build_runner(
-    calibration: Calibration, profile: dict, subject_mass_kg: float, hat: HeadArmsTrunk | None = None
+    calibration: Calibration,
+    profile: dict,
+    subject_mass_kg: float,
+    hat: HeadArmsTrunk | None = None,
+    capsules: leg_contact.LegContactConfig | None = None,
 ) -> newton.ModelBuilder:
-    """Build one world's articulation for a static calibration."""
+    """Build one world's articulation for a static calibration, with leg ``capsules`` if given."""
     hat = hat or HeadArmsTrunk()
     legs = leg_inertials(profile)
     leg_mass = sum(m for m, _, _ in legs)
@@ -73,6 +79,7 @@ def build_runner(
         label="pelvis",
     )
     articulation = [builder.add_joint_free(child=pelvis, label="root")]
+    links = [pelvis]
     for side in SIDES:
         s = "r" if side == "right" else "l"
         bodies = []
@@ -87,6 +94,7 @@ def build_runner(
                 )
             )
         thigh, shank, foot = bodies
+        links.extend(bodies)
         dof = builder.JointDofConfig
         articulation.append(
             builder.add_joint_d6(
@@ -123,6 +131,8 @@ def build_runner(
             )
         )
     builder.add_articulation(articulation)
+    if capsules is not None:
+        leg_contact.add_capsules(builder, links, calibration, capsules)
     return builder
 
 
@@ -133,9 +143,10 @@ def build_worlds(
     subject_mass_kg: float,
     hat: HeadArmsTrunk | None,
     device,
+    capsules: leg_contact.LegContactConfig | None = None,
 ) -> newton.Model:
     """Finalize a model whose world ``w`` uses the calibration ``world_trials[w]``."""
-    templates = [build_runner(c, profile, subject_mass_kg, hat) for c in calibrations]
+    templates = [build_runner(c, profile, subject_mass_kg, hat, capsules) for c in calibrations]
     scene = newton.ModelBuilder(up_axis=newton.Axis.Z, gravity=(0.0, 0.0, -9.81))
     for trial in world_trials:
         scene.add_world(templates[int(trial)])

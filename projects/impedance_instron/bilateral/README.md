@@ -42,8 +42,8 @@ exceed the fixed segment lengths. In both cases the measured joint angles keep
 the knee from snapping straight, and the ankle error left over (1.6 to 2.3 cm
 at its peak) is recorded per segment.
 
-The F01 shoe artifact is a left shoe. [`shoes.py`](shoes.py) mirrors it for
-the right foot: y becomes -y, the -y and +y neighbor slots swap, and triangle
+The F01 shoe artifact is a right shoe. [`shoes.py`](shoes.py) mirrors it for
+the left foot: y becomes -y, the -y and +y neighbor slots swap, and triangle
 winding is reversed. In the sagittal plane the mirrored shoe's wrench equals
 the original's to float32 rounding. It is a geometric assumption, not a
 measured right shoe.

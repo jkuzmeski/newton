@@ -9,7 +9,7 @@
       "time_column": "Total Time (s)"
     },
     "train": {
-      "csv": "processed/fullfoot_train_cycles_90_98.csv",
+      "csv": "processed\\fullfoot_train_cycles_90_98.csv",
       "cycle_column": "Elapsed Cycles",
       "cycle_time_column": "Cycle Elapsed Time (s)",
       "cycles": [
@@ -38,7 +38,7 @@
       "source_csv": "04-07-2025_FR3_185ms_Fullfoot_100Cycle.steps.tracking.csv"
     },
     "validate": {
-      "csv": "processed/fullfoot_validate_cycles_99_100.csv",
+      "csv": "processed\\fullfoot_validate_cycles_99_100.csv",
       "cycle_column": "Elapsed Cycles",
       "cycle_time_column": "Cycle Elapsed Time (s)",
       "cycles": [
@@ -70,7 +70,7 @@
       "time_column": "Total Time (s)"
     },
     "train": {
-      "csv": "processed/rearfoot_train_cycles_90_98.csv",
+      "csv": "processed\\rearfoot_train_cycles_90_98.csv",
       "cycle_column": "Elapsed Cycles",
       "cycle_time_column": "Cycle Elapsed Time (s)",
       "cycles": [
@@ -99,7 +99,7 @@
       "source_csv": "04-07-2025_FR3_140ms_Rearfoot_100Cycle.steps.tracking.csv"
     },
     "validate": {
-      "csv": "processed/rearfoot_validate_cycles_99_100.csv",
+      "csv": "processed\\rearfoot_validate_cycles_99_100.csv",
       "cycle_column": "Elapsed Cycles",
       "cycle_time_column": "Cycle Elapsed Time (s)",
       "cycles": [

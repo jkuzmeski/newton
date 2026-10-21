@@ -37,7 +37,7 @@ from projects.digital_shoe.friction_adapter import FrictionAdapter
 from projects.digital_shoe.runtime import FoundationConfig, MidsoleFoundation, SurroundConfig
 
 # Whole-file SHA-256 digests from baseline at outputs/friction_review/baseline/hashes.json
-MATERIAL_FILE_SHA256 = "b35478d605e800560c041450b278fd63fbdef8f59561f47057caa90c9811b154"
+MATERIAL_FILE_SHA256 = "1370181ccec4d903b29181f5ad2ff7fae06c8650b69ccf934b9a572c3ad56bed"
 CALIBRATION_FILE_SHA256 = "c449affc0fd5999c0911fd876df677a92cbd105d1bd8a795f11690a7a3485fd8"
 
 # Normal function bodies from publication base 28c4e777 (before friction dispatch).

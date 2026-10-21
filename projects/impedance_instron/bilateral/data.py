@@ -521,8 +521,10 @@ def build_dataset(
     assets = building / "assets"
     assets.mkdir()
     shutil.copyfile(profile, assets / "profile.json")
-    shutil.copyfile(shoe, assets / "digital_shoe_left.json")
-    write_mirrored(shoe, assets / "digital_shoe_right.json")
+    # The measured artifact is a right shoe (arch waist, medial forefoot flare and toe
+    # deviation all lie on its +y side); the left foot gets its mirror image.
+    shutil.copyfile(shoe, assets / "digital_shoe_right.json")
+    write_mirrored(shoe, assets / "digital_shoe_left.json")
     rng = np.random.default_rng(seed)
     members, rejected, summaries = [], [], {}
     for trial_name in trials:

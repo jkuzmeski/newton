@@ -101,6 +101,11 @@ class Actor(nn.Module):
         self.normalizer = RunningNormalizer(len(self.observation_names))
         self.net = _mlp(len(self.observation_names), self.hidden, len(self.action_names))
         last = self.net[-1]
+        if seed_logits is None and len(self.action_names) != len(ACTION_NAMES):
+            # ``seed_action`` is the planar impedance seed; on any other action set there is
+            # nothing measured to start from, and a width mismatch here is a confusing crash
+            # rather than a message.
+            seed_logits = np.zeros(len(self.action_names), dtype=np.float32)
         with torch.no_grad():
             last.weight.mul_(0.01)
             last.bias.copy_(torch.as_tensor(seed_logits if seed_logits is not None else seed_action()))
@@ -138,11 +143,21 @@ class ActorCritic(nn.Module):
         return self.critic(self.critic_normalizer(torch.cat((observation, privileged), dim=-1))).squeeze(-1)
 
 
-def save_policy(actor: Actor, path: str | Path, metadata: dict) -> Path:
-    """Write a frozen deterministic policy: weights plus JSON metadata."""
+def save_policy(actor: Actor, path: str | Path, metadata: dict, log_std: torch.Tensor | None = None) -> Path:
+    """Write a frozen deterministic policy: weights plus JSON metadata.
+
+    ``log_std`` is the exploration noise the training policy converged to. The frozen actor
+    is deterministic and does not use it, but a policy that later seeds a fine-tune does:
+    the grown actor keeps its weights, and noise that restarts at the library default is a
+    wider policy than the one the weights describe, which has to stop falling over again
+    before it can adapt to anything.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"state_dict": actor.state_dict(), "hidden": list(actor.hidden)}, path)
+    saved = {"state_dict": actor.state_dict(), "hidden": list(actor.hidden)}
+    if log_std is not None:
+        saved["log_std"] = log_std.detach().cpu()
+    torch.save(saved, path)
     meta = {
         "schema": SCHEMA,
         "observations": list(actor.observation_names),

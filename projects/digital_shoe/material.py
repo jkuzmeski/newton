@@ -7,7 +7,7 @@ Each constitutive expression is defined once in :func:`_material_functions`.
 Warp compiles that source for the live and differentiable kernels. NumPy runs
 that same source with vectorized elementary operations, retaining float64 host
 fitting without device transfers. The backend changes only ``abs``, ``log``,
-``max`` and ``exp``; it does not supply another material formula.
+``min``, ``max`` and ``exp``; it does not supply another material formula.
 
 Device functions accept scalar material arguments, so Warp Tape can trace both
 material and state gradients. Names ending in ``_numpy`` accept arrays for
@@ -104,6 +104,32 @@ def _material_functions(ops, decorate):
         return hyperfoam_pressure_from_stretch(stretch, g_eq, alpha, g_eq2, alpha2, beta, one_minus_two_poisson)
 
     @decorate
+    def densification_multiplier(remaining: Any, onset: Any, limit: Any, gain: Any):
+        """Return the post-densification multiplier on the equilibrium pressure [-].
+
+        A closed-cell foam keeps carrying load after its cells close, but the
+        Ogden-Hill terms are evaluated at a floored stretch, so beyond that floor
+        the series reports a constant pressure while the column is crushed further.
+        This branch replaces that plateau with the bottoming-out response: exactly
+        one while the column is above ``onset``, rising with zero slope at
+        ``onset``, and saturating at ``1 + gain`` at the packed stretch ``limit``,
+        where the column bears like the solid the foam is made of.
+
+        Args:
+            remaining: Remaining thickness stretch ``1 - strain`` [-]. It is not
+                floored here, because the clipped stretch is exactly what hides
+                the densification the branch describes.
+            onset: Remaining stretch where the cell walls begin to carry [-].
+            limit: Remaining stretch of a fully packed column [-].
+            gain: Multiplier reached at ``limit`` [-]. Zero disables the branch
+                exactly, leaving the floored law unchanged bit for bit.
+        """
+        if gain <= 0.0:
+            return 1.0
+        closing = ops.min(ops.max((onset - remaining) / (onset - limit), 0.0), 1.0)
+        return 1.0 + gain * closing * closing * (3.0 - 2.0 * closing)
+
+    @decorate
     def maxwell_coefficients(dt: Any, tau: Any):
         """Return exact exponential decay and linear-pressure ramp weights [-].
 
@@ -146,6 +172,7 @@ def _material_functions(ops, decorate):
         ogden_hill_term,
         hyperfoam_pressure_from_stretch,
         hyperfoam_pressure,
+        densification_multiplier,
         maxwell_coefficients,
         maxwell_increment_step,
         maxwell_step,
@@ -156,6 +183,7 @@ def _material_functions(ops, decorate):
     ogden_hill_term,
     hyperfoam_pressure_from_stretch,
     hyperfoam_pressure,
+    densification_multiplier,
     maxwell_coefficients,
     maxwell_increment_step,
     maxwell_step,
@@ -165,10 +193,11 @@ def _material_functions(ops, decorate):
     ogden_hill_term_numpy,
     hyperfoam_pressure_from_stretch_numpy,
     hyperfoam_pressure_numpy,
+    densification_multiplier_numpy,
     maxwell_coefficients_numpy,
     maxwell_increment_step_numpy,
     maxwell_step_numpy,
 ) = _material_functions(
-    SimpleNamespace(abs=np.abs, log=np.log, max=np.maximum, exp=np.exp),
+    SimpleNamespace(abs=np.abs, log=np.log, min=np.minimum, max=np.maximum, exp=np.exp),
     lambda function: function,
 )

@@ -42,7 +42,7 @@ from scipy.spatial import ConvexHull
 import newton
 
 from ..cartesian.shoe import Shoe
-from . import data3d, model3d
+from . import actuation, data3d, leg_contact, model3d, shoe_randomization
 from .env import _fused_shoe, response_fraction
 from .kinematics3d import JOINT_NAMES
 from .mechanics import SIDES, HeadArmsTrunk
@@ -86,6 +86,8 @@ OBSERVATION_NAMES = (
 )
 ACTION_NAMES = tuple(f"{output}_{name}" for output in ("equilibrium", "stiffness", "damping") for name in JOINT_NAMES)
 REWARD_NAMES = ("pose", "velocity", "position", "force", "effort", "smoothness")
+EXTRA_REWARD_NAMES = ("cadence", "crossing")
+"""Terms outside the six weighted ones, each with its own :class:`Env3DConfig` weight."""
 
 
 @dataclass(frozen=True)
@@ -138,10 +140,64 @@ class Env3DConfig:
     minimum_hip_height_m: float = 0.3
     compression_limit: float = 0.99
     solver: str = "featherstone"
-    """Newton solver of the articulation: ``"featherstone"`` or ``"mujoco"`` (MuJoCo Warp with
-    its own contacts disabled; the shoes apply every ground force)."""
+    """Newton solver of the articulation: ``"featherstone"`` or ``"mujoco"`` (MuJoCo Warp; the
+    shoes apply every ground force, and its contacts are on only for :attr:`leg_contact`
+    ``"mujoco"``)."""
     mass_matrix_interval: int = 2
     """Featherstone mass-matrix refresh interval [substeps]; the matrix changes little over 0.25 ms."""
+    leg_contact: str = "off"
+    """Inter-leg collision profile: ``"off"``, or a profile of :data:`.leg_contact.PROFILES`.
+    Capsule contact between the two legs is the only body-to-body force in the model; the
+    ground still comes from the shoes alone, and ``"probe"`` records their penetration
+    without applying any force. ``"mujoco"`` (needs :attr:`solver` ``"mujoco"``) makes the
+    capsules MuJoCo collision shapes and turns MuJoCo's contacts on for them alone."""
+    leg_contact_penalty: float = 0.0
+    """Reward weight on inter-leg penetration; 0 leaves the reward untouched. The tracking terms
+    are blind to a swing leg crossing inside the stance leg, so this is what makes the defect cost
+    something while the contact law is too soft to stop it mechanically."""
+    leg_contact_penalty_depth_m: float = 0.03
+    """Penetration at which the penalty saturates [m]; deeper crossings cost the same as this."""
+    shoe_dr: str = "off"
+    """Per-world shoe randomization: a preset of :data:`.shoe_randomization.PRESETS`, or
+    ``"off"`` for the measured shoe in every world. Theta covers the foam, the Coulomb
+    coefficient, the unfitted normal damping and the stack height; it is drawn at reset
+    and resampled mid-episode, which is what turns a novel shoe into a testable input
+    instead of a retraining event."""
+    shoe_swap_probability: float = 0.01
+    """Probability per control step that a running world gets a new shoe, when
+    :attr:`shoe_dr` is on. RMA resamples its environment parameters at 0.01 per step.
+    Zero keeps one shoe per world per episode, which is what a paired-world evaluation
+    needs."""
+    shoe_dr_seed: int = 0
+    """Seed of the shoe draw, separate from the environment seed so the same worlds can
+    be re-shod for evaluation without moving the initial states."""
+    contact_observation: bool = False
+    """Append the per-foot foam channels of
+    :data:`.shoe_randomization.CONTACT_OBSERVATION_NAMES` to the actor inputs. They are
+    the only channels that carry foam information, so an adaptation module cannot infer
+    a shoe without them."""
+    theta_observation: bool = False
+    """Append the normalized shoe parameters to the actor inputs: the privileged teacher
+    of the design, which is later distilled into a history-conditioned student."""
+    pose_group_weights: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    """Relative weight of the hip, knee, and ankle groups in the pose term."""
+    pose_dof_weights: tuple[float, ...] = (1.0,) * 10
+    """Per-coordinate multiplier on the pose term in :data:`JOINT_NAMES` order, applied on top of
+    ``pose_group_weights``. One scale over ten coordinates makes a coordinate that is small in radians
+    nearly free: the hip adduction offset measured 4.3 deg and was worth 1.3 % of the reward while the
+    knees, whose error is large, carried half the pose loss."""
+    stance_pose_relief: float = 0.0
+    """Fraction by which the knee and ankle pose weight relaxes while that foot is in
+    stance. A shoe changes how a stance leg has to move, so holding stance angles as
+    tightly as pelvis height pins the gait to the trained shoe."""
+    cadence_weight: float = 0.0
+    """Weight of the cadence-band term. It replaces the measured force trace as the term
+    that keeps the gait a run: it survives a shoe change, the trace does not."""
+    cadence_band_spm: float = 6.0
+    """Half-width of the cadence band [steps/min] inside which the cadence term is zero."""
+    actuation: str | None = None
+    """Smooth substep actuation of the impedance setpoints: a profile of
+    :data:`.actuation.PROFILES` or a JSON object; ``None`` keeps the zero-order hold."""
     episode_s: float = 10.0
     """Episode length [s]; the reference continues across segments, see :class:`ReferenceLibrary3D`."""
     termination_height_m: float = 0.15
@@ -568,6 +624,7 @@ class ReferenceLibrary3D:
         self.grf = torch.tensor(np.concatenate(grf), dtype=torch.float32, device=device)
         self.starts = torch.tensor(starts, dtype=torch.long, device=device)
         self.lengths = torch.tensor(lengths, dtype=torch.long, device=device)
+        self.control_dt_s = float(control_dt_s)
         self.trial_of = torch.tensor(trial_of, dtype=torch.long, device=device)
         self.successor = torch.tensor(
             _successors(self.members, q, qd, grf, control_dt_s, self.body_weight_n), dtype=torch.long, device=device
@@ -589,6 +646,28 @@ class ReferenceLibrary3D:
         """Resolve a shared asset relative to the dataset; older manifests stored absolute local paths."""
         path = Path(self.manifest["shared_assets"][name]["file"])
         return path if path.is_absolute() else self.root / path
+
+
+def _segment_cadence(library: ReferenceLibrary3D) -> np.ndarray:
+    """Measured steps per minute of each reference segment, from its own foot forces.
+
+    The cadence term is a band around what this segment actually did, not around the
+    task speed divided by an assumed stride, so a policy is never asked to run at a
+    cadence the subject did not use in that trial.
+    """
+    grf = library.grf.detach().cpu().numpy()
+    starts, lengths = library.starts.cpu().numpy(), library.lengths.cpu().numpy()
+    rate = library.control_dt_s
+    cadence = np.full(len(lengths), 180.0, dtype=np.float32)
+    for segment in range(len(lengths)):
+        start, length = int(starts[segment]), int(lengths[segment])
+        loaded = (grf[start : start + length, 2] > shoe_randomization.CONTACT_FORCE_N) | (
+            grf[start : start + length, 5] > shoe_randomization.CONTACT_FORCE_N
+        )
+        touchdowns = int(np.count_nonzero(np.diff(loaded.astype(np.int8)) == 1))
+        if length > 1 and touchdowns > 1:
+            cadence[segment] = 60.0 * touchdowns / (length * rate)
+    return cadence
 
 
 def _mount_shifts(library: ReferenceLibrary3D, world_trials: np.ndarray) -> np.ndarray:
@@ -644,7 +723,26 @@ class BilateralEnv3D:
             world_trials = np.arange(w) % len(library.trials)
         self.world_trials = torch.tensor(world_trials, dtype=torch.long, device=self.torch_device)
         subject = float(library.manifest["subject_mass_kg"])
-        self.model = model3d.build_worlds(library.calibrations, world_trials, library.profile, subject, library.hat, d)
+        mount, pitch = library.manifest["shoe"]["mount_m"], library.manifest["shoe"]["pitch_rad"]
+        shoes = {side: Shoe(library.asset(f"digital_shoe_{side}.json"), mount, pitch) for side in SIDES}
+        capsules = None
+        if cfg.leg_contact != "off":
+            bed = shoes["left"].shoe.column_bed
+            capsules = leg_contact.shoe_config(
+                bed.anchor_bottom_m, bed.rest_length_m, mount, leg_contact.profile(cfg.leg_contact)
+            )
+        mujoco_legs = capsules is not None and capsules.engine == "mujoco"
+        if mujoco_legs and cfg.solver != "mujoco":
+            raise ValueError(f"leg_contact {cfg.leg_contact!r} needs solver 'mujoco', not {cfg.solver!r}")
+        self.model = model3d.build_worlds(
+            library.calibrations,
+            world_trials,
+            library.profile,
+            subject,
+            library.hat,
+            d,
+            capsules if mujoco_legs else None,
+        )
         if cfg.solver == "featherstone":
             self.solver = newton.solvers.SolverFeatherstone(
                 self.model, angular_damping=0.0, update_mass_matrix_interval=cfg.mass_matrix_interval
@@ -652,19 +750,18 @@ class BilateralEnv3D:
         elif cfg.solver == "mujoco":
             import mujoco  # noqa: PLC0415
 
-            # The model has no MuJoCo constraints, so njmax=0 takes the solver's exact
-            # qacc = qacc_smooth path and drops the constraint solve and its host readbacks.
-            # That path never writes efc.Ma, which Euler's implicit joint damping reads; the
-            # joints have no springs or damping, so disabling those terms is exact.
-            self.solver = newton.solvers.SolverMuJoCo(
-                self.model,
-                disable_contacts=True,
-                integrator="euler",
-                jacobian="dense",
-                njmax=0,
-                iterations=1,
-                ls_iterations=1,
-            )
+            if mujoco_legs:
+                # Nine right-left capsule pairs, each at most two points (parallel axes), and four
+                # pyramid rows per point with friction. The contact solve needs real iterations;
+                # MuJoCo's Newton solver stops early at its tolerance.
+                limits = {"disable_contacts": False, "nconmax": 18, "njmax": 72, "iterations": 20, "ls_iterations": 50}
+            else:
+                # The model has no MuJoCo constraints, so njmax=0 takes the solver's exact
+                # qacc = qacc_smooth path and drops the constraint solve and its host readbacks.
+                # That path never writes efc.Ma, which Euler's implicit joint damping reads; the
+                # joints have no springs or damping, so disabling those terms is exact.
+                limits = {"disable_contacts": True, "njmax": 0, "iterations": 1, "ls_iterations": 1}
+            self.solver = newton.solvers.SolverMuJoCo(self.model, integrator="euler", jacobian="dense", **limits)
             disabled = mujoco.mjtDisableBit
             self.solver.mjw_model.opt.disableflags |= int(
                 disabled.mjDSBL_SPRING | disabled.mjDSBL_DAMPER | disabled.mjDSBL_EULERDAMP
@@ -673,8 +770,6 @@ class BilateralEnv3D:
             raise ValueError(f"unknown solver {cfg.solver!r}; expected 'featherstone' or 'mujoco'")
         self.states = [self.model.state(), self.model.state()]
         self.control = self.model.control()
-        mount, pitch = library.manifest["shoe"]["mount_m"], library.manifest["shoe"]["pitch_rad"]
-        shoes = {side: Shoe(library.asset(f"digital_shoe_{side}.json"), mount, pitch) for side in SIDES}
         self.shoe_metadata = {side: shoes[side].metadata for side in SIDES}
         self.shoes = {side: _fused_shoe(shoes[side], w, cfg.dt_s, d, cfg.compression_limit) for side in SIDES}
         for shoe in self.shoes.values():
@@ -685,6 +780,18 @@ class BilateralEnv3D:
                 raise ValueError("the flight screen's hull candidates need flat ground under every column")
             hull = np.unique(ConvexHull(anchors).vertices)
             shoe.lean.flight_columns = wp.array(hull.astype(np.int32), dtype=int, device=d)
+        self.leg_contact = None
+        if capsules is not None:
+            # With the MuJoCo engine the profile has zero stiffness, so this only records penetration.
+            self.leg_contact = leg_contact.LegContact(
+                capsules, library.calibrations, world_trials, self.model.body_mass.numpy(), d
+            )
+            # A torch view of the per-world worst penetration, taken once: the reward reads it
+            # inside the captured control step, and a fresh wp.to_torch there would build a new
+            # wrapper on every step of the capture.
+            self.leg_contact_depth = wp.to_torch(self.leg_contact.depth)
+        elif cfg.leg_contact_penalty:
+            raise ValueError("leg_contact_penalty needs a leg_contact profile to measure")
         b = self.bounds
         self.body_weight_n = float(self.model.body_mass.numpy()[:7].sum()) * 9.81
         # Constants of the per-step torch maths, built once: a tensor from a Python list is
@@ -720,6 +827,49 @@ class BilateralEnv3D:
         data.shift_r = wp.array(self.mount_shift_m[:, 0], dtype=wp.vec3, device=d)
         data.shift_l = wp.array(self.mount_shift_m[:, 1], dtype=wp.vec3, device=d)
         self.data = data
+        # Per-world shoes. The randomizer writes the two foundations and the per-world
+        # mount shift in place, so it must exist before the first substep and before the
+        # observation buffers are sized.
+        self.shoe_randomizer = None
+        if cfg.shoe_dr != "off":
+            if cfg.shoe_dr not in shoe_randomization.PRESETS:
+                raise ValueError(
+                    f"unknown shoe_dr {cfg.shoe_dr!r}; expected one of {sorted(shoe_randomization.PRESETS)}"
+                )
+            self.shoe_randomizer = shoe_randomization.ShoeRandomizer(
+                self,
+                shoe_randomization.PRESETS[cfg.shoe_dr],
+                seed=cfg.shoe_dr_seed,
+                swap_probability=cfg.shoe_swap_probability,
+            )
+        self.observation_names = tuple(OBSERVATION_NAMES)
+        if cfg.contact_observation:
+            self.observation_names += shoe_randomization.CONTACT_OBSERVATION_NAMES
+        if cfg.theta_observation:
+            self.observation_names += shoe_randomization.THETA_OBSERVATION_NAMES
+        self.observation_size = len(self.observation_names)
+        self.contact_force_n = shoe_randomization.CONTACT_FORCE_N
+        self.stance_clock_steps = shoe_randomization.STANCE_CLOCK_STEPS
+        # Contact-interface state the actor can see and the adaptation module can read:
+        # a touchdown flag and a stance clock per foot, and one step-frequency estimate.
+        self.stance = torch.zeros(w, 2, device=self.torch_device)
+        self.stance_previous = torch.zeros(w, 2, device=self.torch_device)
+        self.stance_clock = torch.zeros(w, 2, device=self.torch_device)
+        self.cadence_spm = torch.zeros(w, device=self.torch_device)
+        self.touch_step = torch.zeros(w, dtype=torch.long, device=self.torch_device)
+        self.cadence_reference = torch.tensor(_segment_cadence(library), dtype=torch.float32, device=self.torch_device)
+        hips, knees, ankles = cfg.pose_group_weights
+        dof = torch.tensor(cfg.pose_dof_weights, device=self.torch_device, dtype=torch.float32)
+        if dof.numel() != 10:
+            raise ValueError(f"pose_dof_weights has {dof.numel()} entries, expected 10 ({JOINT_NAMES})")
+        self.pose_group = dof.clone()
+        self.pose_group[torch.tensor([0, 1, 2, 5, 6, 7], device=self.torch_device)] *= hips
+        self.pose_group[torch.tensor([3, 8], device=self.torch_device)] *= knees
+        self.pose_group[torch.tensor([4, 9], device=self.torch_device)] *= ankles
+        self.pose_stance_joints = torch.tensor(
+            [0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0], device=self.torch_device
+        )
+        self.joint_side = torch.tensor((0,) * 5 + (1,) * 5, device=self.torch_device)
         names = [
             "status",
             "torque",
@@ -766,6 +916,7 @@ class BilateralEnv3D:
         self.initial_table = table
         self.initial_lengths = torch.tensor(widths, dtype=torch.long, device=dev)[self.world_trials]
         self._graph = None
+        self.control_steps = 0
         # A captured control step replays into the addresses it recorded, so the action it acts
         # on, the reset draw, and everything the caller reads back are fixed buffers here.
         self._action = torch.zeros(w, self.action_size, device=dev)
@@ -775,13 +926,19 @@ class BilateralEnv3D:
         self._reward = torch.zeros(w, device=dev)
         self._terminated = torch.zeros(w, dtype=torch.bool, device=dev)
         self._truncated = torch.zeros(w, dtype=torch.bool, device=dev)
-        self._terms = {name: torch.zeros((), device=dev) for name in REWARD_NAMES}
+        # The cadence band and the crossing penalty are reported next to the six weighted
+        # terms; each carries its own weight in Env3DConfig instead of a slot in
+        # ``reward_weights``, and each is absent from the log when its weight is zero.
+        self._terms = {name: torch.zeros((), device=dev) for name in (*REWARD_NAMES, *EXTRA_REWARD_NAMES)}
         self._info = {
             "terms": self._terms,
             "failed": torch.zeros((), device=dev),
             "final_observation": torch.zeros(w, self.observation_size, device=dev),
             "final_privileged": torch.zeros(w, self.privileged_size, device=dev),
         }
+        # The smoothed actuator, if configured, takes over the impedance write and the
+        # per-substep blend. Attached last: it reads the bounds and the buffers above.
+        self.actuator = actuation.attach(self)
         self._pre_graph = self._step_graph = self._advance_graph = None
 
     # ----- views -----
@@ -800,6 +957,10 @@ class BilateralEnv3D:
     # ----- integration -----
 
     def _substep(self, state_in, state_out):
+        if self.actuator is not None:
+            # A Warp kernel, not torch: this whole sequence is recorded in the
+            # environment's substep graph, which does not capture a torch launch.
+            self.actuator.begin_substep()
         d, data, p = self.device, self.data, self.params
         right, left = self.shoes["right"], self.shoes["left"]
         wp.launch(
@@ -843,6 +1004,8 @@ class BilateralEnv3D:
             ],
             device=d,
         )
+        if self.leg_contact is not None:
+            self.leg_contact.apply(data.status, state_in.body_q, state_in.body_qd, self.model.body_com, state_in.body_f)
         self.solver.step(state_in, state_out, self.control, None, self.config.dt_s)
         wp.launch(_screen, dim=self.worlds, inputs=[p, data, state_out.joint_q, state_out.joint_qd], device=d)
 
@@ -855,6 +1018,8 @@ class BilateralEnv3D:
         for name in ("grf", "effort", "power_positive", "power_negative"):
             getattr(self.t, name).zero_()
         self.t.substeps.zero_()
+        if self.leg_contact is not None:
+            self.leg_contact.clear()
 
     def integrate(self):
         """Advance every running world by one control step (an even number of substeps)."""
@@ -911,6 +1076,46 @@ class BilateralEnv3D:
                 pacer,
                 heading[:, 1, 0:1],
                 heading[:, 0, 0:1],
+                self._contact_channels(),
+                self._theta_channels(),
+            ),
+            dim=1,
+        )
+
+    def _theta_channels(self) -> torch.Tensor:
+        """The privileged shoe parameters, or an empty block when the actor is not privileged."""
+        if not self.config.theta_observation or self.shoe_randomizer is None:
+            return torch.zeros(self.worlds, 0, device=self.torch_device)
+        return self.shoe_randomizer.privileged()
+
+    def _contact_channels(self) -> torch.Tensor:
+        """The per-foot foam channels of :data:`.shoe_randomization.CONTACT_OBSERVATION_NAMES`.
+
+        Every channel is a contact-interface measurement the simulator already makes: the
+        screen's peak driven-column travel, the interval-mean wrench resolved into normal
+        and tangential parts, the ratio the friction cone bounds, and the two clocks. A
+        policy cannot infer a novel shoe from body state alone - a soft foam and a soft
+        actuator look the same to the pelvis - so these are the channels the adaptation
+        module is built on. A world that has just restarted reports nothing: its
+        accumulators were cleared with its history.
+        """
+        if not self.config.contact_observation:
+            return torch.zeros(self.worlds, 0, device=self.torch_device)
+        force = self._interval_force()
+        normal = torch.stack((force[:, 2], force[:, 5]), dim=1).clamp(min=0.0)
+        tangential = torch.stack(
+            (torch.linalg.norm(force[:, 0:2], dim=1), torch.linalg.norm(force[:, 3:5], dim=1)), dim=1
+        )
+        cone = tangential / (normal + 0.05 * self.body_weight_n)
+        travel = torch.stack((wp.to_torch(self.data.fraction_r), wp.to_torch(self.data.fraction_l)), dim=1).float()
+        return torch.cat(
+            (
+                travel,
+                normal / self.body_weight_n,
+                tangential / self.body_weight_n,
+                cone.clamp(max=2.0),
+                self.stance,
+                self.stance_clock / float(self.stance_clock_steps),
             ),
             dim=1,
         )
@@ -963,7 +1168,19 @@ class BilateralEnv3D:
         q_ref, qd_ref, grf_ref = self._reference()
         q, qd = self.joint_q, self.joint_qd
         orientation = self._orientation_error(q[:, 3:7], q_ref[:, 3:7]).norm(dim=1)
-        pose = (torch.sum((q[:, 7:] - q_ref[:, 7:]) ** 2, dim=1) + orientation**2) / 11 / cfg.pose_scale_rad**2
+        # Tracking is asymmetric on purpose (design document section 7.3): pelvis height,
+        # belt speed and cadence stay strict, because those are what a run has to keep,
+        # while a stance knee and ankle are asked to hold the measured angle only while
+        # that foot is swinging. Under a novel shoe the stance solution changes, and a
+        # symmetric pose term punishes exactly the adaptation the world model predicts.
+        weight = self.pose_group[None, :] * (
+            1.0 - cfg.stance_pose_relief * self.pose_stance_joints[None, :] * self.stance[:, self.joint_side]
+        )
+        pose = (
+            (torch.sum(weight * (q[:, 7:] - q_ref[:, 7:]) ** 2, dim=1) + orientation**2)
+            / (1.0 + weight.sum(dim=1))
+            / cfg.pose_scale_rad**2
+        )
         velocity = torch.mean((qd[:, 6:] - qd_ref[:, 7:]) ** 2, dim=1) / cfg.velocity_scale_rad_s**2
         position = ((q[:, 2] - q_ref[:, 2]) / cfg.position_scale_m) ** 2 + torch.sum(
             (q[:, :2] - self.pacer()) ** 2, dim=1
@@ -975,7 +1192,23 @@ class BilateralEnv3D:
         smoothness = torch.mean(self.jump**2, dim=1) / cfg.smoothness_scale**2
         terms = torch.exp(-torch.stack((pose, velocity, position, force, effort, smoothness)))
         weights = self._reward_weights
-        return (weights * terms).sum(0), {name: terms[i].mean() for i, name in enumerate(REWARD_NAMES)}
+        reward = (weights * terms).sum(0)
+        logged = {name: terms[i].mean() for i, name in enumerate(REWARD_NAMES)}
+        if cfg.cadence_weight:
+            # A band, not a target: inside ``cadence_band_spm`` of the measured cadence of
+            # this segment the term is flat, so the runner is free to reorganise its stride
+            # as the shoe asks, and only a gait that stops looking like running is punished.
+            drift = (self.cadence_spm - self.cadence_reference[self.segment]).abs() - cfg.cadence_band_spm
+            cadence = torch.exp(-((drift.clamp(min=0.0) / cfg.cadence_band_spm) ** 2))
+            reward = reward + cfg.cadence_weight * cadence
+            logged["cadence"] = cadence.mean()
+        if cfg.leg_contact_penalty:
+            # Worst penetration of the control step, saturated, so the gradient says "stop
+            # crossing" rather than "run slower and cross less deeply".
+            crossing = (self.leg_contact_depth / cfg.leg_contact_penalty_depth_m).clamp(max=1.0)
+            reward = reward - cfg.leg_contact_penalty * crossing
+            logged["crossing"] = crossing.mean()
+        return reward, logged
 
     def _departed(self) -> torch.Tensor:
         cfg = self.config
@@ -1022,6 +1255,26 @@ class BilateralEnv3D:
         for shoe in self.shoes.values():
             for view in shoe.history:
                 view.masked_fill_(mask.reshape((self.worlds,) + (1,) * (view.dim() - 1)), 0.0)
+        # A restarted world has no contact history, so neither should the channels and the
+        # interval accumulators that feed them and the critic: without this the first
+        # observation and the first ``privileged`` of a new episode still carry the force
+        # sums of the step that ended the last one.
+        for view in (self.stance, self.stance_previous, self.stance_clock):
+            view.masked_fill_(where, 0.0)
+        self.cadence_spm.copy_(torch.where(mask, self.cadence_reference[self.segment], self.cadence_spm))
+        self.touch_step.copy_(torch.where(mask, self.steps, self.touch_step))
+        if self.actuator is not None:
+            # Held actuator state belongs to the episode that ended: with a filter time
+            # constant or a rate bound, a reset world would otherwise start seconds away
+            # from its own command.
+            self.actuator.snap(mask)
+        self.t.grf.mul_(~mask[:, None, None])
+        self.t.effort.mul_(~mask[:, None])
+        for name in ("power_positive", "power_negative"):
+            getattr(self.t, name).mul_(~mask[:, None])
+        self.t.substeps.mul_(~mask)
+        for side in SIDES:
+            wp.to_torch(getattr(self.data, f"fraction_{side[0]}")).masked_fill_(mask, 0.0)
         # Both states hold the same coordinates after the write, so forward kinematics
         # runs once and the body arrays are copied.
         newton.eval_fk(self.model, self.states[0].joint_q, self.states[0].joint_qd, self.states[0])
@@ -1104,7 +1357,10 @@ class BilateralEnv3D:
     def _pre(self):
         """The torch work between an action and the substeps: the impedance command and the shift."""
         before = self._command()
-        self.set_impedance(self._action)
+        if self.actuator is None:
+            self.set_impedance(self._action)
+        else:
+            self.actuator.apply(self._action)
         jump = (self._command() - before) / self.jump_unit
         self.jump.copy_(torch.where((self.steps > 0)[:, None], jump, torch.zeros_like(jump)))
         self.recenter()
@@ -1117,6 +1373,47 @@ class BilateralEnv3D:
         following = self.library.successor[self.segment]
         self.segment.copy_(torch.where(ended, following[:, 0], self.segment))
         self.index.copy_(torch.where(ended, following[:, 1], self.index))
+        self._sense_contact()
+
+    def _sense_contact(self):
+        """Touchdown flags, a stance clock per foot, and one step-frequency estimate.
+
+        Read off the interval-mean foot force of the control step just integrated, with
+        the same 50 N threshold the gait scorer and the measured-contact penalty use, so
+        the policy, the reward, and the report agree on what stance means. Cadence is the
+        quantity the design keeps strict while the joint angles relax, and it is the one
+        gait variable a shoe change moves only through the runner's own response.
+        """
+        force = self._interval_force()
+        normal = torch.stack((force[:, 2], force[:, 5]), dim=1)
+        stance = (normal > self.contact_force_n).float()
+        touched = stance * (1.0 - self.stance_previous)
+        touched_any = touched.sum(dim=1) > 0
+        self.stance_clock.copy_(
+            torch.where(
+                touched > 0.5,
+                torch.ones_like(self.stance_clock),
+                self.stance_clock + 1.0,
+            ).clamp(max=float(self.stance_clock_steps))
+        )
+        self.stance.copy_(stance)
+        self.stance_previous.copy_(stance)
+        interval = (self.steps - self.touch_step).clamp(min=1).float() * self.config.control_dt_s
+        self.cadence_spm.copy_(
+            torch.where(touched_any, 0.75 * self.cadence_spm + 0.25 * (60.0 / interval), self.cadence_spm)
+        )
+        self.touch_step.copy_(torch.where(touched_any, self.steps, self.touch_step))
+
+    def _swap_shoes(self):
+        """Give the worlds that resample this control step their new shoe.
+
+        Runs outside the recorded graphs, and counts control steps on the host: reading
+        :attr:`steps` back would put a synchronisation in the middle of the loop that
+        exists to avoid them.
+        """
+        self.control_steps += 1
+        if self.shoe_randomizer is not None:
+            self.shoe_randomizer.advance(self.control_steps)
 
     def advance(self, action: torch.Tensor):
         """Apply one action for one control step and advance the reference and the pacer.
@@ -1130,10 +1427,11 @@ class BilateralEnv3D:
             self._pre()
             self.integrate()
             self._post()
-            return
-        self._pre_graph.replay()
-        self.integrate()
-        self._advance_graph.replay()
+        else:
+            self._pre_graph.replay()
+            self.integrate()
+            self._advance_graph.replay()
+        self._swap_shoes()
 
     def _step_tail(self) -> tuple:
         """The work after the substeps that :meth:`step` adds: reward, end of episode, next reset."""
@@ -1170,6 +1468,7 @@ class BilateralEnv3D:
             self._pre_graph.replay()
             self.integrate()
             self._step_graph.replay()
+        self._swap_shoes()
         return (self._observation, self._privileged, self._reward, self._terminated, self._truncated, self._info)
 
     def capture(self, warmup: int = 3):
@@ -1217,4 +1516,8 @@ class BilateralEnv3D:
             "worlds": self.worlds,
             "trials": self.library.trials,
             "solver": type(self.solver).__name__,
+            "leg_contact": "off" if self.leg_contact is None else self.leg_contact.describe(),
+            "actuation": None if self.actuator is None else self.actuator.describe(),
+            "shoe_randomization": None if self.shoe_randomizer is None else self.shoe_randomizer.describe(),
+            "shoe_swaps": None if self.shoe_randomizer is None else self.shoe_randomizer.swaps,
         }

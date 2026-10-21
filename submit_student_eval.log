@@ -1,0 +1,6 @@
+LLfree: 188 free H100 GPUs on e9-h100nvl
+pushed code 883155272dbd (agents/expand-model-to-3d-and-nn@e2cff8b1053e+dev-883155272dbd) -> /home/gridsan/JO31399/newton_grid/code/883155272dbd
+submitted job 16701901: shoe_eval_wm indices [4, 5, 6] code 883155272dbd (agents/expand-model-to-3d-and-nn@e2cff8b1053e+dev-883155272dbd)
+experiment report job 16701904 runs after 16701901 ends
+logs: Z:\newton_grid\logs ; outputs: Z:\newton_grid\runs\shoe_eval_wm\16701901
+graphs: <run>/report/*.png per run; Z:\newton_grid\runs\shoe_eval_wm\16701901\report\report.md

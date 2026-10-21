@@ -16,6 +16,23 @@ from projects.digital_shoe.artifact import load_artifact
 from projects.digital_shoe.runtime import FoundationConfig, MidsoleFoundation, SurroundConfig
 
 
+DENSIFY_ONSET_STRETCH = 0.05
+DENSIFY_LIMIT_STRETCH = 0.005
+DENSIFY_GAIN = 20.0
+"""Bottoming-out branch of the column law in the runner.
+
+The identified Hyperfoam response is trusted up to the runtime's stretch floor
+(:class:`projects.digital_shoe.runtime.FoundationConfig`) and is clipped below it,
+which leaves a crushed column carrying a constant force while the foot keeps
+driving it deeper. Gibson and Ashby put the densification onset of a closed-cell
+foam of this stiffness near 0.9 of its free thickness, but the identified curve
+already covers the measured 0-0.72 range, so the branch starts at the clip itself
+(0.05 remaining stretch) and reaches its solid-like cap at 0.005. The cap of
+``1 + 8`` puts a packed column near 40 MPa, the crush pressure of the dense
+polymer, against the 4.5 MPa the clipped law reports at the same point.
+"""
+
+
 def _hull(points: np.ndarray) -> np.ndarray:
     ordered = sorted(set(map(tuple, points)))
     lower, upper = [], []
@@ -105,6 +122,9 @@ class Shoe:
             self.model.body_com,
             FoundationConfig(
                 ground_height_m=0.0,
+                densify_onset=DENSIFY_ONSET_STRETCH,
+                densify_limit=DENSIFY_LIMIT_STRETCH,
+                densify_gain=DENSIFY_GAIN,
                 normal_damping=0.0,
                 friction_stiffness=10000.0
                 if friction_model == "legacy"

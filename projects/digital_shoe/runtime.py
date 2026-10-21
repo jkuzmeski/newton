@@ -23,6 +23,7 @@ from .contact import (
 from .contact import cone_viscous_scale as _cone_viscous_scale  # noqa: F401  # compatibility export
 from .material import (
     HYPERFOAM_ALPHA_FLOOR,
+    densification_multiplier,
     maxwell_coefficients,
     maxwell_coefficients_numpy,
     maxwell_step,
@@ -107,7 +108,10 @@ class FoundationParams:
     tau_s: wp.float32  # Maxwell relaxation time [s]
     overstress: wp.float32  # (1 - equilibrium_fraction) / equilibrium_fraction
     inv_h2: wp.float32  # 1 / spacing^2 [1/m^2]
-    stretch_floor: wp.float32  # minimum stretch (foam densification limit)
+    stretch_floor: wp.float32  # stretch below which the Hyperfoam terms are clipped
+    densify_onset: wp.float32  # remaining stretch where the densification branch starts
+    densify_limit: wp.float32  # remaining stretch of a fully packed, solid-like column
+    densify_gain: wp.float32  # multiplier reached at densify_limit; zero disables the branch
     normal_damping: wp.float32  # per-column Kelvin-Voigt normal damping [N.s/m]
     friction_kt: wp.float32  # uniform bristle tangential stiffness [N/m per column]
     friction_kv: wp.float32  # uniform bristle tangential damping [N.s/m per column]
@@ -145,9 +149,19 @@ def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
     exactly one on CPU and CUDA, and this forward entry point skips it bitwise;
     the stretch floor is what keeps it away from ``pow(0, 0)``. Differentiable
     callers use :func:`hyperfoam_pressure`, whose ``beta`` gradient is kept.
+
+    The clip at :attr:`FoundationParams.stretch_floor` is a numerical bound, not a
+    material response: it holds the pressure still while the column keeps crushing.
+    :func:`densification_multiplier` supplies the missing bottoming-out branch on
+    the *unclipped* remaining stretch, so it is exactly one throughout the range
+    the identified law is trusted and takes over below
+    :attr:`FoundationParams.densify_onset`.
     """
     stretch = wp.max(1.0 - strain, p.stretch_floor)
-    return _hyperfoam_series_term(stretch, p.g_eq, p.alpha, p) + _hyperfoam_series_term(stretch, p.g_eq2, p.alpha2, p)
+    pressure = _hyperfoam_series_term(stretch, p.g_eq, p.alpha, p) + _hyperfoam_series_term(
+        stretch, p.g_eq2, p.alpha2, p
+    )
+    return pressure * densification_multiplier(1.0 - strain, p.densify_onset, p.densify_limit, p.densify_gain)
 
 
 def set_material_block(params: FoundationParams, material) -> None:
@@ -1450,7 +1464,26 @@ class FoundationConfig:
     The Instron replay leaves ``normal_damping``, ``friction_stiffness`` and
     ``friction`` at zero and keeps ``stretch_floor`` below the calibration's peak
     strain so the collected loop reproduces the fitted force-displacement response
-    exactly. The default friction model is an area-scaled elastic Coulomb bristle.
+    exactly.
+
+    ``densify_onset``, ``densify_limit`` and ``densify_gain`` add the branch the
+    Ogden-Hill series does not have: the steep rise of a crushed column once its
+    cell walls carry load (Gibson and Ashby's densification regime). The branch
+    reads the *unclipped* remaining stretch, so it is exactly one wherever the
+    identified law is trusted, is continuous with zero slope at ``densify_onset``,
+    and saturates at ``1 + densify_gain`` at ``densify_limit``, where the column
+    bears like the solid the foam is made of. It is off by default
+    (``densify_gain = 0``) because the identification only measured about 0.72 of
+    the free thickness, which keeps every fixture replay and reported gate as
+    published. Predicting outside the measured range needs it: without it a column
+    past ``stretch_floor`` holds a constant force while it is crushed further, so
+    the bed can be traversed completely instead of bottoming out. Keep
+    ``densify_onset`` at or above ``stretch_floor`` to leave the fitted response
+    untouched; an onset below the floor adds hardening on top of the part of the
+    Hyperfoam series that is already rising, which is a modelling choice rather
+    than the identified response.
+
+    The default friction model is an area-scaled elastic Coulomb bristle.
     ``friction_model="elastic_coulomb"`` derives each column's stiffness as
     ``G_eq * area / rest_length`` and applies no tangential damping. It is a
     geometry-scaled contact assumption; normal compression does not identify
@@ -1503,6 +1536,9 @@ class FoundationConfig:
     """
 
     stretch_floor: float = 0.05
+    densify_onset: float = 0.05
+    densify_limit: float = 0.005
+    densify_gain: float = 0.0
     normal_damping: float = 0.0
     friction_stiffness: float = 0.0
     friction: float = 0.0
@@ -1528,6 +1564,13 @@ class FoundationConfig:
             not np.isfinite(self.ground_height_m) or abs(self.ground_height_m) > float(np.finfo(np.float32).max)
         ):
             raise ValueError("ground_height_m must be finite in float32 or None")
+        if self.densify_gain < 0.0:
+            raise ValueError("densify_gain must be nonnegative")
+        if self.densify_gain > 0.0 and not 0.0 < self.densify_limit < self.densify_onset < 1.0:
+            raise ValueError(
+                "densification needs 0 < densify_limit < densify_onset < 1: a packed stretch below "
+                "the onset, and an onset that is still a compression"
+            )
         negative = (
             self.friction_stiffness < 0.0
             or self.friction < 0.0
@@ -1716,6 +1759,9 @@ class MidsoleFoundation:
         set_material_block(params, material)
         params.inv_h2 = 1.0 / spacing_m**2
         params.stretch_floor = config.stretch_floor
+        params.densify_onset = config.densify_onset
+        params.densify_limit = config.densify_limit
+        params.densify_gain = config.densify_gain
         params.normal_damping = config.normal_damping
         params.friction_kt = config.friction_stiffness
         params.friction_kv = config.friction
@@ -1948,6 +1994,29 @@ class MidsoleFoundation:
         if self.friction_solver is not None and getattr(self.friction_solver, "is_default", False):
             taus = [float(b.friction_relaxation_time_s) for b in self.world_blocks]
             self.friction_solver.update_taus(taus)
+
+    def set_densification(self, *, onset: float, limit: float, gain: float) -> None:
+        """Set the bottoming-out branch of every world, leaving the foam untouched.
+
+        The branch is a contact constant rather than an identified material
+        property, so :meth:`set_world_material` and :meth:`set_world_materials`
+        never write it: a batch of randomized midsoles keeps one bottoming-out
+        limit and only its stiffness varies. Host-side and allocation-free on the
+        device, but it copies, so call it before a CUDA graph capture.
+
+        Args:
+            onset: Remaining stretch where the cell walls begin to carry [-].
+            limit: Remaining stretch of a fully packed column [-].
+            gain: Multiplier of the clipped pressure reached at ``limit`` [-];
+                zero removes the branch and restores the clipped law exactly.
+        """
+        if gain < 0.0 or not 0.0 < limit < onset:
+            raise ValueError("densification needs a nonnegative gain and 0 < limit < onset")
+        for block in self.world_blocks:
+            block.densify_onset = float(onset)
+            block.densify_limit = float(limit)
+            block.densify_gain = float(gain)
+        self.world_params.assign(self.world_blocks)
 
     def _refresh_surround_constants(self, dt: float) -> None:
         """Recompute the per-world Maxwell update the surround sweep relaxes against.

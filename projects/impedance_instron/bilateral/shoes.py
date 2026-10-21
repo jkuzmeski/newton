@@ -3,7 +3,7 @@
 
 """Mirror a digital-shoe artifact for the opposite foot.
 
-The F01 shoe artifact describes the left shoe. The right foot uses its mirror
+The F01 shoe artifact describes the right shoe. The left foot uses its mirror
 image about the shoe's sagittal (x-z) plane: every y coordinate changes sign,
 the -y and +y neighbor slots swap, and triangle winding reverses so outward
 normals stay outward. The constitutive model, identification, and validation
