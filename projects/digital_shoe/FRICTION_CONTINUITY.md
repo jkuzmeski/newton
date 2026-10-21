@@ -7,8 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 
 The old fixed-leg/controller continuity comparison has been retired. The shared
 friction laws and their constitutive continuity tests remain available; no
-simulation-output filter is part of these laws. The runtime default is
-area-scaled `elastic_coulomb`, with Maxwell shear available explicitly; see
+simulation-output filter is part of these laws. The column bed uses
+area-scaled elastic Coulomb friction; see
 [FRICTION_COLUMN.md](FRICTION_COLUMN.md).
 
 ## What the discontinuity tests show
@@ -52,14 +52,8 @@ At fixed displacement, nonzero branch stress relaxes on its physical timescale.
 That is intended viscoelastic behavior, unlike the rejected yield-shoulder scheme
 whose static relaxation depended on the number of timesteps.
 
-The implementation is retained in [`friction_maxwell.py`](friction_maxwell.py),
-with tests in
+The implementation is retained in [`friction_maxwell.py`](friction_maxwell.py);
+the column bed calls it with zero branch viscosity, which is the elastic Coulomb
+bristle. Tests are in
 [`test_digital_shoe_friction_maxwell.py`](../../newton/tests/test_digital_shoe_friction_maxwell.py).
 Its shear assumptions do not constitute independent tangential calibration.
-
-## Optional constitutive hypotheses
-
-Pressure-dependent and loaded-slip weakening laws remain optional research
-hypotheses, not calibrated continuity fixes. Their shared parameter-adapter codes
-and row fields are documented in
-[FRICTION_IDENTIFICATION.md](FRICTION_IDENTIFICATION.md).

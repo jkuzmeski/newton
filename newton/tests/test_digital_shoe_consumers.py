@@ -14,6 +14,7 @@ import numpy as np
 
 from newton.tests.test_digital_shoe import _tiny_artifact
 from projects.digital_shoe.artifact import load_artifact
+from projects.digital_shoe.column_bed import TOP_FREE, TOP_PRESSED
 from projects.digital_shoe.showcase import Example
 
 
@@ -44,7 +45,7 @@ def _fixture_artifact():
 
 
 class TestDigitalShoeConsumers(unittest.TestCase):
-    """Use the same untouched bed and passive solve in export replay and live contact."""
+    """Press the indenter footprint of the whole column bed in the Virtual Instron."""
 
     def setUp(self):
         """Create an artifact whose passive column is absent from the indenter mapping."""
@@ -56,17 +57,15 @@ class TestDigitalShoeConsumers(unittest.TestCase):
             MagicMock(), SimpleNamespace(artifact=self.path, mode="instron", fixture="fullfoot_last")
         )
 
-    def test_instron_keeps_whole_bed_and_passive_neighbor(self):
+    def test_instron_keeps_whole_bed_and_free_neighbor(self):
         """Keep the unpressed column instead of truncating at the fixture footprint."""
-        foundation = self.example.foundation
-        self.assertEqual(foundation.column_count, 2)
-        self.assertEqual(foundation.free_column_count, 1)
-        self.assertIsNone(foundation.ground_height_m)
-        self.assertFalse(foundation.surround.carrier_bond)
-        np.testing.assert_array_equal(foundation.driven.numpy(), [1, 0])
-        np.testing.assert_array_equal(foundation.neighbors.numpy(), [[1, -1, -1, -1], [0, -1, -1, -1]])
-        np.testing.assert_allclose(foundation.rest_len.numpy(), [0.02, 0.02])
-        np.testing.assert_allclose(foundation.area.numpy(), [0.0001, 0.0001])
+        bed = self.example.bed.bed
+        self.assertEqual(self.example.bed.column_count, 2)
+        self.assertEqual(self.example.foundation_config.ground_height_m, 0.0)
+        np.testing.assert_array_equal(bed.connection.numpy(), [TOP_PRESSED, TOP_FREE])
+        np.testing.assert_array_equal(bed.neighbors.numpy(), [[1, -1, -1, -1], [0, -1, -1, -1]])
+        np.testing.assert_allclose(bed.rest_len.numpy(), [0.02, 0.02])
+        np.testing.assert_allclose(bed.area.numpy(), [0.0001, 0.0001])
 
     def test_both_fixture_adapters_keep_the_same_neighbor_bed(self):
         """Keep the full bed for both full-foot and rearfoot fixture adapters."""
@@ -80,12 +79,12 @@ class TestDigitalShoeConsumers(unittest.TestCase):
         for name in ("fullfoot_last", "rearfoot_punch"):
             with self.subTest(fixture=name):
                 scene = SimpleNamespace(shoe=shoe, fixture_name=name, _add_instron_indenter_visual=MagicMock())
-                _, free, rest, area, neighbors, _ = Example._build_instron(scene, MagicMock())
+                anchor, rest, area, neighbors, _, connection, _ = Example._build_instron(scene, MagicMock())
                 self.assertEqual(len(rest), 2)
-                self.assertEqual(int(scene.surround_config.driven.sum()), 1)
+                np.testing.assert_array_equal(connection, [TOP_PRESSED, TOP_FREE])
+                np.testing.assert_array_equal(anchor, shoe.column_bed.anchor_bottom_m)
                 np.testing.assert_array_equal(neighbors, shoe.column_bed.neighbors)
                 np.testing.assert_array_equal(area, shoe.column_bed.area_m2)
-                np.testing.assert_allclose(free, rest)
 
     def test_export_curve_gate_uses_force_evaluation_time(self):
         """Compare warm force samples at their pre-integration phase and reject drift."""
@@ -107,18 +106,18 @@ class TestDigitalShoeConsumers(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "runtime curve differs"):
             Example._test_instron(scene, force + 100.0)
 
-    def test_instron_passive_top_uses_solved_compression(self):
-        """Render indirect passive compression rather than rigid indenter translation."""
+    def test_instron_free_top_uses_solved_compression(self):
+        """Render the shear-loaded free top rather than rigid indenter translation."""
         example = self.example
         example.sim_time = 0.5
         example.step()
         example.render()
-        compression = example.foundation.compression.numpy()
-        self.assertEqual(compression.shape, (2,))
+        compression = example.bed.column_state("compression")[0]
         self.assertGreater(float(compression[1]), 0.0)
         self.assertLess(float(compression[1]), float(compression[0]))
-        bottoms = example._fixed_bottom.numpy()
-        tops = example._points.numpy()
+        bottoms = example._bottoms.numpy()
+        tops = example._tops.numpy()
+        np.testing.assert_allclose(bottoms[:, 2], 0.0, atol=1.0e-7)
         np.testing.assert_allclose(tops[:, 2], bottoms[:, 2] + 0.02 - compression, atol=1.0e-7)
         self.assertGreater(float(tops[1, 2]), float(tops[0, 2]))
 

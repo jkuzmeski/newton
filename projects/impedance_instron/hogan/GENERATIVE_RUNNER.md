@@ -97,30 +97,23 @@ per-world screens, a few metrics, and the small damped normal-equation solve
 reach the host. [`gpu_runner.GpuBatch`](gpu_runner.py) records full traces for
 evaluation and generation, grouped by shoe instance.
 
-Elastic-Coulomb ground beds advance with the lean kernels in
-[`gpu_shoe.py`](gpu_shoe.py): they evaluate the shared material, Maxwell,
-surround, and friction laws but keep only physics history, reduce the carrier
-wrench in the shared fixed order, and skip a world's shoe while every column
-clears the ground by 0.5 mm, both before touchdown and after toe-off. A lifted
-shoe counts the skipped steps and replays their unloaded history updates before
-contact resumes. The kernels reproduce the generic fused-foundation traces
-bitwise. Chain and actuator arithmetic use float64; shared shoe physics use
-float32. The CPU backend remains the numerical reference. Both backends compute
-rollout diagnostics with the same summary function. The shoe allocates only its
-prescribed carrier and physical foundation state; report geometry comes directly
-from the artifact, without a second mesh or spring-replay simulation.
+The shoe is the two-surface column bed of
+[`column_bed.py`](../../digital_shoe/column_bed.py): column tops on the fixture
+footprint are bonded to the last, the outer tops are free, and the bottoms stand
+on the ground plane. One launch per step advances every world's bed with its
+trial's timestep and writes the carrier wrench and the largest held-column
+strain, which feeds the compression screen. Every world's bed runs every step,
+including flight. Chain and actuator arithmetic use float64; the bed uses
+float32. The CPU backend integrates the body on the host and steps the same bed
+on CUDA once per step; both backends compute rollout diagnostics with the same
+summary function. The shoe allocates only its prescribed carrier and bed state;
+report geometry comes directly from the artifact, without a second mesh or
+spring-replay simulation.
 
-By default, the finite-difference rollouts and their own reference use the same
-shoe kernels compiled with fast math, which changes only float32 intrinsic
-rounding. Costs, damping-ladder proposals, `J^T r`, and accepted steps always use
-exact rollouts. `identify fit --exact-jacobian` integrates the differences
-exactly as well.
-
-On the same GPU, one full-dataset LM iteration (119 Jacobian and 5 ladder
-candidates over 98 stances) now takes about 15 s instead of about 245 s, or
-about 20 s with `--exact-jacobian`. With exact differences the iteration history
-agrees with the saved run to float roundoff in the reductions; with fast-math
-differences the first three costs agree to within 4e-5 relative.
+With the earlier single-unknown shoe law and its fused CUDA kernels, one
+full-dataset LM iteration (119 Jacobian and 5 ladder candidates over 98
+stances) took about 15 s on the same GPU instead of about 245 s; the column bed
+has not been timed on the full dataset.
 
 Each fit writes `runner.json`, split metrics and provenance in `summary.json`,
 `trace_NNN.npz`, reference-free `scenario_NNN.json`, and `report.html`.

@@ -130,9 +130,9 @@ def rematerialize(trials: list, artifact: Path) -> list:
     result = []
     for trial in trials:
         original = trial.shoe
-        key = (tuple(original.mount_m), original.static_pitch_rad, original.metadata["friction_model"])
+        key = (tuple(original.mount_m), original.static_pitch_rad)
         if key not in shoes:
-            shoes[key] = Shoe(artifact, *key[:2], friction_model=key[2])
+            shoes[key] = Shoe(artifact, *key)
         provenance = trial.provenance | {"shoe_artifact": str(artifact.resolve()), "shoe_sha256": sha256(artifact)}
         result.append(replace(trial, shoe=shoes[key], provenance=provenance))
     return result

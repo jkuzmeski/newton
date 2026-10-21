@@ -4,7 +4,7 @@
 """Shared Ogden-Hill and Maxwell laws for simulation and identification.
 
 Each constitutive expression is defined once in :func:`_material_functions`.
-Warp compiles that source for the live and differentiable kernels. NumPy runs
+Warp compiles that source for the column-bed kernels. NumPy runs
 that same source with vectorized elementary operations, retaining float64 host
 fitting without device transfers. The backend changes only ``abs``, ``log``,
 ``max`` and ``exp``; it does not supply another material formula.

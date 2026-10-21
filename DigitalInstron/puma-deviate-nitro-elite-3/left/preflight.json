@@ -1,36 +1,105 @@
 {
-  "slug": "puma-deviate-nitro-elite-3",
-  "product_name": "PUMA Deviate NITRO Elite 3",
+  "column_qc": {
+    "build_column_grid_columns": 943,
+    "columns": 944,
+    "dropped_outside_or_thin": 8,
+    "hole_gaps_filled": 1,
+    "lattice_points": 1357,
+    "odd_hit_count_columns": 0,
+    "rays_hitting_mesh": 952,
+    "suspect_columns_replaced": 0,
+    "through_holes": 0
+  },
+  "gates": {
+    "column_count": {
+      "passed": true,
+      "range": [
+        600,
+        1400
+      ],
+      "value": 944.0
+    },
+    "drop_mm": {
+      "passed": true,
+      "range": [
+        0.0,
+        20.0
+      ],
+      "value": 7.7435018692155
+    },
+    "footprint_length_mm": {
+      "passed": true,
+      "range": [
+        255.0,
+        330.0
+      ],
+      "value": 287.6051712036133
+    },
+    "footprint_width_mm": {
+      "passed": true,
+      "range": [
+        80.0,
+        130.0
+      ],
+      "value": 108.3608512878418
+    },
+    "max_thickness_mm": {
+      "passed": true,
+      "range": [
+        5.0,
+        70.0
+      ],
+      "value": 49.68975207442204
+    },
+    "median_thickness_mm": {
+      "passed": true,
+      "range": [
+        15.0,
+        50.0
+      ],
+      "value": 32.31259195388104
+    }
+  },
   "geometry_status": "ready",
-  "right": {
-    "columns": 937,
-    "min_thickness_mm": 5.470638934147918,
-    "median_thickness_mm": 32.36787224535221,
-    "max_thickness_mm": 49.446982895519746
-  },
-  "left": {
-    "columns": 937,
-    "min_thickness_mm": 5.470638934147918,
-    "median_thickness_mm": 32.36787224535221,
-    "max_thickness_mm": 49.446982895519746,
-    "mirrored_from_right": true
-  },
-  "right_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-deviate-nitro-elite-3\\right\\column_grid.npz",
-  "left_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-deviate-nitro-elite-3\\left\\column_grid.npz",
-  "geometry_source": "D:\\PlantarPressure\\rtings_internal_models\\puma-deviate-nitro-elite-3-3d-internal.glb",
-  "source_link": "hardlink",
-  "source_side_assumption": "Treated as right-foot input; RTINGS does not label model side here.",
-  "heel_toe_orientation_verified": false,
-  "plate": {
-    "slug": "puma-deviate-nitro-elite-3",
-    "product_name": "PUMA Deviate NITRO Elite 3",
-    "product_page_url": "https://www.rtings.com/running-shoes/reviews/puma/deviate-nitro-elite-3",
-    "plate_status": "present_reported",
-    "plate_material_reported": "Carbon Fiber",
-    "plate_field_reported": "Carbon Fiber",
-    "source": "RTINGS featured item field: Plate",
-    "alternate_urls_tried": []
-  },
+  "grid_sha256": "dccb2b811ec6c6901e2fba60309d81e82844d5b7e5d5c5b01d7faa44b16a92bd",
+  "mirrored_from_source": true,
+  "provenance_sha256": "c783a5d9766837bcd7589da629a78312c02b06df5e4104243f8aef2993f951a9",
   "side": "left",
-  "mirrored_from_right": true
+  "slug": "puma-deviate-nitro-elite-3",
+  "source_side": "right",
+  "source_to_canonical": [
+    [
+      0.0,
+      -0.001,
+      0.0,
+      -0.130294521332
+    ],
+    [
+      -0.001,
+      0.0,
+      0.0,
+      -0.011502252579
+    ],
+    [
+      0.0,
+      0.0,
+      0.001,
+      0.000541504025
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "stats": {
+    "columns": 944,
+    "drop_mm": 7.7435018692155,
+    "forefoot_thickness_mm": 31.006451449405496,
+    "heel_thickness_mm": 38.749953318620996,
+    "max_thickness_mm": 49.68975207442204,
+    "median_thickness_mm": 32.31259195388104,
+    "min_thickness_mm": 5.1776035657627935
+  }
 }

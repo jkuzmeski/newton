@@ -1,34 +1,161 @@
 {
-  "slug": "puma-fast-r-nitro-elite-3",
-  "product_name": "PUMA Fast-R NITRO Elite 3",
-  "geometry_status": "ready",
-  "right": {
+  "code_sha256": "c34c40e26f659fb5582c843ca03a56449d3f0f2a50d3ca04950cd45d7cce94f5",
+  "column_qc": {
+    "build_column_grid_columns": 916,
     "columns": 917,
-    "min_thickness_mm": 5.36714328126237,
-    "median_thickness_mm": 31.598666380489046,
-    "max_thickness_mm": 44.04701173847599
+    "dropped_outside_or_thin": 20,
+    "hole_gaps_filled": 1,
+    "lattice_points": 1440,
+    "odd_hit_count_columns": 0,
+    "rays_hitting_mesh": 937,
+    "repaired_uv_m": [
+      [
+        -0.141859231,
+        0.013026514
+      ],
+      [
+        0.003140769,
+        0.013026514
+      ]
+    ],
+    "suspect_columns_replaced": 1,
+    "through_holes": 0
   },
+  "frame": "+x heel to toe, +z up, +y = z cross x (medial on a right shoe, lateral on a left shoe)",
+  "frame_evidence": {
+    "heel_toe_cues_m": {
+      "low_end_thickness_or_elevation_m": 0.005274795256133922,
+      "low_minus_high_width_m": 0.015
+    },
+    "source_axes_length_side_up": [
+      1,
+      0,
+      2
+    ],
+    "toe_spring_m": 0.0337446279922609,
+    "up_flipped_from_source": false
+  },
+  "gates": {
+    "column_count": {
+      "passed": true,
+      "range": [
+        600,
+        1400
+      ],
+      "value": 917.0
+    },
+    "drop_mm": {
+      "passed": true,
+      "range": [
+        0.0,
+        20.0
+      ],
+      "value": 2.1322713890308194
+    },
+    "footprint_length_mm": {
+      "passed": true,
+      "range": [
+        255.0,
+        330.0
+      ],
+      "value": 293.71846199035645
+    },
+    "footprint_width_mm": {
+      "passed": true,
+      "range": [
+        80.0,
+        130.0
+      ],
+      "value": 113.94697189331055
+    },
+    "max_thickness_mm": {
+      "passed": true,
+      "range": [
+        5.0,
+        70.0
+      ],
+      "value": 44.0409768187696
+    },
+    "median_thickness_mm": {
+      "passed": true,
+      "range": [
+        15.0,
+        50.0
+      ],
+      "value": 31.598117060901764
+    }
+  },
+  "geometry_status": "ready",
   "left": {
     "columns": 917,
-    "min_thickness_mm": 5.36714328126237,
-    "median_thickness_mm": 31.598666380489046,
-    "max_thickness_mm": 44.04701173847599,
-    "mirrored_from_right": true
+    "drop_mm": 2.1322713890308194,
+    "forefoot_thickness_mm": 32.618642254218656,
+    "grid_sha256": "1be31f3d03e9d23d82ecadb36c55e17dcf09a83042e09f3559de36958849f4e4",
+    "heel_thickness_mm": 34.750913643249476,
+    "max_thickness_mm": 44.0409768187696,
+    "median_thickness_mm": 31.598117060901764,
+    "min_thickness_mm": 5.290598338048922,
+    "mirrored_from_source": true
   },
-  "right_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-fast-r-nitro-elite-3\\right\\column_grid.npz",
-  "left_cache": "D:\\PlantarPressure\\prepared_shoes\\puma-fast-r-nitro-elite-3\\left\\column_grid.npz",
-  "geometry_source": "D:\\PlantarPressure\\rtings_internal_models\\puma-fast-r-nitro-elite-3-3d-internal.glb",
-  "source_link": "hardlink",
-  "source_side_assumption": "Treated as right-foot input; RTINGS does not label model side here.",
-  "heel_toe_orientation_verified": false,
-  "plate": {
-    "slug": "puma-fast-r-nitro-elite-3",
-    "product_name": "PUMA Fast-R NITRO Elite 3",
-    "product_page_url": "https://www.rtings.com/running-shoes/reviews/puma/fast-r-nitro-elite-3",
-    "plate_status": "present_reported",
-    "plate_material_reported": "Carbon Fiber",
-    "plate_field_reported": "Carbon Fiber",
-    "source": "RTINGS featured item field: Plate",
-    "alternate_urls_tried": []
-  }
+  "mesh_qc": {
+    "boundary_after_fill": {
+      "nonmanifold_edges": 0,
+      "open_edge_length_m": 0.0,
+      "open_edges": 0
+    },
+    "boundary_before_fill": {
+      "nonmanifold_edges": 0,
+      "open_edge_length_m": 0.0,
+      "open_edges": 0
+    },
+    "dropped_fragment_faces": 0,
+    "dropped_fragments": 0,
+    "faces": 1000000,
+    "scene_parts": [
+      {
+        "faces": 1000000,
+        "geometry": "fast-r-3_3d-internal",
+        "material": "material_0.004",
+        "node": "fast-r-3_3d-internal"
+      }
+    ],
+    "unit_scale_to_m": 0.001,
+    "vertices_after_weld": 499686,
+    "volume_m3": 0.0006817828292214179,
+    "watertight": true
+  },
+  "parameters": {
+    "max_repaired_fraction": 0.02,
+    "min_arch_difference_m": 0.003,
+    "min_arch_ratio": 1.5,
+    "min_thickness_m": 0.005,
+    "min_toe_spring_m": 0.005,
+    "neighbor_tolerance_m": 0.005,
+    "spacing_m": 0.005
+  },
+  "product_name": "PUMA Fast-R NITRO Elite 3",
+  "provenance_sha256": "cacb0e64f6f2eecfdf58736ff8c525763cf813754f5e161f7d59f337e8ed9303",
+  "right": {
+    "columns": 917,
+    "drop_mm": 2.1322713890308194,
+    "forefoot_thickness_mm": 32.618642254218656,
+    "grid_sha256": "1a4e23bd8ec086a48ad38ee1d7ea3df74a9060fd0ab0b71bb07cc2a15c2fe8d1",
+    "heel_thickness_mm": 34.750913643249476,
+    "max_thickness_mm": 44.0409768187696,
+    "median_thickness_mm": 31.598117060901764,
+    "min_thickness_mm": 5.290598338048922,
+    "mirrored_from_source": false
+  },
+  "side_cues_m": {
+    "arch_indent_neg_y_m": 0.011337638268103967,
+    "arch_indent_pos_y_m": 0.026824577686833405,
+    "toe_offset_y_m": 0.009730291358423307
+  },
+  "slug": "puma-fast-r-nitro-elite-3",
+  "source": {
+    "file": "source.glb",
+    "input_name": "source.glb",
+    "sha256": "539b4683e2314fedde22e19ce2660615f07b55158f7cb289ee266c2ac2932095"
+  },
+  "source_side": "right"
 }

@@ -377,7 +377,7 @@ class RolloutConfig:
     maximum_speed: float = 100.0
     """Numerical speed bound, separately applied to translation [m/s] and angles [rad/s]."""
     compression_limit: float = 0.9
-    """Maximum driven-column compression divided by rest thickness."""
+    """Maximum compression divided by rest thickness over the columns the last holds."""
     contact_threshold_n: float = 50.0
     """Normal-force threshold for contact diagnostics [N]."""
 
@@ -446,9 +446,7 @@ def simulate(
     state = initial.copy()
     if np.any(np.abs(state.torque_nm) > runner.bounds.torque_max_nm):
         raise ValueError("Initial torque exceeds the model bounds")
-    shoe.foundation.reset()
-    driven = shoe.foundation.driven.numpy().astype(bool)
-    rest = np.asarray(shoe.shoe.column_bed.rest_length_m)[driven]
+    shoe.reset()
     foot_angular = chain.angular_jacobian(3)
     states, velocities, phases, loads_bw = [state.q.copy()], [state.v.copy()], [state.phase_rad], [state.normal_load_bw]
     records = {
@@ -475,11 +473,10 @@ def simulate(
                 break
             load, info = runner.actuate(state, chain, task, dt)
             ankle, jacobian, _ = chain.point(state.q, 3, np.zeros(2))
-            wrench, _ = shoe.apply(
+            wrench, compression = shoe.apply(
                 ankle, jacobian @ state.v, chain.angle(state.q, 3), float(foot_angular @ state.v), dt
             )
             wrench = np.asarray(wrench, dtype=float)
-            compression = float(np.max(shoe.foundation.compression.numpy()[driven] / rest))
             if not np.isfinite(wrench).all() or not np.isfinite(compression) or not np.isfinite(load).all():
                 failure = "Nonfinite actuator/contact output"
                 break
@@ -487,7 +484,7 @@ def simulate(
                 failure = "Contact force screen exceeded"
                 break
             if compression > cfg.compression_limit + 1e-6:
-                failure = "Driven shoe compression screen exceeded"
+                failure = "Held shoe compression screen exceeded"
                 break
             mass, bias = chain.dynamics(state.q, state.v, cfg.gravity_m_s2)
             force = load + jacobian.T @ wrench[:2] + foot_angular * wrench[2]
@@ -521,7 +518,7 @@ def simulate(
             phases.append(state.phase_rad)
             loads_bw.append(state.normal_load_bw)
     finally:
-        shoe.foundation.reset()
+        shoe.reset()
     count = len(states) - 1
     trace = {key: np.asarray(value) for key, value in records.items()}
     for key, width in (

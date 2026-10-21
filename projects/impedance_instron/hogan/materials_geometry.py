@@ -136,9 +136,9 @@ def rematerialize_matched(trials: list, condition: dict) -> list:
     shoes: dict[tuple, Shoe] = {}
     result = []
     for trial in trials:
-        key = (tuple(trial.shoe.mount_m), trial.shoe.static_pitch_rad, trial.shoe.metadata["friction_model"])
+        key = (tuple(trial.shoe.mount_m), trial.shoe.static_pitch_rad)
         if key not in shoes:
-            shoes[key] = Shoe(artifact, *key[:2], friction_model=key[2])
+            shoes[key] = Shoe(artifact, *key)
         shoe = shoes[key]
         old_ankle = trial.chain.point(trial.initial.q, 3, np.zeros(2))[0]
         angle = trial.chain.angle(trial.initial.q, 3)

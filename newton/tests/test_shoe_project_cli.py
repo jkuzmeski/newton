@@ -16,14 +16,13 @@ from unittest.mock import patch
 
 _ROOT = Path(__file__).resolve().parents[2]
 _EXPORTS = {
-    "CalibrationWorkspace": "calibration",
     "ColumnBed": "artifact",
     "DigitalShoe": "artifact",
     "FoundationConfig": "runtime",
+    "FrictionParams": "friction_solver",
+    "FrictionSolver": "friction_solver",
     "InstronFixture": "artifact",
-    "MidsoleFoundation": "runtime",
     "ShoeMaterial": "runtime",
-    "SurroundConfig": "runtime",
     "VisualMesh": "artifact",
     "hyperfoam_pressure_numpy": "material",
     "load_artifact": "artifact",
@@ -39,12 +38,9 @@ _COMMANDS = {
         "check-acquisition": "acquisition",
     },
     "projects.digital_instron_v2": {
-        "fit": "workflow",
-        "validate": "phase1",
-        "replay": "phase2",
+        "fit": "sweep_fit",
         "export": "export_digital_shoe",
         "view": "example",
-        "profile": "profile_calibration",
     },
 }
 
@@ -93,24 +89,6 @@ class TestShoeProjectImports(unittest.TestCase):
         with self.assertRaises(AttributeError):
             _ = shoe.not_a_shoe_export
 
-    def test_instron_compatibility_exports_remain_shared(self):
-        """Keep historical foundation imports bound to the same runtime objects."""
-        dynamics = importlib.import_module("projects.digital_instron_v2.dynamics")
-        runtime = importlib.import_module("projects.digital_shoe.runtime")
-        for name in (
-            "FoundationConfig",
-            "FoundationParams",
-            "MidsoleFoundation",
-            "SurroundConfig",
-            "foundation_apply",
-            "foundation_pressure",
-            "foundation_reset",
-            "surround_relax",
-            "surround_write_free_top",
-        ):
-            with self.subTest(name=name):
-                self.assertIs(getattr(dynamics, name), getattr(runtime, name))
-
     def test_lazy_names_are_discoverable_without_loading_them(self):
         """List public exports before importing their defining modules."""
         result = _fresh_python(
@@ -152,8 +130,7 @@ print(json.dumps({'code': code, 'help': out.getvalue(), 'loaded': [n for n in sy
                     for command in commands:
                         self.assertIn(command, data["help"])
                     if package.endswith("digital_instron_v2"):
-                        self.assertIn("averaged", data["help"])
-                        self.assertIn("held-out", data["help"])
+                        self.assertIn("sweep", data["help"])
 
     def test_routes_each_command_and_preserves_remaining_arguments(self):
         """Forward every selected command without parsing or changing its arguments."""
@@ -221,18 +198,15 @@ print(json.dumps({'code': code, 'help': out.getvalue(), 'loaded': [n for n in sy
                 self.assertIs(sys.argv, original)
 
     def test_selected_help_keeps_existing_parsers_without_running_work(self):
-        """Delegate help to all ten existing parsers without executing their work."""
+        """Delegate help to all seven existing parsers without executing their work."""
         blockers = {
             "showcase": ["Example", "newton.examples.run"],
             "report": ["write_report"],
             "record_gifs": ["record_experiment_gifs"],
             "acquisition": ["validate_acquisition_manifest"],
-            "workflow": ["run"],
-            "phase1": ["evaluate", "compare_backends"],
-            "phase2": ["evaluate"],
-            "export_digital_shoe": ["identify_and_export"],
+            "sweep_fit": ["run"],
+            "export_digital_shoe": ["export"],
             "example": ["Example", "newton.examples.run"],
-            "profile_calibration": ["_load_baseline"],
         }
         for package, commands in _COMMANDS.items():
             router = importlib.import_module(package + ".__main__")

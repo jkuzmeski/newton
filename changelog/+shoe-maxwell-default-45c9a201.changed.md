@@ -1,1 +1,0 @@
-Make Maxwell shear bristles the default Digital Shoe friction model, with a 1000 N/m equilibrium spring in the leg-shoe consumer. Preserve the previous law through `FoundationConfig(friction_model="legacy")` or the equivalent shoe/engine option. Keep normal material/contact mechanics unchanged and version the controller baseline for the new contact law.

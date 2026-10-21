@@ -3,10 +3,10 @@
   "groups": [
     {
       "functions": [
-        "projects/digital_shoe/friction_adapter.py:FrictionAdapter.detach",
-        "projects/digital_shoe/friction_parameter_adapter.py:FrictionParameterAdapter.detach"
+        "projects/impedance_instron/hogan/search.py:sha256",
+        "projects/impedance_instron/hogan/sweep.py:_sha256"
       ],
-      "reason": "Retain the existing short lifecycle callbacks on separate adapters; coupling their state implementations is outside the runner cleanup."
+      "reason": "Retain the two short file-hash helpers in their separate Hogan command modules; sharing them is outside the column-bed cleanup."
     }
   ],
   "near_match_policy": "Near matches require semantic review. Different interpolation, work integration, serialization and boundary policies are not automatically interchangeable."

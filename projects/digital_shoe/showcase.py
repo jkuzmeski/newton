@@ -16,13 +16,12 @@ import newton.examples
 from projects.digital_shoe.rendering import camera_look_at as _look_at
 
 from .artifact import load_artifact
-from .rendering import bench_column_endpoints, carried_column_endpoints, column_colors
-from .runtime import FoundationConfig, MidsoleFoundation, SurroundConfig
+from .column_bed import TOP_BONDED, TOP_FREE, TOP_PRESSED, ColumnBed
+from .rendering import column_colors, column_endpoints
+from .runtime import FoundationConfig
 
 DEFAULT_ARTIFACT = "DigitalInstron/digital_shoe_showcase/digital_shoe.json"
 INSTRON_WARMUP_CYCLES = 6
-# Doubling these warm-started sweeps changes either frozen-fixture curve by less than 0.1% of peak.
-INSTRON_SURROUND_SWEEPS = 32
 
 
 @wp.kernel
@@ -101,15 +100,13 @@ class Example:
             raise ValueError("GIF width, FPS, and stride must be positive")
         self._gif_frames = []
 
-        self.surround_config = None
         builder = newton.ModelBuilder()
-        builder.add_ground_plane()
         if self.mode == "instron":
-            anchor, free_top, rest, area, neighbors, spacing = self._build_instron(builder)
+            anchor, rest, area, neighbors, spacing, connection, top_gap = self._build_instron(builder)
         elif self.mode == "drop":
-            anchor, free_top, rest, area, neighbors, spacing = self._build_drop(builder, args)
+            anchor, rest, area, neighbors, spacing, connection, top_gap = self._build_drop(builder, args)
         elif self.mode == "rocker":
-            anchor, free_top, rest, area, neighbors, spacing = self._build_rocker(builder)
+            anchor, rest, area, neighbors, spacing, connection, top_gap = self._build_rocker(builder)
         else:
             raise ValueError(f"unknown showcase mode {self.mode!r}")
 
@@ -128,30 +125,29 @@ class Example:
         self.state_1.body_q.assign(self.state_0.body_q)
         self.state_1.body_qd.assign(self.state_0.body_qd)
 
-        self.foundation = MidsoleFoundation(
+        self.bed = ColumnBed(
             anchor,
-            free_top,
             rest,
             area,
             neighbors,
             spacing,
+            connection,
             self.shoe.material,
-            self.carrier,
-            self.model.body_com,
             self.foundation_config,
-            self.device,
-            self.surround_config,
+            np.array([self.carrier]),
+            self.model.body_com,
+            top_gap_m=top_gap,
+            device=self.device,
         )
+        self.bed.set_timesteps(self.sim_dt)
         self.column_count = len(rest)
-        self._points = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
+        self._bottoms = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._tops = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._colors = wp.zeros(self.column_count, dtype=wp.vec3, device=self.device)
         self._frame_compression = wp.zeros(self.column_count, dtype=wp.float32, device=self.device)
         self._frame_max_compression = wp.zeros(1, dtype=wp.float32, device=self.device)
-        self._fixed_bottom = None
-        if self.mode == "instron":
-            fixed = np.column_stack([anchor[:, :2], free_top - rest])
-            self._fixed_bottom = wp.array(np.ascontiguousarray(fixed, np.float32), dtype=wp.vec3, device=self.device)
+        # The Instron load cell weighs the last, a free body the plane.
+        self._force = self.bed.bed.carried_force if self.mode == "instron" else self.bed.bed.normal_force
         self._peak_force = wp.zeros(1, dtype=wp.float32, device=self.device)
         self._peak_compression = wp.zeros(1, dtype=wp.float32, device=self.device)
         self._impulse = wp.zeros(1, dtype=wp.float32, device=self.device)
@@ -223,32 +219,27 @@ class Example:
             raise ValueError("The Instron fixture and whole bed must share column rest lengths")
         bottom = bed.anchor_bottom_m[:, 2]
         free_top = bottom + bed.rest_length_m
-        anchor = np.column_stack([bed.anchor_bottom_m[:, :2], free_top])
         # Old punch artifacts use zero-bottom column datums. Shift both ends,
-        # not the rest length, so vertical compression and fixture gaps are unchanged.
+        # not the rest length, so the fixture gaps are unchanged.
         datum_shift = bottom[supported] - fixture.foam_bottom_m
-        anchor[supported] = fixture.carrier_anchor_m
-        anchor[supported, 2] += datum_shift
-        free_top[supported] = fixture.foam_free_top_m + datum_shift
-        if not np.allclose(free_top, bottom + bed.rest_length_m, rtol=1.0e-6, atol=1.0e-9):
+        if not np.allclose(fixture.foam_free_top_m + datum_shift, free_top[supported], rtol=1.0e-6, atol=1.0e-9):
             raise ValueError("The fixture and whole bed must share the same uncompressed shoe surface")
-        self._fixture_visual_anchor_m = anchor[supported].copy()
+        surface = fixture.carrier_anchor_m.copy()
+        surface[:, 2] += datum_shift
+        self._fixture_visual_anchor_m = surface
+        # The shoe stands on the platen at its lowest outsole point; the rest of the outsole floats.
+        self.foundation_config = FoundationConfig(stretch_floor=0.05, ground_height_m=float(bottom.min()))
+        builder.add_ground_plane(height=self.foundation_config.ground_height_m)
         self._add_instron_indenter_visual(builder)
-        driven = np.zeros(len(bed.rest_length_m), dtype=np.int32)
-        driven[supported] = 1
-        self.surround_config = SurroundConfig(
-            driven=driven,
-            attachment_n_m=0.0,
-            sweeps=INSTRON_SURROUND_SWEEPS,
-            relaxation_time_s=0.0,
-            carrier_bond=False,
-        )
-        # Bench anchors are indenter tops, not outsole sites on an external plane.
-        self.foundation_config = FoundationConfig(stretch_floor=0.05)
-        return anchor, free_top, bed.rest_length_m, bed.area_m2, bed.neighbors, bed.spacing_m
+        # The indenter presses the tops under it; the rest of the shoe surface is free.
+        connection = np.full(len(bottom), TOP_FREE, dtype=np.int32)
+        connection[supported] = TOP_PRESSED
+        top_gap = np.zeros(len(bottom))
+        top_gap[supported] = surface[:, 2] - free_top[supported]
+        return bed.anchor_bottom_m, bed.rest_length_m, bed.area_m2, bed.neighbors, bed.spacing_m, connection, top_gap
 
     def _build_drop(self, builder, args):
-        bed = self.shoe.column_bed
+        builder.add_ground_plane()
         self.drop_mass_kg = float(getattr(args, "drop_mass", 80.0))
         self.drop_height_m = float(getattr(args, "drop_height", 0.04))
         shoe_last = self.shoe.visual_mesh("fullfoot_last").vertices_m
@@ -277,27 +268,27 @@ class Example:
         )
         self._add_fullfoot_last_visual(builder, label="free_drop_shoe_last")
         self.foundation_config = FoundationConfig(stretch_floor=0.05, normal_damping=5.0, ground_height_m=0.0)
-        return (
-            bed.anchor_bottom_m,
-            np.zeros(len(bed.rest_length_m)),
-            bed.rest_length_m,
-            bed.area_m2,
-            bed.neighbors,
-            bed.spacing_m,
-        )
+        return self._bonded_bed()
 
     def _build_rocker(self, builder):
-        bed = self.shoe.column_bed
+        builder.add_ground_plane()
         self._rocker_period = 1.2
         self.carrier = builder.add_body(mass=1.0, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)))
         self.foundation_config = FoundationConfig(stretch_floor=0.05, ground_height_m=0.0)
+        return self._bonded_bed()
+
+    def _bonded_bed(self):
+        """Return the whole bed with every top glued to the carried shoe."""
+        bed = self.shoe.column_bed
+        count = len(bed.rest_length_m)
         return (
             bed.anchor_bottom_m,
-            np.zeros(len(bed.rest_length_m)),
             bed.rest_length_m,
             bed.area_m2,
             bed.neighbors,
             bed.spacing_m,
+            np.full(count, TOP_BONDED, dtype=np.int32),
+            np.zeros(count),
         )
 
     def _instron_pose(self, time_s: float) -> np.ndarray:
@@ -321,50 +312,33 @@ class Example:
         self._frame_compression.zero_()
         self._frame_max_compression.zero_()
         for _ in range(self.sim_substeps):
-            if self.mode == "instron":
-                self.state_0.body_q.assign(self._instron_pose(self.sim_time).reshape(1, 7))
-                self.state_0.body_qd.zero_()
-                self.state_0.clear_forces()
-                self.foundation.apply(self.state_0, self.sim_dt)
-                wp.launch(
-                    _track_peak_metrics,
-                    dim=1,
-                    inputs=[
-                        self.foundation.normal_force,
-                        self.foundation.max_compression,
-                        self._peak_force,
-                        self._peak_compression,
-                    ],
-                    device=self.device,
+            if self.mode != "drop":
+                pose = (
+                    self._instron_pose(self.sim_time) if self.mode == "instron" else self._rocker_pose(self.sim_time)[0]
                 )
-            elif self.mode == "rocker":
-                pose, _ = self._rocker_pose(self.sim_time)
                 self.state_0.body_q.assign(pose.reshape(1, 7))
                 self.state_0.body_qd.zero_()
-                self.state_0.clear_forces()
-                self.foundation.apply(self.state_0, self.sim_dt)
-                wp.launch(
-                    _track_peak_metrics,
-                    dim=1,
-                    inputs=[
-                        self.foundation.normal_force,
-                        self.foundation.max_compression,
-                        self._peak_force,
-                        self._peak_compression,
-                    ],
-                    device=self.device,
-                )
-            else:
-                self.state_0.clear_forces()
-                self.foundation.apply(self.state_0, self.sim_dt)
+            self.state_0.clear_forces()
+            self.bed.apply(self.state_0)
+            wp.launch(
+                _accumulate_frame_compression,
+                dim=self.column_count,
+                inputs=[
+                    self.bed.bed.compression,
+                    self._frame_compression,
+                    self._frame_max_compression,
+                ],
+                device=self.device,
+            )
+            if self.mode == "drop":
                 wp.launch(
                     _accumulate_drop_metrics,
                     dim=1,
                     inputs=[
                         self.carrier,
                         self.state_0.body_qd,
-                        self.foundation.normal_force,
-                        self.foundation.max_compression,
+                        self._force,
+                        self._frame_max_compression,
                         self.sim_dt,
                         self._peak_force,
                         self._peak_compression,
@@ -376,25 +350,31 @@ class Example:
                 )
                 self.solver.step(self.state_0, self.state_1, self.control, None, self.sim_dt)
                 self.state_0, self.state_1 = self.state_1, self.state_0
-            wp.launch(
-                _accumulate_frame_compression,
-                dim=self.column_count,
-                inputs=[
-                    self.foundation.compression,
-                    self._frame_compression,
-                    self._frame_max_compression,
-                ],
-                device=self.device,
-            )
+            else:
+                wp.launch(
+                    _track_peak_metrics,
+                    dim=1,
+                    inputs=[self._force, self._frame_max_compression, self._peak_force, self._peak_compression],
+                    device=self.device,
+                )
             self.sim_time += self.sim_dt
+
+    def diagnostics(self) -> dict[str, float]:
+        """Return the last substep's contact force [N], plane pressure center [m] and loaded columns."""
+        center = self.bed.bed.pressure_center.numpy()[0]
+        return {
+            "normal_force_n": float(self._force.numpy()[0]),
+            "cop_x_m": float(center[0]),
+            "cop_y_m": float(center[1]),
+            "active_columns": int(np.count_nonzero(self.bed.bed.compression.numpy() > 0.0)),
+        }
 
     def step(self) -> None:
         self.simulate()
-        diagnostics = self.foundation.diagnostics()
         entry = {
             "time_s": self.sim_time,
             "frame_max_compression_mm": 1000.0 * float(self._frame_max_compression.numpy()[0]),
-            **diagnostics,
+            **self.diagnostics(),
         }
         if self.mode == "instron":
             phase = self.sim_time % self._period
@@ -425,47 +405,25 @@ class Example:
             inputs=[self._frame_compression, color_reference_m, self._colors],
             device=self.device,
         )
-        if self.mode == "instron":
-            wp.launch(
-                bench_column_endpoints,
-                dim=self.column_count,
-                inputs=[
-                    self._fixed_bottom,
-                    self.foundation.rest_len,
-                    self.foundation.compression,
-                    self._tops,
-                    self._points,
-                ],
-                device=self.device,
-            )
-            self.viewer.log_lines("digital_shoe/columns", self._fixed_bottom, self._points, self._colors, width=0.003)
-        else:
-            wp.launch(
-                carried_column_endpoints,
-                dim=self.column_count,
-                inputs=[
-                    self.carrier,
-                    self.state_0.body_q,
-                    self.foundation.anchor_local,
-                    self.foundation.rest_len,
-                    self.foundation.compression,
-                    self.foundation.driven,
-                    self.foundation.ground_height_m,
-                    self._points,
-                    self._tops,
-                ],
-                device=self.device,
-            )
-            self.viewer.log_lines("digital_shoe/columns", self._points, self._tops, self._colors, width=0.003)
+        wp.launch(
+            column_endpoints,
+            dim=self.column_count,
+            inputs=[
+                self.carrier,
+                self.state_0.body_q,
+                self.bed.bed.anchor_local,
+                self.bed.bed.rest_len,
+                self.bed.bed.top,
+                self.bed.bed.bottom,
+                self._bottoms,
+                self._tops,
+            ],
+            device=self.device,
+        )
+        self.viewer.log_lines("digital_shoe/columns", self._bottoms, self._tops, self._colors, width=0.003)
         point_radius = 0.0018 if self.mode == "drop" else 0.0025
-        if self.mode == "instron":
-            self.viewer.log_points(
-                "digital_shoe/spring_bases", self._fixed_bottom, radii=point_radius, colors=self._colors
-            )
-            self.viewer.log_points("digital_shoe/spring_tops", self._points, radii=point_radius, colors=self._colors)
-        else:
-            self.viewer.log_points("digital_shoe/spring_bases", self._points, radii=point_radius, colors=self._colors)
-            self.viewer.log_points("digital_shoe/spring_tops", self._tops, radii=point_radius, colors=self._colors)
+        self.viewer.log_points("digital_shoe/spring_bases", self._bottoms, radii=point_radius, colors=self._colors)
+        self.viewer.log_points("digital_shoe/spring_tops", self._tops, radii=point_radius, colors=self._colors)
         last = (
             self.history[-1]
             if self.history

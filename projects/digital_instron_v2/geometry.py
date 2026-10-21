@@ -156,6 +156,29 @@ def build_column_grid(mesh: Any, spacing_m: float, min_thickness_m: float = 0.00
     return ColumnGrid(uv[valid], bottom[valid], top[valid], spacing_m**2, spacing_m, thickness_axis)
 
 
+def neighbor_indices(uv: np.ndarray, grid_uv: np.ndarray, spacing: float) -> np.ndarray:
+    """Return the Pasternak 4-neighbour index table for the active columns.
+
+    Each of the four in-plane neighbours (-u, +u, -v, +v) is a non-negative
+    active-column index, ``-1`` for a footprint boundary, or ``-2`` for a midsole
+    cell outside the active set. Both negative codes are free (zero-gradient)
+    edges that carry no lateral coupling, so the shear layer redistributes load
+    without creating it.
+    """
+    cells = [tuple(np.rint(p / spacing).astype(int)) for p in uv]
+    index = {c: i for i, c in enumerate(cells)}
+    full = {tuple(np.rint(p / spacing).astype(int)) for p in grid_uv}
+    out = np.full((len(cells), 4), -2, dtype=np.int32)
+    for i, (u, v) in enumerate(cells):
+        for side, (du, dv) in enumerate(((-1, 0), (1, 0), (0, -1), (0, 1))):
+            c = (u + du, v + dv)
+            if c in index:
+                out[i, side] = index[c]
+            elif c not in full:
+                out[i, side] = -1
+    return out
+
+
 def rearfoot_center(mesh: Any, grid: ColumnGrid, length_fraction: float) -> np.ndarray:
     """Place the punch along the long footprint axis."""
 

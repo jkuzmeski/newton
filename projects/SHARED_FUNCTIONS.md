@@ -2,9 +2,9 @@
 
 | Computation | Owner | Consumers |
 |---|---|---|
-| Shoe material, contact, foundation runtime | `digital_shoe/` | Calibration, standalone shoe examples, Hogan runner |
+| Shoe material, contact, column bed | `digital_shoe/` | Sweep fit, standalone shoe examples, Hogan runner |
 | Camera look-at calculation | `digital_shoe.rendering.camera_look_at` | Showcase and Instron example |
-| Quaternion and attachment PD helpers | `digital_instron_v2.scenario_common` | Forward and differentiable calibration adapters |
+| Quaternion and attachment PD helpers | `digital_instron_v2.dynamics` | Instron example strides |
 | XYZ rotation and ray-origin setup | `digital_instron_v2.geometry` | Mesh loading and ray queries |
 | Planar chain mechanics | `impedance_instron.hogan.mechanics` | CPU runner and observation preparation |
 | CUDA chain/contact staging | `impedance_instron.hogan.gpu_mechanics` | Batched generative runner |

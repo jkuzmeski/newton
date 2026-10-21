@@ -1,17 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the Phase-1 held-out cycle-window split, metrics, and reporting."""
+"""Tests for the held-out cycle-window split and validation metrics."""
 
 import csv
-import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
 
-from projects.digital_instron_v2 import phase1, validation
+from projects.digital_instron_v2 import validation
 from projects.digital_instron_v2.cycle_windows import build_cycle_window_trace, infer_cycle_column
 from projects.digital_instron_v2.frame_qc import infer_frame_config, read_numeric_csv
 
@@ -93,35 +92,6 @@ class TestFrameQCAndCycleWindows(unittest.TestCase):
         displacement_mm = trace.data["displacement_m"] * 1000.0
         self.assertAlmostEqual(float(displacement_mm.min()), 0.0, places=6)
         self.assertAlmostEqual(float(displacement_mm.max()), 20.0, delta=0.5)  # cycle 2 amplitude = 2 * 10 mm
-
-    def test_generated_provenance_uses_manifest_relative_source_paths(self):
-        """Keep generated cycle provenance portable across clones and worktrees."""
-        manifest_path = Path(self._dir.name) / "manifest.json"
-        manifest_path.write_text(
-            json.dumps(
-                {
-                    "cycle_windows": {
-                        "output_dir": "processed",
-                        "phase_count": 31,
-                        "displacement_zero_policy": "top_of_stroke",
-                        "train": {"cycles": [1, 2], "suffix": "train"},
-                        "validate": {"cycles": [3, 4], "suffix": "validate"},
-                    },
-                    "trials": [
-                        {
-                            "name": "synthetic",
-                            "raw_csv_path": self.csv_path.name,
-                            "split_prefix": "synthetic",
-                        }
-                    ],
-                }
-            )
-        )
-
-        result = phase1.generate_split_traces(manifest_path)
-        provenance = json.loads(result["summary"].read_text())
-        self.assertEqual(provenance["synthetic"]["train"]["source_csv"], self.csv_path.name)
-        self.assertFalse(Path(provenance["synthetic"]["validate"]["source_csv"]).is_absolute())
 
     def test_force_sign_flip_makes_force_compressive(self):
         """Report positive compressive force from a negative machine-force trace."""

@@ -7,7 +7,6 @@ import itertools
 import math
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import numpy as np
 import warp as wp
@@ -26,6 +25,7 @@ def _initial():
     )
 
 
+@unittest.skipUnless(wp.is_cuda_available(), "The column bed requires CUDA")
 class TestLeastSquares(unittest.TestCase):
     """Keep LM residuals consistent with the reported score and fit on training data."""
 
@@ -277,37 +277,6 @@ class TestLeastSquares(unittest.TestCase):
         self.assertGreater(np.max(np.abs(expected[0][24 : 24 + 2 * steps] - raw[0][24 : 24 + 2 * steps])), 1e-6)
         self.assertGreater(np.max(np.abs(rows[0][24 + 2 * steps : objective.offsets[1]])), 0.0)
         self.assertEqual({m["status"] for m in motion[0]}, {"completed"})
-
-    @unittest.skipUnless(wp.is_cuda_available(), "CUDA required")
-    def test_fast_jacobian_redoes_differences_exactly_when_its_reference_fails(self):
-        """Fall back to exact finite differences in the same batch when the fast reference rollout fails."""
-        trials = [self.trial(), self.trial(split="train", duration=0.0061)]
-        x = np.random.default_rng(3).normal(0, 0.02, self.parameters.size)
-        engines = [
-            least_squares._DeviceEngine(
-                self.parameters, trials, self.config, least_squares.LMConfig(fast_jacobian=fast), "cuda:0"
-            )
-            for fast in (False, True)
-        ]
-        for engine in engines:
-            self.assertIsNotNone(engine.start(x))
-        objective = engines[1].objective
-        evaluate, modes = objective.evaluate, []
-
-        def failing_reference(models, rows, *, metrics=False, fast=False):
-            modes.append((len(models), fast))
-            completed, sums, motion = evaluate(models, rows, metrics=metrics, fast=fast)
-            if fast:
-                completed[-1] = False
-            return completed, sums, motion
-
-        with patch.object(objective, "evaluate", side_effect=failing_reference):
-            fallback = engines[1].jacobian(x)
-        n = self.parameters.size + 1
-        self.assertEqual(modes, [(n, True), (n, False)])
-        self.assertEqual({capacity for _, capacity in objective._groups}, {1, min(n, objective.chunk)})
-        for actual, expected in zip(fallback, engines[0].jacobian(x), strict=True):
-            np.testing.assert_array_equal(actual, expected)
 
 
 if __name__ == "__main__":

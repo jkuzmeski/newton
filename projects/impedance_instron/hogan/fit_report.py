@@ -289,7 +289,6 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
         pitch_rad=command["pitch"],
         speed_m_s=command["speed"],
         height_offset_m=command["height_offset"],
-        friction_model=command["friction_model"],
         limit_per_split=command["limit_per_split"],
         force_observation=force_observation(command),
     )
@@ -430,7 +429,6 @@ def rebuild_motion_from_saved_traces(run: Path) -> Path:
         pitch_rad=command["pitch"],
         speed_m_s=command["speed"],
         height_offset_m=command["height_offset"],
-        friction_model=command["friction_model"],
         limit_per_split=command["limit_per_split"],
         force_observation=force_observation(command),
     )

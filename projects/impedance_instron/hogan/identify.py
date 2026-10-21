@@ -304,7 +304,6 @@ def load_trials(
     pitch_rad: float | None = None,
     speed_m_s: float | None = None,
     height_offset_m: float = 0.0,
-    friction_model: str = "elastic_coulomb",
     limit_per_split: int | None = None,
     force_observation: ForceObservation | None = None,
 ) -> list[Trial]:
@@ -360,9 +359,9 @@ def load_trials(
         offset = float(member.get("height_offset_m", height_offset_m))
         rest = RestOfBody(**manifest.get("rest_of_body", {}))
         chain = chain_from_profile(reference, profile_data.load(profile_path), rest)
-        key = (str(shoe_path), tuple(mount), float(pitch), friction_model)
+        key = (str(shoe_path), tuple(mount), float(pitch))
         if key not in shoes:
-            shoes[key] = Shoe(shoe_path, mount, pitch, friction_model=friction_model)
+            shoes[key] = Shoe(shoe_path, mount, pitch)
         shoe = shoes[key]
         q = coordinates(reference, chain, height_offset_m=offset)
         if len(q) < 4:
@@ -416,7 +415,6 @@ def load_trials(
                         "no Hogan filter or GRF COM correction"
                     ),
                     "rest_of_body": asdict(rest),
-                    "friction_model": friction_model,
                     "force_observation": None if force_observation is None else asdict(force_observation),
                     "compatibility": qc,
                 },
@@ -476,7 +474,6 @@ def scenario(trial: Trial, config: RolloutConfig) -> dict:
             "sha256": trial.provenance["shoe_sha256"],
             "mount_m": trial.provenance["mount_m"],
             "pitch_rad": trial.provenance["pitch_rad"],
-            "friction_model": trial.provenance["friction_model"],
         },
         "initial": {
             "q": trial.initial.q.tolist(),
@@ -646,17 +643,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--pitch", type=float)
     parser.add_argument("--speed", type=float, help="Known task speed [m/s]; members may override")
     parser.add_argument("--height-offset", type=float, default=0.0)
-    parser.add_argument(
-        "--friction-model",
-        choices=("elastic_coulomb", "column_maxwell", "maxwell", "legacy"),
-        default="elastic_coulomb",
-    )
     parser.add_argument("--dt", type=float, default=1.25e-4)
     parser.add_argument(
         "--compression-limit",
         type=float,
         default=RolloutConfig.compression_limit,
-        help="Driven-shoe compression fraction that ends a rollout as failed",
+        help="Held-column compression fraction that ends a rollout as failed",
     )
     parser.add_argument("--device", default="cuda:0", help="CUDA backend by default; cpu selects the reference")
     parser.add_argument("--limit-per-split", type=int, help="Explicit small subset for implementation checks")
@@ -670,11 +662,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--lm-objective", choices=("sample", "score"), default="sample", help="LM residual objective")
     parser.add_argument("--lm-tolerance", type=float, default=1e-4, help="Relative improvement stopping tolerance")
     parser.add_argument("--central", action="store_true", help="LM central-difference Jacobian")
-    parser.add_argument(
-        "--exact-jacobian",
-        action="store_true",
-        help="Integrate LM finite differences with exact shoe kernels instead of fast math on CUDA",
-    )
     parser.add_argument(
         "--intrinsic-damping",
         type=float,
@@ -724,7 +711,6 @@ def main(argv: list[str] | None = None) -> None:
         pitch_rad=args.pitch,
         speed_m_s=args.speed,
         height_offset_m=args.height_offset,
-        friction_model=args.friction_model,
         limit_per_split=args.limit_per_split,
         force_observation=force_observation(vars(args)),
     )
@@ -762,7 +748,6 @@ def main(argv: list[str] | None = None) -> None:
                 objective=args.lm_objective,
                 tolerance=args.lm_tolerance,
                 central=args.central,
-                fast_jacobian=not args.exact_jacobian,
             ),
             allow_incompatible=args.allow_incompatible,
             device=args.device,
@@ -788,13 +773,11 @@ def main(argv: list[str] | None = None) -> None:
         Path(__file__).with_name("mechanics.py"),
         Path(__file__).with_name("gpu_runner.py"),
         Path(__file__).with_name("gpu_residuals.py"),
-        Path(__file__).with_name("gpu_shoe.py"),
         Path(__file__).with_name("gpu_mechanics.py"),
         Path(__file__).with_name("least_squares.py"),
         project_root / "cartesian/shoe.py",
         project_root / "cartesian/data.py",
         project_root / "cartesian/profile.py",
-        project_root / "cartesian/gpu/foundation.py",
     ]
     sources.extend((project_root.parent / "digital_shoe").glob("*.py"))
     report["source_sha256"] = {str(path.relative_to(project_root.parent)): _hash(path) for path in sources}

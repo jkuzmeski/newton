@@ -5,6 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Footwear simulation: contact and material laws
 
+> **Historical record.** This document describes the one-unknown-per-column law
+> that preceded the two-surface column bed (`projects/digital_shoe/column_bed.py`).
+> That law and the modules cited here (for example `phase1.py`, `workflow.py`,
+> `inverse_id.py`, `dynamics_diff.py`, `calibration.py`) have been removed; the
+> commands no longer run.
+
 ## Digital Shoe and Digital Instron — two-term model
 
 **Technical report · current implementation audit · internal research use**

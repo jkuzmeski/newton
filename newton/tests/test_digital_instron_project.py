@@ -5,14 +5,12 @@
 
 import json
 import unittest
-from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
 
-from projects.digital_instron_v2.core import CALIBRATED_MATERIAL, metrics, predict
+from projects.digital_instron_v2.core import metrics
 from projects.digital_instron_v2.geometry import build_column_grid, load_mesh, raycast_surface, transform_mesh
-from projects.digital_instron_v2.workflow import prepare_trials
 
 
 class TestDigitalInstronProject(unittest.TestCase):
@@ -153,43 +151,6 @@ class TestDigitalInstronProject(unittest.TestCase):
         result = metrics(force, force, displacement)
         self.assertEqual(result["force_rmse_relative"], 0.0)
         self.assertEqual(result["peak_force_error"], 0.0)
-
-    def test_shared_pointwise_fit_matches_both_branches(self):
-        """Keep loading and unloading RMSE below ten percent for both fixtures."""
-
-        base = Path("DigitalInstron")
-        config = json.loads((base / "manifest_v2.json").read_text())
-        midsole = load_mesh(base / config["midsole_mesh"], 0.001)
-        grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
-        trials, displacement, uv = prepare_trials(base, config, grid, midsole)
-        # The shipped calibration, not a frozen copy of it: the material vector changed
-        # when the Pasternak coefficient stopped being fitted and the full-foot fixture
-        # gained its series compliance, so a hand-copied 4-vector silently means something
-        # else now.
-        material = CALIBRATED_MATERIAL
-
-        for trial in trials:
-            result = metrics(trial.force_n, predict(trial, material), displacement[trial.name])
-            self.assertLess(result["loading_rmse_relative"], 0.10, f"{trial.name}: {result}")
-            self.assertLess(result["unloading_rmse_relative"], 0.10, f"{trial.name}: {result}")
-
-        fullfoot = next(trial for trial in trials if trial.name == "fullfoot_185ms")
-        initial_active = np.count_nonzero(fullfoot.slack_m - fullfoot.lengths_m[0] > 0.0)
-        self.assertGreaterEqual(initial_active, 20)
-        self.assertLessEqual(initial_active, 40)
-        peak_frame = int(np.argmax(fullfoot.displacement_m))
-        compression = np.maximum(fullfoot.slack_m - fullfoot.lengths_m[peak_frame], 0.0)
-        centroid_x = float(np.average(uv[fullfoot.name][:, 0], weights=compression))
-        self.assertLess(abs(centroid_x), 0.01)
-
-        edges = np.linspace(np.min(uv[fullfoot.name][:, 0]), np.max(uv[fullfoot.name][:, 0]), 5)
-        quartile_compression = np.asarray(
-            [
-                np.sum(compression[(uv[fullfoot.name][:, 0] >= lower) & (uv[fullfoot.name][:, 0] < upper)])
-                for lower, upper in pairwise(edges)
-            ]
-        )
-        self.assertLess(float(np.max(quartile_compression) / np.min(quartile_compression)), 1.5)
 
 
 if __name__ == "__main__":

@@ -96,17 +96,14 @@ stay local and ignored; the tools do not change the shoe or physics sources.
 
 ## Standalone friction mechanics
 
-[Compare tangential models](FRICTION.md) with five opt-in solver modes
+[Compare tangential models](FRICTION.md) with five solver modes
 (explicit/implicit legacy bristle, regularized Coulomb, and explicit/implicit
-consistent deflection) while leaving normal compression, material, and contact
-mechanics unchanged.
+consistent deflection) under prescribed normal loading. These modes are a
+standalone comparison; the column bed always uses elastic Coulomb friction.
 
 The retired Cartesian-controller replay, search, and refit experiments are no
-longer supported. Shared constitutive laws, foundation adapters, and the standalone
-friction example remain available. Read
-[FRICTION_IDENTIFICATION.md](FRICTION_IDENTIFICATION.md) for adapter parameters and
-calibration limits, [FRICTION_ONSET.md](FRICTION_ONSET.md) for supplied-signal
-observation helpers, and [FRICTION_CONTINUITY.md](FRICTION_CONTINUITY.md) for
+longer supported. Read [FRICTION_ONSET.md](FRICTION_ONSET.md) for supplied-signal
+observation helpers and [FRICTION_CONTINUITY.md](FRICTION_CONTINUITY.md) for
 constitutive continuity and internal shear relaxation.
 
 ```bash
@@ -118,31 +115,23 @@ uv run --no-sync -m projects.digital_shoe friction --mode implicit_deflection --
 
 This package owns the mechanics used by Digital Instron and the impedance rigs.
 `material.py` defines one set of Ogden–Hill/Maxwell expressions for both vectorized
-NumPy fitting and compiled Warp simulation/autodiff. `contact.py` defines the
-unilateral support, symmetric neighbor coupling, passive balance and anchored
-bristle law. `runtime.py` and the differentiable adapters differ in state storage,
-not in their active material or friction equations.
+NumPy evaluation and compiled Warp simulation. `contact.py` defines the symmetric
+neighbor coupling, the bristle laws and the two-surface column balance.
+`column_bed.py` steps the whole bed on the GPU: each column has a bottom that
+lands on the ground plane and a top that is bonded to, pressed by, or free of the
+carrier surface. `runtime.py` holds the material block and `FoundationConfig`.
 
-`FoundationConfig` and the impedance leg shoe default to
-`elastic_coulomb`: each column uses `G_eq A / L` stiffness with a Coulomb cap
-and no tangential damping. Explicit `maxwell` and `column_maxwell` modes remain
-available; see
-[`FRICTION_COLUMN.md`](FRICTION_COLUMN.md) for its equations, compatibility, and
-calibration limits.
+The column bed uses elastic Coulomb friction: each column uses `G_eq A / L`
+stiffness with a Coulomb cap and no tangential damping; see
+[`FRICTION_COLUMN.md`](FRICTION_COLUMN.md) for its equations and calibration
+limits.
 
-`rendering.py` reconstructs shared bench and carried-shoe endpoint geometry. It
-does not interpret a pressure reference or a friction anchor as a material-point
-displacement. The carried passive surround follows the shoe during flight.
+`rendering.py` draws each column from its solved bottom and top
+(`column_endpoints`). It does not interpret a pressure reference or a friction
+anchor as a material-point displacement.
 
-A bench indenter and a carried shoe require different geometric boundary inputs.
-Only a carried outsole opts into `FoundationConfig.ground_height_m`; its external
-ground force, friction capacity, COP and full wrench then use actual plane
-contact points. Bench top anchors retain their own reference datum and report
-indenter load transfer. The material and contact primitives remain shared.
-
-See `CONSOLIDATION.md` and `projects/digital_instron_v2/README.md` for the adapter
-map, compatibility notes and validation commands. Source identities used by the
-impedance checkpoint include the runtime **and** shared material/contact modules.
+Source identities used by the impedance checkpoint include the column bed
+**and** the shared material/contact modules.
 
 ## Identify and export
 

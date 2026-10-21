@@ -81,7 +81,6 @@ class TestHoganFullRun(unittest.TestCase):
             pitch_rad=command["pitch"],
             speed_m_s=command["speed"],
             height_offset_m=command["height_offset"],
-            friction_model=command["friction_model"],
             limit_per_split=command["limit_per_split"],
         )
         model = Runner.load(MODEL)

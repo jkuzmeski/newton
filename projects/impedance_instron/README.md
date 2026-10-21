@@ -91,12 +91,11 @@ uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_i
 ```
 
 Choose a new output directory. CUDA is the default; `--device cpu` selects the
-reference backend. Use `--limit-per-split 1 --iterations 1` for a small fit.
-The full baseline fit originally took about 82 minutes on an RTX A4000 Laptop
-GPU; the batched CUDA runtime now takes about 15 s per LM iteration. Its finite
-differences use fast-math shoe kernels while costs and accepted steps stay
-exact; `--exact-jacobian` replays the original rollouts exactly at about 20 s
-per iteration. `--chunk` (default 128) sets candidates integrated
+reference backend, which integrates the body on the host and steps the CUDA
+column bed once per step. Use `--limit-per-split 1 --iterations 1` for a small
+fit. The saved baseline fits ran with the earlier single-unknown shoe law; the
+shoe is now the two-surface column bed, so their traces and costs are not
+reproduced exactly. `--chunk` (default 128) sets candidates integrated
 concurrently; 128 candidates over 98 stances need about 2.5 GB of GPU memory,
 so lower it on smaller GPUs. It changes speed, not results.
 
@@ -151,8 +150,8 @@ uv run --no-sync -m projects.impedance_instron generate --model projects/impedan
 - [Model and method](hogan/GENERATIVE_RUNNER.md): initialization, loss, baseline results, and limitations.
 - [Visual3D inputs](VISUAL3D_INPUTS.md): clocks, reference frames, and data preparation.
 - `hogan/`: CPU/CUDA dynamics, LM identification, frozen generation, and reporting.
-- `cartesian/`: retained measurement/profile preparation and shoe attachment;
-  `cartesian/gpu/foundation.py` is the shared batched shoe adapter, not another runner model.
+- `cartesian/`: retained measurement/profile preparation and shoe attachment to
+  the shared CUDA column bed (`projects/digital_shoe/column_bed.py`).
 
 The retired Cartesian equilibrium searches, reference-tracking Hogan schedules,
 CEM optimizer, quick-fit/recovery experiments, old controller bundles, and their

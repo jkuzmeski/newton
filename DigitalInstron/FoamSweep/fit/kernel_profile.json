@@ -1,0 +1,524 @@
+{
+  "gpu": "NVIDIA RTX A4000 Laptop GPU (sm_86, 40 SMs), Warp 1.18.0; laptop clocks drift, so before/after are interleaved in one process and minimum times are reported",
+  "instron_replay": {
+    "setup": "LastReplay.run, FR3 train traces, 24 traces x 7 candidates = 168 worlds, 917 columns, 501 frames x 2 cycles, 16 sweeps, omega 1.8",
+    "launch_s": {
+      "before": 1.492733600000065,
+      "after_restructure": 0.7738811000017449,
+      "after": 0.46913860000131535
+    },
+    "launch_s_dev3": {
+      "before": 1.5614150000001246,
+      "after_restructure": 0.7842152999983227,
+      "after": 0.4848146000003908
+    },
+    "residual_evaluation_s_per_material": {
+      "before": 0.21324765714286645,
+      "after": 0.06701980000018791
+    },
+    "per_kernel_ms_per_cycle": {
+      "column_bed_step": {
+        "before": 797.9632643461227,
+        "after": 238.37878667038495
+      },
+      "drive": {
+        "before": 3.286016061902046,
+        "after": 2.708018178376521
+      },
+      "record": {
+        "before": 2.9931520563550293,
+        "after": 2.61163968769199
+      },
+      "column_extremes (new physical() check)": {
+        "before": null,
+        "after": 5.3515424311189435
+      }
+    },
+    "launches_per_step": {
+      "before": 3,
+      "after": 4
+    },
+    "host_launch_us": 23.697499991612858,
+    "sweep_scaling_s_per_launch": {
+      "after": {
+        "1": 0.145,
+        "2": 0.186,
+        "8": 0.42,
+        "16": 0.751
+      },
+      "before": {
+        "1": 0.367,
+        "16": 1.576
+      }
+    },
+    "max_relative_force_change_vs_before": {
+      "FR3": 5.231069735600613e-05,
+      "Dev3": 9.014049282995984e-05
+    },
+    "force_error_vs_converged_frac_peak": {
+      "FR3": 0.005753409117460251,
+      "Dev3": 0.0023464085534214973
+    }
+  },
+  "runner": {
+    "setup": "generative_runner_f01 reference scenarios; GpuBatch warm wall per step (min of 3), host simulate() per step",
+    "1x1": {
+      "before_ms_per_step": 0.36601500000043335,
+      "after_restructure_ms_per_step": 0.2507429166667641,
+      "after_ms_per_step": 0.16792321969687968
+    },
+    "64x1": {
+      "before_ms_per_step": 0.960374128788482,
+      "after_restructure_ms_per_step": 0.45519867424197646,
+      "after_ms_per_step": 0.31647647727257927
+    },
+    "64x16": {
+      "before_ms_per_step": 17.611788896822095,
+      "after_restructure_ms_per_step": 5.387088432702898,
+      "after_ms_per_step": 3.6878449839341325
+    },
+    "max_abs_grf_change_n": 0.008056640625,
+    "simulate_host_restructure_only": {
+      "before_ms_per_step": 0.9048672348481804,
+      "after_ms_per_step": 0.8674505303030277
+    }
+  },
+  "column_bed_kernel": {
+    "before": {
+      "registers": 128,
+      "local_bytes_per_thread": 760,
+      "static_shared_bytes": 9296,
+      "cubin_bytes": 1161456,
+      "blocks_per_sm": 2,
+      "cold_compile_s": 33.2
+    },
+    "after": {
+      "registers": 128,
+      "local_bytes_per_thread": 0,
+      "static_shared_bytes": 21600,
+      "cubin_bytes": 426736,
+      "blocks_per_sm": 2,
+      "cold_compile_s": 0.9,
+      "note": "register/spill numbers are for the restructured build; fast_math was not re-inspected"
+    }
+  },
+  "notes": [
+    "Cause of the old cost: Warp unrolled the constant row (4) and color (2) loops, so the column solve was compiled 8 times (1.16 MB cubin, 33 s cold compile) and the per-row register vectors spilled 760 B/thread to local memory.",
+    "Change: the bed state (top, bottom, clearance, overstress, support) lives only in shared memory and the row/half-sweep loops have runtime bounds, so the solve is compiled once with no spills; same arithmetic per column.",
+    "Change: a sweep that moves no column ends the step's sweeps early (block-wide flag); the next sweep would reproduce the same state, so this is bitwise neutral (verified) and helps the runner in flight (64x16: about 12%), not the Instron replay (never exactly at a fixed point).",
+    "Forces change by at most 5.9e-6 of the peak (Instron) and 0.0065 N (runner GRF) versus the old build. This is compiler rounding (FMA contraction differs between the unrolled and the single copy), amplified by the unconverged 16-sweep solve; changing only the block-reduction order (512 lanes) already moves forces by 2.4e-7, and 16 sweeps differ from a converged solve by about 1.5e-4. Bitwise identity with the old build is not reachable by any restructuring.",
+    "Where the time goes now (attribution by removing parts): the 16 sweeps are about 86% of a step; inside a column update the active-set solve is about 42% and the two Hyperfoam pressure evaluations (4 powf) about 28% of the launch. The kernel is latency-bound: 2 blocks of 256 lanes per SM (16 warps, 33% occupancy, register-limited at 128).",
+    "Host side: the Instron cycle is one CUDA graph; graph and eager replays take the same time and host launch cost is ~24 us against ~0.8 ms of GPU work per step, so host work is not a bottleneck.",
+    "Tried, not kept: precomputed face couplings in shared memory (11% slower); launch_bounds (256,3)/(256,4) (register caps 80/64 spill, 15-60% slower); launch_bounds (256,1) (30% slower); 128 or 512 lanes per world (2-30% slower); two columns per lane for ILP (8% slower); enable_backward=False (no runtime change).",
+    "Adopted fast_math after the accuracy study (result_changing_study): it adds 3e-6 of peak against the converged solve, the 16-sweep truncation error is 5.8e-3 (FR3) / 2.3e-3 (Dev3). The convergence-tolerance exit was not adopted.",
+    "Per-kernel 'after' times are scaled from a separate profiling process to the interleaved launch time (clock drift between processes)."
+  ],
+  "result_changing_study": {
+    "reference": "128 sweeps, no fast_math, per shoe at its bound-40 fitted material, all 54 traces (identical to 512 sweeps within 1e-6 of peak)",
+    "variant_names": "s16 = today; fm = fast_math; cN_tolT = sweep cap N with per-world exit when no column moves more than T metres in a sweep",
+    "instron_accuracy": {
+      "FR3": {
+        "ref128": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0,
+          "err_median_frac_peak": 0.0,
+          "val_peak_err_median_pct": 3.1815549684106976,
+          "val_rmse_median_pct": 2.290108957791769,
+          "mean_sweeps": 128.0,
+          "max_sweeps": 128
+        },
+        "s16": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.005753353238105774,
+          "err_median_frac_peak": 0.0033003618009388447,
+          "val_peak_err_median_pct": 3.1952918877113086,
+          "val_rmse_median_pct": 2.294383318700515,
+          "mean_sweeps": 16.0,
+          "max_sweeps": 16
+        },
+        "fm16": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0057535963132977486,
+          "err_median_frac_peak": 0.0033004162833094597,
+          "val_peak_err_median_pct": 3.1953040928461576,
+          "val_rmse_median_pct": 2.294382377843538,
+          "mean_sweeps": 16.0,
+          "max_sweeps": 16
+        },
+        "fm128": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 2.718380301303114e-06,
+          "err_median_frac_peak": 1.9221452021156438e-06,
+          "val_peak_err_median_pct": 3.1815763274619546,
+          "val_rmse_median_pct": 2.2901076728705125,
+          "mean_sweeps": 128.0,
+          "max_sweeps": 128
+        },
+        "c16_tol1e-7": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0057533434592187405,
+          "err_median_frac_peak": 0.0033003506250679493,
+          "val_peak_err_median_pct": 3.195255272297092,
+          "val_rmse_median_pct": 2.2943923999056435,
+          "mean_sweeps": 15.81058253862645,
+          "max_sweeps": 16
+        },
+        "c16_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.005753409117460251,
+          "err_median_frac_peak": 0.003300335258245468,
+          "val_peak_err_median_pct": 3.1953193494218532,
+          "val_rmse_median_pct": 2.2943855694512183,
+          "mean_sweeps": 15.972813631995267,
+          "max_sweeps": 16
+        },
+        "fm_c16_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.005753456149250269,
+          "err_median_frac_peak": 0.00330043095164001,
+          "val_peak_err_median_pct": 3.1952766313870287,
+          "val_rmse_median_pct": 2.2943822211551517,
+          "mean_sweeps": 15.973109336881793,
+          "max_sweeps": 16
+        },
+        "c24_tol1e-7": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0022150790318846703,
+          "err_median_frac_peak": 0.0012087555369362235,
+          "val_peak_err_median_pct": 3.182326944865184,
+          "val_rmse_median_pct": 2.296077760046153,
+          "mean_sweeps": 22.54882826938715,
+          "max_sweeps": 24
+        },
+        "c32_tol1e-7": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0010985835688188672,
+          "err_median_frac_peak": 0.0005961217684671283,
+          "val_peak_err_median_pct": 3.181670918211928,
+          "val_rmse_median_pct": 2.292454974484645,
+          "mean_sweeps": 27.391938345531162,
+          "max_sweeps": 32
+        },
+        "c64_tol1e-7": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.00018323051335755736,
+          "err_median_frac_peak": 8.461099059786648e-05,
+          "val_peak_err_median_pct": 3.1814237633585374,
+          "val_rmse_median_pct": 2.2923006729026354,
+          "mean_sweeps": 32.46889554224884,
+          "max_sweeps": 64
+        },
+        "c64_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0001212662537000142,
+          "err_median_frac_peak": 6.61979429423809e-05,
+          "val_peak_err_median_pct": 3.1814512244308735,
+          "val_rmse_median_pct": 2.2908770850173674,
+          "mean_sweeps": 42.24083314851779,
+          "max_sweeps": 64
+        },
+        "fm_c64_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.00012122882617404684,
+          "err_median_frac_peak": 6.621342618018389e-05,
+          "val_peak_err_median_pct": 3.181564122336775,
+          "val_rmse_median_pct": 2.2908776514531777,
+          "mean_sweeps": 42.348229466991945,
+          "max_sweeps": 64
+        }
+      },
+      "Dev3": {
+        "ref128": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0,
+          "err_median_frac_peak": 0.0,
+          "val_peak_err_median_pct": 2.4909736171201624,
+          "val_rmse_median_pct": 2.529742900615659,
+          "mean_sweeps": 128.0,
+          "max_sweeps": 128
+        },
+        "s16": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.002345715882256627,
+          "err_median_frac_peak": 0.001772457966580987,
+          "val_peak_err_median_pct": 2.4746545270210403,
+          "val_rmse_median_pct": 2.534051874087066,
+          "mean_sweeps": 16.0,
+          "max_sweeps": 16
+        },
+        "fm16": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.002345715882256627,
+          "err_median_frac_peak": 0.0017722705379128456,
+          "val_peak_err_median_pct": 2.474695725295131,
+          "val_rmse_median_pct": 2.534050355416505,
+          "mean_sweeps": 16.0,
+          "max_sweeps": 16
+        },
+        "fm128": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 2.0758102436957415e-06,
+          "err_median_frac_peak": 1.3884060763302841e-06,
+          "val_peak_err_median_pct": 2.491014060805418,
+          "val_rmse_median_pct": 2.5297408287863727,
+          "mean_sweeps": 128.0,
+          "max_sweeps": 128
+        },
+        "c16_tol1e-7": {
+          "nonphysical_traces": 1,
+          "err_max_frac_peak": 0.0023457929491996765,
+          "err_median_frac_peak": 0.0017848401330411434,
+          "val_peak_err_median_pct": 2.4746568142498893,
+          "val_rmse_median_pct": 2.5340579260716556,
+          "mean_sweeps": 15.70540400680121,
+          "max_sweeps": 16
+        },
+        "c16_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.002346100751310587,
+          "err_median_frac_peak": 0.0017726183868944645,
+          "val_peak_err_median_pct": 2.474647655949557,
+          "val_rmse_median_pct": 2.5340484932096796,
+          "mean_sweeps": 15.924890958823095,
+          "max_sweeps": 16
+        },
+        "fm_c16_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 0.0023454849142581224,
+          "err_median_frac_peak": 0.0017724578501656651,
+          "val_peak_err_median_pct": 2.4747209082748114,
+          "val_rmse_median_pct": 2.534051261825776,
+          "mean_sweeps": 15.9246691801582,
+          "max_sweeps": 16
+        },
+        "c24_tol1e-7": {
+          "nonphysical_traces": 1,
+          "err_max_frac_peak": 0.0003039882576558739,
+          "err_median_frac_peak": 0.000220297763007693,
+          "val_peak_err_median_pct": 2.4910606162808526,
+          "val_rmse_median_pct": 2.5308027392949137,
+          "mean_sweeps": 21.83799068529607,
+          "max_sweeps": 24
+        },
+        "c32_tol1e-7": {
+          "nonphysical_traces": 1,
+          "err_max_frac_peak": 0.00011925197759410366,
+          "err_median_frac_peak": 6.890158692840487e-05,
+          "val_peak_err_median_pct": 2.4912391092879678,
+          "val_rmse_median_pct": 2.5302849828643756,
+          "mean_sweeps": 25.849523175870484,
+          "max_sweeps": 32
+        },
+        "c64_tol1e-7": {
+          "nonphysical_traces": 1,
+          "err_max_frac_peak": 4.768296275869943e-05,
+          "err_median_frac_peak": 2.2258138415054418e-05,
+          "val_peak_err_median_pct": 2.4907332750847586,
+          "val_rmse_median_pct": 2.5303989854203044,
+          "mean_sweeps": 28.733884083684483,
+          "max_sweeps": 64
+        },
+        "c64_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 1.7109234249801375e-05,
+          "err_median_frac_peak": 7.315375114558265e-06,
+          "val_peak_err_median_pct": 2.490983530009331,
+          "val_rmse_median_pct": 2.5299693239209304,
+          "mean_sweeps": 36.58534782287278,
+          "max_sweeps": 64
+        },
+        "fm_c64_tol3e-8": {
+          "nonphysical_traces": 0,
+          "err_max_frac_peak": 1.706056900729891e-05,
+          "err_median_frac_peak": 7.385061962850159e-06,
+          "val_peak_err_median_pct": 2.491027793563448,
+          "val_rmse_median_pct": 2.5299706731161047,
+          "mean_sweeps": 36.64112515709322,
+          "max_sweeps": 64
+        }
+      }
+    },
+    "runner_reference_trial_vs_128_sweeps": {
+      "ref128": {
+        "max_abs_n": 0.0,
+        "rel_peak": 0.0,
+        "mean_sweeps": 118.36519152101152,
+        "max_sweeps": 128.0,
+        "contact_s": 0.23187499297348482,
+        "peak_h": 224.7832794189453,
+        "peak_v": 1973.5926513671875
+      },
+      "s16": {
+        "max_abs_n": 0.2613525390625,
+        "rel_peak": 0.00013242476297297242,
+        "mean_sweeps": 14.86203049460766,
+        "max_sweeps": 16.0,
+        "contact_s": 0.23187499297348482,
+        "peak_h": 224.77685546875,
+        "peak_v": 1973.5517578125
+      },
+      "fm16": {
+        "max_abs_n": 0.261474609375,
+        "rel_peak": 0.00013248661480061042,
+        "mean_sweeps": 14.86203049460766,
+        "max_sweeps": 16.0,
+        "contact_s": 0.23187499297348482,
+        "peak_h": 224.7765655517578,
+        "peak_v": 1973.5521240234375
+      },
+      "c16_tol3e-8": {
+        "max_abs_n": 0.2613525390625,
+        "rel_peak": 0.00013242476297297242,
+        "mean_sweeps": 12.52547415396058,
+        "max_sweeps": 16.0,
+        "contact_s": 0.23187499297348482,
+        "peak_h": 224.77685546875,
+        "peak_v": 1973.5517578125
+      },
+      "fm_c16_tol3e-8": {
+        "max_abs_n": 0.261474609375,
+        "rel_peak": 0.00013248661480061042,
+        "mean_sweeps": 12.52547415396058,
+        "max_sweeps": 16.0,
+        "contact_s": 0.23187499297348482,
+        "peak_h": 224.7765655517578,
+        "peak_v": 1973.5521240234375
+      },
+      "c64_tol3e-8": {
+        "max_abs_n": 0.0087890625,
+        "rel_peak": 4.453331589936485e-06,
+        "mean_sweeps": 30.195611751580515,
+        "max_sweeps": 64.0,
+        "contact_s": 0.23187499297348482,
+        "peak_h": 224.7830810546875,
+        "peak_v": 1973.5924072265625
+      },
+      "fm_c64_tol3e-8": {
+        "max_abs_n": 0.0087890625,
+        "rel_peak": 4.453331589936485e-06,
+        "mean_sweeps": 30.204908888062477,
+        "max_sweeps": 64.0,
+        "contact_s": 0.23187499297348482,
+        "peak_h": 224.78311157226562,
+        "peak_v": 1973.59228515625
+      }
+    },
+    "instron_launch_s_168_worlds": {
+      "FR3": {
+        "cur": 0.7739829000001919,
+        "vT:16:0": 0.779289099999005,
+        "vTF:16:0": 0.47291840000070806,
+        "vT:16:3e-8": 0.7761663000001136,
+        "vTF:16:3e-8": 0.4749312000003556,
+        "vT:64:3e-8": 1.9136142999996082,
+        "vTF:64:3e-8": 1.1414272000001802,
+        "vT:64:0": 2.8563751999990927
+      },
+      "Dev3": {
+        "cur": 1.1283555999998498,
+        "vT:16:0": 1.1323960999998235,
+        "vTF:16:0": 0.7031726999994135,
+        "vT:16:3e-8": 1.1283203000002686,
+        "vTF:16:3e-8": 0.6995714000004227,
+        "vT:64:3e-8": 2.4417360999996163,
+        "vTF:64:3e-8": 1.4767334000007395,
+        "vT:64:0": 4.150740499999301
+      }
+    },
+    "runner_ms_per_step": {
+      "1x1": {
+        "cur": 0.24205871212126856,
+        "vT:16:0": 0.24253128787856412,
+        "vTF:16:0": 0.1651995075759039,
+        "vT:16:3e-8": 0.2164509090906711,
+        "vTF:16:3e-8": 0.15094128787867786,
+        "vT:64:3e-8": 0.4142044318183308,
+        "vTF:64:3e-8": 0.25940795454502996,
+        "vT:64:0": 0.7502797727277015
+      },
+      "64x1": {
+        "cur": 0.4542544318183266,
+        "vT:16:0": 0.4548948484846209,
+        "vTF:16:0": 0.3153442803033723,
+        "vT:16:3e-8": 0.4121246969699507,
+        "vTF:16:3e-8": 0.2894540151518496,
+        "vT:64:3e-8": 0.7898258333336178,
+        "vTF:64:3e-8": 0.5188437878793841,
+        "vT:64:0": 1.4238575378785203
+      },
+      "64x16": {
+        "cur": 5.384645876472523,
+        "vT:16:0": 5.416641485183763,
+        "vTF:16:0": 3.691425490896268,
+        "vT:16:3e-8": 4.854733023919851,
+        "vTF:16:3e-8": 3.3727427704390216,
+        "vT:64:3e-8": 9.63779957158128,
+        "vTF:64:3e-8": 6.210177757943901,
+        "vT:64:0": 17.55172898964647
+      }
+    },
+    "notes": [
+      "Timing is interleaved in one process per table; the Dev3 Instron table ran at lower clocks (GPU throttled), so compare within a column only.",
+      "The update-size exit misses slow, long-wavelength error: at tol >= 1e-7 m Dev3 200ms_800N train stops with |T-R| 2.3% of peak and physical() rejects it. At 3e-8 m every trace passes.",
+      "fast_math changes forces by 3e-6 of peak against the converged solve; the 16-sweep truncation error is 5.8e-3 (FR3) and 2.3e-3 (Dev3)."
+    ]
+  },
+  "adopted": {
+    "state": "restructured kernel + fast_math, 16 sweeps, exact fixed-point exit (no tolerance exit)",
+    "contact_fix": "column_balance_pressures splits the local Hessian into foam and shear parts (no foam + shear - foam cancellation); an isolated column under fast_math otherwise drifted to 1.6 mm compression with zero force",
+    "rescore_max_metric_change": {
+      "FR3": {
+        "train": {
+          "peak_force_error": 2.059686226796309e-06,
+          "force_rmse_relative": 5.0432992899918094e-08,
+          "loading_rmse_relative": 6.130042552385251e-08,
+          "unloading_rmse_relative": 9.307290611132446e-08,
+          "hysteresis_error": 1.327334844458683e-05,
+          "peak_force_n": 0.004638671875
+        },
+        "validate": {
+          "peak_force_error": 2.213520013158443e-06,
+          "force_rmse_relative": 5.534405924864649e-08,
+          "loading_rmse_relative": 6.132847597123403e-08,
+          "unloading_rmse_relative": 7.65616421753712e-08,
+          "hysteresis_error": 2.8483670036494324e-06,
+          "peak_force_n": 0.0029296875
+        },
+        "repeat": {
+          "peak_force_error": 9.917791009977917e-07,
+          "force_rmse_relative": 3.2154576036502736e-08,
+          "loading_rmse_relative": 3.806301540620893e-08,
+          "unloading_rmse_relative": 4.199928779757833e-08,
+          "hysteresis_error": 2.3544656701512956e-06,
+          "peak_force_n": 0.0015869140625
+        }
+      },
+      "Dev3Elite": {
+        "train": {
+          "peak_force_error": 9.919750737948096e-07,
+          "force_rmse_relative": 7.377996593532776e-08,
+          "loading_rmse_relative": 6.59231297953089e-08,
+          "unloading_rmse_relative": 8.401735132612664e-08,
+          "hysteresis_error": 1.501687350136116e-06,
+          "peak_force_n": 0.002197265625
+        },
+        "validate": {
+          "peak_force_error": 1.3225837916519545e-06,
+          "force_rmse_relative": 7.553674594151794e-08,
+          "loading_rmse_relative": 8.509124717337446e-08,
+          "unloading_rmse_relative": 8.287720341948468e-08,
+          "hysteresis_error": 6.462038220383937e-06,
+          "peak_force_n": 0.003173828125
+        },
+        "repeat": {
+          "peak_force_error": 9.918202521115582e-07,
+          "force_rmse_relative": 6.378719062671845e-08,
+          "loading_rmse_relative": 5.828668904472867e-08,
+          "unloading_rmse_relative": 6.915776509797134e-08,
+          "hysteresis_error": 2.0598391740817013e-05,
+          "peak_force_n": 0.001708984375
+        }
+      }
+    }
+  }
+}

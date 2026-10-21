@@ -138,31 +138,6 @@ class TestDigitalShoeMaterial(unittest.TestCase):
                     self.assertTrue(np.all(np.isfinite(shared)))
                     np.testing.assert_array_equal(forward, shared)
 
-    def test_legacy_laplacian_warns_and_preserves_force(self):
-        """Deprecate the old subset shear input without changing its force history."""
-        foam = core.Material(100000.0, 2.0, 1.0)
-        slack = np.array([0.02, 0.03])
-        lengths = np.array([[0.02, 0.03], [0.019, 0.028], [0.018, 0.027]])
-        areas = np.array([1.0e-4, 2.0e-4])
-        laplacian = np.array([[0.0, 0.0], [10.0, -10.0], [20.0, -20.0]])
-        trial = core.Trial(
-            "legacy",
-            slack,
-            areas,
-            lengths,
-            np.full(3, 0.01),
-            np.zeros(3),
-            np.array([0.0, 0.001, 0.002]),
-            laplacian,
-        )
-        pressure = core._hyperfoam_pressure(np.maximum(slack[None, :] - lengths, 0.0) / slack[None, :], foam)
-        expected = np.sum(areas * (np.maximum(pressure, 0.0) - foam.coupling_n_per_m(slack) * laplacian), axis=1)
-        with self.assertWarnsRegex(DeprecationWarning, "Trial.surround"):
-            actual = core.predict(trial, foam)
-        np.testing.assert_allclose(actual, expected, rtol=1.0e-14, atol=1.0e-12)
-        uncoupled = replace(trial, compression_laplacian_m_inv=None)
-        np.testing.assert_allclose(core.predict(uncoupled, foam), np.sum(areas * np.maximum(pressure, 0.0), axis=1))
-
     def test_independent_equilibrium_shear_override_preserves_pressure_law(self):
         """Keep zero-override arithmetic and change shear coupling independently of compression."""
         legacy = runtime.ShoeMaterial(100000.0, 2.0, 0.6, 0.0, instantaneous_shear_modulus_2_pa=20000.0)

@@ -159,7 +159,6 @@ class TestHoganMotionGif(unittest.TestCase):
                     "pitch": 0.0,
                     "speed": 0.0,
                     "height_offset": 0.0,
-                    "friction_model": "default",
                     "limit_per_split": None,
                 },
                 "trials": traces,

@@ -23,7 +23,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--scenario", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--device", default="cuda:0", help="CUDA by default; cpu uses the reference solver")
+    parser.add_argument(
+        "--device", default="cuda:0", help="CUDA batch by default; cpu integrates the body on the host per step"
+    )
     args = parser.parse_args(argv)
     if args.output.exists():
         raise FileExistsError(f"Refusing to overwrite {args.output}")
@@ -38,7 +40,7 @@ def main(argv: list[str] | None = None) -> None:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     if digest != spec["sha256"]:
         raise ValueError("Scenario shoe hash mismatch")
-    shoe = Shoe(path, spec["mount_m"], spec["pitch_rad"], friction_model=spec["friction_model"])
+    shoe = Shoe(path, spec["mount_m"], spec["pitch_rad"])
     initial, task, config = State(**scenario["initial"]), Task(**scenario["task"]), RolloutConfig(**scenario["config"])
     if args.device == "cpu":
         trace, summary = simulate(runner, chain, shoe, initial, task, duration_s=scenario["duration_s"], config=config)

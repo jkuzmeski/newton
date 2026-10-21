@@ -1,9 +1,34 @@
 {
-  "midsole_mesh": "../source.glb",
+  "column_grid_cache": "column_grid.npz",
+  "geometry_preflight": "preflight.json",
   "grid": {
     "coarse_spacing_m": 0.005
   },
-  "column_grid_cache": "column_grid.npz",
-  "geometry_preflight": "preflight.json",
-  "midsole_mirror_axis": null
+  "midsole_mesh": "../source.glb",
+  "midsole_to_canonical": [
+    [
+      0.0,
+      -0.001,
+      0.0,
+      -0.137562003136
+    ],
+    [
+      0.001,
+      0.0,
+      0.0,
+      0.012673830032
+    ],
+    [
+      0.0,
+      0.0,
+      0.001,
+      0.005106321812
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ]
 }

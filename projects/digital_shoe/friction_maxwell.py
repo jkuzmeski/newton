@@ -8,30 +8,11 @@ series). Unlike a dashpot applied directly to relative velocity, its stress is
 an internal mechanical state with finite high-frequency stiffness. Backward
 Euler and one radial return update both mechanical states consistently.
 This is not an output-force filter. Normal mechanics remain external inputs.
+The column bed runs it with zero branch viscosity, which is the area-scaled
+elastic Coulomb bristle.
 """
 
 import warp as wp
-
-
-@wp.func
-def column_maxwell_parameters(
-    equilibrium_shear_modulus: float,
-    overstress_ratio: float,
-    area: float,
-    rest_length: float,
-    relaxation_time_s: float,
-) -> tuple[float, float]:
-    """Return material-derived equilibrium shear stiffness [N/m] and viscosity [N s/m].
-
-    The foam column is treated as a linear shear layer with ``k = G A / L``.
-    Its Maxwell branch uses the material's branch-to-equilibrium modulus ratio
-    and relaxation time. This is a large-strain extrapolation of the fitted
-    normal material, not independent outsole shear calibration.
-    """
-    scale = area / wp.max(rest_length, 1.0e-12)
-    stiffness = equilibrium_shear_modulus * scale
-    viscosity = equilibrium_shear_modulus * overstress_ratio * scale * relaxation_time_s
-    return stiffness, viscosity
 
 
 @wp.func
@@ -140,12 +121,3 @@ def bristle_elastic_coulomb_step(
         dwell,
     )
     return force, tangent, z, next_stuck, next_dwell
-
-
-@wp.func
-def maxwell_bristle_energy(z: wp.vec2, q: wp.vec2, kt: float, viscosity: float, relaxation_time_s: float) -> float:
-    """Return stored mechanical energy [J] of both tangential springs."""
-    energy = 0.5 * kt * wp.dot(z, z)
-    if viscosity > 0.0:
-        energy += 0.5 * relaxation_time_s * wp.dot(q, q) / viscosity
-    return energy

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+import warp as wp
 
 from newton.tests.test_impedance_hogan import _chain, _reference, _tiny_shoe
 from projects.impedance_instron.cartesian.prepare_dataset import _flight_velocity
@@ -42,22 +43,12 @@ from projects.impedance_instron.hogan.runner import (
 )
 
 
-class _Array:
-    def __init__(self, value):
-        self.value = np.asarray(value)
-
-    def numpy(self):
-        return self.value.copy()
-
-
 class _Shoe:
     """Supply a controlled external wrench for dynamics tests, not a shoe fit."""
 
     def __init__(self, force=(0.0, 0.0, 0.0)):
         self.force = np.asarray(force)
         self.resets = 0
-        self.foundation = SimpleNamespace(driven=_Array([1]), compression=_Array([0.0]), reset=self.reset)
-        self.shoe = SimpleNamespace(column_bed=SimpleNamespace(rest_length_m=np.array([0.02])))
 
     def reset(self):
         self.resets += 1
@@ -256,6 +247,7 @@ class TestGenerativeRunner(unittest.TestCase):
         self.assertEqual(summary["integrated_duration_s"], 0)
         self.assertEqual(shoe.resets, 2)
 
+    @unittest.skipUnless(wp.is_cuda_available(), "The column bed requires CUDA")
     def test_real_shoe_runs_without_plan(self):
         """Integrate the existing shoe interface without inverse dynamics or targets."""
         with tempfile.TemporaryDirectory() as directory:
@@ -480,6 +472,7 @@ class TestRunnerIdentification(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertGreaterEqual(result["mean_loss"], 2000)
 
+    @unittest.skipUnless(wp.is_cuda_available(), "The column bed requires CUDA")
     def test_multicondition_loader_and_cli(self):
         """Load member-specific shoes and speeds and preserve causal initialization."""
         with tempfile.TemporaryDirectory() as directory:

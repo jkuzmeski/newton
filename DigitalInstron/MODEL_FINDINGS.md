@@ -1,5 +1,11 @@
 # Digital Instron Material-Model Findings
 
+> **Historical record.** This document describes the one-unknown-per-column law
+> that preceded the two-surface column bed (`projects/digital_shoe/column_bed.py`).
+> That law and the modules cited here (for example `phase1.py`, `workflow.py`,
+> `inverse_id.py`, `dynamics_diff.py`, `calibration.py`) have been removed; the
+> commands no longer run.
+
 ## Scope
 
 This document records the evidence and decisions behind the Digital Instron

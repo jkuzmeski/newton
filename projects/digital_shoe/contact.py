@@ -1,21 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared scalar contact mechanics for forward, fitting and tape-safe adapters.
+"""Shared scalar contact mechanics of the column bed.
 
-Adapters choose boundary coordinates and own state storage. These functions own
-unilateral reaction, lateral coupling, friction and force-to-wrench mechanics.
-Autodiff uses the same piecewise bristle law; it does not substitute smooth
-Coulomb friction for the forward model's static contact.
+Callers choose boundary coordinates and own state storage. These functions own
+the lateral shear coupling, the bristle friction law, contact kinematics, and
+the two-surface column balance.
 """
 
-from types import SimpleNamespace
 from typing import Any
 
-import numpy as np
 import warp as wp
-
-from .material import hyperfoam_pressure
 
 
 def _pasternak_coupling(t_i: Any, t_j: Any, mu_eq: Any):
@@ -24,41 +19,6 @@ def _pasternak_coupling(t_i: Any, t_j: Any, mu_eq: Any):
 
 
 pasternak_coupling = wp.func(_pasternak_coupling)
-pasternak_coupling_numpy = _pasternak_coupling
-
-
-def _normal_reaction_function(ops, decorate):
-    """Bind one unilateral contact expression to scalar or vectorized operations."""
-
-    @decorate
-    def normal_reaction(
-        compression: Any,
-        pressure: Any,
-        area: Any,
-        damping: Any,
-        velocity_z: Any,
-        gap: Any,
-        ground_plane: int,
-    ):
-        """Return unilateral support [N], excluding internal neighbor transfer.
-
-        ``gap`` is nominal bottom clearance [m] for an explicitly declared plane.
-        A bench adapter instead supplies its imposed top compression.
-        """
-        reaction = ops.max(pressure, 0.0) * area
-        reaction = reaction - ops.where(compression > 0.0, damping * velocity_z, 0.0)
-        reaction = ops.max(reaction, 0.0)
-        if ground_plane != 0:
-            reaction = ops.where(gap > 0.0, 0.0, reaction)
-        return reaction
-
-    return normal_reaction
-
-
-normal_reaction = _normal_reaction_function(wp, wp.func)
-normal_reaction_numpy = _normal_reaction_function(
-    SimpleNamespace(max=np.maximum, where=np.where), lambda function: function
-)
 
 
 @wp.func
@@ -136,100 +96,6 @@ def bristle_step(
 
 
 @wp.func
-def contact_wrench(
-    point: wp.vec3,
-    force: wp.vec3,
-    com_world: wp.vec3,
-    velocity: wp.spatial_vector,
-) -> tuple[wp.vec3, wp.vec3, float]:
-    """Return COM torque [N·m], world-origin moment [N·m], and rigid power [W]."""
-    arm = point - com_world
-    point_velocity = wp.spatial_top(velocity) + wp.cross(wp.spatial_bottom(velocity), arm)
-    return wp.cross(arm, force), wp.cross(point, force), wp.dot(force, point_velocity)
-
-
-@wp.func
-def _surround_balance_pressures(
-    c: float,
-    rigid: float,
-    pull: float,
-    coupling_sum: float,
-    thickness: float,
-    overstress_base: float,
-    overstress_gain: float,
-    area: float,
-    attachment: float,
-    max_strain: float,
-    relaxation: float,
-    carrier_bond: int,
-    peq: float,
-    peq_ahead: float,
-) -> float:
-    """Apply the shared constrained balance to already evaluated pressures."""
-    reaction = area * wp.max(peq + overstress_base + overstress_gain * peq, 0.0)
-    step = 1.0e-3 * thickness
-    ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
-    stiffness = wp.max((ahead - reaction) / step + attachment + coupling_sum, 1.0e-9)
-    bond_reference = float(0.0)
-    upper = max_strain * thickness
-    if carrier_bond != 0:
-        bond_reference = rigid
-        upper = wp.clamp(rigid, 0.0, upper)
-    residual = reaction + attachment * (c - bond_reference) - pull
-    return wp.clamp(c - relaxation * residual / stiffness, 0.0, upper)
-
-
-@wp.func
-def surround_balance(
-    c: float,
-    rigid: float,
-    pull: float,
-    coupling_sum: float,
-    thickness: float,
-    overstress_base: float,
-    overstress_gain: float,
-    g_eq: float,
-    alpha: float,
-    g_eq2: float,
-    alpha2: float,
-    beta: float,
-    one_minus_two_poisson: float,
-    stretch_floor: float,
-    area: float,
-    attachment: float,
-    max_strain: float,
-    relaxation: float,
-    carrier_bond: int,
-) -> float:
-    """Take one constrained passive-column Newton step [m] with the shared material.
-
-    Material scalars can originate from a constant block or differentiable
-    arrays. The balance and one-sided retention bound do not depend on storage.
-    """
-    peq = hyperfoam_pressure(c / thickness, g_eq, alpha, g_eq2, alpha2, beta, one_minus_two_poisson, stretch_floor)
-    step = 1.0e-3 * thickness
-    peq_ahead = hyperfoam_pressure(
-        (c + step) / thickness, g_eq, alpha, g_eq2, alpha2, beta, one_minus_two_poisson, stretch_floor
-    )
-    return _surround_balance_pressures(
-        c,
-        rigid,
-        pull,
-        coupling_sum,
-        thickness,
-        overstress_base,
-        overstress_gain,
-        area,
-        attachment,
-        max_strain,
-        relaxation,
-        carrier_bond,
-        peq,
-        peq_ahead,
-    )
-
-
-@wp.func
 def contact_kinematics(
     transform: wp.transform,
     velocity: wp.spatial_vector,
@@ -252,20 +118,247 @@ def contact_kinematics(
     return point, com, point_velocity, world[2] - ground_height
 
 
+# Top connection of a two-surface column (see :func:`column_balance_pressures`).
+TOP_BONDED = wp.constant(0)
+TOP_PRESSED = wp.constant(1)
+TOP_FREE = wp.constant(2)
+# Support state bits of a balanced two-surface column.
+TOP_HELD = wp.constant(1)
+BOTTOM_LANDED = wp.constant(2)
+
+
 @wp.func
-def pasternak_flux(
-    column: int,
-    base: int,
-    compression: wp.array[float],
-    rest_len: wp.array[float],
-    neighbors: wp.array2d[int],
-    mu_eq: float,
-) -> float:
-    """Return neighbor shear transfer [N] inside one world's compression tile."""
-    ci = compression[base + column]
-    flux = float(0.0)
-    for side in range(4):
-        j = neighbors[column, side]
-        if j >= 0:
-            flux += pasternak_coupling(rest_len[column], rest_len[j], mu_eq) * (compression[base + j] - ci)
-    return flux
+def _hessian_product(foam: float, shear: float, v: wp.vec2) -> wp.vec2:
+    """Return the local model's Hessian times ``v``.
+
+    The Hessian is ``foam [[1, -1], [-1, 1]] + shear I``: the foam stiffens only
+    the compression ``t - b`` and the face layers stiffen both ends alike.
+    Keeping the two parts apart avoids the cancellation of ``foam + shear - foam``.
+    """
+    return wp.vec2(1.0, -1.0) * (foam * (v[0] - v[1])) + v * shear
+
+
+@wp.func
+def _model_value(grad: wp.vec2, foam: float, shear: float, d: wp.vec2) -> float:
+    """Return the local quadratic model of the column energy for a step ``d``."""
+    return wp.dot(grad, d) + 0.5 * wp.dot(d, _hessian_product(foam, shear, d))
+
+
+@wp.func
+def _line_minimum(y0: wp.vec2, grad: wp.vec2, foam: float, shear: float, n: wp.vec2, beta: float) -> wp.vec2:
+    """Minimize the local model on the line ``n . y = beta``."""
+    p = n * (beta / wp.dot(n, n))
+    d = wp.vec2(-n[1], n[0])
+    hd = _hessian_product(foam, shear, d)
+    s = -(wp.dot(d, grad) + wp.dot(hd, p - y0)) / wp.dot(d, hd)
+    return p + d * s
+
+
+@wp.func
+def _vertex(na: wp.vec2, ba: float, nb: wp.vec2, bb: float) -> tuple[wp.vec2, int]:
+    """Intersect two constraint lines; the flag is zero for parallel lines."""
+    det = na[0] * nb[1] - na[1] * nb[0]
+    if wp.abs(det) < 1.0e-12:
+        return wp.vec2(0.0, 0.0), 0
+    return wp.vec2((ba * nb[1] - na[1] * bb) / det, (na[0] * bb - ba * nb[0]) / det), 1
+
+
+@wp.func
+def _keep_better(
+    y: wp.vec2,
+    valid: int,
+    y0: wp.vec2,
+    grad: wp.vec2,
+    foam: float,
+    shear: float,
+    n0: wp.vec2,
+    b0: float,
+    n1: wp.vec2,
+    b1: float,
+    n2: wp.vec2,
+    b2: float,
+    tol: float,
+    best: wp.vec2,
+    best_value: float,
+) -> tuple[wp.vec2, float]:
+    """Keep a feasible candidate when it lowers the local model."""
+    if valid == 0:
+        return best, best_value
+    if wp.dot(n0, y) > b0 + tol or wp.dot(n1, y) > b1 + tol or wp.dot(n2, y) > b2 + tol:
+        return best, best_value
+    value = _model_value(grad, foam, shear, y - y0)
+    if value < best_value:
+        return y, value
+    return best, best_value
+
+
+@wp.func
+def column_balance_pressures(
+    top: float,
+    bottom: float,
+    connection: int,
+    top_bound: float,
+    clearance: float,
+    compression_limit: float,
+    coupling_sum: float,
+    top_sum: float,
+    bottom_sum: float,
+    thickness: float,
+    overstress_base: float,
+    overstress_gain: float,
+    area: float,
+    peq: float,
+    peq_ahead: float,
+    relaxation: float,
+) -> tuple[float, float, int]:
+    """Take one projected Newton step of a two-surface column with evaluated pressures.
+
+    ``top`` and ``bottom`` are the downward displacements ``t`` and ``b`` [m] of
+    the column ends from the rigidly carried rest shape; the compression is
+    ``c = t - b``. The column energy is its foam energy ``W(c)`` plus the
+    top- and bottom-face Pasternak layers ``1/2 sum_j k_ij (dt^2 + db^2)`` to
+    neighbours held fixed for this step, with ``dt = t - t_j`` and
+    ``db = b - b_j``. With every bottom fixed this is
+    :func:`_surround_balance_pressures`' ``1/2 k dc^2``.
+
+    Constraints: ``b <= clearance`` (the plane), ``c >= 0``, and by connection
+    ``t = top_bound`` (:data:`TOP_BONDED`), ``t >= top_bound``
+    (:data:`TOP_PRESSED`), or ``c <= compression_limit`` (:data:`TOP_FREE`).
+    The local quadratic model is minimized exactly over these constraints by
+    enumerating its active sets.
+
+    Args:
+        top_sum: ``sum_j k_ij t_j`` [N].
+        bottom_sum: ``sum_j k_ij b_j`` [N].
+        coupling_sum: ``sum_j k_ij`` [N/m].
+        overstress_base: Maxwell overstress at zero equilibrium pressure [Pa].
+        overstress_gain: Overstress per unit equilibrium pressure of this step.
+        peq: Equilibrium pressure at ``c`` [Pa].
+        peq_ahead: Equilibrium pressure at ``c + 1e-3 * thickness`` [Pa].
+        relaxation: Fraction of the constrained step taken before the result is
+            projected back onto the constraints; above one over-relaxes.
+
+    Returns:
+        Updated ``t`` and ``b`` [m] and the support bits :data:`TOP_HELD` and
+        :data:`BOTTOM_LANDED`. Held and landed ends sit exactly on their bounds.
+    """
+    force = area * wp.max(peq + overstress_base + overstress_gain * peq, 0.0)
+    step = 1.0e-3 * thickness
+    ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
+    foam = wp.max((ahead - force) / step, 0.0)
+    k = coupling_sum
+    grad = wp.vec2(force + k * top - top_sum, -force + k * bottom - bottom_sum)
+    shear = k + 1.0e-9
+    y0 = wp.vec2(top, bottom)
+    tol = 1.0e-6 * thickness
+    t = top
+    b = bottom
+    if connection == TOP_BONDED:
+        t = top_bound
+        b = bottom - relaxation * (grad[1] - foam * (t - top)) / (foam + shear)
+        b = wp.min(b, wp.min(clearance, t))
+    else:
+        # Constraints n . (t, b) <= beta: the plane, c >= 0, and the top bound or the strain limit.
+        n0 = wp.vec2(0.0, 1.0)
+        b0 = clearance
+        n1 = wp.vec2(-1.0, 1.0)
+        b1 = float(0.0)
+        n2 = wp.vec2(-1.0, 0.0)
+        b2 = -top_bound
+        if connection == TOP_FREE:
+            n2 = wp.vec2(1.0, -1.0)
+            b2 = compression_limit
+        # Newton step along the Hessian's eigenvectors: the rigid shift (1, 1)
+        # with curvature shear and the squeeze (1, -1) with 2 foam + shear.
+        rigid = (grad[0] + grad[1]) / (2.0 * shear)
+        squeeze = (grad[0] - grad[1]) / (2.0 * (2.0 * foam + shear))
+        free = y0 - wp.vec2(rigid + squeeze, rigid - squeeze)
+        best = y0
+        best_value = float(1.0e30)
+        best, best_value = _keep_better(free, 1, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
+        best, best_value = _keep_better(
+            _line_minimum(y0, grad, foam, shear, n0, b0),
+            1,
+            y0,
+            grad,
+            foam,
+            shear,
+            n0,
+            b0,
+            n1,
+            b1,
+            n2,
+            b2,
+            tol,
+            best,
+            best_value,
+        )
+        best, best_value = _keep_better(
+            _line_minimum(y0, grad, foam, shear, n1, b1),
+            1,
+            y0,
+            grad,
+            foam,
+            shear,
+            n0,
+            b0,
+            n1,
+            b1,
+            n2,
+            b2,
+            tol,
+            best,
+            best_value,
+        )
+        best, best_value = _keep_better(
+            _line_minimum(y0, grad, foam, shear, n2, b2),
+            1,
+            y0,
+            grad,
+            foam,
+            shear,
+            n0,
+            b0,
+            n1,
+            b1,
+            n2,
+            b2,
+            tol,
+            best,
+            best_value,
+        )
+        y, valid = _vertex(n0, b0, n1, b1)
+        best, best_value = _keep_better(y, valid, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
+        y, valid = _vertex(n0, b0, n2, b2)
+        best, best_value = _keep_better(y, valid, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
+        y, valid = _vertex(n1, b1, n2, b2)
+        best, best_value = _keep_better(y, valid, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
+        t = top + relaxation * (best[0] - top)
+        b = bottom + relaxation * (best[1] - bottom)
+        if connection == TOP_PRESSED and t <= top_bound + tol:
+            t = top_bound
+    # Close at most half the remaining thickness per update, so a far-off step
+    # cannot jump into the foam's lock-up; a converged state is unaffected.
+    room = 0.5 * (thickness - (top - bottom))
+    if (t - b) - (top - bottom) > room:
+        if connection == TOP_BONDED:
+            b = t - (top - bottom) - room
+        else:
+            s = room / ((t - b) - (top - bottom))
+            t = top + s * (t - top)
+            b = bottom + s * (b - bottom)
+    if b >= clearance - tol:
+        b = clearance
+    if t < b:
+        if connection == TOP_FREE:
+            t = b
+        else:
+            b = t
+    if connection == TOP_FREE and t - b > compression_limit:
+        t = b + compression_limit
+    support = int(0)
+    if connection == TOP_BONDED or (connection == TOP_PRESSED and t == top_bound):
+        support = support | TOP_HELD
+    if b == clearance:
+        support = support | BOTTOM_LANDED
+    return t, b, support

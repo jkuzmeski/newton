@@ -9,58 +9,67 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+import warp as wp
 
 from newton.tests.test_digital_shoe import _tiny_artifact
-from projects.digital_shoe.runtime import FoundationConfig
+from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE
 from projects.impedance_instron.cartesian.shoe import Shoe
 
 
+def _tiny_shoe_file(directory: str) -> Path:
+    """Write a small standalone two-column shoe and fixture."""
+    raw = _tiny_artifact()
+    raw["visual_meshes"] = {
+        "fullfoot_last": {
+            "vertices_m": [[-0.02, -0.01, 0.02], [0.02, -0.01, 0.02], [0.02, 0.01, 0.02], [-0.02, 0.01, 0.02]],
+            "triangles": [[0, 1, 2], [0, 2, 3]],
+        }
+    }
+    raw["instron_fixtures"] = {
+        "fullfoot_last": {
+            "carrier_anchor_m": [[-0.01, 0.0, 0.02], [0.01, 0.0, 0.02]],
+            "foam_free_top_m": [0.02, 0.02],
+            "foam_bottom_m": [0.0, 0.0],
+            "rest_length_m": [0.02, 0.02],
+            "area_m2": [0.0001, 0.0001],
+            "neighbors": [[1, -1, -1, -1], [0, -1, -1, -1]],
+            "spacing_m": 0.01,
+        }
+    }
+    path = Path(directory) / "shoe.json"
+    path.write_text(json.dumps(raw))
+    return path
+
+
+class TestCartesianShoeDevice(unittest.TestCase):
+    def test_cpu_device_is_rejected(self):
+        """Refuse a CPU shoe because the column bed runs only on CUDA."""
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(RuntimeError, "CUDA"):
+                Shoe(_tiny_shoe_file(directory), [0, 0, 0.1], 0.0, device="cpu")
+
+
+@unittest.skipUnless(wp.is_cuda_available(), "The column bed requires CUDA")
 class TestCartesianShoe(unittest.TestCase):
     """Keep contact a force response rather than prescribed foot motion."""
 
     def setUp(self):
-        """Write a small standalone two-column shoe and fixture."""
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        raw = _tiny_artifact()
-        raw["visual_meshes"] = {
-            "fullfoot_last": {
-                "vertices_m": [[-0.02, -0.01, 0.02], [0.02, -0.01, 0.02], [0.02, 0.01, 0.02], [-0.02, 0.01, 0.02]],
-                "triangles": [[0, 1, 2], [0, 2, 3]],
-            }
-        }
-        raw["instron_fixtures"] = {
-            "fullfoot_last": {
-                "carrier_anchor_m": [[-0.01, 0.0, 0.02], [0.01, 0.0, 0.02]],
-                "foam_free_top_m": [0.02, 0.02],
-                "foam_bottom_m": [0.0, 0.0],
-                "rest_length_m": [0.02, 0.02],
-                "area_m2": [0.0001, 0.0001],
-                "neighbors": [[1, -1, -1, -1], [0, -1, -1, -1]],
-                "spacing_m": 0.01,
-            }
-        }
-        path = Path(self.directory.name) / "shoe.json"
-        path.write_text(json.dumps(raw))
-        self.shoe = Shoe(path, [0, 0, 0.1], 0.0)
+        self.shoe = Shoe(_tiny_shoe_file(self.directory.name), [0, 0, 0.1], 0.0)
 
     def test_flight_and_compression(self):
         """Produce zero flight force and an upward response to compression."""
-        force, compression = self.shoe.apply([0, 0.2], [0, 0], 0, 0, 0.0001)
+        force, strain = self.shoe.apply([0, 0.2], [0, 0], 0, 0, 0.0001)
         np.testing.assert_array_equal(force, 0)
-        self.assertEqual(compression, 0)
-        force, compression = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
+        self.assertEqual(strain, 0)
+        force, strain = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
         self.assertGreater(force[1], 0)
         self.assertAlmostEqual(force[2], 0, places=6)
-        self.assertAlmostEqual(compression, 0.001, places=6)
+        self.assertAlmostEqual(strain, 0.001 / 0.02, places=5)
 
-    def test_elastic_coulomb_is_the_leg_default_and_scales_with_column_geometry(self):
-        """Use area-scaled equilibrium shear stiffness without a Maxwell branch."""
-        self.assertEqual(self.shoe.foundation.config.friction_model, "elastic_coulomb")
-        self.assertEqual(int(self.shoe.foundation.friction_solver.settings.numpy()[0, 0]), 9)
-        self.assertEqual(FoundationConfig().friction_model, "elastic_coulomb")
-        cfg = FoundationConfig(friction_model="column_maxwell")
-        self.assertEqual(cfg.friction_model, "column_maxwell")
+    def test_elastic_coulomb_scales_with_column_geometry(self):
+        """Use area-scaled equilibrium shear stiffness."""
         material = self.shoe.shoe.material
         g_eq = material.equilibrium_shear_modulus_pa
         area = np.asarray(self.shoe.shoe.column_bed.area_m2)
@@ -68,28 +77,19 @@ class TestCartesianShoe(unittest.TestCase):
         kt = g_eq * area / rest
         dt, speed = 0.001, 0.01
         expected = -np.sum(kt * dt * speed)
-        actual, _compression = self.shoe.apply([0, 0.099], [speed, 0], 0, 0, dt)
+        actual, _strain = self.shoe.apply([0, 0.099], [speed, 0], 0, 0, dt)
         np.testing.assert_allclose(actual[0], expected, rtol=1e-5, atol=1e-7)
 
-        explicit_maxwell = Shoe(self.shoe.artifact_path, [0, 0, 0.1], 0.0, friction_model="maxwell")
-        prior_force, _compression = explicit_maxwell.apply([0, 0.099], [speed, 0], 0, 0, dt)
-        self.assertGreater(abs(prior_force[0]), 10.0 * abs(actual[0]))
-
-        explicit_column_maxwell = Shoe(self.shoe.artifact_path, [0, 0, 0.1], 0.0, friction_model="column_maxwell")
-        self.assertEqual(explicit_column_maxwell.foundation.config.friction_model, "column_maxwell")
-
-    def test_pitch_sign_and_virtual_power(self):
-        """Map Newton wrench signs into mathematical planar angular power."""
+    def test_pitch_sign(self):
+        """Map the Newton +Y torque into the mathematical planar angle convention."""
         force, _ = self.shoe.apply([0, 0.1], [0.2, -0.1], 0.1, 0.3, 0.0001)
+        self.assertNotEqual(force[2], 0)
         self.assertAlmostEqual(force[2], -float(self.shoe.state.body_f.numpy()[0, 4]))
-        expected = np.dot(force, [0.2, -0.1, 0.3])
-        reported = float(self.shoe.foundation.contact_power.numpy()[0])
-        self.assertAlmostEqual(expected, reported, places=5)
 
     def test_translation_invariance(self):
         """Preserve normal loading under a stationary-ground horizontal translation."""
         a, _ = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
-        self.shoe.foundation.reset()
+        self.shoe.reset()
         b, _ = self.shoe.apply([3, 0.099], [0, 0], 0, 0, 0.0001)
         np.testing.assert_allclose(a, b, atol=1e-5)
 
@@ -113,19 +113,23 @@ class TestCartesianShoe(unittest.TestCase):
         np.testing.assert_allclose(self.shoe.last_vertices_local_m + self.shoe.mount_m, vertices)
 
     def test_distributed_pressure_and_moment(self):
-        """Recover the ankle wrench from distributed ground forces rather than a point load."""
-        wrench, _ = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
-        self.assertTrue(np.all(self.shoe.foundation.ground_force.numpy()[:, 2] > 0))
-        wrench, _ = self.shoe.apply([0, 0.099], [0.1, 0], 0.05, 0.1, 0.0001)
-        force = self.shoe.foundation.ground_force.numpy().astype(float)
-        self.assertNotAlmostEqual(float(force[0, 2]), float(force[1, 2]))
-        point = self.shoe.foundation.contact_point.numpy().astype(float)
-        total = force.sum(axis=0)
-        moment = np.cross(point - [0, 0, 0.099], force).sum(axis=0)
-        np.testing.assert_allclose(wrench, [total[0], total[2], -moment[1]], atol=1e-6)
+        """Recover the ankle wrench from the carried column forces rather than a point load."""
+        self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
+        self.assertTrue(np.all(self.shoe.bed.column_state("reaction") > 0))
+        self.shoe.reset()
+        pitch = 0.05
+        wrench, _ = self.shoe.apply([0, 0.099], [0, 0], pitch, 0, 0.0001)
+        carried = self.shoe.bed.column_state("carried")[0].astype(float)
+        self.assertNotAlmostEqual(carried[0], carried[1])
+        anchors = self.shoe.anchor_local_m
+        c, s = np.cos(pitch), np.sin(pitch)
+        # Carried forces act at the plane point under each nominal bottom.
+        x = c * anchors[:, 0] - s * anchors[:, 2]
+        moment_y = -np.sum(x * carried)
+        np.testing.assert_allclose(wrench, [0, carried.sum(), -moment_y], rtol=1e-5, atol=1e-5)
 
-    def test_keep_coupled_passive_margin(self):
-        """Retain outer foam columns without rigidly attaching their tops to the last."""
+    def test_bond_footprint_and_free_margin(self):
+        """Bond the fixture footprint to the last and leave outer column tops free."""
         path = self.shoe.artifact_path
         raw = json.loads(path.read_text())
         bed = raw["column_bed"]
@@ -135,13 +139,14 @@ class TestCartesianShoe(unittest.TestCase):
         bed["neighbors"] = [[1, -1, -1, -1], [0, 2, -1, -1], [1, -1, -1, -1]]
         path.write_text(json.dumps(raw))
         shoe = Shoe(path, [0, 0, 0.1], 0)
-        self.assertEqual(shoe.foundation.free_column_count, 1)
-        np.testing.assert_array_equal(shoe.foundation.driven.numpy(), [1, 1, 0])
-        shoe.apply([0, 0.098], [0, 0], 0, 0, 0.0001)
-        compression = shoe.foundation.compression.numpy()
+        np.testing.assert_array_equal(shoe.connection, [TOP_BONDED, TOP_BONDED, TOP_FREE])
+        self.assertEqual((shoe.metadata["bonded_columns"], shoe.metadata["free_columns"]), (2, 1))
+        _, strain = shoe.apply([0, 0.098], [0, 0], 0, 0, 0.0001)
+        compression = shoe.bed.column_state("compression")[0]
         self.assertEqual(compression.shape, (3,))
         self.assertGreater(compression[2], 0)
         self.assertLessEqual(compression[2], 0.002 + 1e-7)
+        self.assertAlmostEqual(strain, compression[:2].max() / 0.02, places=6)
 
     def test_fixed_attachment_offsets_preserve_rest_geometry(self):
         """Keep fixture-to-foam offsets rigid without changing calibrated spring rest lengths."""

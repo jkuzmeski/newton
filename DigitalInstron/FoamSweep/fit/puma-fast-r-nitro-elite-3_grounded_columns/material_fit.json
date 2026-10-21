@@ -1,0 +1,1223 @@
+{
+  "conditions": {
+    "160ms_1200N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.08570655153628297,
+          "hysteresis_error": 0.07846848595029038,
+          "loading_rmse_relative": 0.07692200466790373,
+          "passed": false,
+          "peak_force_error": 0.22334722882690594,
+          "unloading_rmse_relative": 0.09633217276667702
+        },
+        "initial": {
+          "force_rmse_relative": 0.0811025323085898,
+          "hysteresis_error": 0.06529809250212829,
+          "loading_rmse_relative": 0.07246924460113746,
+          "passed": false,
+          "peak_force_error": 0.20580881826828573,
+          "unloading_rmse_relative": 0.09141320126894309
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.08568555414987891,
+          "hysteresis_error": 0.07705643407500173,
+          "loading_rmse_relative": 0.07693228698482125,
+          "passed": false,
+          "peak_force_error": 0.2234037508784639,
+          "unloading_rmse_relative": 0.09628189151444852
+        },
+        "initial": {
+          "force_rmse_relative": 0.08108180799245475,
+          "hysteresis_error": 0.06386633560266539,
+          "loading_rmse_relative": 0.07247489087414248,
+          "passed": false,
+          "peak_force_error": 0.20588866001942835,
+          "unloading_rmse_relative": 0.09136811193957442
+        }
+      }
+    },
+    "160ms_1600N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.057230303256296716,
+          "hysteresis_error": 0.05060939362840023,
+          "loading_rmse_relative": 0.04987965513085856,
+          "passed": false,
+          "peak_force_error": 0.11463559174238712,
+          "unloading_rmse_relative": 0.06543251219565277
+        },
+        "initial": {
+          "force_rmse_relative": 0.05133539386361189,
+          "hysteresis_error": 0.07263392644489929,
+          "loading_rmse_relative": 0.04405489442261492,
+          "passed": true,
+          "peak_force_error": 0.08740617313022517,
+          "unloading_rmse_relative": 0.05921446716451368
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.05732028551876402,
+          "hysteresis_error": 0.05110252897656206,
+          "loading_rmse_relative": 0.0499851852948592,
+          "passed": false,
+          "peak_force_error": 0.11486033944846193,
+          "unloading_rmse_relative": 0.06551028233921359
+        },
+        "initial": {
+          "force_rmse_relative": 0.05142563812839993,
+          "hysteresis_error": 0.07312796925424152,
+          "loading_rmse_relative": 0.044152459954573675,
+          "passed": true,
+          "peak_force_error": 0.08764601672306463,
+          "unloading_rmse_relative": 0.05930068996874211
+        }
+      }
+    },
+    "160ms_2000N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.0373387855378404,
+          "hysteresis_error": 0.231805861099078,
+          "loading_rmse_relative": 0.0299325057843517,
+          "passed": false,
+          "peak_force_error": 0.04445030563049667,
+          "unloading_rmse_relative": 0.04471070866062201
+        },
+        "initial": {
+          "force_rmse_relative": 0.03687819125978831,
+          "hysteresis_error": 0.2797360946457161,
+          "loading_rmse_relative": 0.03220797536794074,
+          "passed": false,
+          "peak_force_error": 0.12261652797892136,
+          "unloading_rmse_relative": 0.04250467191122456
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.037311094932545155,
+          "hysteresis_error": 0.2328961152984428,
+          "loading_rmse_relative": 0.029910515159287953,
+          "passed": false,
+          "peak_force_error": 0.044845996098857484,
+          "unloading_rmse_relative": 0.04467844380828142
+        },
+        "initial": {
+          "force_rmse_relative": 0.03689171250827927,
+          "hysteresis_error": 0.280947945823379,
+          "loading_rmse_relative": 0.03227626521709994,
+          "passed": false,
+          "peak_force_error": 0.12324957161578284,
+          "unloading_rmse_relative": 0.04247221408843889
+        }
+      }
+    },
+    "160ms_2400N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 4.271711532199643,
+          "hysteresis_error": 8.440756531773632,
+          "loading_rmse_relative": 4.378344489492239,
+          "passed": false,
+          "peak_force_error": 26.487967454076845,
+          "unloading_rmse_relative": 4.3955857800726035
+        },
+        "initial": {
+          "force_rmse_relative": 10.98271842635355,
+          "hysteresis_error": 20.970789153534582,
+          "loading_rmse_relative": 11.246104133120689,
+          "passed": false,
+          "peak_force_error": 68.28616386479901,
+          "unloading_rmse_relative": 11.308706917789781
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 4.271252977225517,
+          "hysteresis_error": 8.517151738558004,
+          "loading_rmse_relative": 4.38000912352776,
+          "passed": false,
+          "peak_force_error": 26.484069576120405,
+          "unloading_rmse_relative": 4.393016644593085
+        },
+        "initial": {
+          "force_rmse_relative": 10.982202743705104,
+          "hysteresis_error": 21.038154107095366,
+          "loading_rmse_relative": 11.249069036553506,
+          "passed": false,
+          "peak_force_error": 68.27685610026975,
+          "unloading_rmse_relative": 11.30484887925406
+        }
+      }
+    },
+    "160ms_2800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 9.791175991141563,
+          "hysteresis_error": 21.747993983760058,
+          "loading_rmse_relative": 10.157330019488493,
+          "passed": false,
+          "peak_force_error": 61.32687463137123,
+          "unloading_rmse_relative": 10.08040864949963
+        },
+        "initial": {
+          "force_rmse_relative": 25.1779851617084,
+          "hysteresis_error": 53.33612529418605,
+          "loading_rmse_relative": 26.089460050810008,
+          "passed": false,
+          "peak_force_error": 158.30728662581524,
+          "unloading_rmse_relative": 25.970364527374564
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 9.89219878535722,
+          "hysteresis_error": 24.105961640151623,
+          "loading_rmse_relative": 10.356322611032942,
+          "passed": false,
+          "peak_force_error": 60.779418066806656,
+          "unloading_rmse_relative": 10.048419828459268
+        },
+        "initial": {
+          "force_rmse_relative": 25.44616061251744,
+          "hysteresis_error": 59.84844771417051,
+          "loading_rmse_relative": 26.619336235956435,
+          "passed": false,
+          "peak_force_error": 156.84131457984705,
+          "unloading_rmse_relative": 25.883964380405118
+        }
+      }
+    },
+    "160ms_800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.11627207434309837,
+          "hysteresis_error": 0.25148569323081227,
+          "loading_rmse_relative": 0.10545518302944508,
+          "passed": false,
+          "peak_force_error": 0.3493572128303817,
+          "unloading_rmse_relative": 0.13013371753513991
+        },
+        "initial": {
+          "force_rmse_relative": 0.11349897505581413,
+          "hysteresis_error": 0.2443871102792843,
+          "loading_rmse_relative": 0.10280244153468586,
+          "passed": false,
+          "peak_force_error": 0.33958362813090304,
+          "unloading_rmse_relative": 0.12714967244314354
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.11640701994023872,
+          "hysteresis_error": 0.2508309326603133,
+          "loading_rmse_relative": 0.10568182557836844,
+          "passed": false,
+          "peak_force_error": 0.34958963656323566,
+          "unloading_rmse_relative": 0.13018208714086657
+        },
+        "initial": {
+          "force_rmse_relative": 0.11363486186185552,
+          "hysteresis_error": 0.24372680644645098,
+          "loading_rmse_relative": 0.10302650846521934,
+          "passed": false,
+          "peak_force_error": 0.33982105041516264,
+          "unloading_rmse_relative": 0.12720279055983952
+        }
+      }
+    },
+    "200ms_1200N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.09457352146671148,
+          "hysteresis_error": 0.20086871867168174,
+          "loading_rmse_relative": 0.08744745740631715,
+          "passed": false,
+          "peak_force_error": 0.20631315176748513,
+          "unloading_rmse_relative": 0.10333373957390653
+        },
+        "initial": {
+          "force_rmse_relative": 0.08925243595887415,
+          "hysteresis_error": 0.1893382772130406,
+          "loading_rmse_relative": 0.08228830498790811,
+          "passed": false,
+          "peak_force_error": 0.18803745431791577,
+          "unloading_rmse_relative": 0.09770858798509177
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.09468174010323657,
+          "hysteresis_error": 0.20030415978471,
+          "loading_rmse_relative": 0.08758612981730403,
+          "passed": false,
+          "peak_force_error": 0.2066481826970824,
+          "unloading_rmse_relative": 0.10341286413656443
+        },
+        "initial": {
+          "force_rmse_relative": 0.08936240291947707,
+          "hysteresis_error": 0.18876766989666535,
+          "loading_rmse_relative": 0.0824218477892149,
+          "passed": false,
+          "peak_force_error": 0.18837988421191487,
+          "unloading_rmse_relative": 0.09779679934502512
+        }
+      }
+    },
+    "200ms_1200N_repeat": {
+      "repeat": {
+        "fitted": {
+          "force_rmse_relative": 0.09551828539218969,
+          "hysteresis_error": 0.16834257160334662,
+          "loading_rmse_relative": 0.08828986655270271,
+          "passed": false,
+          "peak_force_error": 0.2011125900556654,
+          "unloading_rmse_relative": 0.10440203214170035
+        },
+        "initial": {
+          "force_rmse_relative": 0.09027087933463694,
+          "hysteresis_error": 0.15621415096866803,
+          "loading_rmse_relative": 0.08315387086241954,
+          "passed": false,
+          "peak_force_error": 0.18261984006456067,
+          "unloading_rmse_relative": 0.09890112323334456
+        }
+      }
+    },
+    "200ms_1600N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.061553259604948916,
+          "hysteresis_error": 0.090960711288683,
+          "loading_rmse_relative": 0.05543803207394136,
+          "passed": true,
+          "peak_force_error": 0.09923651579745087,
+          "unloading_rmse_relative": 0.06843454465805919
+        },
+        "initial": {
+          "force_rmse_relative": 0.05499200002579087,
+          "hysteresis_error": 0.07185573326780785,
+          "loading_rmse_relative": 0.04906221563225674,
+          "passed": true,
+          "peak_force_error": 0.07068513324320723,
+          "unloading_rmse_relative": 0.06149011587031718
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.061481280692791414,
+          "hysteresis_error": 0.08929768280981794,
+          "loading_rmse_relative": 0.0551262018204569,
+          "passed": true,
+          "peak_force_error": 0.0991496829621425,
+          "unloading_rmse_relative": 0.06853850506013115
+        },
+        "initial": {
+          "force_rmse_relative": 0.05491734269370898,
+          "hysteresis_error": 0.07015713952205628,
+          "loading_rmse_relative": 0.04886899295068151,
+          "passed": true,
+          "peak_force_error": 0.07058796724742777,
+          "unloading_rmse_relative": 0.06147540358002747
+        }
+      }
+    },
+    "200ms_1600N_repeat": {
+      "repeat": {
+        "fitted": {
+          "force_rmse_relative": 0.06245461159669264,
+          "hysteresis_error": 0.049158438020918974,
+          "loading_rmse_relative": 0.05570915721577422,
+          "passed": true,
+          "peak_force_error": 0.09732840644938537,
+          "unloading_rmse_relative": 0.069940480593099
+        },
+        "initial": {
+          "force_rmse_relative": 0.05607270902425921,
+          "hysteresis_error": 0.029082384802532224,
+          "loading_rmse_relative": 0.04953995874196183,
+          "passed": true,
+          "peak_force_error": 0.06863755856904283,
+          "unloading_rmse_relative": 0.06314650247478681
+        }
+      }
+    },
+    "200ms_2000N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.04140256495790601,
+          "hysteresis_error": 0.06765724373501283,
+          "loading_rmse_relative": 0.03657908631227307,
+          "passed": true,
+          "peak_force_error": 0.09538743970273221,
+          "unloading_rmse_relative": 0.04677424888268673
+        },
+        "initial": {
+          "force_rmse_relative": 0.04554044873339291,
+          "hysteresis_error": 0.11451955623458218,
+          "loading_rmse_relative": 0.04440889545823342,
+          "passed": false,
+          "peak_force_error": 0.19870375977682203,
+          "unloading_rmse_relative": 0.048447601821461045
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.04138327852224633,
+          "hysteresis_error": 0.06717062085246321,
+          "loading_rmse_relative": 0.03616264840109042,
+          "passed": true,
+          "peak_force_error": 0.09202290297612836,
+          "unloading_rmse_relative": 0.04708249627725108
+        },
+        "initial": {
+          "force_rmse_relative": 0.045209935028363984,
+          "hysteresis_error": 0.11359536709357307,
+          "loading_rmse_relative": 0.04257800872499675,
+          "passed": false,
+          "peak_force_error": 0.19357521172492892,
+          "unloading_rmse_relative": 0.04968263275176447
+        }
+      }
+    },
+    "200ms_2000N_repeat": {
+      "repeat": {
+        "fitted": {
+          "force_rmse_relative": 0.04213450262463766,
+          "hysteresis_error": 0.11361799409664307,
+          "loading_rmse_relative": 0.03618819887186108,
+          "passed": false,
+          "peak_force_error": 0.08026201370540742,
+          "unloading_rmse_relative": 0.048392513065346414
+        },
+        "initial": {
+          "force_rmse_relative": 0.04478237559168138,
+          "hysteresis_error": 0.16067304359642212,
+          "loading_rmse_relative": 0.04144047323849785,
+          "passed": false,
+          "peak_force_error": 0.17595787353157957,
+          "unloading_rmse_relative": 0.04968757112937127
+        }
+      }
+    },
+    "200ms_2400N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 4.702559848763431,
+          "hysteresis_error": 7.949643292387235,
+          "loading_rmse_relative": 4.72437345551162,
+          "passed": false,
+          "peak_force_error": 25.809712070207755,
+          "unloading_rmse_relative": 4.890523667446818
+        },
+        "initial": {
+          "force_rmse_relative": 12.08311503373022,
+          "hysteresis_error": 19.49683632113727,
+          "loading_rmse_relative": 12.1175247050912,
+          "passed": false,
+          "peak_force_error": 66.59531969144827,
+          "unloading_rmse_relative": 12.584467896724862
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 4.704931951533307,
+          "hysteresis_error": 7.65104998237969,
+          "loading_rmse_relative": 4.730539854235707,
+          "passed": false,
+          "peak_force_error": 25.767165018816108,
+          "unloading_rmse_relative": 4.887985716184405
+        },
+        "initial": {
+          "force_rmse_relative": 12.089303863386665,
+          "hysteresis_error": 18.706095446081697,
+          "loading_rmse_relative": 12.132472286334151,
+          "passed": false,
+          "peak_force_error": 66.48944330202973,
+          "unloading_rmse_relative": 12.579441097965626
+        }
+      }
+    },
+    "200ms_2400N_repeat": {
+      "repeat": {
+        "fitted": {
+          "force_rmse_relative": 4.5819020714172884,
+          "hysteresis_error": 9.579514828493727,
+          "loading_rmse_relative": 4.680761141507411,
+          "passed": false,
+          "peak_force_error": 25.97023006632177,
+          "unloading_rmse_relative": 4.683414463274499
+        },
+        "initial": {
+          "force_rmse_relative": 11.79072468808627,
+          "hysteresis_error": 23.79711813762146,
+          "loading_rmse_relative": 12.030206327009468,
+          "passed": false,
+          "peak_force_error": 66.98212097969407,
+          "unloading_rmse_relative": 12.065916846539343
+        }
+      }
+    },
+    "200ms_2800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 9.78626110273287,
+          "hysteresis_error": 20.04557984737572,
+          "loading_rmse_relative": 9.774665547371578,
+          "passed": false,
+          "peak_force_error": 52.954059538438926,
+          "unloading_rmse_relative": 10.291966125407148
+        },
+        "initial": {
+          "force_rmse_relative": 25.14575243779215,
+          "hysteresis_error": 49.71499532884481,
+          "loading_rmse_relative": 25.071687740426093,
+          "passed": false,
+          "peak_force_error": 136.50829654190716,
+          "unloading_rmse_relative": 26.48033127998798
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 9.799548856983746,
+          "hysteresis_error": 20.042462247403446,
+          "loading_rmse_relative": 9.818915445535751,
+          "passed": false,
+          "peak_force_error": 52.78171968613708,
+          "unloading_rmse_relative": 10.276368223226447
+        },
+        "initial": {
+          "force_rmse_relative": 25.176580855749567,
+          "hysteresis_error": 49.58209130677405,
+          "loading_rmse_relative": 25.177714375136397,
+          "passed": false,
+          "peak_force_error": 136.06554860333677,
+          "unloading_rmse_relative": 26.44129971576742
+        }
+      }
+    },
+    "200ms_2800N_repeat": {
+      "repeat": {
+        "fitted": {
+          "force_rmse_relative": 9.195932399548171,
+          "hysteresis_error": 21.746667945659823,
+          "loading_rmse_relative": 9.345445091679421,
+          "passed": false,
+          "peak_force_error": 52.63564080831538,
+          "unloading_rmse_relative": 9.527442609980119
+        },
+        "initial": {
+          "force_rmse_relative": 23.663815782210374,
+          "hysteresis_error": 54.16529364025126,
+          "loading_rmse_relative": 24.012720839181725,
+          "passed": false,
+          "peak_force_error": 135.73334086680683,
+          "unloading_rmse_relative": 24.556307894943117
+        }
+      }
+    },
+    "200ms_800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.13880265764330169,
+          "hysteresis_error": 0.36586826157271346,
+          "loading_rmse_relative": 0.1259621855886867,
+          "passed": false,
+          "peak_force_error": 0.3482551437139377,
+          "unloading_rmse_relative": 0.15416349174709795
+        },
+        "initial": {
+          "force_rmse_relative": 0.13559659366328153,
+          "hysteresis_error": 0.35989062272790673,
+          "loading_rmse_relative": 0.12296640371725576,
+          "passed": false,
+          "peak_force_error": 0.33838317428444725,
+          "unloading_rmse_relative": 0.15066884873458458
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.1392296795749331,
+          "hysteresis_error": 0.36558076457422606,
+          "loading_rmse_relative": 0.1264431944931074,
+          "passed": false,
+          "peak_force_error": 0.34914184291334566,
+          "unloading_rmse_relative": 0.1545452642446195
+        },
+        "initial": {
+          "force_rmse_relative": 0.13603002660196467,
+          "hysteresis_error": 0.3596071224890097,
+          "loading_rmse_relative": 0.12344943165501773,
+          "passed": false,
+          "peak_force_error": 0.33929323225859026,
+          "unloading_rmse_relative": 0.15106163340167506
+        }
+      }
+    },
+    "200ms_800N_repeat": {
+      "repeat": {
+        "fitted": {
+          "force_rmse_relative": 0.14509762830273445,
+          "hysteresis_error": 0.3566913417108367,
+          "loading_rmse_relative": 0.13382351151531932,
+          "passed": false,
+          "peak_force_error": 0.3508129263735897,
+          "unloading_rmse_relative": 0.15910547637709638
+        },
+        "initial": {
+          "force_rmse_relative": 0.14194138232248185,
+          "hysteresis_error": 0.3506029606506414,
+          "loading_rmse_relative": 0.13080550799538432,
+          "passed": false,
+          "peak_force_error": 0.3410015098907146,
+          "unloading_rmse_relative": 0.1557326393521657
+        }
+      }
+    },
+    "240ms_1200N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.10491119036579517,
+          "hysteresis_error": 0.291838027124564,
+          "loading_rmse_relative": 0.09899361867907677,
+          "passed": false,
+          "peak_force_error": 0.2062203477666228,
+          "unloading_rmse_relative": 0.11233714111323256
+        },
+        "initial": {
+          "force_rmse_relative": 0.09900673316752233,
+          "hysteresis_error": 0.28170155925775664,
+          "loading_rmse_relative": 0.09327663470075043,
+          "passed": false,
+          "peak_force_error": 0.18790605877091543,
+          "unloading_rmse_relative": 0.10611787212448208
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.10497569733185473,
+          "hysteresis_error": 0.291100306805188,
+          "loading_rmse_relative": 0.09907070589087653,
+          "passed": false,
+          "peak_force_error": 0.2063289813544299,
+          "unloading_rmse_relative": 0.11238991780762761
+        },
+        "initial": {
+          "force_rmse_relative": 0.099069783207486,
+          "hysteresis_error": 0.28095405361685355,
+          "loading_rmse_relative": 0.09334658788817521,
+          "passed": false,
+          "peak_force_error": 0.1880180201641251,
+          "unloading_rmse_relative": 0.10617533902495568
+        }
+      }
+    },
+    "240ms_1600N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.06786414080384257,
+          "hysteresis_error": 0.19436668161765086,
+          "loading_rmse_relative": 0.06257249653505327,
+          "passed": false,
+          "peak_force_error": 0.1019113496337983,
+          "unloading_rmse_relative": 0.07385262062667636
+        },
+        "initial": {
+          "force_rmse_relative": 0.060498601576070815,
+          "hysteresis_error": 0.177687722598065,
+          "loading_rmse_relative": 0.05560057482687968,
+          "passed": false,
+          "peak_force_error": 0.07329030040164547,
+          "unloading_rmse_relative": 0.0659231952210364
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.06804047131926315,
+          "hysteresis_error": 0.19399725548997912,
+          "loading_rmse_relative": 0.06274496079488308,
+          "passed": false,
+          "peak_force_error": 0.10258686533954718,
+          "unloading_rmse_relative": 0.0740363666453767
+        },
+        "initial": {
+          "force_rmse_relative": 0.06067489593597621,
+          "hysteresis_error": 0.17731626321103175,
+          "loading_rmse_relative": 0.055764145549694076,
+          "passed": false,
+          "peak_force_error": 0.07400877988679377,
+          "unloading_rmse_relative": 0.06611571421869433
+        }
+      }
+    },
+    "240ms_2000N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.04386132145189458,
+          "hysteresis_error": 0.061937502885101685,
+          "loading_rmse_relative": 0.03982762768326874,
+          "passed": true,
+          "peak_force_error": 0.07330230678931923,
+          "unloading_rmse_relative": 0.04821007434643388
+        },
+        "initial": {
+          "force_rmse_relative": 0.04660240820250449,
+          "hysteresis_error": 0.024069989138787898,
+          "loading_rmse_relative": 0.045048270858332656,
+          "passed": false,
+          "peak_force_error": 0.1670604912731277,
+          "unloading_rmse_relative": 0.04941670387127727
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.04390515693430133,
+          "hysteresis_error": 0.06177969456336594,
+          "loading_rmse_relative": 0.0398444733405299,
+          "passed": true,
+          "peak_force_error": 0.07200106059439602,
+          "unloading_rmse_relative": 0.048270833976798315
+        },
+        "initial": {
+          "force_rmse_relative": 0.04649886299964495,
+          "hysteresis_error": 0.024019772212107767,
+          "loading_rmse_relative": 0.04495790987923018,
+          "passed": false,
+          "peak_force_error": 0.16521631421592237,
+          "unloading_rmse_relative": 0.04927369564728654
+        }
+      }
+    },
+    "240ms_2400N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 5.177060488097641,
+          "hysteresis_error": 6.181353771911219,
+          "loading_rmse_relative": 5.119504771139691,
+          "passed": false,
+          "peak_force_error": 25.735160995641884,
+          "unloading_rmse_relative": 5.410386067263895
+        },
+        "initial": {
+          "force_rmse_relative": 13.32513098351304,
+          "hysteresis_error": 15.240039695289742,
+          "loading_rmse_relative": 13.158775002154524,
+          "passed": false,
+          "peak_force_error": 66.41421420151428,
+          "unloading_rmse_relative": 13.94191707561041
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 5.15723480255099,
+          "hysteresis_error": 6.565861106627204,
+          "loading_rmse_relative": 5.1165855980760915,
+          "passed": false,
+          "peak_force_error": 25.74044957377719,
+          "unloading_rmse_relative": 5.3733282667495015
+        },
+        "initial": {
+          "force_rmse_relative": 13.273881034636096,
+          "hysteresis_error": 16.39291460962499,
+          "loading_rmse_relative": 13.153432193797912,
+          "passed": false,
+          "peak_force_error": 66.42706433960443,
+          "unloading_rmse_relative": 13.844251215418597
+        }
+      }
+    },
+    "240ms_2800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 10.882761185043456,
+          "hysteresis_error": 20.62994857207803,
+          "loading_rmse_relative": 10.388409191455178,
+          "passed": false,
+          "peak_force_error": 52.55498474245864,
+          "unloading_rmse_relative": 11.73646280048728
+        },
+        "initial": {
+          "force_rmse_relative": 28.00968730511692,
+          "hysteresis_error": 51.95244647687074,
+          "loading_rmse_relative": 26.70014418311108,
+          "passed": false,
+          "peak_force_error": 135.53172179863654,
+          "unloading_rmse_relative": 30.239996019311775
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 10.903709973772914,
+          "hysteresis_error": 21.366214954276536,
+          "loading_rmse_relative": 10.44442270350311,
+          "passed": false,
+          "peak_force_error": 52.46357686087085,
+          "unloading_rmse_relative": 11.724063015653291
+        },
+        "initial": {
+          "force_rmse_relative": 28.066091162755242,
+          "hysteresis_error": 53.915618442153836,
+          "loading_rmse_relative": 26.849914134016636,
+          "passed": false,
+          "peak_force_error": 135.29139418446834,
+          "unloading_rmse_relative": 30.20770587868118
+        }
+      }
+    },
+    "240ms_800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.1582166503029988,
+          "hysteresis_error": 0.43910059744143953,
+          "loading_rmse_relative": 0.14736280284241413,
+          "passed": false,
+          "peak_force_error": 0.351695232834195,
+          "unloading_rmse_relative": 0.17151492072866964
+        },
+        "initial": {
+          "force_rmse_relative": 0.154616895120737,
+          "hysteresis_error": 0.433854482993778,
+          "loading_rmse_relative": 0.14395373517606225,
+          "passed": false,
+          "peak_force_error": 0.34187341277858885,
+          "unloading_rmse_relative": 0.16765403807737755
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.15859378193291057,
+          "hysteresis_error": 0.43908171784507705,
+          "loading_rmse_relative": 0.14781664750773127,
+          "passed": false,
+          "peak_force_error": 0.35251185542547975,
+          "unloading_rmse_relative": 0.1718197269985607
+        },
+        "initial": {
+          "force_rmse_relative": 0.15500022913947012,
+          "hysteresis_error": 0.43383979401391015,
+          "loading_rmse_relative": 0.14440924368722152,
+          "passed": false,
+          "peak_force_error": 0.3427067876915839,
+          "unloading_rmse_relative": 0.16796988772718716
+        }
+      }
+    },
+    "280ms_1200N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.11466384188679692,
+          "hysteresis_error": 0.3635245503673856,
+          "loading_rmse_relative": 0.10961225022338783,
+          "passed": false,
+          "peak_force_error": 0.20613255652395449,
+          "unloading_rmse_relative": 0.12108330016708863
+        },
+        "initial": {
+          "force_rmse_relative": 0.10827767439331505,
+          "hysteresis_error": 0.35445072686531337,
+          "loading_rmse_relative": 0.10348377097195091,
+          "passed": false,
+          "peak_force_error": 0.1877997238967917,
+          "unloading_rmse_relative": 0.114315105697419
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.11444850360844706,
+          "hysteresis_error": 0.36292840243097774,
+          "loading_rmse_relative": 0.10944347971802967,
+          "passed": false,
+          "peak_force_error": 0.20585970464713232,
+          "unloading_rmse_relative": 0.12081565720647236
+        },
+        "initial": {
+          "force_rmse_relative": 0.10805406860838872,
+          "hysteresis_error": 0.3538441156793508,
+          "loading_rmse_relative": 0.10330094401715928,
+          "passed": false,
+          "peak_force_error": 0.18751254768772418,
+          "unloading_rmse_relative": 0.11404552651532376
+        }
+      }
+    },
+    "280ms_1600N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.07423325946193599,
+          "hysteresis_error": 0.27420289141004467,
+          "loading_rmse_relative": 0.06993529181153887,
+          "passed": false,
+          "peak_force_error": 0.10521405597478585,
+          "unloading_rmse_relative": 0.07916971047011205
+        },
+        "initial": {
+          "force_rmse_relative": 0.06614344730792122,
+          "hysteresis_error": 0.25932049053515654,
+          "loading_rmse_relative": 0.062363151280882656,
+          "passed": false,
+          "peak_force_error": 0.07669989529783112,
+          "unloading_rmse_relative": 0.07040059356836621
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.07452303666878381,
+          "hysteresis_error": 0.27407307245802914,
+          "loading_rmse_relative": 0.07004452271071328,
+          "passed": false,
+          "peak_force_error": 0.10600858627700341,
+          "unloading_rmse_relative": 0.0796115761555552
+        },
+        "initial": {
+          "force_rmse_relative": 0.06643213709887276,
+          "hysteresis_error": 0.2591985022558511,
+          "loading_rmse_relative": 0.0625672403704088,
+          "passed": false,
+          "peak_force_error": 0.07758640350974481,
+          "unloading_rmse_relative": 0.07074726776295219
+        }
+      }
+    },
+    "280ms_2000N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.046321887423528135,
+          "hysteresis_error": 0.15456041559360645,
+          "loading_rmse_relative": 0.04338200935373957,
+          "passed": false,
+          "peak_force_error": 0.05632557406782299,
+          "unloading_rmse_relative": 0.04944175874819509
+        },
+        "initial": {
+          "force_rmse_relative": 0.04817404457452351,
+          "hysteresis_error": 0.12238358791358224,
+          "loading_rmse_relative": 0.046889094947027,
+          "passed": false,
+          "peak_force_error": 0.14325533609752453,
+          "unloading_rmse_relative": 0.050325455725626134
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.0462984901436427,
+          "hysteresis_error": 0.15406070348459008,
+          "loading_rmse_relative": 0.04334162999440097,
+          "passed": false,
+          "peak_force_error": 0.05530072477799005,
+          "unloading_rmse_relative": 0.04942992203304488
+        },
+        "initial": {
+          "force_rmse_relative": 0.0480447263709982,
+          "hysteresis_error": 0.1219402530959164,
+          "loading_rmse_relative": 0.046788427660252714,
+          "passed": false,
+          "peak_force_error": 0.14183112903452957,
+          "unloading_rmse_relative": 0.050150243341473284
+        }
+      }
+    },
+    "280ms_2400N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 5.8474715960225225,
+          "hysteresis_error": 6.450360927798904,
+          "loading_rmse_relative": 5.450883250423543,
+          "passed": false,
+          "peak_force_error": 25.074859132119656,
+          "unloading_rmse_relative": 6.370102656015421
+        },
+        "initial": {
+          "force_rmse_relative": 15.058821549332862,
+          "hysteresis_error": 16.15875244450749,
+          "loading_rmse_relative": 14.014037929558194,
+          "passed": false,
+          "peak_force_error": 64.77714305196254,
+          "unloading_rmse_relative": 16.424864336958613
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 5.866412670583608,
+          "hysteresis_error": 6.5091665208587255,
+          "loading_rmse_relative": 5.4931548934195655,
+          "passed": false,
+          "peak_force_error": 24.807198699008534,
+          "unloading_rmse_relative": 6.367176082712835
+        },
+        "initial": {
+          "force_rmse_relative": 15.10692518767988,
+          "hysteresis_error": 16.325664263556583,
+          "loading_rmse_relative": 14.122435268650369,
+          "passed": false,
+          "peak_force_error": 64.06093722676776,
+          "unloading_rmse_relative": 16.41652639056896
+        }
+      }
+    },
+    "280ms_2800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 12.260392249115354,
+          "hysteresis_error": 17.39395357975954,
+          "loading_rmse_relative": 10.555025059172538,
+          "passed": false,
+          "peak_force_error": 51.69779963843799,
+          "unloading_rmse_relative": 14.010237417102834
+        },
+        "initial": {
+          "force_rmse_relative": 31.559450239005482,
+          "hysteresis_error": 43.479703976427274,
+          "loading_rmse_relative": 27.126664853810404,
+          "passed": false,
+          "peak_force_error": 133.45007476249447,
+          "unloading_rmse_relative": 36.097339410404565
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 12.279645843184106,
+          "hysteresis_error": 18.122574198516173,
+          "loading_rmse_relative": 10.615044736127333,
+          "passed": false,
+          "peak_force_error": 51.590012246721656,
+          "unloading_rmse_relative": 13.998674566305416
+        },
+        "initial": {
+          "force_rmse_relative": 31.611520863565445,
+          "hysteresis_error": 45.51240873866646,
+          "loading_rmse_relative": 27.28654460073717,
+          "passed": false,
+          "peak_force_error": 133.17457232450022,
+          "unloading_rmse_relative": 36.068150993507224
+        }
+      }
+    },
+    "280ms_800N": {
+      "train": {
+        "fitted": {
+          "force_rmse_relative": 0.1762021086809068,
+          "hysteresis_error": 0.49946476533905076,
+          "loading_rmse_relative": 0.16829723446254033,
+          "passed": false,
+          "peak_force_error": 0.3534016503113229,
+          "unloading_rmse_relative": 0.1864380051660487
+        },
+        "initial": {
+          "force_rmse_relative": 0.17228775739090527,
+          "hysteresis_error": 0.4948026154768811,
+          "loading_rmse_relative": 0.16453480772124307,
+          "passed": false,
+          "peak_force_error": 0.34360294699247707,
+          "unloading_rmse_relative": 0.18230595641222647
+        }
+      },
+      "validate": {
+        "fitted": {
+          "force_rmse_relative": 0.1762216268445677,
+          "hysteresis_error": 0.49868431546750575,
+          "loading_rmse_relative": 0.16839450528268587,
+          "passed": false,
+          "peak_force_error": 0.3535759969235392,
+          "unloading_rmse_relative": 0.18637441737135738
+        },
+        "initial": {
+          "force_rmse_relative": 0.17230696505345927,
+          "hysteresis_error": 0.49401533642237494,
+          "loading_rmse_relative": 0.16462840679355464,
+          "passed": false,
+          "peak_force_error": 0.34378350485508496,
+          "unloading_rmse_relative": 0.18224577238759085
+        }
+      }
+    }
+  },
+  "evaluations": 2,
+  "initial_material": {
+    "equilibrium_fraction": 0.6586721149134733,
+    "hyperfoam_exponent": 18.07697643908876,
+    "hyperfoam_exponent_2": -0.5855868486256809,
+    "instantaneous_shear_modulus_2_pa": 19487.70413858932,
+    "instantaneous_shear_modulus_pa": 267615.1977311966,
+    "maxwell_relaxation_time_s": 0.0051501095220815776
+  },
+  "material": {
+    "equilibrium_fraction": 0.6576064678388214,
+    "hyperfoam_exponent": 18.09258148604992,
+    "hyperfoam_exponent_2": -0.3996919308098923,
+    "instantaneous_shear_modulus_2_pa": 19310.809249565675,
+    "instantaneous_shear_modulus_pa": 265566.6672672526,
+    "maxwell_relaxation_time_s": 0.0051477947151191686
+  },
+  "optimization": {
+    "accepted_iterations": 1,
+    "history": [
+      {
+        "equilibrium_fraction": 0.6586721149134733,
+        "hyperfoam_exponent": 18.07697643908876,
+        "hyperfoam_exponent_2": -0.5855868486256809,
+        "instantaneous_shear_modulus_2_pa": 19487.70413858932,
+        "instantaneous_shear_modulus_pa": 267615.1977311966,
+        "iteration": 0.0,
+        "loss": 468.5227518026396,
+        "loss_160ms_1200N": 0.009794921917816654,
+        "loss_160ms_1600N": 0.003433843029115385,
+        "loss_160ms_2000N": 0.006319922123435572,
+        "loss_160ms_2400N": 475.7316667528671,
+        "loss_160ms_2800N": 2566.4434350519755,
+        "loss_160ms_800N": 0.024052545996558785,
+        "loss_200ms_1200N": 0.012246680461670293,
+        "loss_200ms_1600N": 0.0036263126914303045,
+        "loss_200ms_2000N": 0.005543345956807913,
+        "loss_200ms_2400N": 481.72508859731715,
+        "loss_200ms_2800N": 2086.3196850945164,
+        "loss_200ms_800N": 0.03294582557840976,
+        "loss_240ms_1200N": 0.016234544494816577,
+        "loss_240ms_1600N": 0.0055991978110568365,
+        "loss_240ms_2000N": 0.004189422659670596,
+        "loss_240ms_2400N": 504.0837172080198,
+        "loss_240ms_2800N": 2230.2400904865917,
+        "loss_240ms_800N": 0.04153166762649275,
+        "loss_280ms_1200N": 0.02044594213084246,
+        "loss_280ms_1600N": 0.008120902879895905,
+        "loss_280ms_2000N": 0.00452470949543683,
+        "loss_280ms_2400N": 539.1595840535418,
+        "loss_280ms_2800N": 2360.5939828799537,
+        "loss_280ms_800N": 0.05018335371443036,
+        "maxwell_relaxation_time_s": 0.0051501095220815776,
+        "start": 0.0
+      },
+      {
+        "equilibrium_fraction": 0.6576064678388214,
+        "hyperfoam_exponent": 18.09258148604992,
+        "hyperfoam_exponent_2": -0.3996919308098923,
+        "instantaneous_shear_modulus_2_pa": 19310.809249565675,
+        "instantaneous_shear_modulus_pa": 265566.6672672526,
+        "iteration": 1.0,
+        "loss": 70.80070020338542,
+        "loss_160ms_1200N": 0.011192660170211786,
+        "loss_160ms_1600N": 0.004330117764835409,
+        "loss_160ms_2000N": 0.004200725733971218,
+        "loss_160ms_2400N": 71.93084213563193,
+        "loss_160ms_2800N": 388.1695659571195,
+        "loss_160ms_800N": 0.02534405536789128,
+        "loss_200ms_1200N": 0.013960377455868356,
+        "loss_200ms_1600N": 0.004889771675916335,
+        "loss_200ms_2000N": 0.0025860704507822004,
+        "loss_200ms_2400N": 72.84324827425534,
+        "loss_200ms_2800N": 316.0549165650293,
+        "loss_200ms_800N": 0.03452283104725261,
+        "loss_240ms_1200N": 0.018239337963884647,
+        "loss_240ms_1600N": 0.007208210120914331,
+        "loss_240ms_2000N": 0.0024914002557063905,
+        "loss_240ms_2400N": 75.99553553702607,
+        "loss_240ms_2800N": 336.79622377749746,
+        "loss_240ms_800N": 0.04336847541752579,
+        "loss_280ms_1200N": 0.02270469428599318,
+        "loss_280ms_1600N": 0.010017891728580702,
+        "loss_280ms_2000N": 0.0035515705847455944,
+        "loss_280ms_2400N": 81.12481516700026,
+        "loss_280ms_2800N": 356.0407880388586,
+        "loss_280ms_800N": 0.05226123880738831,
+        "maxwell_relaxation_time_s": 0.0051477947151191686,
+        "start": 0.0
+      }
+    ]
+  },
+  "registration": {
+    "pose": {
+      "lift_m": 0.041888022897997756,
+      "x_m": -0.11735734005432989,
+      "y_m": -0.005088187585965106,
+      "yaw_rad": 0.06763150851478027
+    },
+    "qc": {
+      "columns": 917,
+      "columns_within_mm": {
+        "0": 1,
+        "0.5": 2,
+        "1": 7,
+        "2": 46,
+        "5": 246
+      },
+      "gap_percentiles_mm": {
+        "p25": 3.54,
+        "p5": 1.63,
+        "p50": 5.43,
+        "p75": 7.15,
+        "p95": 8.76
+      },
+      "heel_offset_m": 0.023250000000000007,
+      "last": {
+        "attachment_gap_m": 0.07099981711508391,
+        "heel_seat_height_m": 0.005063634054700246,
+        "heel_toe_cues": {
+          "ball_tread_fraction_minus_half": 0.19834710743801653,
+          "toe_side_minus_heel_side_width_m": 0.02300000000000002
+        },
+        "length_m": 0.2370000000000002,
+        "max_width_m": 0.07900000000000007,
+        "plate_stud_angle_deg": 0.0022613741900354136,
+        "toe_tip_height_m": 0.009224663361312363,
+        "unit_scale_to_m": 0.001,
+        "up_in_source": [
+          -0.026184647912624804,
+          0.9983733969273328,
+          -0.050645083882547084
+        ]
+      },
+      "last_outside_fraction": 0.009652509652509633,
+      "last_side": "left (from the STL name; not verified)",
+      "overlap_columns": 555,
+      "platen_columns": 89,
+      "platen_columns_x_range_m": [
+        0.008140769004821885,
+        0.043140769004821916
+      ],
+      "preload": {
+        "compressed_columns": 64,
+        "indentation_m": 0.0023037479842008997,
+        "modulus_pa": 567320.0267171019,
+        "preload_n": 20.309546766009625
+      },
+      "preload_centroid_inside_platen_contact": true,
+      "preload_force_centroid_xy_m": [
+        0.016328071011365432,
+        0.002589695711829527
+      ],
+      "rest_pitch_deg": 4.53125,
+      "rest_roll_deg": -0.265625,
+      "shoe_heel_at_input_plus_x": false,
+      "shoe_heel_toe_cues_m": {
+        "low_end_thickness_or_elevation_m": -0.005911396610536548,
+        "low_minus_high_width_m": -0.014999999999999986
+      },
+      "shoe_side": "left",
+      "shoe_side_cues_m": {
+        "arch_indent_neg_y_m": 0.028265306122448965,
+        "arch_indent_pos_y_m": 0.01552631578947368,
+        "toe_offset_y_m": -0.00846153846153846
+      },
+      "spread_cost_m": 0.0012498354196274475,
+      "spread_cost_probes_m": {
+        "x_5mm": [
+          null,
+          null
+        ],
+        "y_5mm": [
+          null,
+          null
+        ],
+        "yaw_2deg": [
+          null,
+          null
+        ]
+      },
+      "yaw_deg": 3.875
+    }
+  },
+  "shoe": "puma-fast-r-nitro-elite-3",
+  "side": "left",
+  "sweep": "FR3"
+}

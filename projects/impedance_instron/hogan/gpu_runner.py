@@ -3,18 +3,17 @@
 
 """CUDA candidate rollouts of the causal runner, without tracking-plan inputs.
 
-The chain, actuator, oscillator, and load memory use float64; the unchanged shoe
-runtime uses float32. Worlds are candidate-major within each group, and a group
-shares one shoe instance. Every world keeps its own trial's *exact* integration
+The chain, actuator, oscillator, and load memory use float64; the column bed
+uses float32. Worlds are candidate-major within each group, and a group shares
+one shoe instance and one :class:`~projects.digital_shoe.column_bed.ColumnBed`. Every world keeps its own trial's *exact* integration
 timestep, duration / ceil(duration / maximum_dt), in both the chain and the shoe,
 so stances with different horizons integrate concurrently without inheriting
 another trial's settings.
 
 Only graph chunks are dispatched from Python during integration. Each step runs
-actuation with carrier staging, the shoe (the lean kernels of :mod:`.gpu_shoe`
-for elastic-Coulomb ground beds, otherwise the generic fused foundation plus a
-warp-per-world compression screen), and integration, plus optional observers
-such as the on-device LM objective of :mod:`.gpu_residuals`.
+actuation with carrier staging, one column-bed launch for every world (carrier
+wrench and held-strain screen), and integration, plus optional observers such as
+the on-device LM objective of :mod:`.gpu_residuals`.
 Full traces remain resident until all groups finish; summaries and offline
 identification scores can then be computed on the host. Trace memory is
 O(candidates * trials * steps); max_trials_per_group bounds the world count per
@@ -26,16 +25,14 @@ setup.
 from __future__ import annotations
 
 import math
-from copy import deepcopy
 from time import perf_counter
 from types import SimpleNamespace
 
 import numpy as np
 import warp as wp
 
-from projects.digital_shoe.runtime import clone_params
+from projects.digital_shoe.column_bed import ColumnBed
 
-from ..cartesian.gpu.foundation import FoundationFused
 from ..cartesian.shoe import Shoe
 from .gpu_mechanics import (
     ChainParams,
@@ -49,7 +46,6 @@ from .gpu_mechanics import (
     _dynamics,
     _finite6,
 )
-from .gpu_shoe import apply_ground_shoe, ground_shoe, reset_ground_shoe
 from .mechanics import Chain
 from .runner import FEATURE_NAMES, RolloutConfig, Runner, State, Task, _summary
 
@@ -65,7 +61,7 @@ _FAILURES = {
     3: "Numerical speed screen exceeded",
     4: "Nonfinite actuator/contact output",
     5: "Contact force screen exceeded",
-    6: "Driven shoe compression screen exceeded",
+    6: "Held shoe compression screen exceeded",
     7: "Singular mass matrix",
     8: "Nonfinite integrated state",
     9: "Integrated state exceeded height/speed screen",
@@ -112,9 +108,6 @@ class _Buffers:
     grf: wp.array[wp.vec2d]
     status: wp.array[int]
     recorded: wp.array[int]
-    enabled: wp.array[int]
-    fraction: wp.array[wp.float64]
-    invalid_compression: wp.array[int]
     record: int
     states: wp.array2d[Vec6]
     velocities: wp.array2d[Vec6]
@@ -142,11 +135,9 @@ def _reset(
     data.recorded[w] = 0
     if w // trials < active:
         data.status[w] = 0
-        data.enabled[w] = 1
     else:
         # Padding candidates never integrate, so smaller batches reuse the graph.
         data.status[w] = _INACTIVE
-        data.enabled[w] = 0
     if data.record != 0:
         data.states[0, w] = q0[s]
         data.velocities[0, w] = v0[s]
@@ -193,7 +184,6 @@ def _actuate(
         code = 3
     if code != 0:
         data.status[w] = code
-        data.enabled[w] = 0
         return
     p = params[s]
     m = models[c]
@@ -269,35 +259,6 @@ def _actuate(
 
 
 @wp.kernel
-def _compression(
-    columns: int,
-    driven: wp.array[int],
-    rest: wp.array[wp.float64],
-    compression: wp.array[wp.float32],
-    data: _Buffers,
-):
-    """Reduce the driven-column compression screen with one warp per world."""
-    w, lane = wp.tid()
-    if data.status[w] != 0:
-        return
-    largest = wp.float64(0.0)
-    invalid = int(0)
-    for index in range(lane, driven.shape[0], wp.block_dim()):
-        # The CPU divides float32 compression by the artifact's float64 thickness.
-        fraction = wp.float64(compression[w * columns + driven[index]]) / rest[index]
-        if not wp.isfinite(fraction):
-            invalid = 1
-        else:
-            largest = wp.max(largest, fraction)
-    # Every lane takes part in register-tile extraction, which synchronizes the block.
-    screen = wp.tile_max(wp.tile(largest))[0]
-    any_invalid = wp.tile_max(wp.tile(invalid))[0]
-    if lane == 0:
-        data.fraction[w] = screen
-        data.invalid_compression[w] = any_invalid
-
-
-@wp.kernel
 def _advance(
     params: wp.array[ChainParams],
     models: wp.array[_Model],
@@ -307,6 +268,7 @@ def _advance(
     load_rate: wp.array[wp.float64],
     cfg: Settings,
     body_f: wp.array[wp.spatial_vector],
+    held_strain: wp.array[wp.float32],
     data: _Buffers,
 ):
     w = wp.tid()
@@ -324,12 +286,10 @@ def _advance(
     fx = wp.float64(f[0])
     fz = wp.float64(f[2])
     moment = -wp.float64(f[4])
-    compression = data.fraction[w]
+    compression = wp.float64(held_strain[w])
     code = int(0)
-    if (
-        not _finite6(load)
-        or not (wp.isfinite(fx) and wp.isfinite(fz) and wp.isfinite(moment))
-        or data.invalid_compression[w] != 0
+    if not _finite6(load) or not (
+        wp.isfinite(fx) and wp.isfinite(fz) and wp.isfinite(moment) and wp.isfinite(compression)
     ):
         code = 4
     elif fz < wp.float64(-1.0e-6) or wp.length(wp.vec2d(fx, fz)) > cfg.max_force:
@@ -338,7 +298,6 @@ def _advance(
         code = 6
     if code != 0:
         data.status[w] = code
-        data.enabled[w] = 0
         return
     mass, bias = _dynamics(q, v, p, cfg.gravity)
     _position, jx, jz, _angle = _ankle(q, p)
@@ -354,7 +313,6 @@ def _advance(
         code = 9
     if code != 0:
         data.status[w] = code
-        data.enabled[w] = 0
         return
     # Commit only accepted intervals, then update sensors using this contact.
     sense = data.sensory[w]
@@ -384,7 +342,6 @@ def _advance(
     data.recorded[w] = k + 1
     if k + 1 == steps[s]:
         data.status[w] = 1
-        data.enabled[w] = 0
 
 
 def _model_params(model: Runner) -> _Model:
@@ -420,15 +377,9 @@ def _rates(models: list[Runner], dts: np.ndarray, capacity: int) -> tuple[np.nda
 
 
 class _Group:
-    """Persistent worlds for up to ``candidates`` models over one shoe's trials.
+    """Persistent worlds for up to ``candidates`` models over one shoe's trials."""
 
-    Setting ``fast_shoe`` before :meth:`launch` advances lean elastic-Coulomb
-    shoes with fast-math kernels, which agree with the exact kernels only to
-    float32 intrinsic rounding. Both modes share the group's memory and keep
-    one captured graph each.
-    """
-
-    def __init__(self, batch, indices, chains, shoes, initials, tasks, *, candidates=None, record=True, lean=True):
+    def __init__(self, batch, indices, chains, shoes, initials, tasks, *, candidates=None, record=True):
         self.indices = tuple(indices)
         self.device = batch.device
         self.config = batch.config
@@ -439,11 +390,10 @@ class _Group:
         self.dts = batch.dts[list(indices)].copy()
         self.durations = batch.durations_s[list(indices)]
         self.chunk_steps = min(batch.chunk_steps, int(self.steps.max()))
-        self._graphs = {}
+        self._graph = None
         self.max_steps = int(self.steps.max())
         self.active = self.candidates
         self.observers = []
-        self.fast_shoe = False
         d, w = self.device, self.world_count
         self.params = wp.array([_chain_params(chains[i]) for i in indices], dtype=ChainParams, device=d)
         self.models = wp.zeros(self.candidates, dtype=_Model, device=d)
@@ -460,50 +410,22 @@ class _Group:
             np.array([[initials[i].phase_rad, initials[i].normal_load_bw] for i in indices]), dtype=wp.vec2d, device=d
         )
         shoe = shoes[indices[0]]
-        source = shoe.foundation
         bed = shoe.shoe.column_bed
-        self.foundation = FoundationFused(
-            source.anchor_local.numpy(),
-            np.full(len(bed.rest_length_m), source.config.ground_height_m),
-            source.rest_len.numpy(),
-            source.area.numpy(),
-            source.neighbors.numpy(),
+        self.bed = ColumnBed(
+            shoe.anchor_local_m,
+            bed.rest_length_m,
+            bed.area_m2,
+            bed.neighbors,
             bed.spacing_m,
-            shoe.shoe.material,
+            shoe.connection,
+            shoe.material,
+            shoe.config,
             np.arange(w),
             wp.zeros(w, dtype=wp.vec3, device=d),
-            deepcopy(source.config),
-            d,
-            deepcopy(source.surround),
-            world_count=w,
+            device=d,
         )
-        # Preserve runtime material/config blocks and default-adapter parameters,
-        # rather than reconstructing them from artifact defaults.
-        foundation = self.foundation
-        foundation.world_blocks = [clone_params(source.world_blocks[0]) for _ in range(w)]
-        foundation.world_params.assign(foundation.world_blocks)
-        foundation._materials_dirty = True
-        wp.copy(foundation.friction_kt, source.friction_kt)
-        wp.copy(foundation.friction_kv, source.friction_kv)
-        if source.friction_solver is not None:
-            adapter = foundation.friction_solver
-            adapter.settings.assign(np.repeat(source.friction_solver.settings.numpy(), w, axis=0))
-            wp.copy(adapter.base_kt, source.friction_solver.base_kt)
-            wp.copy(adapter.base_kv, source.friction_solver.base_kv)
         # World w = candidate * trials + trial advances with its trial's exact step.
-        foundation.set_world_timesteps(np.tile(self.dts, self.candidates))
-        driven = np.flatnonzero(foundation.driven.numpy())
-        self.driven = wp.array(driven, dtype=int, device=d)
-        self.rest = wp.array(np.asarray(bed.rest_length_m, dtype=np.float64)[driven], dtype=wp.float64, device=d)
-        # Elastic-Coulomb ground beds advance only physics history in one fused pass.
-        # Without traces the float64 compression fraction only feeds the screen.
-        self.lean = (
-            ground_shoe(
-                foundation, bed.rest_length_m, exact_screen=record, compression_limit=self.config.compression_limit
-            )
-            if lean
-            else None
-        )
+        self.bed.set_timesteps(np.tile(self.dts, self.candidates))
         self.carriers = SimpleNamespace(
             body_q=wp.zeros(w, dtype=wp.transform, device=d),
             body_qd=wp.zeros(w, dtype=wp.spatial_vector, device=d),
@@ -530,9 +452,6 @@ class _Group:
         data.grf = wp.zeros(w, dtype=wp.vec2d, device=d)
         data.status = wp.zeros(w, dtype=int, device=d)
         data.recorded = wp.zeros(w, dtype=int, device=d)
-        data.enabled = self.foundation.enabled
-        data.fraction = wp.zeros(w, dtype=wp.float64, device=d)
-        data.invalid_compression = wp.zeros(w, dtype=int, device=d)
         data.record = int(record)
         if record:
             data.states = wp.zeros((self.max_steps + 1, w), dtype=Vec6, device=d)
@@ -542,9 +461,7 @@ class _Group:
         self.data = data
 
     def _reset(self):
-        self.foundation.reset()
-        if self.lean is not None:
-            reset_ground_shoe(self.lean)
+        self.bed.reset()
         wp.launch(
             _reset,
             dim=self.world_count,
@@ -574,24 +491,7 @@ class _Group:
             ],
             device=d,
         )
-        if self.lean is not None:
-            apply_ground_shoe(
-                self.foundation,
-                self.lean,
-                self.carriers,
-                data.fraction,
-                data.invalid_compression,
-                fast=self.fast_shoe,
-            )
-        else:
-            self.foundation.apply(self.carriers, None, clear_body_force=True)
-            wp.launch_tiled(
-                _compression,
-                dim=self.world_count,
-                block_dim=32,
-                inputs=[self.foundation.column_count, self.driven, self.rest, self.foundation.compression, data],
-                device=d,
-            )
+        self.bed.apply(self.carriers)
         wp.launch(
             _advance,
             dim=self.world_count,
@@ -604,6 +504,7 @@ class _Group:
                 self.load_rate,
                 self.settings,
                 self.carriers.body_f,
+                self.bed.bed.held_strain,
                 data,
             ],
             device=d,
@@ -626,18 +527,17 @@ class _Group:
     def launch(self, models):
         self.set_models(models)
         self._reset()
-        graph = self._graphs.get(self.fast_shoe)
-        if graph is None:
-            # Settle compilation and shoe caches before capture, not at every step.
+        if self._graph is None:
+            # Settle compilation before capture, not at every step.
             self._step()
             wp.synchronize_device(self.device)
             self._reset()
             with wp.ScopedCapture(device=self.device) as capture:
                 for _ in range(self.chunk_steps):
                     self._step()
-            graph = self._graphs[self.fast_shoe] = capture.graph
+            self._graph = capture.graph
         for _ in range(math.ceil(self.max_steps / self.chunk_steps)):
-            wp.capture_launch(graph)
+            wp.capture_launch(self._graph)
 
     def collect(self):
         data = self.data
@@ -698,12 +598,6 @@ class _Inputs:
         self.steps = np.asarray(steps, dtype=np.int32)
         self.dts = self.durations_s / self.steps
         self.initials = tuple(initial.copy() for initial in initials)
-        for shoe in shoes:
-            source = shoe.foundation
-            if source.world_count != 1 or source.config.ground_height_m is None or source.surround is None:
-                raise ValueError("Each shoe needs a single-world ground-plane foundation with a surround mask")
-            if source.friction_solver is not None and not getattr(source.friction_solver, "is_default", False):
-                raise ValueError("Custom friction adapters are not supported")
         self.device = wp.get_device(device)
         if not self.device.is_cuda:
             raise ValueError("GPU rollouts require a CUDA device")
@@ -731,10 +625,10 @@ class GpuBatch:
 
     Args:
         chains: Body mechanics, one per trial.
-        shoes: Ordinary ground-plane Shoe instances, one per trial. Reuse an
-            instance to batch trials with identical geometry/material/config.
-            Runtime material blocks and default-adapter settings are copied at
-            construction; custom friction adapters are not supported.
+        shoes: Shoe instances, one per trial. Reuse an instance to batch trials
+            with identical geometry, material and contact settings; each group
+            builds its own column bed from the shoe's geometry, connection,
+            material and config.
         initials: Complete causal runner initial states, one per trial.
         tasks: Known task inputs, one per trial.
         durations_s: Positive prediction horizons [s], one per trial.

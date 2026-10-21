@@ -4,12 +4,10 @@
 """Unit tests for friction-only consistent deflection law and solver modes."""
 
 import unittest
-from unittest.mock import MagicMock
 
 import numpy as np
 import warp as wp
 
-from projects.digital_shoe.friction_adapter import FrictionAdapter
 from projects.digital_shoe.friction_deflection import bristle_deflection_step
 from projects.digital_shoe.friction_solver import FrictionParams, FrictionSolver
 
@@ -971,22 +969,6 @@ class TestDigitalShoeFrictionDeflection(unittest.TestCase):
                 # Both have experienced unphysical creep below 9.8 N
                 self.assertLess(f_dt1, 9.8 - 0.4)
                 self.assertLess(f_dt2, f_dt1 - 0.1)
-
-    def test_adapter_rejects_nonzero_yield_width(self):
-        """Verify FrictionAdapter rejects nonzero yield_width as unsupported at public API."""
-        foundation = MagicMock()
-        foundation.compression.device = "cpu"
-        foundation.world_count = 1
-        foundation.column_count = 2
-        foundation.friction_solver = None
-        mobility = wp.array([np.eye(6, dtype=np.float32)], dtype=wp.spatial_matrix, device="cpu")
-
-        with self.assertRaises(ValueError):
-            FrictionAdapter(foundation, mobility, yield_width=0.1)
-
-        # yield_width=0.0 is accepted
-        adapter = FrictionAdapter(foundation, mobility, yield_width=0.0)
-        self.assertEqual(adapter.yield_width, 0.0)
 
 
 if __name__ == "__main__":

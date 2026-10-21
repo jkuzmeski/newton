@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 import numpy as np
+import warp as wp
 
 from newton.tests.test_impedance_hogan import _tiny_shoe
 from projects.impedance_instron.cartesian.prepare_visual3d import (
@@ -105,6 +106,7 @@ class TestGroundAngleReconstruction(unittest.TestCase):
         scalar_error = abs(expected_pitch - 10.0)
         self.assertGreater(scalar_error, 0.5)
 
+    @unittest.skipUnless(wp.is_cuda_available(), "The column bed requires CUDA")
     def test_fixed_registration_and_translation_invariance(self):
         """Apply fixed shoe registration once and preserve angles under translation."""
         fixed_pitch = -0.24446041090480894
@@ -113,7 +115,7 @@ class TestGroundAngleReconstruction(unittest.TestCase):
         knee = -0.3
         with tempfile.TemporaryDirectory() as directory:
             fixture = _tiny_shoe(directory)
-            shoe = Shoe(fixture.artifact_path, fixture.mount_m, fixed_pitch, device="cpu")
+            shoe = Shoe(fixture.artifact_path, fixture.mount_m, fixed_pitch)
             for pitch in test_pitches:
                 ankle = pitch + fixed_pitch - (thigh + knee) - np.pi / 2
                 solver_pitch = thigh + knee + ankle + np.pi / 2

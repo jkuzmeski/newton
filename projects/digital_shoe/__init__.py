@@ -6,17 +6,13 @@
 from importlib import import_module
 
 _EXPORT_MODULES = {
-    "CalibrationWorkspace": "calibration",
     "ColumnBed": "artifact",
     "DigitalShoe": "artifact",
     "FoundationConfig": "runtime",
-    "FrictionAdapter": "friction_adapter",
     "FrictionParams": "friction_solver",
     "FrictionSolver": "friction_solver",
     "InstronFixture": "artifact",
-    "MidsoleFoundation": "runtime",
     "ShoeMaterial": "runtime",
-    "SurroundConfig": "runtime",
     "VisualMesh": "artifact",
     "hyperfoam_pressure_numpy": "material",
     "load_artifact": "artifact",
@@ -26,17 +22,13 @@ _EXPORT_MODULES = {
 }
 
 __all__ = [
-    "CalibrationWorkspace",
     "ColumnBed",
     "DigitalShoe",
     "FoundationConfig",
-    "FrictionAdapter",
     "FrictionParams",
     "FrictionSolver",
     "InstronFixture",
-    "MidsoleFoundation",
     "ShoeMaterial",
-    "SurroundConfig",
     "VisualMesh",
     "hyperfoam_pressure_numpy",
     "load_artifact",

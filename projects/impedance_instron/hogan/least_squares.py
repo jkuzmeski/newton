@@ -52,10 +52,6 @@ class LMConfig:
     """Stop when an accepted step improves the cost by less than this fraction."""
     chunk: int = 128
     """Candidates per batched rollout."""
-    fast_jacobian: bool = True
-    """Integrate finite-difference rollouts, and their own reference, with fast-math
-    shoe kernels on CUDA. Costs, damping-ladder proposals, and accepted steps stay
-    exact; only the search direction carries float32 intrinsic rounding."""
 
     def __post_init__(self):
         if self.objective not in ("sample", "score"):
@@ -262,12 +258,10 @@ class _DeviceEngine:
         # Row ``size`` briefly holds the reference for the fused J^T J / J^T r product.
         self.ladder_row = max(jacobian_rows, size + 1)
         self.reference_row = self.ladder_row + len(search.ladder)
-        # Fast differences need a reference with the same numerics as their perturbations.
-        self.fast_reference_row = self.reference_row + 1
         self.objective = GpuResiduals(
             trials,
             config,
-            rows=self.fast_reference_row + 1,
+            rows=self.reference_row + 1,
             device=device,
             chunk=search.chunk,
             objective=search.objective,
@@ -286,33 +280,17 @@ class _DeviceEngine:
             return None
         return float(sums[0]), motion_metrics(motion[0])
 
-    def _differences(self, x: np.ndarray, fast: bool):
-        """Integrate perturbations into rows ``[0, n)``; return completion flags and the reference row."""
+    def jacobian(self, x: np.ndarray):
         size, search = self.parameters.size, self.search
         eye = np.eye(size) * search.step
         perturbed = np.vstack((x + eye, x - eye)) if search.central else x + eye
-        rows = np.arange(len(perturbed))
-        if not fast:
-            completed, _, _ = self.objective.evaluate(self._models(perturbed), rows)
-            return completed, self.reference_row
-        models = self._models(np.vstack((perturbed, x[None])))
-        rows = np.append(rows, self.fast_reference_row)
-        completed, _, _ = self.objective.evaluate(models, rows, fast=True)
-        if not completed[-1]:
-            # The exact reference completed; redo the same batch, and group, exactly.
-            completed, _, _ = self.objective.evaluate(models, rows)
-        return completed[:-1], self.fast_reference_row
-
-    def jacobian(self, x: np.ndarray):
-        size, search = self.parameters.size, self.search
-        completed, reference = self._differences(x, search.fast_jacobian)
+        completed, _, _ = self.objective.evaluate(self._models(perturbed), np.arange(len(perturbed)))
         plus_ok = completed[:size]
         minus_ok = completed[size:] if search.central else np.ones(size, dtype=bool)
         plus, minus, denominator = _columns(size, search.step, search.central, plus_ok, minus_ok)
-        rows = {"plus": lambda i: i, "minus": lambda i: size + i, "reference": lambda i: reference}
+        rows = {"plus": lambda i: i, "minus": lambda i: size + i, "reference": lambda i: self.reference_row}
         plus_rows = [0 if a is None else rows[a[0]](a[1]) for a in plus]
         minus_rows = [0 if b is None else rows[b[0]](b[1]) for b in minus]
-        # The gradient always uses the exact residual of the current iterate.
         normal, gradient = self.objective.normal(plus_rows, minus_rows, denominator, self.reference_row)
         return normal, gradient, sum(not den for den in denominator)
 
@@ -343,9 +321,7 @@ def fit_lm(
     the cost, and otherwise increases damping. Failed perturbations fall back to
     a one-sided difference or a zero column for that iteration. On CUDA, the
     residuals, Jacobian, and ``J^T J`` stay on the device; only the small damped
-    normal-equation solve runs on the host. With :attr:`LMConfig.fast_jacobian`,
-    the finite differences use fast-math shoe kernels while every reported cost
-    and accepted step remains an exact rollout.
+    normal-equation solve runs on the host.
     """
     cfg, search = config or RolloutConfig(), search or LMConfig()
     train = [trial for trial in trials if trial.split == "train"]

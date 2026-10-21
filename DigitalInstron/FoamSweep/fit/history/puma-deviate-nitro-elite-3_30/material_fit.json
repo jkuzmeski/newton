@@ -1,0 +1,2829 @@
+{
+  "conditions": {
+    "160ms_1200N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1285.0924072265625,
+            "floating_clear": 111,
+            "floating_in_contact": 428,
+            "max_strain": 0.25420677073435843,
+            "passive_force_n": 374.75799560546875,
+            "passive_in_contact": 201,
+            "platen_reaction_n": 1285.0924072265625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1285.09228515625
+          },
+          "force_rmse_relative": 0.043151393169534466,
+          "hysteresis_error": 0.051442312400154774,
+          "loading_rmse_relative": 0.04020670926718767,
+          "measured_peak_force_n": 1200.1090298038673,
+          "passed": true,
+          "peak_force_error": 0.07301214756568014,
+          "peak_force_n": 1287.7315673828125,
+          "unloading_rmse_relative": 0.04651708651198261
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 373.27801513671875,
+            "floating_clear": 111,
+            "floating_in_contact": 428,
+            "max_strain": 0.24799302885630084,
+            "passive_force_n": 107.76885223388672,
+            "passive_in_contact": 201,
+            "platen_reaction_n": 373.2779846191406,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 373.2779541015625
+          },
+          "force_rmse_relative": 0.2349142656150466,
+          "hysteresis_error": 0.6297161680901566,
+          "loading_rmse_relative": 0.2162751736685373,
+          "measured_peak_force_n": 1200.1090298038673,
+          "passed": false,
+          "peak_force_error": 0.6879058078859046,
+          "peak_force_n": 374.54705810546875,
+          "unloading_rmse_relative": 0.25858247916282434
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1284.205810546875,
+            "floating_clear": 111,
+            "floating_in_contact": 428,
+            "max_strain": 0.25403550111176176,
+            "passive_force_n": 374.5347900390625,
+            "passive_in_contact": 201,
+            "platen_reaction_n": 1284.2056884765625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1284.2056884765625
+          },
+          "force_rmse_relative": 0.04321016658798075,
+          "hysteresis_error": 0.052107417813820896,
+          "loading_rmse_relative": 0.04023529036068301,
+          "measured_peak_force_n": 1199.8406802763757,
+          "passed": true,
+          "peak_force_error": 0.07262297880570744,
+          "peak_force_n": 1286.9766845703125,
+          "unloading_rmse_relative": 0.04660339334784092
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 372.951416015625,
+            "floating_clear": 111,
+            "floating_in_contact": 428,
+            "max_strain": 0.24782970294538262,
+            "passive_force_n": 107.6878662109375,
+            "passive_in_contact": 201,
+            "platen_reaction_n": 372.951416015625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 372.9513854980469
+          },
+          "force_rmse_relative": 0.2350941545307305,
+          "hysteresis_error": 0.630047355924556,
+          "loading_rmse_relative": 0.21666044031546056,
+          "measured_peak_force_n": 1199.8406802763757,
+          "passed": false,
+          "peak_force_error": 0.6880723458356804,
+          "peak_force_n": 374.26348876953125,
+          "unloading_rmse_relative": 0.2585604166130068
+        }
+      }
+    },
+    "160ms_1600N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1702.2615966796875,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4521106224870435,
+            "passive_force_n": 493.2522277832031,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1702.2615966796875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1702.26171875
+          },
+          "force_rmse_relative": 0.03965420917310318,
+          "hysteresis_error": 0.05751030713798655,
+          "loading_rmse_relative": 0.039295441801820534,
+          "measured_peak_force_n": 1599.7427345465537,
+          "passed": true,
+          "peak_force_error": 0.06629816003415633,
+          "peak_force_n": 1705.802734375,
+          "unloading_rmse_relative": 0.04021353119019384
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 549.9168701171875,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4521106224870435,
+            "passive_force_n": 155.60446166992188,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 549.9168701171875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 549.916748046875
+          },
+          "force_rmse_relative": 0.22289387711558178,
+          "hysteresis_error": 0.5663394623044843,
+          "loading_rmse_relative": 0.20935777999961055,
+          "measured_peak_force_n": 1599.7427345465537,
+          "passed": false,
+          "peak_force_error": 0.6553525656985182,
+          "peak_force_n": 551.3472290039062,
+          "unloading_rmse_relative": 0.24136271087136638
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1702.532958984375,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4524489731351291,
+            "passive_force_n": 493.3570556640625,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1702.532958984375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1702.5330810546875
+          },
+          "force_rmse_relative": 0.03969837243604155,
+          "hysteresis_error": 0.058409488122134125,
+          "loading_rmse_relative": 0.039352833694570134,
+          "measured_peak_force_n": 1599.7985439504182,
+          "passed": true,
+          "peak_force_error": 0.06650612524994384,
+          "peak_force_n": 1706.1949462890625,
+          "unloading_rmse_relative": 0.040243307713643456
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 550.0612182617188,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4524489731351291,
+            "passive_force_n": 155.65151977539062,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 550.0611572265625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 550.0612182617188
+          },
+          "force_rmse_relative": 0.22284791610119117,
+          "hysteresis_error": 0.5660062570849658,
+          "loading_rmse_relative": 0.20949405587024936,
+          "measured_peak_force_n": 1599.7985439504182,
+          "passed": false,
+          "peak_force_error": 0.6552402140263637,
+          "peak_force_n": 551.5462036132812,
+          "unloading_rmse_relative": 0.24112884712131227
+        }
+      }
+    },
+    "160ms_2000N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2033.94287109375,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6744474951703473,
+            "passive_force_n": 633.5482177734375,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 2033.94287109375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2033.94287109375
+          },
+          "force_rmse_relative": 0.03219405873799438,
+          "hysteresis_error": 0.1034051004203102,
+          "loading_rmse_relative": 0.03216957525661001,
+          "measured_peak_force_n": 1999.9784340396498,
+          "passed": false,
+          "peak_force_error": 0.018158866970471418,
+          "peak_force_n": 2036.2957763671875,
+          "unloading_rmse_relative": 0.032172469633313425
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 710.00927734375,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6869509541068446,
+            "passive_force_n": 203.46495056152344,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 710.00927734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 710.00927734375
+          },
+          "force_rmse_relative": 0.21244399588122753,
+          "hysteresis_error": 0.5243622011782569,
+          "loading_rmse_relative": 0.19893060806694673,
+          "measured_peak_force_n": 1999.9784340396498,
+          "passed": false,
+          "peak_force_error": 0.6441955041874879,
+          "peak_force_n": 711.601318359375,
+          "unloading_rmse_relative": 0.23078057261191293
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2034.5748291015625,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6745317322099356,
+            "passive_force_n": 633.8582763671875,
+            "passive_in_contact": 239,
+            "platen_reaction_n": 2034.57470703125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2034.5745849609375
+          },
+          "force_rmse_relative": 0.032239640414329244,
+          "hysteresis_error": 0.10428347939585662,
+          "loading_rmse_relative": 0.03222248054584983,
+          "measured_peak_force_n": 2000.366316294191,
+          "passed": false,
+          "peak_force_error": 0.018369995793200398,
+          "peak_force_n": 2037.113037109375,
+          "unloading_rmse_relative": 0.032209718911747835
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 710.344970703125,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6875363182591545,
+            "passive_force_n": 203.57403564453125,
+            "passive_in_contact": 239,
+            "platen_reaction_n": 710.344970703125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 710.344970703125
+          },
+          "force_rmse_relative": 0.21235931878490177,
+          "hysteresis_error": 0.5240175814659762,
+          "loading_rmse_relative": 0.19903719534588252,
+          "measured_peak_force_n": 2000.366316294191,
+          "passed": false,
+          "peak_force_error": 0.6440450239347248,
+          "peak_force_n": 712.0403442382812,
+          "unloading_rmse_relative": 0.23050176227425248
+        }
+      }
+    },
+    "160ms_2400N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2341.5556640625,
+            "floating_clear": 27,
+            "floating_in_contact": 512,
+            "max_strain": 0.6900571620708049,
+            "passive_force_n": 778.490234375,
+            "passive_in_contact": 257,
+            "platen_reaction_n": 2341.5556640625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2341.555908203125
+          },
+          "force_rmse_relative": 0.027150271853358884,
+          "hysteresis_error": 0.12890289628168913,
+          "loading_rmse_relative": 0.026991682611400537,
+          "measured_peak_force_n": 2399.7852743048297,
+          "passed": false,
+          "peak_force_error": 0.023604761182482902,
+          "peak_force_n": 2343.138916015625,
+          "unloading_rmse_relative": 0.027320568291999484
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 875.0111083984375,
+            "floating_clear": 27,
+            "floating_in_contact": 512,
+            "max_strain": 0.8208729455986058,
+            "passive_force_n": 259.59912109375,
+            "passive_in_contact": 257,
+            "platen_reaction_n": 875.010986328125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 875.010986328125
+          },
+          "force_rmse_relative": 0.20277824893974777,
+          "hysteresis_error": 0.4837626745406741,
+          "loading_rmse_relative": 0.18753860504776848,
+          "measured_peak_force_n": 2399.7852743048297,
+          "passed": false,
+          "peak_force_error": 0.6344104724118533,
+          "peak_force_n": 877.3363647460938,
+          "unloading_rmse_relative": 0.22258151042877122
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2342.027587890625,
+            "floating_clear": 27,
+            "floating_in_contact": 512,
+            "max_strain": 0.6900856501435064,
+            "passive_force_n": 778.8515014648438,
+            "passive_in_contact": 257,
+            "platen_reaction_n": 2342.02734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2342.02734375
+          },
+          "force_rmse_relative": 0.027175987116751357,
+          "hysteresis_error": 0.1305480951618158,
+          "loading_rmse_relative": 0.027017469432149863,
+          "measured_peak_force_n": 2399.71799521017,
+          "passed": false,
+          "peak_force_error": 0.02329547289900374,
+          "peak_force_n": 2343.8154296875,
+          "unloading_rmse_relative": 0.027345255174682698
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 875.15283203125,
+            "floating_clear": 27,
+            "floating_in_contact": 512,
+            "max_strain": 0.8210331800506008,
+            "passive_force_n": 259.6671142578125,
+            "passive_in_contact": 257,
+            "platen_reaction_n": 875.15283203125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 875.1527709960938
+          },
+          "force_rmse_relative": 0.202754610496337,
+          "hysteresis_error": 0.48310232238243134,
+          "loading_rmse_relative": 0.18771976322432987,
+          "measured_peak_force_n": 2399.71799521017,
+          "passed": false,
+          "peak_force_error": 0.634259825295961,
+          "peak_force_n": 877.6732788085938,
+          "unloading_rmse_relative": 0.22235794116170743
+        }
+      }
+    },
+    "160ms_2800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2846.2880859375,
+            "floating_clear": 22,
+            "floating_in_contact": 517,
+            "max_strain": 0.7044602103481229,
+            "passive_force_n": 1140.368896484375,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2846.2880859375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2846.288330078125
+          },
+          "force_rmse_relative": 0.023478448405982216,
+          "hysteresis_error": 0.15701313649316753,
+          "loading_rmse_relative": 0.023312896692497705,
+          "measured_peak_force_n": 2800.108139592301,
+          "passed": false,
+          "peak_force_error": 0.01778845049331782,
+          "peak_force_n": 2849.917724609375,
+          "unloading_rmse_relative": 0.023642734572174796
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1044.432861328125,
+            "floating_clear": 22,
+            "floating_in_contact": 517,
+            "max_strain": 0.8586303359123219,
+            "passive_force_n": 323.8597717285156,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1044.432861328125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1044.432861328125
+          },
+          "force_rmse_relative": 0.19488714524305123,
+          "hysteresis_error": 0.44562199616632875,
+          "loading_rmse_relative": 0.17872918262834733,
+          "measured_peak_force_n": 2800.108139592301,
+          "passed": false,
+          "peak_force_error": 0.6248864879231295,
+          "peak_force_n": 1050.3583984375,
+          "unloading_rmse_relative": 0.21528226335320705
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2842.19677734375,
+            "floating_clear": 22,
+            "floating_in_contact": 517,
+            "max_strain": 0.7044373514876734,
+            "passive_force_n": 1137.5672607421875,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2842.19677734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2842.19677734375
+          },
+          "force_rmse_relative": 0.023377497024744606,
+          "hysteresis_error": 0.1569924797889861,
+          "loading_rmse_relative": 0.023222080764825855,
+          "measured_peak_force_n": 2800.169454953468,
+          "passed": false,
+          "peak_force_error": 0.016424692412202995,
+          "peak_force_n": 2846.161376953125,
+          "unloading_rmse_relative": 0.023526605451584793
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1042.7479248046875,
+            "floating_clear": 22,
+            "floating_in_contact": 517,
+            "max_strain": 0.8584549370400889,
+            "passive_force_n": 323.175048828125,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1042.748046875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1042.748046875
+          },
+          "force_rmse_relative": 0.19505456782898378,
+          "hysteresis_error": 0.4459352065825406,
+          "loading_rmse_relative": 0.17909489031738754,
+          "measured_peak_force_n": 2800.169454953468,
+          "passed": false,
+          "peak_force_error": 0.6254041837218944,
+          "peak_force_n": 1048.9317626953125,
+          "unloading_rmse_relative": 0.21526638343009694
+        }
+      }
+    },
+    "160ms_800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 717.1090698242188,
+            "floating_clear": 239,
+            "floating_in_contact": 300,
+            "max_strain": 0.16643320729643474,
+            "passive_force_n": 235.8199462890625,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 717.1090087890625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 717.1087646484375
+          },
+          "force_rmse_relative": 0.07393060584360908,
+          "hysteresis_error": 0.28280095583449,
+          "loading_rmse_relative": 0.06462330384739363,
+          "measured_peak_force_n": 800.0289996493675,
+          "passed": false,
+          "peak_force_error": 0.10274126547024162,
+          "peak_force_n": 717.8330078125,
+          "unloading_rmse_relative": 0.08374725965129892
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 192.9915313720703,
+            "floating_clear": 239,
+            "floating_in_contact": 300,
+            "max_strain": 0.16643320729643474,
+            "passive_force_n": 63.13148498535156,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 192.9915313720703,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 192.99148559570312
+          },
+          "force_rmse_relative": 0.24877543057149307,
+          "hysteresis_error": 0.7343999159154043,
+          "loading_rmse_relative": 0.22558732565966252,
+          "measured_peak_force_n": 800.0289996493675,
+          "passed": false,
+          "peak_force_error": 0.7578884914018917,
+          "peak_force_n": 193.69622802734375,
+          "unloading_rmse_relative": 0.2777239747036053
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 716.8461303710938,
+            "floating_clear": 239,
+            "floating_in_contact": 300,
+            "max_strain": 0.1664140881401971,
+            "passive_force_n": 235.76234436035156,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 716.8460693359375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 716.8460693359375
+          },
+          "force_rmse_relative": 0.07402285124375169,
+          "hysteresis_error": 0.2827109351493814,
+          "loading_rmse_relative": 0.06471362581679334,
+          "measured_peak_force_n": 800.15163761244,
+          "passed": false,
+          "peak_force_error": 0.10311311746624524,
+          "peak_force_n": 717.6455078125,
+          "unloading_rmse_relative": 0.0838446293063017
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 192.89190673828125,
+            "floating_clear": 239,
+            "floating_in_contact": 300,
+            "max_strain": 0.1664140881401971,
+            "passive_force_n": 63.11016082763672,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 192.8918914794922,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 192.89190673828125
+          },
+          "force_rmse_relative": 0.24884770245354698,
+          "hysteresis_error": 0.7343750347374024,
+          "loading_rmse_relative": 0.2259397534558829,
+          "measured_peak_force_n": 800.15163761244,
+          "passed": false,
+          "peak_force_error": 0.757998351006487,
+          "peak_force_n": 193.6380157470703,
+          "unloading_rmse_relative": 0.2775278477555793
+        }
+      }
+    },
+    "200ms_1200N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1286.400390625,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.26234326403310004,
+            "passive_force_n": 375.20831298828125,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 1286.4002685546875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1286.4002685546875
+          },
+          "force_rmse_relative": 0.04864391079877228,
+          "hysteresis_error": 0.06413162516306666,
+          "loading_rmse_relative": 0.045833453304603936,
+          "measured_peak_force_n": 1200.0272482771118,
+          "passed": true,
+          "peak_force_error": 0.07612200829265581,
+          "peak_force_n": 1291.375732421875,
+          "unloading_rmse_relative": 0.05184715564192513
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 377.8229675292969,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.25567558434909726,
+            "passive_force_n": 109.01396179199219,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 377.8229675292969,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 377.822998046875
+          },
+          "force_rmse_relative": 0.27048964572563505,
+          "hysteresis_error": 0.6836499326223995,
+          "loading_rmse_relative": 0.25253889039397553,
+          "measured_peak_force_n": 1200.0272482771118,
+          "passed": false,
+          "peak_force_error": 0.6841353868236538,
+          "peak_force_n": 379.046142578125,
+          "unloading_rmse_relative": 0.2929030640095225
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1288.14208984375,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.2619449855224049,
+            "passive_force_n": 375.6026306152344,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 1288.14208984375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1288.1422119140625
+          },
+          "force_rmse_relative": 0.04859986940816005,
+          "hysteresis_error": 0.06415774063692242,
+          "loading_rmse_relative": 0.04566854825908337,
+          "measured_peak_force_n": 1200.250258940976,
+          "passed": true,
+          "peak_force_error": 0.0757045161253574,
+          "peak_force_n": 1291.1146240234375,
+          "unloading_rmse_relative": 0.051904784719844825
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 378.29534912109375,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.2552971118040969,
+            "passive_force_n": 109.11329650878906,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 378.2953186035156,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 378.29534912109375
+          },
+          "force_rmse_relative": 0.27049464994722333,
+          "hysteresis_error": 0.6837019809492862,
+          "loading_rmse_relative": 0.24975865061536842,
+          "measured_peak_force_n": 1200.250258940976,
+          "passed": false,
+          "peak_force_error": 0.6842829394788633,
+          "peak_force_n": 378.9394836425781,
+          "unloading_rmse_relative": 0.2954970511961457
+        }
+      }
+    },
+    "200ms_1200N_repeat": {
+      "repeat": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1281.8372802734375,
+            "floating_clear": 109,
+            "floating_in_contact": 430,
+            "max_strain": 0.26041838007236806,
+            "passive_force_n": 373.90704345703125,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 1281.83740234375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1281.83740234375
+          },
+          "force_rmse_relative": 0.05056215720818382,
+          "hysteresis_error": 0.057552597748615805,
+          "loading_rmse_relative": 0.04712211126447476,
+          "measured_peak_force_n": 1199.9772581964608,
+          "passed": true,
+          "peak_force_error": 0.07090622057536648,
+          "peak_force_n": 1285.0631103515625,
+          "unloading_rmse_relative": 0.05437760683146939
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 376.2231750488281,
+            "floating_clear": 109,
+            "floating_in_contact": 430,
+            "max_strain": 0.25382349997425036,
+            "passive_force_n": 108.56985473632812,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 376.22320556640625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 376.22308349609375
+          },
+          "force_rmse_relative": 0.2722384711354503,
+          "hysteresis_error": 0.6813956885392929,
+          "loading_rmse_relative": 0.2536096594897537,
+          "measured_peak_force_n": 1199.9772581964608,
+          "passed": false,
+          "peak_force_error": 0.6858538283589433,
+          "peak_force_n": 376.96826171875,
+          "unloading_rmse_relative": 0.2953358343697582
+        }
+      }
+    },
+    "200ms_1600N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1690.435302734375,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45944064742094637,
+            "passive_force_n": 490.5272521972656,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1690.435302734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1690.435546875
+          },
+          "force_rmse_relative": 0.04293896381586721,
+          "hysteresis_error": 0.03771548324535291,
+          "loading_rmse_relative": 0.042283588507348105,
+          "measured_peak_force_n": 1599.7519538764866,
+          "passed": true,
+          "peak_force_error": 0.05878947858447166,
+          "peak_force_n": 1693.800537109375,
+          "unloading_rmse_relative": 0.04375825762844599
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 551.2030029296875,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45944064742094637,
+            "passive_force_n": 156.03091430664062,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 551.2030029296875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 551.2030029296875
+          },
+          "force_rmse_relative": 0.25464685504371526,
+          "hysteresis_error": 0.6280810940448227,
+          "loading_rmse_relative": 0.23849662915428158,
+          "measured_peak_force_n": 1599.7519538764866,
+          "passed": false,
+          "peak_force_error": 0.6549540228804518,
+          "peak_force_n": 551.9879760742188,
+          "unloading_rmse_relative": 0.27510853572130967
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1689.998291015625,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45920958723743505,
+            "passive_force_n": 490.3962097167969,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1689.9984130859375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1689.998779296875
+          },
+          "force_rmse_relative": 0.042867136178542986,
+          "hysteresis_error": 0.037794898007340955,
+          "loading_rmse_relative": 0.04221953409582506,
+          "measured_peak_force_n": 1600.192284682316,
+          "passed": true,
+          "peak_force_error": 0.05831184015642136,
+          "peak_force_n": 1693.50244140625,
+          "unloading_rmse_relative": 0.043675245360531675
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 551.0048828125,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45920958723743505,
+            "passive_force_n": 155.97610473632812,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 551.0050048828125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 551.0048828125
+          },
+          "force_rmse_relative": 0.2547299774530408,
+          "hysteresis_error": 0.6281108340569396,
+          "loading_rmse_relative": 0.23876932633176814,
+          "measured_peak_force_n": 1600.192284682316,
+          "passed": false,
+          "peak_force_error": 0.6551439831435287,
+          "peak_force_n": 551.8359375,
+          "unloading_rmse_relative": 0.2750010727167531
+        }
+      }
+    },
+    "200ms_1600N_repeat": {
+      "repeat": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1685.308349609375,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45689232357609,
+            "passive_force_n": 488.9960021972656,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1685.308349609375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1685.3082275390625
+          },
+          "force_rmse_relative": 0.04312303467555513,
+          "hysteresis_error": 0.05486606783529043,
+          "loading_rmse_relative": 0.04251160212263576,
+          "measured_peak_force_n": 1600.001672804886,
+          "passed": true,
+          "peak_force_error": 0.05648845842637166,
+          "peak_force_n": 1690.38330078125,
+          "unloading_rmse_relative": 0.04388198306665786
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 548.9717407226562,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45689232357609,
+            "passive_force_n": 155.4130859375,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 548.9716796875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 548.9716186523438
+          },
+          "force_rmse_relative": 0.25531968354739054,
+          "hysteresis_error": 0.621801396359414,
+          "loading_rmse_relative": 0.2415786237297172,
+          "measured_peak_force_n": 1600.001672804886,
+          "passed": false,
+          "peak_force_error": 0.6560005351285653,
+          "peak_force_n": 550.3997192382812,
+          "unloading_rmse_relative": 0.27345912404434086
+        }
+      }
+    },
+    "200ms_2000N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2013.275146484375,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.674950287739627,
+            "passive_force_n": 628.14111328125,
+            "passive_in_contact": 239,
+            "platen_reaction_n": 2013.2752685546875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2013.2752685546875
+          },
+          "force_rmse_relative": 0.03394430457302989,
+          "hysteresis_error": 0.08479074348207424,
+          "loading_rmse_relative": 0.03351633175181366,
+          "measured_peak_force_n": 1999.97490288255,
+          "passed": true,
+          "peak_force_error": 0.008089432296003748,
+          "peak_force_n": 2016.153564453125,
+          "unloading_rmse_relative": 0.03435934168192515
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 706.3253173828125,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6882614054511141,
+            "passive_force_n": 202.41966247558594,
+            "passive_in_contact": 239,
+            "platen_reaction_n": 706.3253784179688,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 706.3253173828125
+          },
+          "force_rmse_relative": 0.24300574286745544,
+          "hysteresis_error": 0.591035135055242,
+          "loading_rmse_relative": 0.2252609076000044,
+          "measured_peak_force_n": 1999.97490288255,
+          "passed": false,
+          "peak_force_error": 0.6461882176427746,
+          "peak_force_n": 707.6146850585938,
+          "unloading_rmse_relative": 0.2647686654263369
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2012.5443115234375,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6749099223319991,
+            "passive_force_n": 627.8504638671875,
+            "passive_in_contact": 239,
+            "platen_reaction_n": 2012.544189453125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2012.544189453125
+          },
+          "force_rmse_relative": 0.033891108126852844,
+          "hysteresis_error": 0.08462163948634648,
+          "loading_rmse_relative": 0.033458471872159175,
+          "measured_peak_force_n": 2000.3639162727168,
+          "passed": true,
+          "peak_force_error": 0.007600167252153647,
+          "peak_force_n": 2015.5670166015625,
+          "unloading_rmse_relative": 0.03431105262371236
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 705.9490356445312,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6878657280351922,
+            "passive_force_n": 202.30455017089844,
+            "passive_in_contact": 239,
+            "platen_reaction_n": 705.948974609375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 705.948974609375
+          },
+          "force_rmse_relative": 0.24307943880783736,
+          "hysteresis_error": 0.5911807969247177,
+          "loading_rmse_relative": 0.2255214964201905,
+          "measured_peak_force_n": 2000.3639162727168,
+          "passed": false,
+          "peak_force_error": 0.6464098281106647,
+          "peak_force_n": 707.3090209960938,
+          "unloading_rmse_relative": 0.264661365169131
+        }
+      }
+    },
+    "200ms_2000N_repeat": {
+      "repeat": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2005.69677734375,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6742171800595067,
+            "passive_force_n": 624.8753051757812,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 2005.69677734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2005.696533203125
+          },
+          "force_rmse_relative": 0.03378711338761261,
+          "hysteresis_error": 0.10462803495861214,
+          "loading_rmse_relative": 0.03346961728739471,
+          "measured_peak_force_n": 2000.2336939049767,
+          "passed": false,
+          "peak_force_error": 0.004182774166378617,
+          "peak_force_n": 2008.6002197265625,
+          "unloading_rmse_relative": 0.03407617808366759
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 702.1836547851562,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6825632649771621,
+            "passive_force_n": 201.16000366210938,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 702.1837158203125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 702.18359375
+          },
+          "force_rmse_relative": 0.24363087639244452,
+          "hysteresis_error": 0.5835105679329495,
+          "loading_rmse_relative": 0.2256367385067424,
+          "measured_peak_force_n": 2000.2336939049767,
+          "passed": false,
+          "peak_force_error": 0.6482922556460631,
+          "peak_force_n": 703.4976806640625,
+          "unloading_rmse_relative": 0.26565288276155996
+        }
+      }
+    },
+    "200ms_2400N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2308.607177734375,
+            "floating_clear": 28,
+            "floating_in_contact": 511,
+            "max_strain": 0.6900293314151658,
+            "passive_force_n": 766.0987548828125,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 2308.607421875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2308.607666015625
+          },
+          "force_rmse_relative": 0.02887489620758714,
+          "hysteresis_error": 0.10832202327228366,
+          "loading_rmse_relative": 0.028401130457610786,
+          "measured_peak_force_n": 2399.9160108387255,
+          "passed": false,
+          "peak_force_error": 0.037391036340836216,
+          "peak_force_n": 2310.1806640625,
+          "unloading_rmse_relative": 0.029435217700921425
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 864.119384765625,
+            "floating_clear": 28,
+            "floating_in_contact": 511,
+            "max_strain": 0.8207727552383048,
+            "passive_force_n": 256.0843811035156,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 864.1194458007812,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 864.119384765625
+          },
+          "force_rmse_relative": 0.2345074938183956,
+          "hysteresis_error": 0.5578731082738707,
+          "loading_rmse_relative": 0.2105590924321103,
+          "measured_peak_force_n": 2399.9160108387255,
+          "passed": false,
+          "peak_force_error": 0.6392416780664815,
+          "peak_force_n": 865.7896728515625,
+          "unloading_rmse_relative": 0.2613547144183634
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2308.7578125,
+            "floating_clear": 28,
+            "floating_in_contact": 511,
+            "max_strain": 0.6900475199538906,
+            "passive_force_n": 766.255615234375,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 2308.7578125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2308.7578125
+          },
+          "force_rmse_relative": 0.028894963109097883,
+          "hysteresis_error": 0.10892985078711283,
+          "loading_rmse_relative": 0.02842194061016436,
+          "measured_peak_force_n": 2400.129065934818,
+          "passed": false,
+          "peak_force_error": 0.03735401476207641,
+          "peak_force_n": 2310.474609375,
+          "unloading_rmse_relative": 0.029453946172831067
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 864.142822265625,
+            "floating_clear": 28,
+            "floating_in_contact": 511,
+            "max_strain": 0.8208779419682796,
+            "passive_force_n": 256.10650634765625,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 864.142822265625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 864.142822265625
+          },
+          "force_rmse_relative": 0.23448033849360067,
+          "hysteresis_error": 0.5576355047961494,
+          "loading_rmse_relative": 0.21074481592620822,
+          "measured_peak_force_n": 2400.129065934818,
+          "passed": false,
+          "peak_force_error": 0.639205625957633,
+          "peak_force_n": 865.9530639648438,
+          "unloading_rmse_relative": 0.26113645580772693
+        }
+      }
+    },
+    "200ms_2400N_repeat": {
+      "repeat": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2295.044677734375,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.6896063931050587,
+            "passive_force_n": 758.47998046875,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 2295.04443359375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2295.044677734375
+          },
+          "force_rmse_relative": 0.029008720735165985,
+          "hysteresis_error": 0.13194698301550412,
+          "loading_rmse_relative": 0.02865051953373794,
+          "measured_peak_force_n": 2399.7922285697273,
+          "passed": false,
+          "peak_force_error": 0.04291803922900933,
+          "peak_force_n": 2296.7978515625,
+          "unloading_rmse_relative": 0.029476418647767205
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 857.3992919921875,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.8185244765407016,
+            "passive_force_n": 253.71641540527344,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 857.3992919921875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 857.399169921875
+          },
+          "force_rmse_relative": 0.23522078300485974,
+          "hysteresis_error": 0.5491834194153896,
+          "loading_rmse_relative": 0.21114702987816134,
+          "measured_peak_force_n": 2399.7922285697273,
+          "passed": false,
+          "peak_force_error": 0.6419804193074079,
+          "peak_force_n": 859.172607421875,
+          "unloading_rmse_relative": 0.262204654564829
+        }
+      }
+    },
+    "200ms_2800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2803.5517578125,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.7044553770069831,
+            "passive_force_n": 1118.455322265625,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2803.5517578125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2803.5517578125
+          },
+          "force_rmse_relative": 0.024171966990266375,
+          "hysteresis_error": 0.13688002933752194,
+          "loading_rmse_relative": 0.023920132330164916,
+          "measured_peak_force_n": 2800.1364812644815,
+          "passed": false,
+          "peak_force_error": 0.001866100162163822,
+          "peak_force_n": 2805.36181640625,
+          "unloading_rmse_relative": 0.024390386562503707
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1029.822265625,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.8583231906607954,
+            "passive_force_n": 318.2099609375,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1029.822265625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1029.822265625
+          },
+          "force_rmse_relative": 0.22802347837523163,
+          "hysteresis_error": 0.5239280056172201,
+          "loading_rmse_relative": 0.19786453693629416,
+          "measured_peak_force_n": 2800.1364812644815,
+          "passed": false,
+          "peak_force_error": 0.6310238008992516,
+          "peak_force_n": 1033.1837158203125,
+          "unloading_rmse_relative": 0.2592870587647046
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2802.822265625,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.7044557181840048,
+            "passive_force_n": 1118.0439453125,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2802.82177734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2802.822021484375
+          },
+          "force_rmse_relative": 0.024162585248164833,
+          "hysteresis_error": 0.1373573852778272,
+          "loading_rmse_relative": 0.023909675535684558,
+          "measured_peak_force_n": 2800.511180234227,
+          "passed": false,
+          "peak_force_error": 0.0015436639967408706,
+          "peak_force_n": 2804.834228515625,
+          "unloading_rmse_relative": 0.024382085074745347
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1029.4554443359375,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.8583205609925461,
+            "passive_force_n": 318.0764465332031,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1029.455322265625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1029.4554443359375
+          },
+          "force_rmse_relative": 0.22803355602508465,
+          "hysteresis_error": 0.5237043616289313,
+          "loading_rmse_relative": 0.19808296463781105,
+          "measured_peak_force_n": 2800.511180234227,
+          "passed": false,
+          "peak_force_error": 0.631147879503094,
+          "peak_force_n": 1032.9744873046875,
+          "unloading_rmse_relative": 0.25912715285155385
+        }
+      }
+    },
+    "200ms_2800N_repeat": {
+      "repeat": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2775.13427734375,
+            "floating_clear": 24,
+            "floating_in_contact": 515,
+            "max_strain": 0.7042255942829115,
+            "passive_force_n": 1099.01025390625,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2775.134765625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2775.13525390625
+          },
+          "force_rmse_relative": 0.024156954025087586,
+          "hysteresis_error": 0.16131795256040313,
+          "loading_rmse_relative": 0.023861429332431513,
+          "measured_peak_force_n": 2800.1546260582945,
+          "passed": false,
+          "peak_force_error": 0.008075930651641357,
+          "peak_force_n": 2777.540771484375,
+          "unloading_rmse_relative": 0.02442731356926983
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1017.8886108398438,
+            "floating_clear": 24,
+            "floating_in_contact": 515,
+            "max_strain": 0.8565275655245171,
+            "passive_force_n": 313.33477783203125,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1017.8885498046875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1017.8885498046875
+          },
+          "force_rmse_relative": 0.22913830228412974,
+          "hysteresis_error": 0.5148481532978716,
+          "loading_rmse_relative": 0.19899023485423203,
+          "measured_peak_force_n": 2800.1546260582945,
+          "passed": false,
+          "peak_force_error": 0.6351380122360119,
+          "peak_force_n": 1021.6699829101562,
+          "unloading_rmse_relative": 0.260435381970733
+        }
+      }
+    },
+    "200ms_800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 717.26904296875,
+            "floating_clear": 234,
+            "floating_in_contact": 305,
+            "max_strain": 0.16782123825232123,
+            "passive_force_n": 235.12225341796875,
+            "passive_in_contact": 167,
+            "platen_reaction_n": 717.2691650390625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 717.2693481445312
+          },
+          "force_rmse_relative": 0.0845293071731271,
+          "hysteresis_error": 0.3030443062010189,
+          "loading_rmse_relative": 0.07328712647966096,
+          "measured_peak_force_n": 799.9897664563762,
+          "passed": false,
+          "peak_force_error": 0.10137079849975288,
+          "peak_force_n": 718.8941650390625,
+          "unloading_rmse_relative": 0.09587409303813409
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 193.7413330078125,
+            "floating_clear": 234,
+            "floating_in_contact": 305,
+            "max_strain": 0.16782123825232123,
+            "passive_force_n": 63.26087951660156,
+            "passive_in_contact": 167,
+            "platen_reaction_n": 193.74131774902344,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 193.74130249023438
+          },
+          "force_rmse_relative": 0.2896015062238004,
+          "hysteresis_error": 0.7778433270550683,
+          "loading_rmse_relative": 0.2600505439511684,
+          "measured_peak_force_n": 799.9897664563762,
+          "passed": false,
+          "peak_force_error": 0.7569789698443541,
+          "peak_force_n": 194.41433715820312,
+          "unloading_rmse_relative": 0.32336343565952724
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 716.4868774414062,
+            "floating_clear": 234,
+            "floating_in_contact": 305,
+            "max_strain": 0.16772922885878433,
+            "passive_force_n": 234.94573974609375,
+            "passive_in_contact": 167,
+            "platen_reaction_n": 716.48681640625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 716.48681640625
+          },
+          "force_rmse_relative": 0.08469127394618206,
+          "hysteresis_error": 0.3031723137095497,
+          "loading_rmse_relative": 0.07342875189288299,
+          "measured_peak_force_n": 800.0151118720648,
+          "passed": false,
+          "peak_force_error": 0.10228441375854987,
+          "peak_force_n": 718.18603515625,
+          "unloading_rmse_relative": 0.09605962528880167
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 193.50869750976562,
+            "floating_clear": 234,
+            "floating_in_contact": 305,
+            "max_strain": 0.16772922885878433,
+            "passive_force_n": 63.20808029174805,
+            "passive_in_contact": 167,
+            "platen_reaction_n": 193.50868225097656,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 193.50869750976562
+          },
+          "force_rmse_relative": 0.2896178104913399,
+          "hysteresis_error": 0.7779058176444594,
+          "loading_rmse_relative": 0.260308133475295,
+          "measured_peak_force_n": 800.0151118720648,
+          "passed": false,
+          "peak_force_error": 0.7572393688821072,
+          "peak_force_n": 194.21217346191406,
+          "unloading_rmse_relative": 0.3231584184613008
+        }
+      }
+    },
+    "200ms_800N_repeat": {
+      "repeat": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 700.294921875,
+            "floating_clear": 241,
+            "floating_in_contact": 298,
+            "max_strain": 0.16571991189315222,
+            "passive_force_n": 231.28189086914062,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 700.2947998046875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 700.2947998046875
+          },
+          "force_rmse_relative": 0.09280574023549577,
+          "hysteresis_error": 0.3075975827688611,
+          "loading_rmse_relative": 0.08088301694531815,
+          "measured_peak_force_n": 799.950088181014,
+          "passed": false,
+          "peak_force_error": 0.12156468619668166,
+          "peak_force_n": 702.7044067382812,
+          "unloading_rmse_relative": 0.10503288892927395
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 188.87030029296875,
+            "floating_clear": 241,
+            "floating_in_contact": 298,
+            "max_strain": 0.16571991189315222,
+            "passive_force_n": 62.15078353881836,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 188.8702850341797,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 188.87025451660156
+          },
+          "force_rmse_relative": 0.2938506960064645,
+          "hysteresis_error": 0.7797558561317205,
+          "loading_rmse_relative": 0.2678067174998289,
+          "measured_peak_force_n": 799.950088181014,
+          "passed": false,
+          "peak_force_error": 0.7627816019753612,
+          "peak_force_n": 189.76287841796875,
+          "unloading_rmse_relative": 0.32459375508739396
+        }
+      }
+    },
+    "240ms_1200N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1269.635986328125,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.26264619134690365,
+            "passive_force_n": 370.7049865722656,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 1269.635986328125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1269.635986328125
+          },
+          "force_rmse_relative": 0.05091478699522643,
+          "hysteresis_error": 0.10006221964826886,
+          "loading_rmse_relative": 0.04764302056911123,
+          "measured_peak_force_n": 1200.1410635972925,
+          "passed": false,
+          "peak_force_error": 0.06114611277178498,
+          "peak_force_n": 1273.5250244140625,
+          "unloading_rmse_relative": 0.054538553992377746
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 376.1172180175781,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.2557846371157965,
+            "passive_force_n": 108.55280303955078,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 376.1172180175781,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 376.1172180175781
+          },
+          "force_rmse_relative": 0.30331636579081456,
+          "hysteresis_error": 0.7234078169944634,
+          "loading_rmse_relative": 0.2890847258403811,
+          "measured_peak_force_n": 1200.1410635972925,
+          "passed": false,
+          "peak_force_error": 0.686068728309794,
+          "peak_force_n": 376.7618103027344,
+          "unloading_rmse_relative": 0.3217570919187505
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1270.2088623046875,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.26222504134419483,
+            "passive_force_n": 370.8138427734375,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 1270.208740234375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1270.2088623046875
+          },
+          "force_rmse_relative": 0.050946640849145436,
+          "hysteresis_error": 0.10129638805818338,
+          "loading_rmse_relative": 0.04762324035068691,
+          "measured_peak_force_n": 1199.895533054204,
+          "passed": false,
+          "peak_force_error": 0.06070625256544149,
+          "peak_force_n": 1272.7366943359375,
+          "unloading_rmse_relative": 0.05459556119779074
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 376.1409912109375,
+            "floating_clear": 107,
+            "floating_in_contact": 432,
+            "max_strain": 0.25538731824812294,
+            "passive_force_n": 108.5446548461914,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 376.1409912109375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 376.1409912109375
+          },
+          "force_rmse_relative": 0.3034957817517201,
+          "hysteresis_error": 0.7238291009496494,
+          "loading_rmse_relative": 0.28693270284622524,
+          "measured_peak_force_n": 1199.895533054204,
+          "passed": false,
+          "peak_force_error": 0.6862539416758725,
+          "peak_force_n": 376.4624938964844,
+          "unloading_rmse_relative": 0.32422565443412726
+        }
+      }
+    },
+    "240ms_1600N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1671.4071044921875,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4579485736562537,
+            "passive_force_n": 485.2135009765625,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1671.4072265625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1671.4072265625
+          },
+          "force_rmse_relative": 0.044157694370534795,
+          "hysteresis_error": 0.0077415135400988955,
+          "loading_rmse_relative": 0.043188162903891325,
+          "measured_peak_force_n": 1599.9742903614638,
+          "passed": true,
+          "peak_force_error": 0.04645739730128324,
+          "peak_force_n": 1674.304931640625,
+          "unloading_rmse_relative": 0.04526339700446799
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 548.2716064453125,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4579485736562537,
+            "passive_force_n": 155.19468688964844,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 548.2716674804688,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 548.2716064453125
+          },
+          "force_rmse_relative": 0.28383570251781937,
+          "hysteresis_error": 0.6749118164894108,
+          "loading_rmse_relative": 0.26896972133839475,
+          "measured_peak_force_n": 1599.9742903614638,
+          "passed": false,
+          "peak_force_error": 0.6569806103160228,
+          "peak_force_n": 548.8222045898438,
+          "unloading_rmse_relative": 0.3027209542837573
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1671.426513671875,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4580681359059917,
+            "passive_force_n": 485.22857666015625,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1671.42626953125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1671.4266357421875
+          },
+          "force_rmse_relative": 0.044173405784951714,
+          "hysteresis_error": 0.006738690887361835,
+          "loading_rmse_relative": 0.04321625547707268,
+          "measured_peak_force_n": 1599.7990643181488,
+          "passed": true,
+          "peak_force_error": 0.04664801412765747,
+          "peak_force_n": 1674.426513671875,
+          "unloading_rmse_relative": 0.04526588725767738
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 548.3046875,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.4580681359059917,
+            "passive_force_n": 155.20571899414062,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 548.3046875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 548.3046875
+          },
+          "force_rmse_relative": 0.28385216895269144,
+          "hysteresis_error": 0.6745793551625265,
+          "loading_rmse_relative": 0.26912584352660224,
+          "measured_peak_force_n": 1599.7990643181488,
+          "passed": false,
+          "peak_force_error": 0.6569130139529449,
+          "peak_force_n": 548.8702392578125,
+          "unloading_rmse_relative": 0.3025921385108738
+        }
+      }
+    },
+    "240ms_2000N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1989.624267578125,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.674926445414166,
+            "passive_force_n": 620.8692626953125,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 1989.6243896484375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1989.62451171875
+          },
+          "force_rmse_relative": 0.035135958839816996,
+          "hysteresis_error": 0.039084584770602525,
+          "loading_rmse_relative": 0.03436025696881748,
+          "measured_peak_force_n": 2000.030516406833,
+          "passed": true,
+          "peak_force_error": 0.0031327030797768806,
+          "peak_force_n": 1993.7650146484375,
+          "unloading_rmse_relative": 0.03592508633556102
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 700.6431274414062,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6850698647524618,
+            "passive_force_n": 200.73220825195312,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 700.6431884765625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 700.6431274414062
+          },
+          "force_rmse_relative": 0.27205861736989884,
+          "hysteresis_error": 0.6404411837478547,
+          "loading_rmse_relative": 0.2540772467337469,
+          "measured_peak_force_n": 2000.030516406833,
+          "passed": false,
+          "peak_force_error": 0.6489331215424224,
+          "peak_force_n": 702.1444702148438,
+          "unloading_rmse_relative": 0.2936685895167971
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1989.1019287109375,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6748977820302479,
+            "passive_force_n": 620.6710815429688,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 1989.1016845703125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1989.101806640625
+          },
+          "force_rmse_relative": 0.03511866560340347,
+          "hysteresis_error": 0.0390005963210388,
+          "loading_rmse_relative": 0.03434509371665081,
+          "measured_peak_force_n": 2000.123239767914,
+          "passed": true,
+          "peak_force_error": 0.0033813578141433263,
+          "peak_force_n": 1993.360107421875,
+          "unloading_rmse_relative": 0.03590571321892242
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 700.3870849609375,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6847888408722125,
+            "passive_force_n": 200.65676879882812,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 700.3870849609375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 700.386962890625
+          },
+          "force_rmse_relative": 0.27213527877690435,
+          "hysteresis_error": 0.6405113324831411,
+          "loading_rmse_relative": 0.2543215040698158,
+          "measured_peak_force_n": 2000.123239767914,
+          "passed": false,
+          "peak_force_error": 0.6490588869135547,
+          "peak_force_n": 701.9254760742188,
+          "unloading_rmse_relative": 0.2935818748522358
+        }
+      }
+    },
+    "240ms_2400N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2281.453857421875,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.690072633285672,
+            "passive_force_n": 756.0626220703125,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 2281.453857421875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2281.4541015625
+          },
+          "force_rmse_relative": 0.031128753796921333,
+          "hysteresis_error": 0.06831399296287742,
+          "loading_rmse_relative": 0.030324030950370683,
+          "measured_peak_force_n": 2400.1366084415477,
+          "passed": true,
+          "peak_force_error": 0.04866214186236894,
+          "peak_force_n": 2283.3408203125,
+          "unloading_rmse_relative": 0.03206508596105761
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 855.9133911132812,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.8207500524357519,
+            "passive_force_n": 253.39309692382812,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 855.9133911132812,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 855.913330078125
+          },
+          "force_rmse_relative": 0.2657751403306919,
+          "hysteresis_error": 0.6079476466896853,
+          "loading_rmse_relative": 0.234813079482539,
+          "measured_peak_force_n": 2400.1366084415477,
+          "passed": false,
+          "peak_force_error": 0.6428811976292611,
+          "peak_force_n": 857.1339111328125,
+          "unloading_rmse_relative": 0.297836153494079
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2283.55517578125,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.6901514356775449,
+            "passive_force_n": 757.3013305664062,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 2283.55517578125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2283.554931640625
+          },
+          "force_rmse_relative": 0.031127536275975164,
+          "hysteresis_error": 0.0700012718400292,
+          "loading_rmse_relative": 0.030341406269569996,
+          "measured_peak_force_n": 2399.9850030311336,
+          "passed": true,
+          "peak_force_error": 0.04766179404341666,
+          "peak_force_n": 2285.597412109375,
+          "unloading_rmse_relative": 0.03203874712815763
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 856.9381713867188,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.8211644881518526,
+            "passive_force_n": 253.7636260986328,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 856.9381103515625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 856.9381103515625
+          },
+          "force_rmse_relative": 0.2655972009439754,
+          "hysteresis_error": 0.6072874465773913,
+          "loading_rmse_relative": 0.2348426214589283,
+          "measured_peak_force_n": 2399.9850030311336,
+          "passed": false,
+          "peak_force_error": 0.6424013044816002,
+          "peak_force_n": 858.2315063476562,
+          "unloading_rmse_relative": 0.29747781065889345
+        }
+      }
+    },
+    "240ms_2800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2765.16845703125,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.7045732536679582,
+            "passive_force_n": 1100.043701171875,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2765.16796875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2765.16845703125
+          },
+          "force_rmse_relative": 0.025744836830974834,
+          "hysteresis_error": 0.10139313806170733,
+          "loading_rmse_relative": 0.02507885249066157,
+          "measured_peak_force_n": 2800.140772139292,
+          "passed": false,
+          "peak_force_error": 0.011420028064289519,
+          "peak_force_n": 2768.1630859375,
+          "unloading_rmse_relative": 0.02636973665980116
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1016.0111694335938,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.8584146154602652,
+            "passive_force_n": 313.036376953125,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1016.0111083984375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1016.0111694335938
+          },
+          "force_rmse_relative": 0.26296193228528075,
+          "hysteresis_error": 0.5744088839711737,
+          "loading_rmse_relative": 0.22078220516675912,
+          "measured_peak_force_n": 2800.140772139292,
+          "passed": false,
+          "peak_force_error": 0.6359898061919488,
+          "peak_force_n": 1019.27978515625,
+          "unloading_rmse_relative": 0.30232765277156753
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2764.640869140625,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.7045742203361861,
+            "passive_force_n": 1099.7620849609375,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2764.64111328125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2764.641357421875
+          },
+          "force_rmse_relative": 0.025768386462928842,
+          "hysteresis_error": 0.10119726665791288,
+          "loading_rmse_relative": 0.025090354045019362,
+          "measured_peak_force_n": 2800.1097460317255,
+          "passed": false,
+          "peak_force_error": 0.011520415483024087,
+          "peak_force_n": 2767.851318359375,
+          "unloading_rmse_relative": 0.026405324317447264
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1015.747802734375,
+            "floating_clear": 23,
+            "floating_in_contact": 516,
+            "max_strain": 0.8584157549831732,
+            "passive_force_n": 312.9403991699219,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1015.7478637695312,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1015.747802734375
+          },
+          "force_rmse_relative": 0.2630131740140072,
+          "hysteresis_error": 0.574520427712958,
+          "loading_rmse_relative": 0.22101455464035968,
+          "measured_peak_force_n": 2800.1097460317255,
+          "passed": false,
+          "peak_force_error": 0.636035209381994,
+          "peak_force_n": 1019.141357421875,
+          "unloading_rmse_relative": 0.30224468610667654
+        }
+      }
+    },
+    "240ms_800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 701.6983032226562,
+            "floating_clear": 236,
+            "floating_in_contact": 303,
+            "max_strain": 0.16708303600514313,
+            "passive_force_n": 230.94862365722656,
+            "passive_in_contact": 167,
+            "platen_reaction_n": 701.6983642578125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 701.6983642578125
+          },
+          "force_rmse_relative": 0.09579306251102805,
+          "hysteresis_error": 0.32426457591389446,
+          "loading_rmse_relative": 0.08374284581143283,
+          "measured_peak_force_n": 799.9779093453969,
+          "passed": false,
+          "peak_force_error": 0.12012821541706943,
+          "peak_force_n": 703.8779907226562,
+          "unloading_rmse_relative": 0.10788341755674727
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 190.6998748779297,
+            "floating_clear": 236,
+            "floating_in_contact": 303,
+            "max_strain": 0.16708303600514313,
+            "passive_force_n": 62.53028869628906,
+            "passive_in_contact": 167,
+            "platen_reaction_n": 190.69989013671875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 190.69985961914062
+          },
+          "force_rmse_relative": 0.32958822020056056,
+          "hysteresis_error": 0.8050952476212717,
+          "loading_rmse_relative": 0.2986899060933533,
+          "measured_peak_force_n": 799.9779093453969,
+          "passed": false,
+          "peak_force_error": 0.76107412527262,
+          "peak_force_n": 191.1354217529297,
+          "unloading_rmse_relative": 0.36400572971328815
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 700.3649291992188,
+            "floating_clear": 237,
+            "floating_in_contact": 302,
+            "max_strain": 0.16691262075743632,
+            "passive_force_n": 230.65093994140625,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 700.364990234375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 700.3649291992188
+          },
+          "force_rmse_relative": 0.09635004479253886,
+          "hysteresis_error": 0.3243216951335279,
+          "loading_rmse_relative": 0.084218420083046,
+          "measured_peak_force_n": 800.0800271350656,
+          "passed": false,
+          "peak_force_error": 0.12181964408709171,
+          "peak_force_n": 702.6145629882812,
+          "unloading_rmse_relative": 0.10852549399685549
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 190.316650390625,
+            "floating_clear": 237,
+            "floating_in_contact": 302,
+            "max_strain": 0.16691262075743632,
+            "passive_force_n": 62.44314193725586,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 190.316650390625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 190.31666564941406
+          },
+          "force_rmse_relative": 0.3298141776010386,
+          "hysteresis_error": 0.8051531899405693,
+          "loading_rmse_relative": 0.2991395840071439,
+          "measured_peak_force_n": 800.0800271350656,
+          "passed": false,
+          "peak_force_error": 0.7615692994605675,
+          "peak_force_n": 190.76364135742188,
+          "unloading_rmse_relative": 0.36402801181236993
+        }
+      }
+    },
+    "280ms_1200N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1258.9049072265625,
+            "floating_clear": 108,
+            "floating_in_contact": 431,
+            "max_strain": 0.2621720477240046,
+            "passive_force_n": 367.8080139160156,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 1258.9049072265625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1258.90478515625
+          },
+          "force_rmse_relative": 0.05350029874944626,
+          "hysteresis_error": 0.15193464124255945,
+          "loading_rmse_relative": 0.049513479127491544,
+          "measured_peak_force_n": 1200.024660195965,
+          "passed": false,
+          "peak_force_error": 0.05064847329266315,
+          "peak_force_n": 1260.8040771484375,
+          "unloading_rmse_relative": 0.05788062389503142
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 375.05694580078125,
+            "floating_clear": 108,
+            "floating_in_contact": 431,
+            "max_strain": 0.2551914977582249,
+            "passive_force_n": 108.26228332519531,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 375.05694580078125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 375.0569763183594
+          },
+          "force_rmse_relative": 0.3306205069649843,
+          "hysteresis_error": 0.7562442171711738,
+          "loading_rmse_relative": 0.32000663986469813,
+          "measured_peak_force_n": 1200.024660195965,
+          "passed": false,
+          "peak_force_error": 0.687200692806662,
+          "peak_force_n": 375.36688232421875,
+          "unloading_rmse_relative": 0.34514520629024614
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1257.63037109375,
+            "floating_clear": 108,
+            "floating_in_contact": 431,
+            "max_strain": 0.26180269178770904,
+            "passive_force_n": 367.4658203125,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 1257.63037109375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1257.630615234375
+          },
+          "force_rmse_relative": 0.0536204608003987,
+          "hysteresis_error": 0.15225069596664464,
+          "loading_rmse_relative": 0.049584239442554974,
+          "measured_peak_force_n": 1199.9683122636902,
+          "passed": false,
+          "peak_force_error": 0.049715015793329896,
+          "peak_force_n": 1259.624755859375,
+          "unloading_rmse_relative": 0.058048053261695376
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 374.5821228027344,
+            "floating_clear": 108,
+            "floating_in_contact": 431,
+            "max_strain": 0.25483813587228854,
+            "passive_force_n": 108.13739013671875,
+            "passive_in_contact": 202,
+            "platen_reaction_n": 374.5820617675781,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 374.58203125
+          },
+          "force_rmse_relative": 0.33081745593306056,
+          "hysteresis_error": 0.7563878740886679,
+          "loading_rmse_relative": 0.32034665660798445,
+          "measured_peak_force_n": 1199.9683122636902,
+          "passed": false,
+          "peak_force_error": 0.687565678552681,
+          "peak_force_n": 374.9112854003906,
+          "unloading_rmse_relative": 0.3451844706990996
+        }
+      }
+    },
+    "280ms_1600N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1658.6846923828125,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45643704034651567,
+            "passive_force_n": 481.62860107421875,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1658.684814453125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1658.6851806640625
+          },
+          "force_rmse_relative": 0.045380081444596466,
+          "hysteresis_error": 0.06229130184872713,
+          "loading_rmse_relative": 0.04390506046225351,
+          "measured_peak_force_n": 1600.0250099093334,
+          "passed": true,
+          "peak_force_error": 0.03831987516796902,
+          "peak_force_n": 1661.3377685546875,
+          "unloading_rmse_relative": 0.047020598360801996
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 546.304443359375,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.45643704034651567,
+            "passive_force_n": 154.63204956054688,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 546.3043823242188,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 546.3045654296875
+          },
+          "force_rmse_relative": 0.30880512983290404,
+          "hysteresis_error": 0.7112155015287686,
+          "loading_rmse_relative": 0.2959079205508744,
+          "measured_peak_force_n": 1600.0250099093334,
+          "passed": false,
+          "peak_force_error": 0.6582059880950576,
+          "peak_force_n": 546.8789672851562,
+          "unloading_rmse_relative": 0.325532994397605
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1657.9044189453125,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.455902516447027,
+            "passive_force_n": 481.380859375,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 1657.904296875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1657.904541015625
+          },
+          "force_rmse_relative": 0.0453418948675634,
+          "hysteresis_error": 0.062385396112110816,
+          "loading_rmse_relative": 0.043865934629254554,
+          "measured_peak_force_n": 1599.9275620718752,
+          "passed": true,
+          "peak_force_error": 0.03797637536051477,
+          "peak_force_n": 1660.68701171875,
+          "unloading_rmse_relative": 0.04698229856298559
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 545.9254150390625,
+            "floating_clear": 58,
+            "floating_in_contact": 481,
+            "max_strain": 0.455902516447027,
+            "passive_force_n": 154.52313232421875,
+            "passive_in_contact": 225,
+            "platen_reaction_n": 545.9254760742188,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 545.9254150390625
+          },
+          "force_rmse_relative": 0.3089225134048329,
+          "hysteresis_error": 0.7113059158169609,
+          "loading_rmse_relative": 0.2961812981722616,
+          "measured_peak_force_n": 1599.9275620718752,
+          "passed": false,
+          "peak_force_error": 0.6583937673134302,
+          "peak_force_n": 546.5452270507812,
+          "unloading_rmse_relative": 0.3254842018766351
+        }
+      }
+    },
+    "280ms_2000N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1973.9139404296875,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6747161596098247,
+            "passive_force_n": 615.7681274414062,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 1973.913818359375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1973.913818359375
+          },
+          "force_rmse_relative": 0.036433582078354274,
+          "hysteresis_error": 0.014894075344330772,
+          "loading_rmse_relative": 0.035342150323737026,
+          "measured_peak_force_n": 1999.9484432443267,
+          "passed": true,
+          "peak_force_error": 0.011603243879499434,
+          "peak_force_n": 1976.7425537109375,
+          "unloading_rmse_relative": 0.037559707644739516
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 697.2605590820312,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6820306695010563,
+            "passive_force_n": 199.69805908203125,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 697.260498046875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 697.2604370117188
+          },
+          "force_rmse_relative": 0.29777148568277095,
+          "hysteresis_error": 0.678384510990529,
+          "loading_rmse_relative": 0.27820247187179303,
+          "measured_peak_force_n": 1999.9484432443267,
+          "passed": false,
+          "peak_force_error": 0.6509251444828874,
+          "peak_force_n": 698.1317138671875,
+          "unloading_rmse_relative": 0.3206097960046891
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 1973.37744140625,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.674678905976292,
+            "passive_force_n": 615.5567016601562,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 1973.3775634765625,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1973.377685546875
+          },
+          "force_rmse_relative": 0.03644117711756963,
+          "hysteresis_error": 0.015217909718878745,
+          "loading_rmse_relative": 0.03535885303668522,
+          "measured_peak_force_n": 1999.8256438538194,
+          "passed": true,
+          "peak_force_error": 0.01176766861036518,
+          "peak_force_n": 1976.2923583984375,
+          "unloading_rmse_relative": 0.03755793247978479
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 696.9899291992188,
+            "floating_clear": 42,
+            "floating_in_contact": 497,
+            "max_strain": 0.6817051165717842,
+            "passive_force_n": 199.61831665039062,
+            "passive_in_contact": 238,
+            "platen_reaction_n": 696.989990234375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 696.989990234375
+          },
+          "force_rmse_relative": 0.29784221318197096,
+          "hysteresis_error": 0.6785222330548977,
+          "loading_rmse_relative": 0.2784227390441242,
+          "measured_peak_force_n": 1999.8256438538194,
+          "passed": false,
+          "peak_force_error": 0.6510203273570132,
+          "peak_force_n": 697.8984985351562,
+          "unloading_rmse_relative": 0.32053477144463144
+        }
+      }
+    },
+    "280ms_2400N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2255.53857421875,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.690201706168912,
+            "passive_force_n": 746.4356689453125,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 2255.53857421875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2255.53857421875
+          },
+          "force_rmse_relative": 0.03428031690228693,
+          "hysteresis_error": 0.01811391433353184,
+          "loading_rmse_relative": 0.032857991249483444,
+          "measured_peak_force_n": 2399.8712937560504,
+          "passed": true,
+          "peak_force_error": 0.0584869031164253,
+          "peak_force_n": 2259.51025390625,
+          "unloading_rmse_relative": 0.03586895105169458
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 848.1738891601562,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.8208323610519572,
+            "passive_force_n": 250.8301544189453,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 848.1739501953125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 848.174072265625
+          },
+          "force_rmse_relative": 0.2947636504836415,
+          "hysteresis_error": 0.6470582645455053,
+          "loading_rmse_relative": 0.2639430608137494,
+          "measured_peak_force_n": 2399.8712937560504,
+          "passed": false,
+          "peak_force_error": 0.6459090250697163,
+          "peak_force_n": 849.7727661132812,
+          "unloading_rmse_relative": 0.32649310791621994
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2255.352783203125,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.6902055191878735,
+            "passive_force_n": 746.37255859375,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 2255.35302734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2255.35302734375
+          },
+          "force_rmse_relative": 0.034292028105471946,
+          "hysteresis_error": 0.019284513817045375,
+          "loading_rmse_relative": 0.03287914051395642,
+          "measured_peak_force_n": 2399.3670709779108,
+          "passed": true,
+          "peak_force_error": 0.058315704840603326,
+          "peak_force_n": 2259.4462890625,
+          "unloading_rmse_relative": 0.035870151998919395
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 848.099853515625,
+            "floating_clear": 30,
+            "floating_in_contact": 509,
+            "max_strain": 0.8208472625053703,
+            "passive_force_n": 250.8071746826172,
+            "passive_in_contact": 256,
+            "platen_reaction_n": 848.0999755859375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 848.099853515625
+          },
+          "force_rmse_relative": 0.2948181616695382,
+          "hysteresis_error": 0.6466672220259598,
+          "loading_rmse_relative": 0.26413934852177895,
+          "measured_peak_force_n": 2399.3670709779108,
+          "passed": false,
+          "peak_force_error": 0.6458473070466942,
+          "peak_force_n": 849.7423095703125,
+          "unloading_rmse_relative": 0.32642454187986797
+        }
+      }
+    },
+    "280ms_2800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2732.677490234375,
+            "floating_clear": 24,
+            "floating_in_contact": 515,
+            "max_strain": 0.7048753659206165,
+            "passive_force_n": 1086.181640625,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2732.677734375,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2732.677734375
+          },
+          "force_rmse_relative": 0.027739055204469436,
+          "hysteresis_error": 0.05599164295684436,
+          "loading_rmse_relative": 0.026645585318719252,
+          "measured_peak_force_n": 2800.403988254821,
+          "passed": true,
+          "peak_force_error": 0.022245564083289062,
+          "peak_force_n": 2738.107421875,
+          "unloading_rmse_relative": 0.028775043940226713
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1005.7354736328125,
+            "floating_clear": 24,
+            "floating_in_contact": 515,
+            "max_strain": 0.8589832373913874,
+            "passive_force_n": 309.2177734375,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1005.7355346679688,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1005.7354736328125
+          },
+          "force_rmse_relative": 0.2968956277741995,
+          "hysteresis_error": 0.6141472494553742,
+          "loading_rmse_relative": 0.2504697310567722,
+          "measured_peak_force_n": 2800.403988254821,
+          "passed": false,
+          "peak_force_error": 0.639818268313945,
+          "peak_force_n": 1008.6543579101562,
+          "unloading_rmse_relative": 0.3388790801910128
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 2732.44921875,
+            "floating_clear": 24,
+            "floating_in_contact": 515,
+            "max_strain": 0.7048782659253003,
+            "passive_force_n": 1086.0804443359375,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 2732.44921875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 2732.44921875
+          },
+          "force_rmse_relative": 0.02774302629897953,
+          "hysteresis_error": 0.055942464336943,
+          "loading_rmse_relative": 0.026662666327438782,
+          "measured_peak_force_n": 2800.0394880625718,
+          "passed": true,
+          "peak_force_error": 0.022132669790873992,
+          "peak_force_n": 2738.067138671875,
+          "unloading_rmse_relative": 0.028766671275258213
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 1005.6367797851562,
+            "floating_clear": 24,
+            "floating_in_contact": 515,
+            "max_strain": 0.8589905128068773,
+            "passive_force_n": 309.1826477050781,
+            "passive_in_contact": 268,
+            "platen_reaction_n": 1005.6367797851562,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 1005.63671875
+          },
+          "force_rmse_relative": 0.2968934786169958,
+          "hysteresis_error": 0.6141900974443942,
+          "loading_rmse_relative": 0.25065876962087175,
+          "measured_peak_force_n": 2800.0394880625718,
+          "passed": false,
+          "peak_force_error": 0.6397760239732251,
+          "peak_force_n": 1008.641357421875,
+          "unloading_rmse_relative": 0.3387353260286923
+        }
+      }
+    },
+    "280ms_800N": {
+      "train": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 689.169189453125,
+            "floating_clear": 238,
+            "floating_in_contact": 301,
+            "max_strain": 0.1666195510520549,
+            "passive_force_n": 227.55496215820312,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 689.169189453125,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 689.169189453125
+          },
+          "force_rmse_relative": 0.10768025641771554,
+          "hysteresis_error": 0.3583651617527967,
+          "loading_rmse_relative": 0.09706055271967175,
+          "measured_peak_force_n": 799.9728087627216,
+          "passed": false,
+          "peak_force_error": 0.1365379582669826,
+          "peak_force_n": 690.7461547851562,
+          "unloading_rmse_relative": 0.11898324955209437
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 189.05288696289062,
+            "floating_clear": 238,
+            "floating_in_contact": 301,
+            "max_strain": 0.1666195510520549,
+            "passive_force_n": 62.14005661010742,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 189.05288696289062,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 189.0528106689453
+          },
+          "force_rmse_relative": 0.3647485226056178,
+          "hysteresis_error": 0.8274771154917697,
+          "loading_rmse_relative": 0.3455611980209198,
+          "measured_peak_force_n": 799.9728087627216,
+          "passed": false,
+          "peak_force_error": 0.7634029079974463,
+          "peak_force_n": 189.271240234375,
+          "unloading_rmse_relative": 0.3883769967339669
+        }
+      },
+      "validate": {
+        "fitted": {
+          "contact": {
+            "carrier_force_n": 687.8241577148438,
+            "floating_clear": 239,
+            "floating_in_contact": 300,
+            "max_strain": 0.16643845084251802,
+            "passive_force_n": 227.2558135986328,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 687.82421875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 687.82421875
+          },
+          "force_rmse_relative": 0.1083709931602064,
+          "hysteresis_error": 0.35830074754055596,
+          "loading_rmse_relative": 0.09769090156527319,
+          "measured_peak_force_n": 799.9698639100282,
+          "passed": false,
+          "peak_force_error": 0.13815623969295807,
+          "peak_force_n": 689.4490356445312,
+          "unloading_rmse_relative": 0.11974391635165361
+        },
+        "initial": {
+          "contact": {
+            "carrier_force_n": 188.658935546875,
+            "floating_clear": 239,
+            "floating_in_contact": 300,
+            "max_strain": 0.16643845084251802,
+            "passive_force_n": 62.050209045410156,
+            "passive_in_contact": 166,
+            "platen_reaction_n": 188.658935546875,
+            "touching_in_contact": 18,
+            "transfer_sum_n": 188.6588897705078
+          },
+          "force_rmse_relative": 0.3650663043272727,
+          "hysteresis_error": 0.8274813028061582,
+          "loading_rmse_relative": 0.3460372756959762,
+          "measured_peak_force_n": 799.9698639100282,
+          "passed": false,
+          "peak_force_error": 0.7638854346088121,
+          "peak_force_n": 188.88453674316406,
+          "unloading_rmse_relative": 0.388533923077365
+        }
+      }
+    }
+  },
+  "evaluations": 30,
+  "initial_material": {
+    "equilibrium_fraction": 0.6586721149134733,
+    "hyperfoam_exponent": 18.07697643908876,
+    "hyperfoam_exponent_2": -0.5855868486256809,
+    "instantaneous_shear_modulus_2_pa": 19487.70413858932,
+    "instantaneous_shear_modulus_pa": 267615.1977311966,
+    "maxwell_relaxation_time_s": 0.0051501095220815776
+  },
+  "material": {
+    "equilibrium_fraction": 0.8432379530976928,
+    "hyperfoam_exponent": 19.999999998037712,
+    "hyperfoam_exponent_2": -13.657930904662296,
+    "instantaneous_shear_modulus_2_pa": 0.9246870463785875,
+    "instantaneous_shear_modulus_pa": 915633.4449826954,
+    "maxwell_relaxation_time_s": 0.021157065638980354
+  },
+  "optimization": {
+    "history": [
+      {
+        "equilibrium_fraction": 0.6586721149134733,
+        "hyperfoam_exponent": 18.07697643908876,
+        "hyperfoam_exponent_2": -0.5855868486256809,
+        "instantaneous_shear_modulus_2_pa": 19487.70413858932,
+        "instantaneous_shear_modulus_pa": 267615.1977311966,
+        "loss": 0.12695900170462185,
+        "maxwell_relaxation_time_s": 0.0051501095220815776
+      },
+      {
+        "equilibrium_fraction": 0.6661119010087525,
+        "hyperfoam_exponent": 18.210841663334502,
+        "hyperfoam_exponent_2": -0.7988584492955544,
+        "instantaneous_shear_modulus_2_pa": 86.98501805232445,
+        "instantaneous_shear_modulus_pa": 1017251.9066322758,
+        "loss": 0.008182300942307468,
+        "maxwell_relaxation_time_s": 0.006242836352302218
+      },
+      {
+        "equilibrium_fraction": 0.6762319041135398,
+        "hyperfoam_exponent": 19.751389044201826,
+        "hyperfoam_exponent_2": -5.772995408068062,
+        "instantaneous_shear_modulus_2_pa": 2627.5251421439907,
+        "instantaneous_shear_modulus_pa": 1106729.2115533166,
+        "loss": 0.00690457185639184,
+        "maxwell_relaxation_time_s": 0.006203463410684657
+      },
+      {
+        "equilibrium_fraction": 0.7071860640651312,
+        "hyperfoam_exponent": 19.809129107142603,
+        "hyperfoam_exponent_2": -4.442329801257861,
+        "instantaneous_shear_modulus_2_pa": 2224.504480117464,
+        "instantaneous_shear_modulus_pa": 1088127.6320990378,
+        "loss": 0.004713471653197491,
+        "maxwell_relaxation_time_s": 0.00613287993710848
+      },
+      {
+        "equilibrium_fraction": 0.7145267075113089,
+        "hyperfoam_exponent": 19.93406764924918,
+        "hyperfoam_exponent_2": -4.906377239618328,
+        "instantaneous_shear_modulus_2_pa": 1093.3572325858545,
+        "instantaneous_shear_modulus_pa": 1091111.502940029,
+        "loss": 0.0045631527759600774,
+        "maxwell_relaxation_time_s": 0.006242983748669072
+      },
+      {
+        "equilibrium_fraction": 0.7889509880387297,
+        "hyperfoam_exponent": 19.961461246362855,
+        "hyperfoam_exponent_2": -5.9649274115344735,
+        "instantaneous_shear_modulus_2_pa": 87.58402148543473,
+        "instantaneous_shear_modulus_pa": 983633.5827413613,
+        "loss": 0.005372003049626906,
+        "maxwell_relaxation_time_s": 0.0090396383386219
+      },
+      {
+        "equilibrium_fraction": 0.7302293952057117,
+        "hyperfoam_exponent": 19.957756532398967,
+        "hyperfoam_exponent_2": -5.387246961249822,
+        "instantaneous_shear_modulus_2_pa": 830.4566218275002,
+        "instantaneous_shear_modulus_pa": 1068598.2434229422,
+        "loss": 0.004505113081601903,
+        "maxwell_relaxation_time_s": 0.006863028208170779
+      },
+      {
+        "equilibrium_fraction": 0.7932532671545957,
+        "hyperfoam_exponent": 19.980738642363033,
+        "hyperfoam_exponent_2": -5.858326647364628,
+        "instantaneous_shear_modulus_2_pa": 499.2089513199299,
+        "instantaneous_shear_modulus_pa": 976428.8858233318,
+        "loss": 0.004887199475972338,
+        "maxwell_relaxation_time_s": 0.00965456888697764
+      },
+      {
+        "equilibrium_fraction": 0.7462070340630111,
+        "hyperfoam_exponent": 19.96422763905003,
+        "hyperfoam_exponent_2": -5.553971379828038,
+        "instantaneous_shear_modulus_2_pa": 759.9412618305371,
+        "instantaneous_shear_modulus_pa": 1045494.0321642009,
+        "loss": 0.004465172120219551,
+        "maxwell_relaxation_time_s": 0.007613823881790702
+      },
+      {
+        "equilibrium_fraction": 0.7790762381836943,
+        "hyperfoam_exponent": 19.974103962631908,
+        "hyperfoam_exponent_2": -5.763280792962616,
+        "instantaneous_shear_modulus_2_pa": 630.1461004733413,
+        "instantaneous_shear_modulus_pa": 998525.3870944347,
+        "loss": 0.004432524009392431,
+        "maxwell_relaxation_time_s": 0.009387557097264023
+      },
+      {
+        "equilibrium_fraction": 0.800011692347478,
+        "hyperfoam_exponent": 19.97909450326986,
+        "hyperfoam_exponent_2": -6.592000012723077,
+        "instantaneous_shear_modulus_2_pa": 74.6265541455789,
+        "instantaneous_shear_modulus_pa": 980205.8880553871,
+        "loss": 0.00435144549255229,
+        "maxwell_relaxation_time_s": 0.011346995889956347
+      },
+      {
+        "equilibrium_fraction": 0.8311680026610085,
+        "hyperfoam_exponent": 19.989983175454693,
+        "hyperfoam_exponent_2": -6.957753378516507,
+        "instantaneous_shear_modulus_2_pa": 122.06493639929204,
+        "instantaneous_shear_modulus_pa": 936353.3758525852,
+        "loss": 0.004330011793738085,
+        "maxwell_relaxation_time_s": 0.015216854762817979
+      },
+      {
+        "equilibrium_fraction": 0.8307196729193119,
+        "hyperfoam_exponent": 19.86592991266942,
+        "hyperfoam_exponent_2": -6.970267661576679,
+        "instantaneous_shear_modulus_2_pa": 154.94743852657052,
+        "instantaneous_shear_modulus_pa": 941943.1280821369,
+        "loss": 0.004188789293747721,
+        "maxwell_relaxation_time_s": 0.01599291996727772
+      },
+      {
+        "equilibrium_fraction": 0.8322096451049394,
+        "hyperfoam_exponent": 19.87517305225385,
+        "hyperfoam_exponent_2": -7.113207838181419,
+        "instantaneous_shear_modulus_2_pa": 154.79997421729027,
+        "instantaneous_shear_modulus_pa": 931349.084970675,
+        "loss": 0.004127490692948254,
+        "maxwell_relaxation_time_s": 0.017185697763423453
+      },
+      {
+        "equilibrium_fraction": 0.8395938352574245,
+        "hyperfoam_exponent": 19.9040483880488,
+        "hyperfoam_exponent_2": -7.43237042338726,
+        "instantaneous_shear_modulus_2_pa": 150.3336405720952,
+        "instantaneous_shear_modulus_pa": 919397.1061434706,
+        "loss": 0.004092590412220315,
+        "maxwell_relaxation_time_s": 0.019172942872357268
+      },
+      {
+        "equilibrium_fraction": 0.8428358128680722,
+        "hyperfoam_exponent": 19.9659965708713,
+        "hyperfoam_exponent_2": -8.077481877508596,
+        "instantaneous_shear_modulus_2_pa": 113.85279219578003,
+        "instantaneous_shear_modulus_pa": 915225.8863097732,
+        "loss": 0.004056329307900165,
+        "maxwell_relaxation_time_s": 0.020581742805592298
+      },
+      {
+        "equilibrium_fraction": 0.8433366902398449,
+        "hyperfoam_exponent": 19.99779848352756,
+        "hyperfoam_exponent_2": -9.281455741167962,
+        "instantaneous_shear_modulus_2_pa": 18.16392814430293,
+        "instantaneous_shear_modulus_pa": 915763.8344115528,
+        "loss": 0.004039748702753645,
+        "maxwell_relaxation_time_s": 0.021014043947848667
+      },
+      {
+        "equilibrium_fraction": 0.8435337644018277,
+        "hyperfoam_exponent": 19.998951134023187,
+        "hyperfoam_exponent_2": -11.084442240819468,
+        "instantaneous_shear_modulus_2_pa": 0.02940617714631344,
+        "instantaneous_shear_modulus_pa": 917191.9919490151,
+        "loss": 0.004193320812162247,
+        "maxwell_relaxation_time_s": 0.02115937159038575
+      },
+      {
+        "equilibrium_fraction": 0.8434391250424618,
+        "hyperfoam_exponent": 19.999228361708866,
+        "hyperfoam_exponent_2": -9.711898744170487,
+        "instantaneous_shear_modulus_2_pa": 27.953839416666455,
+        "instantaneous_shear_modulus_pa": 916628.8953206261,
+        "loss": 0.004020658137656861,
+        "maxwell_relaxation_time_s": 0.021083348582355662
+      },
+      {
+        "equilibrium_fraction": 0.8433941371612172,
+        "hyperfoam_exponent": 19.99969288680463,
+        "hyperfoam_exponent_2": -10.593496611543813,
+        "instantaneous_shear_modulus_2_pa": 7.024516947491438,
+        "instantaneous_shear_modulus_pa": 916484.1774255981,
+        "loss": 0.004019952905808105,
+        "maxwell_relaxation_time_s": 0.021099913211754077
+      },
+      {
+        "equilibrium_fraction": 0.8434234017627945,
+        "hyperfoam_exponent": 19.99985221997985,
+        "hyperfoam_exponent_2": -10.801573196981412,
+        "instantaneous_shear_modulus_2_pa": 9.627465935174698,
+        "instantaneous_shear_modulus_pa": 916963.0328228832,
+        "loss": 0.004010769813199128,
+        "maxwell_relaxation_time_s": 0.021101029702748055
+      },
+      {
+        "equilibrium_fraction": 0.8431089991083477,
+        "hyperfoam_exponent": 19.999931964493136,
+        "hyperfoam_exponent_2": -11.217666299402692,
+        "instantaneous_shear_modulus_2_pa": 9.914714447790104,
+        "instantaneous_shear_modulus_pa": 915457.7245283695,
+        "loss": 0.004005480242872835,
+        "maxwell_relaxation_time_s": 0.021061692047094693
+      },
+      {
+        "equilibrium_fraction": 0.8431554373059702,
+        "hyperfoam_exponent": 19.999989854443285,
+        "hyperfoam_exponent_2": -11.65812402768133,
+        "instantaneous_shear_modulus_2_pa": 6.1550830530159155,
+        "instantaneous_shear_modulus_pa": 915487.3492982312,
+        "loss": 0.004002819541699953,
+        "maxwell_relaxation_time_s": 0.02108046153717823
+      },
+      {
+        "equilibrium_fraction": 0.8432309601366602,
+        "hyperfoam_exponent": 19.999999548141894,
+        "hyperfoam_exponent_2": -12.560954254614199,
+        "instantaneous_shear_modulus_2_pa": 1.2756434303043749,
+        "instantaneous_shear_modulus_pa": 915624.3494169295,
+        "loss": 0.004007763420266791,
+        "maxwell_relaxation_time_s": 0.021130591913619923
+      },
+      {
+        "equilibrium_fraction": 0.8432140612566137,
+        "hyperfoam_exponent": 19.999997269216188,
+        "hyperfoam_exponent_2": -11.918932330975375,
+        "instantaneous_shear_modulus_2_pa": 5.036660435946594,
+        "instantaneous_shear_modulus_pa": 915541.5996980246,
+        "loss": 0.004001708667374838,
+        "maxwell_relaxation_time_s": 0.02110866871463845
+      },
+      {
+        "equilibrium_fraction": 0.8432469261063585,
+        "hyperfoam_exponent": 19.999999732182147,
+        "hyperfoam_exponent_2": -12.333624466653097,
+        "instantaneous_shear_modulus_2_pa": 2.997911937212064,
+        "instantaneous_shear_modulus_pa": 915652.5089278234,
+        "loss": 0.003999965915508799,
+        "maxwell_relaxation_time_s": 0.02112900719496976
+      },
+      {
+        "equilibrium_fraction": 0.8432776453169999,
+        "hyperfoam_exponent": 19.99999991270326,
+        "hyperfoam_exponent_2": -13.424584926228153,
+        "instantaneous_shear_modulus_2_pa": 0.10985902758443133,
+        "instantaneous_shear_modulus_pa": 915869.5738340013,
+        "loss": 0.004037217917935255,
+        "maxwell_relaxation_time_s": 0.021164784230463383
+      },
+      {
+        "equilibrium_fraction": 0.8432639680279173,
+        "hyperfoam_exponent": 19.999999887832377,
+        "hyperfoam_exponent_2": -12.606358878137552,
+        "instantaneous_shear_modulus_2_pa": 2.380286653607298,
+        "instantaneous_shear_modulus_pa": 915818.8216895701,
+        "loss": 0.003998989859348153,
+        "maxwell_relaxation_time_s": 0.021140004511416073
+      },
+      {
+        "equilibrium_fraction": 0.8433090238731793,
+        "hyperfoam_exponent": 19.99999997703946,
+        "hyperfoam_exponent_2": -13.14203453200391,
+        "instantaneous_shear_modulus_2_pa": 1.1361488780403057,
+        "instantaneous_shear_modulus_pa": 915876.2701452385,
+        "loss": 0.003998341117658684,
+        "maxwell_relaxation_time_s": 0.02116622010192761
+      },
+      {
+        "equilibrium_fraction": 0.8432379530976928,
+        "hyperfoam_exponent": 19.999999998037712,
+        "hyperfoam_exponent_2": -13.657930904662296,
+        "instantaneous_shear_modulus_2_pa": 0.9246870463785875,
+        "instantaneous_shear_modulus_pa": 915633.4449826954,
+        "loss": 0.003995141984805951,
+        "maxwell_relaxation_time_s": 0.021157065638980354
+      }
+    ],
+    "launches": 55,
+    "residual_evaluations": 30,
+    "seconds": 22.464293400000315,
+    "seconds_per_launch": 0.4084416981818239,
+    "worlds_per_launch": 168
+  },
+  "registration": {
+    "pose": {
+      "lift_m": 0.03935393625337355,
+      "x_m": -0.126535101153864,
+      "y_m": -0.007781435707422809,
+      "yaw_rad": 0.06108652381980153
+    },
+    "qc": {
+      "columns": 944,
+      "columns_within_mm": {
+        "0": 1,
+        "0.5": 5,
+        "1": 9,
+        "2": 46,
+        "5": 348
+      },
+      "gap_percentiles_mm": {
+        "p25": 3.43,
+        "p5": 1.54,
+        "p50": 4.7,
+        "p75": 5.65,
+        "p95": 7.06
+      },
+      "heel_offset_m": 0.014875000000000027,
+      "last": {
+        "attachment_gap_m": 0.07099981711508391,
+        "heel_seat_height_m": 0.005063634054700246,
+        "heel_toe_cues": {
+          "ball_tread_fraction_minus_half": 0.19834710743801653,
+          "toe_side_minus_heel_side_width_m": 0.02300000000000002
+        },
+        "length_m": 0.2370000000000002,
+        "max_width_m": 0.07900000000000007,
+        "plate_stud_angle_deg": 0.0022613741900354136,
+        "toe_tip_height_m": 0.009224663361312363,
+        "unit_scale_to_m": 0.001,
+        "up_in_source": [
+          -0.026184647912624804,
+          0.9983733969273328,
+          -0.050645083882547084
+        ]
+      },
+      "last_outside_fraction": 0.0,
+      "last_side": "left (from the STL name; not verified)",
+      "overlap_columns": 557,
+      "platen_columns": 23,
+      "platen_columns_x_range_m": [
+        -0.07880258560180656,
+        0.046197414398193554
+      ],
+      "preload": {
+        "compressed_columns": 63,
+        "indentation_m": 0.0022994484732490454,
+        "modulus_pa": 567320.0267171019,
+        "preload_n": 20.377029248684103
+      },
+      "preload_centroid_inside_platen_contact": true,
+      "preload_force_centroid_xy_m": [
+        -0.02431632275804759,
+        -0.0035758101326936755
+      ],
+      "rest_pitch_deg": -0.109375,
+      "rest_roll_deg": 0.34375000000000006,
+      "shoe_heel_at_input_plus_x": false,
+      "shoe_heel_toe_cues_m": {
+        "low_end_thickness_or_elevation_m": -0.009946262993572055,
+        "low_minus_high_width_m": -0.01999999999999999
+      },
+      "shoe_side": "unverified",
+      "shoe_side_cues_m": {
+        "reason": "medial side not established: arch indents 10.2 / 15.0 mm"
+      },
+      "spread_cost_m": 0.0007482050879934643,
+      "spread_cost_probes_m": {
+        "x_5mm": [
+          0.0008457712697679543,
+          0.0008153938561421618
+        ],
+        "y_5mm": [
+          0.0008350171043160263,
+          null
+        ],
+        "yaw_2deg": [
+          0.0008317529891955027,
+          null
+        ]
+      },
+      "yaw_deg": 3.4999999999999996
+    }
+  },
+  "shoe": "puma-deviate-nitro-elite-3",
+  "side": "left",
+  "sweep": "Dev3Elite"
+}

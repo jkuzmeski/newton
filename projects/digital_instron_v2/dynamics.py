@@ -1,25 +1,19 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dynamic elastic-foundation midsole coupled into Newton rigid-body physics.
+"""Bench geometry, measured drive, and stride trajectories for the midsole example.
 
-The calibrated column model from :mod:`projects.digital_instron_v2.core` is a
-Winkler/Pasternak bed of nonlinear viscoelastic springs sampled from the shoe
-midsole mesh. This module turns that bed into a live Warp force model: every
-substep each column reads its carrier-body pose, computes its through-thickness
-compression, evaluates the first-order Hyperfoam equilibrium pressure with a
-real-time generalized-Maxwell overstress branch and Pasternak lateral coupling,
-and accumulates the resulting wrench into :attr:`newton.State.body_f`.
+The calibrated column bed is sampled from the shoe midsole mesh and driven by
+:mod:`projects.digital_instron_v2.example` through the shared two-surface
+column bed (:class:`projects.digital_shoe.column_bed.ColumnBed`) as
 
-The same foundation drives three scenarios:
-
-* a displacement-controlled digital Instron that squishes the midsole between a
-  shoe-last crosshead and the ground plane and records the force-displacement
+* a displacement-controlled digital Instron that presses the midsole between a
+  shoe-last crosshead and the platen and records the force-displacement
   hysteresis loop,
-* a free, massive midsole that rests in stable equilibrium on the foundation and
+* a free, massive plate that rests in stable equilibrium on the foam and
   resists lateral loads through Coulomb foam-shear friction, and
-* a synthetic running stride whose heel-to-toe roll produces a ground-reaction
-  force profile and a migrating center of pressure.
+* prescribed and foot-mounted running strides whose heel-to-toe roll produces a
+  ground-reaction force profile and a migrating center of pressure.
 """
 
 from __future__ import annotations
@@ -31,52 +25,7 @@ from pathlib import Path
 import numpy as np
 import warp as wp
 
-from projects.digital_shoe.rendering import (
-    attached_column_endpoints as attached_columns,
-)
-from projects.digital_shoe.rendering import (
-    bench_column_top_points as column_world_positions,
-)
-from projects.digital_shoe.rendering import (
-    column_colors,
-)
-from projects.digital_shoe.runtime import (
-    FoundationConfig,
-    FoundationParams,
-    MidsoleFoundation,
-    SurroundConfig,
-    foundation_apply,
-    foundation_pressure,
-    foundation_reset,
-    surround_relax,
-    surround_write_free_top,
-)
-
-from .core import CALIBRATED_MATERIAL, EFFECTIVE_POISSON_RATIO, MAXWELL_RELAXATION_TIME_S, Material
-from .geometry import build_column_grid, load_mesh, raycast_surface, rearfoot_center, transform_mesh
-from .scenario_common import attachment_pd_wrench
-
-POISSON = wp.constant(EFFECTIVE_POISSON_RATIO)
-TAU_S = wp.constant(MAXWELL_RELAXATION_TIME_S)
-
-__all__ = [
-    "EFFECTIVE_POISSON_RATIO",
-    "MAXWELL_RELAXATION_TIME_S",
-    "POISSON",
-    "TAU_S",
-    "FoundationConfig",
-    "FoundationParams",
-    "MidsoleFoundation",
-    "SurroundConfig",
-    "attached_columns",
-    "column_colors",
-    "column_world_positions",
-    "foundation_apply",
-    "foundation_pressure",
-    "foundation_reset",
-    "surround_relax",
-    "surround_write_free_top",
-]
+from .geometry import build_column_grid, load_mesh, neighbor_indices, raycast_surface, transform_mesh
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +35,9 @@ __all__ = [
 class FoundationGeometry:
     """Whole-midsole column bed sampled from the calibrated mesh (ground plane at z=0).
 
-    The bed spans every column of the manifest grid, which is the geometry the
-    identification fits (:class:`projects.digital_instron_v2.core.Surround`).
-    ``driven`` marks the subset the indenter presses; the rest is real foam that
-    deforms only through the lateral shear layer and its bond to the shoe.
+    The bed spans every column of the manifest grid. ``driven`` marks the subset
+    the indenter presses; the rest is free foam that deforms only through the
+    lateral shear layer.
     """
 
     uv_m: np.ndarray  # footprint coordinates [column_count, 2]
@@ -108,8 +56,8 @@ class FoundationGeometry:
     thickness_axis: int  # mesh axis along which columns compress (rendering/offset axis)
 
 
-def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoot_last") -> FoundationGeometry:
-    """Sample the whole calibrated midsole into an elastic-foundation column bed.
+def build_foundation_geometry(manifest_path: str | Path) -> FoundationGeometry:
+    """Sample the whole calibrated midsole under the full-foot last into a column bed.
 
     Reuses the calibration geometry pipeline: the midsole mesh is column-sampled
     on the manifest grid, and the shoe-last indenter is posed and raycast to give
@@ -120,8 +68,7 @@ def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoo
     Dropping the rest left the shear layer with no material to act on, so the
     runtime lost the support the identification counts on. Columns the indenter
     misses are anchored on their own foam top (``gap0 = 0``) and reported as
-    undriven, ready for the passive relaxation in
-    :class:`projects.digital_shoe.runtime.SurroundConfig`.
+    undriven.
     """
     path = Path(manifest_path).resolve()
     config = json.loads(path.read_text())
@@ -129,10 +76,7 @@ def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoo
     midsole = load_mesh(base / config["midsole_mesh"], 0.001)
     grid = build_column_grid(midsole, config["grid"]["coarse_spacing_m"])
 
-    source = next(t for t in config["trials"] if t["fixture"] == fixture)
-    indenter = source["indenter"]
-    if "path" not in indenter:
-        return _build_rearfoot_geometry(config, base, grid, source, str(base / config["midsole_mesh"]))
+    indenter = next(t for t in config["trials"] if t["fixture"] == "fullfoot_last")["indenter"]
     last = load_mesh(base / indenter["path"], 0.001, indenter["rotation_deg"], indenter["crop_height_m"])
     transform_mesh(
         last,
@@ -146,7 +90,7 @@ def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoo
     surface = surface + indenter_shift
     surface[driven] = np.maximum(surface[driven], grid.top_m[driven])
     # The crosshead never reaches these columns, so their carrier anchor is their own
-    # free foam top. The relaxation, not the carrier pose, then sets their compression.
+    # free foam top; the column balance, not the carrier pose, sets their compression.
     surface[~driven] = grid.top_m[~driven]
 
     top = np.asarray(grid.top_m, dtype=float)
@@ -161,98 +105,13 @@ def build_foundation_geometry(manifest_path: str | Path, fixture: str = "fullfoo
         z_bottom_m=bottom - z_shift,
         surface_m=surface - z_shift,
         gap0_m=surface - top,
-        neighbors=_neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m),
+        neighbors=neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m),
         driven=driven,
         midsole_mesh_path=str(base / config["midsole_mesh"]),
         z_shift_m=z_shift,
         indenter_shift_m=indenter_shift,
         thickness_axis=int(grid.thickness_axis),
     )
-
-
-def _build_rearfoot_geometry(config: dict, base: Path, grid, source: dict, mesh_path: str) -> FoundationGeometry:
-    """Sample the whole midsole for the rearfoot fixture and drive the punch footprint.
-
-    The rearfoot test drives a rigid ``radius_m`` punch straight down onto the
-    heel. Both fixtures retain the same mesh-derived outsole and rest top.
-    Anchoring each driven top at its own rest height preserves the calibration's
-    uniform-shortening assumption: a vertical carrier descent ``d`` gives each
-    disc column compression ``d`` without flattening the shoe geometry. This
-    reduced loading map is not a gap-aware collision solve against a flat punch.
-
-    The midsole outside the disc is kept and reported as undriven. Its tributary
-    area is the grid cell area, which is also the area the identification gives
-    every column of a surround trial, so the summed reaction matches the fit.
-    """
-    radius = float(source["indenter"]["radius_m"])
-    center = rearfoot_center(
-        load_mesh(base / config["midsole_mesh"], 0.001), grid, config["grid"]["rearfoot_length_fraction"]
-    )
-    driven = np.linalg.norm(grid.uv_m - center, axis=1) <= radius
-    slack = np.asarray(grid.slack_m, dtype=float)
-    bottom = np.asarray(grid.bottom_m, dtype=float)
-    top = np.asarray(grid.top_m, dtype=float)
-    z_shift = float(np.min(bottom))
-    count = len(slack)
-    return FoundationGeometry(
-        uv_m=np.asarray(grid.uv_m, dtype=float),
-        slack_m=slack,
-        area_m2=float(grid.area_m2),
-        spacing_m=grid.spacing_m,
-        z_free_m=top - z_shift,
-        z_bottom_m=bottom - z_shift,
-        surface_m=top - z_shift,
-        gap0_m=np.zeros(count, dtype=np.float64),
-        neighbors=_neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m),
-        driven=driven,
-        midsole_mesh_path=mesh_path,
-        z_shift_m=z_shift,
-        indenter_shift_m=0.0,
-        thickness_axis=int(grid.thickness_axis),
-    )
-
-
-def _neighbor_indices(uv: np.ndarray, grid_uv: np.ndarray, spacing: float) -> np.ndarray:
-    """Return the Pasternak 4-neighbour index table for the active columns.
-
-    Each of the four in-plane neighbours (-u, +u, -v, +v) is a non-negative
-    active-column index, ``-1`` for a footprint boundary, or ``-2`` for a midsole
-    cell outside the active set. Both negative codes are free (zero-gradient)
-    edges that carry no lateral coupling, so the shear layer redistributes load
-    without creating it. See :meth:`projects.digital_shoe.runtime.foundation_apply`.
-    """
-    cells = [tuple(np.rint(p / spacing).astype(int)) for p in uv]
-    index = {c: i for i, c in enumerate(cells)}
-    full = {tuple(np.rint(p / spacing).astype(int)) for p in grid_uv}
-    out = np.full((len(cells), 4), -2, dtype=np.int32)
-    for i, (u, v) in enumerate(cells):
-        for side, (du, dv) in enumerate(((-1, 0), (1, 0), (0, -1), (0, 1))):
-            c = (u + du, v + dv)
-            if c in index:
-                out[i, side] = index[c]
-            elif c not in full:
-                out[i, side] = -1
-    return out
-
-
-def load_fitted_material(manifest_path: str | Path) -> Material:
-    """Load the fitted artifact or the checked-in calibrated prediction baseline."""
-    path = Path(manifest_path).resolve()
-    config = json.loads(path.read_text())
-    artifact = path.parent / config["cache_dir"] / "digital_instron_material.json"
-    if artifact.exists():
-        values = json.loads(artifact.read_text())["material"]
-        return Material(
-            values["instantaneous_shear_modulus_pa"],
-            values["hyperfoam_exponent"],
-            values["equilibrium_fraction"],
-            values["maxwell_relaxation_time_s"],
-            # Single-term artifacts predate the second Ogden-Hill term and leave
-            # it disabled, which reproduces their law exactly.
-            values.get("instantaneous_shear_modulus_2_pa", 0.0),
-            values.get("hyperfoam_exponent_2", 1.0),
-        )
-    return CALIBRATED_MATERIAL
 
 
 def load_measured_cycle(
@@ -319,6 +178,64 @@ def synthetic_stride(peak_depth_m: float, pitch_deg: float, roll_length_m: float
         return pos, rot
 
     return pose
+
+
+def quat_multiply(a, b) -> np.ndarray:
+    """Multiply two XYZW quaternions and retain the scenario's float32 output."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return np.array(
+        [
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+            aw * bw - ax * bx - ay * by - az * bz,
+        ],
+        dtype=np.float32,
+    )
+
+
+def quat_conjugate(a) -> np.ndarray:
+    """Return the conjugate of an XYZW quaternion as float32."""
+    return np.array([-a[0], -a[1], -a[2], a[3]], dtype=np.float32)
+
+
+@wp.func
+def attachment_pd_wrench(
+    pose: wp.transform,
+    velocity: wp.spatial_vector,
+    target: wp.transform,
+    target_velocity: wp.spatial_vector,
+    kp_lin: float,
+    kd_lin: float,
+    kp_ang: float,
+    kd_ang: float,
+    max_force: float,
+) -> tuple[wp.vec3, wp.vec3]:
+    """Return the scenarios' existing clamped attachment force and moment [N, N·m].
+
+    Both poses use the same body-origin/COM convention as the original examples.
+    The adapters own target indexing and accumulation, not a second PD law.
+    """
+    pos = wp.transform_get_translation(pose)
+    rot = wp.transform_get_rotation(pose)
+    target_pos = wp.transform_get_translation(target)
+    target_rot = wp.transform_get_rotation(target)
+    e_p = target_pos - pos
+    q_err = target_rot * wp.quat_inverse(rot)
+    if q_err[3] < 0.0:
+        q_err = wp.quat(-q_err[0], -q_err[1], -q_err[2], -q_err[3])
+    e_r = 2.0 * wp.vec3(q_err[0], q_err[1], q_err[2])
+    v = wp.spatial_top(velocity)
+    w = wp.spatial_bottom(velocity)
+    tv = wp.spatial_top(target_velocity)
+    tw = wp.spatial_bottom(target_velocity)
+    force = kp_lin * e_p + kd_lin * (tv - v)
+    moment = kp_ang * e_r + kd_ang * (tw - w)
+    mag = wp.length(force)
+    if mag > max_force and mag > 1.0e-9:
+        force = force * (max_force / mag)
+    return force, moment
 
 
 @wp.kernel

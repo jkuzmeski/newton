@@ -15,7 +15,7 @@ from unittest.mock import patch
 import numpy as np
 import warp as wp
 
-from projects.digital_instron_v2 import example, geometry, scenario_common, scenarios_diff
+from projects.digital_instron_v2 import dynamics, example, geometry
 from projects.digital_shoe import rendering, showcase
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,7 +38,7 @@ def _import_names(path: Path):
 @wp.kernel
 def _pd_probe(force: wp.array[wp.vec3], moment: wp.array[wp.vec3], limit: float, sign: float):
     target = wp.transform(wp.vec3(1.1, 1.8, 3.2), sign * wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), 0.2))
-    f, m = scenario_common.attachment_pd_wrench(
+    f, m = dynamics.attachment_pd_wrench(
         wp.transform(wp.vec3(1.0, 2.0, 3.0), wp.quat_identity()),
         wp.spatial_vector(wp.vec3(0.1, 0.2, 0.3), wp.vec3(0.0, 0.2, 0.0)),
         target,
@@ -58,24 +58,13 @@ class TestSharedProjectHelpers(unittest.TestCase):
         """Use one helper object instead of independent camera or quaternion copies."""
         self.assertIs(example._look_at, showcase._look_at)
         self.assertIs(example._look_at, rendering.camera_look_at)
-        self.assertIs(example._quat_mul, scenarios_diff._quat_mul)
-        self.assertIs(example._quat_mul, scenario_common.quat_multiply)
-        self.assertIs(example._quat_inv, scenarios_diff._quat_inv)
+        self.assertIs(example._quat_mul, dynamics.quat_multiply)
+        self.assertIs(example._quat_inv, dynamics.quat_conjugate)
         position, pitch, yaw = rendering.camera_look_at([1, 0, 0], [0, 0, 0])
         np.testing.assert_array_equal(np.asarray(position), [1.0, 0.0, 0.0])
         self.assertEqual(pitch, 0.0)
         self.assertEqual(abs(yaw), 180.0)
         np.testing.assert_array_equal(example._quat_mul([0, 0, 0, 1], [1, 2, 3, 4]), np.array([1, 2, 3, 4], np.float32))
-
-    def test_shared_surround_preserves_explicit_local_settings(self):
-        """Keep scenario-level settings overridable without copying a factory body."""
-        driven = np.array([1, 0], np.int32)
-        with patch.object(scenarios_diff, "SURROUND_SWEEPS", 9):
-            config = scenarios_diff.default_surround(driven, carrier_bond=False)
-        self.assertEqual(config.sweeps, 9)
-        np.testing.assert_array_equal(config.driven, driven)
-        self.assertFalse(config.carrier_bond)
-        self.assertEqual(config.attachment_n_m, 0.0)
 
     def test_shared_pd_preserves_clamp_and_quaternion_sign(self):
         """Retain original PD force, moment, clamp and equivalent-quaternion behavior."""
@@ -105,11 +94,6 @@ class TestSharedProjectHelpers(unittest.TestCase):
         np.testing.assert_allclose(origins, [[0.2, 0.4, 0.29], [-0.1, 0.8, 0.29]], atol=1e-15)
         np.testing.assert_array_equal(directions, [[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]])
 
-    def test_unused_normal_readout_is_gone_but_legacy_shear_is_explicit(self):
-        """Remove the dead recomputation without deleting an explicit compatibility helper."""
-        self.assertFalse(hasattr(scenarios_diff, "_ground_reaction_force"))
-        self.assertTrue(hasattr(scenarios_diff, "_shear_reaction_force"))
-
 
 class TestProjectDependencyBoundaries(unittest.TestCase):
     def test_portable_shoe_has_no_controller_or_fitter_dependency(self):
@@ -117,6 +101,7 @@ class TestProjectDependencyBoundaries(unittest.TestCase):
         runtime_modules = (
             "__init__",
             "artifact",
+            "column_bed",
             "runtime",
             "material",
             "contact",
@@ -124,13 +109,8 @@ class TestProjectDependencyBoundaries(unittest.TestCase):
             "provenance",
             "friction_law",
             "friction_deflection",
-            "friction_stribeck",
-            "friction_pressure",
-            "friction_slip_history",
             "friction_maxwell",
-            "friction_parameter_adapter",
             "friction_solver",
-            "friction_adapter",
         )
         for module in runtime_modules:
             path = ROOT / "projects" / "digital_shoe" / f"{module}.py"
@@ -146,7 +126,7 @@ class TestProjectDependencyBoundaries(unittest.TestCase):
         self.assertIn(base / "__main__.py", files)
         self.assertIn(base / "hogan" / "runner.py", files)
         retired = {"legacy", "simple", "paper", "joint_space"}
-        retired_modules = {"projects.impedance_instron.pipeline"}
+        retired_modules = {"projects.impedance_instron.pipeline", "projects.impedance_instron.cartesian.gpu"}
         retired_modules.update(
             f"projects.impedance_instron.cartesian.{name}"
             for name in (
@@ -181,7 +161,6 @@ class TestProjectDependencyBoundaries(unittest.TestCase):
                 "identify.fit",
             )
         )
-        gpu_package = "projects.impedance_instron.cartesian.gpu"
         for path in files:
             for module in _import_names(path):
                 location = (path.relative_to(base), module)
@@ -189,11 +168,6 @@ class TestProjectDependencyBoundaries(unittest.TestCase):
                 self.assertFalse(
                     any(module == old or module.startswith(old + ".") for old in retired_modules), location
                 )
-                if module.startswith(gpu_package + "."):
-                    self.assertTrue(
-                        module == gpu_package + ".foundation" or module.startswith(gpu_package + ".foundation."),
-                        location,
-                    )
 
     def test_dependency_scan_resolves_relative_from_import_aliases(self):
         """Expose module aliases that would otherwise hide retired relative imports."""

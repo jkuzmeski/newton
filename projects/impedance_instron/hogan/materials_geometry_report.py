@@ -524,7 +524,6 @@ def qualify(run, ids, summaries, evidence):
                     run / "materials" / f"{condition_id}.json",
                     spec["mount_m"],
                     spec["pitch_rad"],
-                    friction_model=spec["friction_model"],
                 )
             ankle = chain.point(q, 3, np.zeros(2))[0]
             clearances[condition_id] = float(shoes[condition_id].outline(ankle, chain.angle(q, 3))[:, 1].min())

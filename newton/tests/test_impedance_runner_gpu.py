@@ -3,21 +3,19 @@
 
 """Qualify target-free CUDA candidate rollouts against the CPU runner."""
 
+import json
 import math
 import tempfile
 import unittest
-from copy import deepcopy
 from dataclasses import replace
-from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 import warp as wp
 
 from newton.tests.test_impedance_hogan import _chain, _tiny_shoe
-from projects.digital_shoe.runtime import MidsoleFoundation, SurroundConfig
 from projects.impedance_instron.cartesian.shoe import Shoe
-from projects.impedance_instron.hogan import gpu_runner
 from projects.impedance_instron.hogan.gpu_runner import GpuBatch
 from projects.impedance_instron.hogan.identify import Trial, score
 from projects.impedance_instron.hogan.runner import Bounds, RolloutConfig, Runner, State, Task, simulate
@@ -83,8 +81,8 @@ class TestRunnerGpu(unittest.TestCase):
                 if name == "torque_saturated":
                     np.testing.assert_array_equal(trace[name], reference[name])
                 else:
-                    # Identical Shoe.apply poses already differ by ~5e-5 N on
-                    # CPU/CUDA for the pitched legacy fixture (float32 law).
+                    # Host-staged and device-staged carrier poses round differently
+                    # to float32 before the column bed sees them.
                     tolerance = 1e-4 if name == "grf_n" else 2e-5
                     np.testing.assert_allclose(trace[name], reference[name], rtol=2e-5, atol=tolerance)
         for name, value in info.items():
@@ -196,7 +194,7 @@ class TestRunnerGpu(unittest.TestCase):
     def test_mixed_exact_timesteps_durations_and_shoes(self):
         """Use each adjusted timestep for both the shoe and chain without rounding."""
         models = _models()
-        shifted = Shoe(self.shoe.artifact_path, [0.005, 0, 0.102], 0.01, friction_model="legacy")
+        shifted = Shoe(self.shoe.artifact_path, [0.005, 0, 0.102], 0.01)
         initials = [_initial() for _ in range(4)]
         durations = [0.00305, 0.0031, 0.0062, 0.00305]
         shoes = [self.shoe, self.shoe, self.shoe, shifted]
@@ -230,7 +228,7 @@ class TestRunnerGpu(unittest.TestCase):
             (fast, self.cfg, "Numerical speed screen exceeded"),
             (falling, replace(self.cfg, minimum_hip_height_m=0.91), "Integrated state exceeded height/speed screen"),
             (valid, replace(self.cfg, maximum_force_n=0.001), "Contact force screen exceeded"),
-            (valid, replace(self.cfg, compression_limit=0.001), "Driven shoe compression screen exceeded"),
+            (valid, replace(self.cfg, compression_limit=0.001), "Held shoe compression screen exceeded"),
         ]
         for initial, cfg, reason in cases:
             with self.subTest(reason=reason):
@@ -277,34 +275,22 @@ class TestRunnerGpu(unittest.TestCase):
         for name in trace:
             np.testing.assert_array_equal(repeated[0][name], trace[name])
 
-    def test_passive_shoe_history_and_runtime_material(self):
-        """Preserve passive sweeps, shoe settings, runtime material, and reset isolation."""
-        shoe = Shoe(self.shoe.artifact_path, [0, 0, 0.1], 0, friction_model="legacy")
-        bed = shoe.shoe.column_bed
-        config = replace(shoe.foundation.config, normal_damping=0.2, mu=0.4)
-        shoe.foundation = MidsoleFoundation(
-            shoe.anchor_local_m,
-            np.zeros(2),
-            bed.rest_length_m,
-            bed.area_m2,
-            bed.neighbors,
-            bed.spacing_m,
-            shoe.shoe.material,
-            0,
-            shoe.model.body_com,
-            config,
-            shoe.device,
-            SurroundConfig(driven=np.array([1, 0]), carrier_bond=True, sweeps=3, relaxation_time_s=0.002),
-        )
-        material = deepcopy(shoe.shoe.material)
-        material = replace(material, maxwell_relaxation_time_s=material.maxwell_relaxation_time_s * 1.5)
-        shoe.foundation.set_world_material(0, material)
+    def test_free_margin_reset_isolation_and_warm_graph(self):
+        """Match a shoe with a free outer column, leave the source shoe untouched, and replay a warm graph."""
+        raw = json.loads(self.shoe.artifact_path.read_text())
+        bed = raw["column_bed"]
+        bed["anchor_bottom_m"].append([0.02, 0, 0])
+        bed["rest_length_m"].append(0.02)
+        bed["area_m2"].append(0.0001)
+        bed["neighbors"] = [[1, -1, -1, -1], [0, 2, -1, -1], [1, -1, -1, -1]]
+        path = Path(self.directory.name) / "margin.json"
+        path.write_text(json.dumps(raw))
+        shoe = Shoe(path, [0, 0, 0.1], 0)
         models, initial = _models(), _initial()
         batch = self.batch([initial], [0.008], models, shoes=[shoe])
-        before = shoe.foundation.q_state.numpy().copy()
         first = batch.evaluate(models)
-        np.testing.assert_array_equal(shoe.foundation.q_state.numpy(), before)
-        self.assertGreater(float(batch._groups[0].foundation.surround_compression.numpy().max()), 0)
+        np.testing.assert_array_equal(shoe.bed.column_state("compression"), 0)
+        self.assertGreater(float(batch._groups[0].bed.column_state("compression")[:, 2].max()), 0)
         for c, model in enumerate(models):
             expected = simulate(model, self.chain, shoe, initial, Task(0.3), duration_s=0.008, config=self.cfg)
             self.assertParity(first[c][0], expected)
@@ -318,175 +304,6 @@ class TestRunnerGpu(unittest.TestCase):
         for c in range(len(models)):
             for name in first[c][0][0]:
                 np.testing.assert_array_equal(first[c][0][0][name], repeated[c][0][0][name])
-
-    def _grid_shoe(self):
-        """Replace the tiny bed with a 600-column elastic-Coulomb bed and a passive rim."""
-        shoe = Shoe(self.shoe.artifact_path, [0, 0, 0.1], 0.0)
-        x, y = np.meshgrid((np.arange(30) - 14.5) * 0.005, (np.arange(20) - 9.5) * 0.005)
-        anchors = np.column_stack((x.ravel(), y.ravel(), np.full(x.size, -0.1)))
-        rest = 0.02 + 0.001 * np.sin(np.arange(x.size))
-        neighbors = np.full((x.size, 4), -1, dtype=np.int32)
-        index = np.arange(x.size).reshape(x.shape)
-        neighbors[index[:, 1:].ravel(), 0] = index[:, :-1].ravel()
-        neighbors[index[:, :-1].ravel(), 1] = index[:, 1:].ravel()
-        neighbors[index[1:, :].ravel(), 2] = index[:-1, :].ravel()
-        neighbors[index[:-1, :].ravel(), 3] = index[1:, :].ravel()
-        driven = ((np.abs(anchors[:, 0]) < 0.05) & (np.abs(anchors[:, 1]) < 0.03)).astype(np.int32)
-        material = shoe.shoe.material
-        shoe.foundation = MidsoleFoundation(
-            anchors,
-            np.zeros(x.size),
-            rest,
-            np.full(x.size, 2.5e-5),
-            neighbors,
-            0.005,
-            material,
-            0,
-            shoe.model.body_com,
-            shoe.foundation.config,
-            shoe.device,
-            SurroundConfig(driven=driven, carrier_bond=True),
-        )
-        shoe.foundation.reset()
-        shoe.shoe = SimpleNamespace(column_bed=SimpleNamespace(rest_length_m=rest, spacing_m=0.005), material=material)
-        return shoe
-
-    def test_lean_ground_shoe_matches_generic_fused_foundation(self):
-        """Match generic fused-foundation traces bitwise with the lean elastic-Coulomb kernels.
-
-        The 600-column bed spans several contact rows per lane and a passive
-        surround, and one stance starts in flight so the pristine-shoe skip runs
-        before touchdown.
-        """
-        shoe, models = self._grid_shoe(), _models()
-        flight = _initial()
-        flight.q[1] += 0.004
-        initials = [flight, _initial()]
-        lean = self.batch(initials, [0.012, 0.012], models, shoes=[shoe, shoe])
-        self.assertIsNotNone(lean._groups[0].lean)
-        self.assertTrue(lean._groups[0].lean.fused_surround)
-        with patch.object(gpu_runner, "ground_shoe", return_value=None):
-            generic = self.batch(initials, [0.012, 0.012], models, shoes=[shoe, shoe])
-        self.assertIsNone(generic._groups[0].lean)
-        expected, actual = generic.evaluate(models), lean.evaluate(models)
-        for c in range(len(models)):
-            for s in range(len(initials)):
-                for name, values in expected[c][s][0].items():
-                    np.testing.assert_array_equal(actual[c][s][0][name], values, err_msg=name)
-                self.assertEqual(actual[c][s][1], expected[c][s][1])
-            grf = actual[c][0][0]["grf_n"][:, 1]
-            # The flight stance begins with an exactly zero, skipped shoe and then lands.
-            self.assertEqual(grf[0], 0.0)
-            self.assertGreater(grf.max(), 1.0)
-
-    def test_lifted_shoe_replays_skipped_history_on_recontact(self):
-        """Skip airborne steps after contact and replay them bitwise before landing again.
-
-        Prescribed carrier poses press, lift, and re-press a 600-column bed in
-        staggered worlds, so pristine, active, lifted, and waking worlds coexist
-        in one launch. Wrenches, compression screens, and every shoe history match
-        the generic fused foundation at each step.
-        """
-        shoe, models = self._grid_shoe(), _models()
-        initials = [_initial() for _ in range(3)]
-        lean = self.batch(initials, [0.01] * 3, models, shoes=[shoe] * 3)
-        with patch.object(gpu_runner, "ground_shoe", return_value=None):
-            generic = self.batch(initials, [0.01] * 3, models, shoes=[shoe] * 3)
-        groups = lean._groups[0], generic._groups[0]
-        worlds = groups[0].world_count
-        for group in groups:
-            group.set_models(models)
-            group._reset()
-        names = ("q_state", "peq_prev", "surround_compression", "tangent_deflection", "tangent_stuck", "tangent_dwell")
-        phases = set()
-        for step in range(90):
-            poses = np.zeros((worlds, 7), dtype=np.float32)
-            twists = np.zeros((worlds, 6), dtype=np.float32)
-            for w in range(worlds):
-                # Pristine flight, pressed, lifted 8 mm, then pressed again, staggered per world.
-                airborne = step < 2 * w or 25 + 3 * w <= step < 55 + 2 * w
-                height = 0.108 if airborne else 0.097 - 0.00002 * step
-                half = 0.02 * np.sin(0.1 * step + w)
-                poses[w] = [0.001 * step, 0.0, height, 0.0, -np.sin(half), 0.0, np.cos(half)]
-                twists[w] = [0.3 + 0.05 * w, 0.0, -0.02, 0.0, 0.4, 0.0]
-            screens = []
-            for group in groups:
-                group.carriers.body_q.assign(poses)
-                group.carriers.body_qd.assign(twists)
-                if group.lean is not None:
-                    gpu_runner.apply_ground_shoe(
-                        group.foundation,
-                        group.lean,
-                        group.carriers,
-                        group.data.fraction,
-                        group.data.invalid_compression,
-                    )
-                else:
-                    group.foundation.apply(group.carriers, None, clear_body_force=True)
-                    wp.launch_tiled(
-                        gpu_runner._compression,
-                        dim=worlds,
-                        block_dim=32,
-                        inputs=[
-                            group.foundation.column_count,
-                            group.driven,
-                            group.rest,
-                            group.foundation.compression,
-                            group.data,
-                        ],
-                    )
-                screens.append((group.carriers.body_f.numpy(), group.data.fraction.numpy()))
-            phase = groups[0].lean.phase.numpy()
-            phases.update(phase.tolist())
-            np.testing.assert_array_equal(screens[0][0], screens[1][0], err_msg=f"wrench, step {step}")
-            np.testing.assert_array_equal(screens[0][1], screens[1][1], err_msg=f"screen, step {step}")
-            if not np.any(phase == 2):
-                # Lifted worlds defer their history until they wake.
-                for name in names:
-                    np.testing.assert_array_equal(
-                        getattr(groups[0].foundation, name).numpy(),
-                        getattr(groups[1].foundation, name).numpy(),
-                        err_msg=f"{name}, step {step}",
-                    )
-        self.assertEqual(phases, {0, 1, 2})
-        self.assertTrue(np.all(groups[0].lean.phase.numpy() == 1))
-        self.assertGreater(np.abs(groups[0].carriers.body_f.numpy()[:, 2]).min(), 1.0)
-
-    def test_fast_math_shoe_tracks_exact_kernels(self):
-        """Keep fast-math shoe wrenches and compression screens within float32 rounding of the exact kernels."""
-        shoe, models = self._grid_shoe(), _models()
-        initials = [_initial() for _ in range(2)]
-        groups = [self.batch(initials, [0.01] * 2, models, shoes=[shoe] * 2)._groups[0] for _ in range(2)]
-        for group in groups:
-            self.assertIsNotNone(group.lean)
-            group.set_models(models)
-            group._reset()
-        worlds = groups[0].world_count
-        for step in range(60):
-            poses = np.zeros((worlds, 7), dtype=np.float32)
-            twists = np.zeros((worlds, 6), dtype=np.float32)
-            for w in range(worlds):
-                half = 0.02 * np.sin(0.1 * step + w)
-                poses[w] = [0.001 * step, 0.0, 0.098 - 0.00003 * step, 0.0, -np.sin(half), 0.0, np.cos(half)]
-                twists[w] = [0.3 + 0.05 * w, 0.0, -0.03, 0.0, 0.4, 0.0]
-            results = []
-            for group, fast_math in zip(groups, (False, True), strict=True):
-                group.carriers.body_q.assign(poses)
-                group.carriers.body_qd.assign(twists)
-                gpu_runner.apply_ground_shoe(
-                    group.foundation,
-                    group.lean,
-                    group.carriers,
-                    group.data.fraction,
-                    group.data.invalid_compression,
-                    fast=fast_math,
-                )
-                results.append((group.carriers.body_f.numpy(), group.data.fraction.numpy()))
-            (exact, exact_fraction), (fast, fast_fraction) = results
-            scale = np.abs(exact).max()
-            np.testing.assert_allclose(fast, exact, rtol=0.0, atol=1e-4 * scale, err_msg=f"wrench, step {step}")
-            np.testing.assert_allclose(fast_fraction, exact_fraction, rtol=0.0, atol=1e-4, err_msg=f"step {step}")
-        self.assertGreater(scale, 1.0)
 
     def test_validation_and_group_bound(self):
         """Reject invalid batches and initial torques before launching candidates."""

@@ -8,18 +8,22 @@ import json
 import os
 import tempfile
 import unittest
+from dataclasses import asdict
 from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from projects.digital_instron_v2.export_digital_shoe import build_artifact
-from projects.digital_instron_v2.phase1 import evaluate
+import numpy as np
+import warp as wp
+
+from projects.digital_instron_v2 import export_digital_shoe
+from projects.digital_instron_v2.core import CALIBRATED_MATERIAL
+from projects.digital_instron_v2.registration import load_last, register_last
+from projects.digital_instron_v2.sweep_fit import DEFAULT_LAST, load_grid
 from projects.digital_shoe.acquisition import validate_acquisition_manifest
 from projects.digital_shoe.artifact import load_artifact, validate_artifact
 from projects.digital_shoe.report import render_html
 from projects.digital_shoe.showcase import Example
-
-MANIFEST = Path("DigitalInstron/manifest_v2.json")
 
 
 def _tiny_artifact() -> dict:
@@ -193,32 +197,53 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overlap"):
             validate_acquisition_manifest(leaked)
 
-    def test_exports_whole_bed_without_absolute_paths(self):
-        """Export all shoe columns, fixture mappings, held-out curves, and portable provenance."""
-        report = evaluate(MANIFEST, evaluations=10, write_report=False)
-        artifact = build_artifact(MANIFEST, report, shoe_id="test_shoe")
+    @unittest.skipUnless(wp.is_cuda_available(), "the validation replay needs CUDA")
+    def test_exports_fitted_shoe_without_absolute_paths(self):
+        """Export the shoe grid, fitted material, registered last and held-out replay as a portable artifact."""
+        shoe = Path("DigitalInstron/puma-fast-r-nitro-elite-3")
+        grid = load_grid(shoe / "left" / "column_grid.npz")
+        registration = register_last(grid, load_last(DEFAULT_LAST), modulus_pa=5.0e5, preload_n=20.0)
+        preload = {"modulus_pa": 5.0e5, "preload_n": 20.0}
+        fit = {
+            "shoe": shoe.name,
+            "side": "left",
+            "sweep": "synthetic",
+            "material": asdict(CALIBRATED_MATERIAL),
+            "registration": {"pose": registration.pose, "qc": {"preload": preload}},
+            "conditions": {},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "material_fit.json").write_text(json.dumps(fit))
+            condition = {"stance_ms": 200, "target_n": 800, "role": "condition", "validate_path": "validate.csv"}
+            (root / "conditions.json").write_text(json.dumps({"conditions": [condition]}))
+            time_s = np.arange(501) * 1.0e-3
+            displacement = 0.004 * np.sin(np.pi * time_s / time_s[-1])
+            np.savetxt(
+                root / "validate.csv",
+                np.column_stack((time_s, displacement, 2.0e5 * displacement)),
+                delimiter=",",
+                header="time_s,displacement_m,force_n",
+                comments="",
+            )
+            with patch.object(export_digital_shoe, "register_last", return_value=registration):
+                artifact = export_digital_shoe.build_artifact(shoe, root / "material_fit.json", root)
         validate_artifact(artifact)
-        self.assertEqual(artifact["column_bed"]["column_count"], 910)
-        self.assertEqual(artifact["instron_fixtures"]["fullfoot_last"]["column_count"], 611)
-        self.assertGreater(artifact["visual_meshes"]["midsole"]["vertex_count"], 7000)
-        self.assertGreater(artifact["visual_meshes"]["fullfoot_last"]["vertex_count"], 7000)
-        # The export must publish the gate outcome, whatever it is. Pinning a value here
-        # made a 10-evaluation smoke fit assert a physics result: with the corrected
-        # mechanics that short fit now passes, and the real outcome is the refit artifact's.
-        gates = artifact["identification"]["gates"]
-        self.assertIsInstance(artifact["identification"]["passed_all_declared_gates"], bool)
-        for prefix in ("rearfoot", "fullfoot"):
-            for gate in ("peak_force_error", "force_rmse_relative", "hysteresis_error"):
-                self.assertIn(f"{prefix}_{gate}", gates)
-        self.assertEqual(
-            artifact["identification"]["passed_all_declared_gates"],
-            all(gate["passed"] for gate in gates.values()),
-        )
+        bed = np.asarray(artifact["column_bed"]["anchor_bottom_m"])
+        fixture = artifact["instron_fixtures"]["fullfoot_last"]
+        self.assertEqual(len(bed), len(grid.slack_m))
+        self.assertEqual(fixture["column_count"], int(np.isfinite(registration.surface_m).sum()))
+        self.assertEqual(bed[:, 2].min(), 0.0)
+        # The baked last bottoms out on the first-contact surface the fixture records.
+        last = np.asarray(artifact["visual_meshes"]["fullfoot_last"]["vertices_m"])
+        anchors = np.asarray(fixture["carrier_anchor_m"])
+        self.assertAlmostEqual(last[:, 2].min(), anchors[:, 2].min(), delta=1.0e-3)
+        (curve,) = artifact["validation"]["curves"]
+        self.assertEqual(curve["name"], "200ms_800N")
+        self.assertGreater(max(curve["predicted_force_n"]), 0.0)
         encoded = json.dumps(artifact, sort_keys=True)
         self.assertNotIn(str(Path.cwd()), encoded)
-        roles = {item["role"] for item in artifact["provenance"]["source_files"]}
-        self.assertIn("rearfoot_140ms_raw_measurement", roles)
-        self.assertIn("fullfoot_185ms_raw_measurement", roles)
+        self.assertNotIn(directory, encoded)
 
 
 class TestDigitalShoeRendering(unittest.TestCase):
@@ -229,14 +254,14 @@ class TestDigitalShoeRendering(unittest.TestCase):
             Example.render(example)
         example.viewer.log_mesh.assert_not_called()
         example.viewer.log_lines.assert_called_once_with(
-            "digital_shoe/columns", example._fixed_bottom, example._points, example._colors, width=0.003
+            "digital_shoe/columns", example._bottoms, example._tops, example._colors, width=0.003
         )
         self.assertEqual(example.viewer.log_points.call_count, 2)
         example.viewer.log_points.assert_any_call(
-            "digital_shoe/spring_bases", example._fixed_bottom, radii=0.0025, colors=example._colors
+            "digital_shoe/spring_bases", example._bottoms, radii=0.0025, colors=example._colors
         )
         example.viewer.log_points.assert_any_call(
-            "digital_shoe/spring_tops", example._points, radii=0.0025, colors=example._colors
+            "digital_shoe/spring_tops", example._tops, radii=0.0025, colors=example._colors
         )
         example.viewer.log_state.assert_called_once_with(example.state_0)
 

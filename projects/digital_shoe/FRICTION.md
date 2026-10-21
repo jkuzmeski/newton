@@ -5,17 +5,15 @@ SPDX-License-Identifier: Apache-2.0
 
 # Friction-only Digital Shoe mechanics
 
-> **Current default:** `FoundationConfig` uses area-scaled `elastic_coulomb`
-> friction. Maxwell shear and the previous anchored-bristle law remain explicit
-> options. See [FRICTION_COLUMN.md](FRICTION_COLUMN.md) for the column-derived models.
+> **Live shoe friction:** the column bed (`column_bed.ColumnBed`) always uses
+> area-scaled elastic Coulomb friction
+> (`friction_maxwell.bristle_elastic_coulomb_step`). The solver modes below are a
+> standalone research comparison run by the `friction` example; they do not
+> attach to the column bed.
 
-This investigation evaluates tangential friction models while leaving the
-accepted normal compression, material, and contact mechanics unchanged. It
-does not refit the two-term foam model, alter the passive surround, replace
-normal support, or enable another collision response. The shared runtime selects
-area-scaled elastic Coulomb friction by default.
-Choose `FoundationConfig(friction_model="legacy")` for the previous anchored-bristle
-behavior. Explicit solver adapters remain available for diagnostic comparisons.
+This investigation evaluates tangential friction models under prescribed normal
+loading. It does not refit the two-term foam model, replace normal support, or
+enable another collision response.
 
 ## Five tangential solver modes
 
@@ -78,8 +76,6 @@ mathematically non-idempotent: $g(r) < r$ causes spurious numerical relaxation/c
 toward $C \cdot (1 - w)$ at a rate dictated by the simulation time step $\Delta t$.
 Therefore:
 - `yield_width` must be strictly `0.0` in all production simulations, sweeps, and fits.
-- `FrictionParameterAdapter` explicitly enforces `yield_width == 0.0` and rejects
-  nonzero values.
 - The mathematical formulation is retained solely as an unsupported reference.
 
 ### Coupled solve mechanics
@@ -100,52 +96,6 @@ Jacobians and a pivoted $6 \times 6$ linear solve with backtracking line search.
 History is updated once after the fixed iteration budget. Inspect the returned residual;
 convergence is not guaranteed for every input.
 
-## Experimental Stribeck constitutive law
-
-`friction_stribeck.py` implements an experimental velocity-dependent Coulomb cap
-for exploratory parameter fitting:
-
-$$\mu(v) = \mu_{\text{dynamic}} + (\mu_{\text{static}} - \mu_{\text{dynamic}}) \exp\left(-\frac{\|v\|^2}{v_s^2}\right)$$
-
-where $\mu_{\text{static}} \ge \mu_{\text{dynamic}} \ge 0$ and $v_s > 0$ is
-the transition velocity. The law delegates state advance and radial return to
-`bristle_deflection_step` with $\mu = \mu_{\text{eff}}$ and $w = 0.0$, adding the
-analytic velocity chain-rule derivative $\frac{\partial F}{\partial C} \frac{\partial C}{\partial v}$.
-
-The constitutive law remains available through `FrictionParameterAdapter`, but
-the old free-leg parameter-search experiment has been retired. This law is not an
-independent calibration of outsole speed dependence.
-
-## Integration with MidsoleFoundation
-
-```python
-from projects.digital_shoe import FrictionAdapter, MidsoleFoundation
-
-# Attach the adapter to an existing MidsoleFoundation instance
-friction = FrictionAdapter(
-    foundation,
-    mobility=mobility,  # wp.array[wp.spatial_matrix], shape [world_count]
-    mode="implicit_deflection",  # or "deflection", "implicit_bristle", "regularized"
-    iterations=8,
-)
-
-# Supply the actual constrained/articulated COM mobility, not a visual carrier mass.
-# Zero mobility denotes prescribed motion. Do not apply both result velocity and wrench.
-# Advance foundation normally: normal mechanics execute first, followed by friction dispatch
-foundation.apply(state, dt)
-
-# Access forces, predicted velocities, and residuals
-result = friction.result
-
-# Restore the foundation's configured friction path
-friction.detach()
-```
-
-The adapter redirects legacy tangential anchor arrays to zero stiffness and
-scratch buffers, runs the unmodified normal kernels, and executes the tangential
-solve before wrench reduction. Stored vertical compression, Pasternak neighbor
-shear, Maxwell relaxation states, and contact points are preserved untouched.
-
 ## Runnable CLI examples
 
 ### Synthetic multi-mode demonstration
@@ -161,5 +111,4 @@ uv run --no-sync -m projects.digital_shoe friction --mode deflection --viewer gl
 ```
 
 The standalone demonstration does not require a controller, gait reference, or
-saved leg rollout. For shared per-world parameter schemas and calibration limits,
-see [FRICTION_IDENTIFICATION.md](FRICTION_IDENTIFICATION.md).
+saved leg rollout.

@@ -65,12 +65,10 @@ def _svg(curve: dict, *, domain: str) -> str:
 </g></svg>"""
 
 
-def _fixture_label(curve: dict) -> str:
-    """Use readable fixture names while retaining unknown trial names."""
-    return {
-        "rearfoot_punch": "Rearfoot punch",
-        "fullfoot_last": "Full-foot last",
-    }.get(curve.get("fixture"), curve["name"])
+def _curve_label(curve: dict) -> str:
+    """Name a curve by its fixture and trial; unknown fixtures show the trial alone."""
+    fixture = {"rearfoot_punch": "Rearfoot punch", "fullfoot_last": "Full-foot last"}.get(curve.get("fixture"))
+    return f"{fixture}, {curve['name']}" if fixture else curve["name"]
 
 
 def _percent(value: float) -> str:
@@ -84,7 +82,7 @@ def _metric_rows(curves: Iterable[dict]) -> str:
         passed = bool(metric["passed"])
         rows.append(
             "<tr>"
-            f'<th scope="row">{html.escape(_fixture_label(curve))}</th>'
+            f'<th scope="row">{html.escape(_curve_label(curve))}</th>'
             f"<td>{_percent(metric['peak_force_error'])}</td>"
             f"<td>{_percent(metric['force_rmse_relative'])}</td>"
             f"<td>{_percent(metric['hysteresis_error'])}</td>"
@@ -343,7 +341,7 @@ def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> st
     curve_figures = []
     for curve in curves:
         curve_figures.append(
-            f"<article><h4>{html.escape(_fixture_label(curve))}</h4>"
+            f"<article><h4>{html.escape(_curve_label(curve))}</h4>"
             '<div class="plot-grid"><figure><figcaption>Force&ndash;compression loop</figcaption>'
             f"{_svg(curve, domain='displacement')}</figure>"
             "<figure><figcaption>Force history</figcaption>"
@@ -399,8 +397,10 @@ def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> st
 <p class="section-note">Reuse the existing artifact and GIFs. No fitting or simulation is needed.</p>
 <pre><code>uv run -m projects.digital_shoe.report DigitalInstron/digital_shoe_showcase/digital_shoe.json --output DigitalInstron/digital_shoe_showcase/validation_report.html --media-dir DigitalInstron/digital_shoe_showcase</code></pre>
 <details><summary>Full workflow: fit, simulate, and record</summary><div class="details-body">
-<h3>Identify and export</h3>
-<pre><code>uv run --extra examples -m projects.digital_instron_v2.export_digital_shoe --manifest DigitalInstron/manifest_v2.json --output DigitalInstron/digital_shoe_showcase</code></pre>
+<h3>Fit the material to the foam sweep</h3>
+<pre><code>uv run --extra dev -m projects.digital_instron_v2 fit --shoe DigitalInstron/puma-fast-r-nitro-elite-3 --sweep DigitalInstron/FoamSweep/processed/FR3 --out DigitalInstron/FoamSweep/fit/puma-fast-r-nitro-elite-3</code></pre>
+<h3>Export</h3>
+<pre><code>uv run --extra dev -m projects.digital_instron_v2 export --shoe DigitalInstron/puma-fast-r-nitro-elite-3 --fit DigitalInstron/FoamSweep/fit/puma-fast-r-nitro-elite-3/material_fit.json --sweep DigitalInstron/FoamSweep/processed/FR3 --output DigitalInstron/digital_shoe_showcase</code></pre>
 <h3>Open a mechanical example</h3>
 <pre><code>uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode instron --viewer gl
 uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode drop --viewer gl
@@ -424,7 +424,7 @@ def write_report(
     """Load an artifact and write its self-contained HTML report."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render_html(load_artifact(artifact_path), media_dir=media_dir))
+    output.write_text(render_html(load_artifact(artifact_path), media_dir=media_dir), encoding="utf-8")
     return output
 
 

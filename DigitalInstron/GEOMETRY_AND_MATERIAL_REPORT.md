@@ -1,5 +1,11 @@
 # Digital Instron v2 — Geometry & Material Foundation Report
 
+> **Historical record.** This document describes the one-unknown-per-column law
+> that preceded the two-surface column bed (`projects/digital_shoe/column_bed.py`).
+> That law and the modules cited here (for example `phase1.py`, `workflow.py`,
+> `inverse_id.py`, `dynamics_diff.py`, `calibration.py`) have been removed; the
+> commands no longer run.
+
 *How the midsole column bed and its constitutive law are built, and why this is
 the right reduction for a differentiable, contact-ready digital shoe.*
 
