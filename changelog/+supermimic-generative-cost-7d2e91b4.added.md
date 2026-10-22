@@ -1,1 +1,1 @@
-Add the SuperMimic generative running reward and joint work bookkeeping in ``projects.supermimic.cost``.
+Add the SuperMimic generative running reward in ``projects.supermimic.cost``.

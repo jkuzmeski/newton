@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Generative running reward of the SuperMimic runner and its joint work bookkeeping.
+"""Generative running reward of the SuperMimic runner.
 
 The reward asks for running on the treadmill without a reference motion. It
 rewards holding the treadmill speed, an upright pelvis and survival, and costs
@@ -12,8 +12,10 @@ separate weights.
 Velocities are treadmill-frame velocities (see :mod:`.sim`): a runner that holds
 the belt speed has zero mean forward velocity. Every term is a rate multiplied
 by the control step, so a return sums to the time integral of the rates. The
-work rate is joint power divided by the belt speed, so its time integral over
-an episode is the episode duration times the work per meter travelled.
+work rate is the joint work of a step divided by the step and the belt speed,
+so its time integral over an episode is the episode duration times the work per
+meter travelled. Positive and negative work come from the simulator, which
+splits them at every substep.
 
 Inputs are torch tensors with any leading batch shape. An action has the layout
 ``[..., joint, 3]`` of :class:`.sim.RunnerSim`: equilibrium angle [rad],
@@ -27,7 +29,7 @@ from dataclasses import dataclass
 
 import torch
 
-__all__ = ["GenerativeCostConfig", "generative_reward", "generative_terminated", "joint_work", "travel_distance"]
+__all__ = ["GenerativeCostConfig", "generative_reward", "generative_terminated", "travel_distance"]
 
 
 @dataclass(frozen=True)
@@ -67,7 +69,8 @@ def _pelvis_up_z(root_quat: torch.Tensor) -> torch.Tensor:
 def generative_reward(
     root_quat: torch.Tensor,
     root_lin_vel: torch.Tensor,
-    joint_power: torch.Tensor,
+    joint_work_pos: torch.Tensor,
+    joint_work_neg: torch.Tensor,
     action: torch.Tensor,
     prev_action: torch.Tensor,
     config: GenerativeCostConfig,
@@ -80,7 +83,8 @@ def generative_reward(
     Args:
         root_quat: Pelvis orientation ``xyzw``, shape ``[..., 4]``.
         root_lin_vel: Treadmill-frame pelvis velocity [m/s], shape ``[..., 3]``.
-        joint_power: Mean joint power over the step [W], shape ``[..., 10]``.
+        joint_work_pos: Positive joint work over the step [J], shape ``[..., 10]``.
+        joint_work_neg: Negative joint work over the step [J], non-positive, shape ``[..., 10]``.
         action: Commands of the step, shape ``[..., 10, 3]``.
         prev_action: Commands of the previous step, shape ``[..., 10, 3]``.
         config: Weights and thresholds.
@@ -96,8 +100,8 @@ def generative_reward(
         "speed": config.speed * speed,
         "upright": config.upright * _pelvis_up_z(root_quat),
         "alive": torch.full_like(speed, config.alive),
-        "positive_work": -config.positive_work / belt_speed * joint_power.clamp(min=0.0).sum(-1),
-        "negative_work": -config.negative_work / belt_speed * (-joint_power).clamp(min=0.0).sum(-1),
+        "positive_work": -config.positive_work / (dt * belt_speed) * joint_work_pos.sum(-1),
+        "negative_work": config.negative_work / (dt * belt_speed) * joint_work_neg.sum(-1),
         "stiffness": -config.stiffness * action[..., 1].sum(-1),
         "damping": -config.damping * action[..., 2].sum(-1),
         "command_rate": -rate.sum(-1),
@@ -111,21 +115,6 @@ def generative_terminated(
 ) -> torch.Tensor:
     """Return whether the pelvis fell below ``height_min`` or tilted past ``up_min``, shape ``[...]``."""
     return (root_pos[..., 2] < config.height_min) | (_pelvis_up_z(root_quat) < config.up_min)
-
-
-def joint_work(joint_power: torch.Tensor, dt: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return the positive and negative joint work of a power history.
-
-    The power is split by sign per step, so sign changes within a step cancel.
-
-    Args:
-        joint_power: Mean joint power per step [W], shape ``[..., time, joint]``.
-        dt: Control step [s].
-
-    Returns:
-        Positive work (non-negative) and negative work (non-positive) per joint [J], shape ``[..., joint]``.
-    """
-    return dt * joint_power.clamp(min=0.0).sum(-2), dt * joint_power.clamp(max=0.0).sum(-2)
 
 
 def travel_distance(root_lin_vel: torch.Tensor, dt: float, belt_speed: float) -> torch.Tensor:

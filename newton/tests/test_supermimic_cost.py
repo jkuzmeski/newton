@@ -14,7 +14,6 @@ if _HAS_TORCH:
         GenerativeCostConfig,
         generative_reward,
         generative_terminated,
-        joint_work,
         travel_distance,
     )
 
@@ -29,12 +28,14 @@ def _action(k: float, b: float, q_eq: float = 0.0) -> "torch.Tensor":
 
 @unittest.skipUnless(_HAS_TORCH, "torch not installed")
 class TestSupermimicCost(unittest.TestCase):
-    def reward(self, quat=UPRIGHT, vel=(0.0, 0.0, 0.0), power=None, action=None, prev=None, config=None):
+    def reward(self, quat=UPRIGHT, vel=(0.0, 0.0, 0.0), work=None, action=None, prev=None, config=None):
         action = _action(200.0, 10.0) if action is None else action
+        pos, neg = (torch.zeros(10), torch.zeros(10)) if work is None else work
         return generative_reward(
             torch.tensor(quat),
             torch.tensor(vel),
-            torch.zeros(10) if power is None else power,
+            pos,
+            neg,
             action,
             action if prev is None else prev,
             config or GenerativeCostConfig(),
@@ -61,13 +62,13 @@ class TestSupermimicCost(unittest.TestCase):
         self.assertAlmostEqual(terms["upright"].item(), 0.0, places=6)
 
     def test_work_weights_per_meter(self):
-        """Weight positive and negative power separately, divided by the belt speed."""
+        """Weight positive and negative work separately, per meter of belt travel in the step."""
         c = GenerativeCostConfig(positive_work=0.02, negative_work=0.005)
-        power = torch.zeros(10)
-        power[0], power[3], power[8] = 100.0, -60.0, 20.0
-        _, terms = self.reward(power=power, config=c)
-        self.assertAlmostEqual(terms["positive_work"].item(), -DT * 0.02 * 120.0 / BELT, places=7)
-        self.assertAlmostEqual(terms["negative_work"].item(), -DT * 0.005 * 60.0 / BELT, places=7)
+        pos, neg = torch.zeros(10), torch.zeros(10)
+        pos[0], pos[8], neg[3] = 1.0, 0.2, -0.6
+        _, terms = self.reward(work=(pos, neg), config=c)
+        self.assertAlmostEqual(terms["positive_work"].item(), -0.02 * 1.2 / BELT, places=7)
+        self.assertAlmostEqual(terms["negative_work"].item(), -0.005 * 0.6 / BELT, places=7)
 
     def test_command_rate(self):
         """Sum the weighted squared change of each command channel over the joints."""
@@ -77,42 +78,35 @@ class TestSupermimicCost(unittest.TestCase):
         self.assertAlmostEqual(terms["command_rate"].item(), expected, places=6)
 
     def test_reward_gradients(self):
-        """Pass the hand-derived gradient to power, stiffness and equilibrium angle."""
+        """Pass the hand-derived gradient to work, stiffness and equilibrium angle."""
         c = GenerativeCostConfig(command_rate=(3.0, 0.0, 0.0))
-        power = torch.zeros(10)
-        power[0], power[1] = 50.0, -50.0
-        power.requires_grad_(True)
+        pos = torch.full((10,), 0.5, requires_grad=True)
+        neg = torch.full((10,), -0.5, requires_grad=True)
         action = _action(200.0, 10.0, 0.2).requires_grad_(True)
-        reward, _ = self.reward(power=power, action=action, prev=_action(200.0, 10.0, 0.0), config=c)
+        reward, _ = self.reward(work=(pos, neg), action=action, prev=_action(200.0, 10.0, 0.0), config=c)
         reward.backward()
-        self.assertAlmostEqual(power.grad[0].item(), -DT * c.positive_work / BELT, places=8)
-        self.assertAlmostEqual(power.grad[1].item(), DT * c.negative_work / BELT, places=8)
+        self.assertAlmostEqual(pos.grad[0].item(), -c.positive_work / BELT, places=8)
+        self.assertAlmostEqual(neg.grad[1].item(), c.negative_work / BELT, places=8)
         self.assertAlmostEqual(action.grad[4, 1].item(), -DT * c.stiffness, places=8)
         self.assertAlmostEqual(action.grad[4, 0].item(), -DT * 3.0 * 2.0 * 0.2, places=7)
 
-    def test_work_bookkeeping(self):
-        """Split work by sign per step and measure distance over the belt."""
-        power = torch.tensor([[10.0, -5.0], [-20.0, 5.0], [30.0, 0.0]])
-        positive, negative = joint_work(power, 0.1)
-        torch.testing.assert_close(positive, torch.tensor([4.0, 0.5]))
-        torch.testing.assert_close(negative, torch.tensor([-2.0, -0.5]))
+    def test_travel_distance(self):
+        """Measure the distance over the belt from treadmill-frame velocities."""
         vel = torch.tensor([[0.1, 0.3, 0.0], [-0.3, 0.0, 1.0]])
         self.assertAlmostEqual(travel_distance(vel, 0.1, BELT).item(), 0.1 * (4.1 + 3.7), places=6)
 
     def test_work_return_matches_work_per_meter(self):
-        """Sum the work terms of an episode at the belt speed to its duration times the work per meter."""
+        """Sum the work terms of an episode to its duration times the work per meter travelled."""
         c = GenerativeCostConfig(positive_work=0.03, negative_work=0.01)
         steps = 50
-        power = torch.randn(steps, 10) * 100.0
+        pos, neg = torch.rand(steps, 10), -torch.rand(steps, 10)
         vel = torch.zeros(steps, 3)
         action = _action(200.0, 10.0).expand(steps, 10, 3)
         _, terms = generative_reward(
-            torch.tensor(UPRIGHT).expand(steps, 4), vel, power, action, action, c, dt=DT, belt_speed=BELT
+            torch.tensor(UPRIGHT).expand(steps, 4), vel, pos, neg, action, action, c, dt=DT, belt_speed=BELT
         )
-        positive, negative = joint_work(power, DT)
         distance = travel_distance(vel, DT, BELT)
-        duration = steps * DT
-        expected = -duration * (c.positive_work * positive.sum() - c.negative_work * negative.sum()) / distance
+        expected = -steps * DT * (c.positive_work * pos.sum() - c.negative_work * neg.sum()) / distance
         total = terms["positive_work"].sum() + terms["negative_work"].sum()
         self.assertAlmostEqual(total.item(), expected.item(), places=5)
 
