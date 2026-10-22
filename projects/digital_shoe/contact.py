@@ -230,6 +230,8 @@ def column_balance_pressures(
     Constraints: ``b <= clearance`` (the plane), ``c >= 0``, and by connection
     ``t = top_bound`` (:data:`TOP_BONDED`), ``t >= top_bound``
     (:data:`TOP_PRESSED`), or ``c <= compression_limit`` (:data:`TOP_FREE`).
+    A :data:`TOP_BONDED` column keeps ``c <= compression_limit`` by pushing its
+    bottom down, unless the plane is in the way.
     The local quadratic model is minimized exactly over these constraints by
     enumerating its active sets.
 
@@ -263,7 +265,8 @@ def column_balance_pressures(
     if connection == TOP_BONDED:
         t = top_bound
         b = bottom - relaxation * (grad[1] - foam * (t - top)) / (foam + shear)
-        b = wp.min(b, wp.min(clearance, t))
+        # The compression stop pushes the bottom down, but the plane comes first.
+        b = wp.min(wp.max(b, t - compression_limit), wp.min(clearance, t))
     else:
         # Constraints n . (t, b) <= beta: the plane, c >= 0, and the top bound or the strain limit.
         n0 = wp.vec2(0.0, 1.0)

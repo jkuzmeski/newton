@@ -172,3 +172,53 @@ def _material_functions(ops, decorate):
     SimpleNamespace(abs=np.abs, log=np.log, max=np.maximum, exp=np.exp),
     lambda function: function,
 )
+
+
+SOLID_MODULUS_PA = 100.0e6
+"""Compression tangent modulus of fully densified foam, the solid polymer's [Pa].
+
+Past the strain where the equilibrium law first gets this stiff, or past
+:data:`CAP_MIN_STRAIN` if later, pressure grows linearly with this slope. The
+fitted densification terms otherwise extrapolate to pressures no solid can
+carry, beyond the strains the bench fixtures reach.
+"""
+
+CAP_MIN_STRAIN = 0.80
+"""Strain below which the equilibrium law is never capped, so the plateau and the fitted wall stay as fitted."""
+
+
+def densification_onset(
+    g_eq: float, alpha: float, g_eq2: float, alpha2: float, beta: float, one_minus_two_poisson: float
+) -> tuple[float, float]:
+    """Return the stretch where the cap on the tangent modulus starts and the equilibrium pressure there.
+
+    The cap starts where the tangent reaches :data:`SOLID_MODULUS_PA`, but not
+    before a strain of :data:`CAP_MIN_STRAIN`. Returns ``(-inf, 0.0)`` when the
+    law stays softer down to a stretch of 1e-3.
+
+    Args:
+        g_eq: First equilibrium term shear modulus [Pa].
+        alpha: First term exponent [-].
+        g_eq2: Second equilibrium term shear modulus [Pa].
+        alpha2: Second term exponent [-].
+        beta: Volumetric coefficient ``nu / (1 - 2 nu)`` [-].
+        one_minus_two_poisson: Volumetric stretch exponent ``1 - 2 nu`` [-].
+    """
+
+    def pressure(stretch):
+        return hyperfoam_pressure_from_stretch_numpy(stretch, g_eq, alpha, g_eq2, alpha2, beta, one_minus_two_poisson)
+
+    def tangent(stretch):
+        return (pressure(stretch - 1.0e-7) - pressure(stretch + 1.0e-7)) / 2.0e-7
+
+    with np.errstate(over="ignore"):
+        grid = np.linspace(1.0, 1.0e-3, 2001)
+        stiff = np.flatnonzero(~(tangent(grid) < SOLID_MODULUS_PA))
+        if len(stiff) == 0:
+            return -np.inf, 0.0
+        soft, hard = grid[max(int(stiff[0]) - 1, 0)], grid[int(stiff[0])]
+        for _ in range(50):
+            middle = 0.5 * (soft + hard)
+            soft, hard = (middle, hard) if tangent(middle) < SOLID_MODULUS_PA else (soft, middle)
+    soft = min(float(soft), 1.0 - CAP_MIN_STRAIN)
+    return soft, float(pressure(soft))

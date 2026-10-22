@@ -251,6 +251,32 @@ def _rimmed_bed(worlds: int, mobility=None):
     return bed, anchors
 
 
+def _press(bed, loads: np.ndarray, mass: float, steps: int):
+    """Press 1 kg-class rigid carriers, one per world, with constant ``loads`` [N]; return the bed force and strain per step."""
+    dt = 1.25e-4
+    worlds = len(loads)
+    thickness = bed.bed.rest_len.numpy()
+    state = SimpleNamespace(body_f=wp.zeros(worlds, dtype=wp.spatial_vector))
+    height = np.zeros(worlds)
+    speed = np.zeros(worlds)
+    applied, strain = [], []
+    for _ in range(steps):
+        q = np.zeros((worlds, 7), np.float32)
+        q[:, 2] = height
+        q[:, 6] = 1.0
+        qd = np.zeros((worlds, 6), np.float32)
+        qd[:, 2] = speed
+        state.body_q = wp.array(q, dtype=wp.transform)
+        state.body_qd = wp.array(qd, dtype=wp.spatial_vector)
+        bed.apply(state)
+        force = state.body_f.numpy()[:, 2]
+        speed += dt * (force - loads) / mass - dt * 9.81
+        height += dt * speed
+        applied.append(force)
+        strain.append((bed.column_state("compression") / thickness).max(1))
+    return np.array(applied), np.array(strain), speed
+
+
 @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
 class TestColumnBedWall(unittest.TestCase):
     """Shear layers that follow compression onto the densification wall must not create energy."""
@@ -285,6 +311,44 @@ class TestColumnBedWall(unittest.TestCase):
         self.assertTrue(np.isfinite(applied).all())
         self.assertLess(np.max(strain), 0.92)
         np.testing.assert_allclose(applied[-800:].mean(0), loads + mass * 9.81, rtol=0.03)
+
+    def test_carrier_pressed_hard_never_passes_the_compression_stop(self):
+        """A 1 kg carrier pressed with 4 kN stays bounded and never closes a column past the stop.
+
+        The 3 x 3 bed cannot carry 4 kN below the stop, so its columns end up on it.
+        """
+        mass, load = 1.0, 4000.0
+        rows = np.diag([1.0 / mass] * 3 + [1.0e-6] * 3)
+        mobility = wp.array(rows[None], dtype=wp.spatial_matrix)
+        rimmed, _anchors = _rimmed_bed(1, mobility)
+        spacing, thickness = 0.005, 0.03
+        anchors, neighbors = _flat_bed(3, 3, spacing)
+        n = len(anchors)
+        small = ColumnBed(
+            anchors,
+            np.full(n, thickness),
+            spacing**2,
+            neighbors,
+            spacing,
+            np.full(n, TOP_BONDED, np.int32),
+            FR3_V3,
+            FoundationConfig(ground_height_m=0.0, mu=0.8),
+            np.array([0]),
+            wp.zeros(1, dtype=wp.vec3),
+            carrier_mobility=mobility,
+        )
+        small.set_timesteps(1.25e-4)
+        for name, bed in (("rimmed", rimmed), ("small", small)):
+            with self.subTest(bed=name):
+                applied, strain, speed = _press(bed, np.array([load]), mass, 3200)
+                stop = bed.bed.max_strain
+                self.assertTrue(np.isfinite(applied).all())
+                self.assertLess(np.abs(applied).max(), 1.0e6)
+                self.assertLessEqual(strain.max(), stop + 1.0e-3)
+                np.testing.assert_allclose(applied[-800:].mean(), load + mass * 9.81, rtol=0.03)
+                if name == "small":
+                    self.assertGreater(strain.max(), stop - 0.01)
+                    self.assertLess(abs(speed[0]), 0.05)
 
     def test_bed_does_no_work_over_a_closed_press_and_tilt(self):
         """A carrier driven around a closed loop of depth and pitch gets no work out of the bed, either way round."""

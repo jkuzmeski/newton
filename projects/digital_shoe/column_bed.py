@@ -78,6 +78,12 @@ _STICK_SPEED = wp.constant(1.0e-4)
 A sticking bottom resists sliding as a damper of ``R / _STICK_SPEED``, so it
 creeps at most ``mu * _STICK_SPEED`` before it slides. This is a solver
 constant, not a material property."""
+_STOP_MODULUS = wp.constant(1.0e13)
+"""Modulus of a column at its compression stop [Pa].
+
+A column at the stop is rigid to the implicit carrier: this makes it a hundred
+times stiffer than any carrier it can meet. It is a solver constant, not a
+material property."""
 _BLOCK = wp.constant(256)
 MAX_COLUMNS = 1024
 """Columns one block holds in shared memory."""
@@ -226,6 +232,8 @@ class _Bed:
     lever: wp.array[wp.vec3]
     tangential_stiffness: wp.array[wp.float32]
     tangential_load: wp.array[wp.vec2]
+    stop_gap: wp.array[wp.float32]
+    stop_stiffness: wp.array[wp.float32]
 
 
 _STRAIN_STEP = wp.constant(1.0e-3)
@@ -531,6 +539,11 @@ def _column_bed_step(
         elif landed:
             axial = -on_top
         bed.stiffness[i] = 0.0
+        bed.stop_gap[i] = 1.0e30
+        bed.stop_stiffness[i] = 0.0
+        if bed.implicit != 0 and held and landed:
+            # Room left to the stop, negative once the carrier has passed it.
+            bed.stop_gap[i] = bed.max_strain * thickness - comp
         if bed.implicit != 0 and held and comp > 0.0:
             # Axial tangent of the foam, by a backward difference so it never
             # steps onto the stretch floor.
@@ -657,6 +670,11 @@ def _column_bed_step(
                     gz = _row(ez, r)
                     stiff_lane += s_col * wp.outer(gz, gz)
                     load_lane += bed.carried[i] * gz
+                s_stop = bed.stop_stiffness[i]
+                if s_stop > 0.0:
+                    gs = _row(ez, r)
+                    stiff_lane += s_stop * wp.outer(gs, gs)
+                    load_lane -= (s_stop / dt) * bed.stop_gap[i] * gs
                 gx = _row(ex, r)
                 gy = _row(ey, r)
                 s_t = bed.tangential_stiffness[i]
@@ -675,11 +693,21 @@ def _column_bed_step(
             u = _carrier_velocity(mass, u0, stiff, load, dt)
             dropped = float(0.0)
             for slot in range(lane, count, _BLOCK):
-                i = base + bed.order[slot]
+                column = bed.order[slot]
+                i = base + column
                 r = bed.lever[i]
                 s_col = bed.stiffness[i]
                 if s_col > 0.0 and s_col * _row_speed(u, ez, r) > bed.carried[i]:
                     bed.stiffness[i] = 0.0
+                    dropped += 1.0
+                # A column pushes the carrier back to the stop once its end-of-step
+                # compression would pass it, and lets go as soon as it would pull.
+                closing = -_row_speed(u, ez, r) * dt - bed.stop_gap[i]
+                if bed.stop_stiffness[i] > 0.0 and closing < 0.0:
+                    bed.stop_stiffness[i] = 0.0
+                    dropped += 1.0
+                elif bed.stop_stiffness[i] == 0.0 and closing > 0.0:
+                    bed.stop_stiffness[i] = dt * bed.area[column] * _STOP_MODULUS / bed.rest_len[column]
                     dropped += 1.0
                 s_t = bed.tangential_stiffness[i]
                 slip = wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r))
@@ -816,8 +844,10 @@ class ColumnBed:
             its end-of-step twist (linearized backward Euler), which stays
             stable on the foam's densification wall. Without, carriers see the
             explicit forces, as kinematically driven fixtures do.
-        max_strain: Compression limit of a free top as a fraction of rest
-            thickness.
+        max_strain: Hard compression stop as a fraction of rest thickness. A
+            free top never closes past it, a bonded column's bottom is pushed
+            down to keep it, and a landed column at the stop is rigid to the
+            implicit carrier, which it pushes back to the stop.
         sweeps: Red-black sweeps per step, warm started from the previous step.
         over_relaxation: Fraction of each column's constrained Newton step taken;
             above one is projected successive over-relaxation.
@@ -836,7 +866,7 @@ class ColumnBed:
     body_com: wp.array
     top_gap_m: np.ndarray | None = None
     carrier_mobility: wp.array | None = None
-    max_strain: float = 0.9
+    max_strain: float = 0.95
     sweeps: int = 16
     over_relaxation: float = 1.8
     device: object = None
@@ -899,6 +929,8 @@ class ColumnBed:
             "reaction",
             "shear_modulus",
             "stiffness",
+            "stop_gap",
+            "stop_stiffness",
         ):
             setattr(bed, name, wp.zeros(total, dtype=wp.float32, device=d))
         bed.lever = wp.zeros(total, dtype=wp.vec3, device=d)
