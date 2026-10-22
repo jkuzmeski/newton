@@ -463,6 +463,9 @@ class RunnerSim:
             for side in SIDES
         ]
 
+        # The beds of different feet are independent, so the graph runs them side by side.
+        self._bed_streams = [wp.Stream(d) for _ in self.beds]
+
         joints = len(JOINT_NAMES)
         self.action = wp.zeros((w, joints, 3), dtype=float, device=d)
         self._command = wp.zeros_like(self.action)
@@ -587,26 +590,31 @@ class RunnerSim:
                     self.joint_work_neg,
                 ],
             )
-            for bed in self.beds:
-                bed.bed.apply(s0)
-                wp.launch(
-                    _add_grf,
-                    dim=len(bed.worlds),
-                    inputs=[
-                        bed.side,
-                        cfg.belt_speed_m_s * k * dt,
-                        k // self.fine_substeps,
-                        scale,
-                        1.0 / self.fine_substeps,
-                        bed.world_index,
-                        bed.feet,
-                        s0.body_f,
-                        bed.bed.bed.normal_force,
-                        bed.bed.bed.pressure_center,
-                        bed.bed.bed.held_strain,
-                    ],
-                    outputs=[self.grf, self.cop, self.grf_fine, self.held_strain],
-                )
+            main = wp.get_stream(self.device)
+            for bed, stream in zip(self.beds, self._bed_streams, strict=True):
+                stream.wait_stream(main)
+                with wp.ScopedStream(stream):
+                    bed.bed.apply(s0)
+                    wp.launch(
+                        _add_grf,
+                        dim=len(bed.worlds),
+                        inputs=[
+                            bed.side,
+                            cfg.belt_speed_m_s * k * dt,
+                            k // self.fine_substeps,
+                            scale,
+                            1.0 / self.fine_substeps,
+                            bed.world_index,
+                            bed.feet,
+                            s0.body_f,
+                            bed.bed.bed.normal_force,
+                            bed.bed.bed.pressure_center,
+                            bed.bed.bed.held_strain,
+                        ],
+                        outputs=[self.grf, self.cop, self.grf_fine, self.held_strain],
+                    )
+            for stream in self._bed_streams:
+                main.wait_stream(stream)
             self.solver.step(s0, s1, self.control, None, dt)
             self.state_0, self.state_1 = s1, s0
         wp.launch(
