@@ -15,15 +15,15 @@ from torch import nn
 __all__ = ["DAMPING_LIMITS", "STIFFNESS_LIMITS", "Actor", "Critic", "RunningNormalizer", "impedance_action_bounds"]
 
 
-# Short-time human joint impedance bounds (R3 of whitepapers/supermimic_neuromech_params.md):
-# K_max = 4.8 rad^-1 times the joint torque capacity, B_max = 0.0046 s times K_max. The source has
-# no hip adduction or rotation values; they take the hip flexion values. Lower bounds are the
-# loosest measured swing impedance (knee in swing: K 0-3.5 N m/rad, B 0.02-0.14 N m s/rad), with
-# K raised from 0 to 1 N m/rad for the log scale.
-STIFFNESS_LIMITS = ((1.0, 1127.0), (1.0, 1127.0), (1.0, 1127.0), (1.0, 1141.0), (1.0, 665.0))
+# Human joint impedance bounds (whitepapers/supermimic_neuromech_params.md). Upper (R3, short-time
+# impedance): K_max = 4.8 rad^-1 times the joint torque capacity, B_max = 0.0046 s times K_max.
+# Lower (section 8, lowest walking value per joint): hip flexion swing K 34, B 1.9; knee swing K 0
+# (raised to 1 for the log scale), B 0.02; ankle K 23 (relaxed standing), B 0.67 (0.010 N m s/rad/kg).
+# The source has no hip adduction or rotation values; they take the hip flexion values.
+STIFFNESS_LIMITS = ((34.0, 1127.0), (34.0, 1127.0), (34.0, 1127.0), (1.0, 1141.0), (23.0, 665.0))
 """Lower and upper joint stiffness of the five joints of one side in ``JOINT_NAMES`` order [N·m/rad]; the left side is equal."""
 
-DAMPING_LIMITS = ((0.02, 5.2), (0.02, 5.2), (0.02, 5.2), (0.02, 5.3), (0.02, 3.1))
+DAMPING_LIMITS = ((1.9, 5.2), (1.9, 5.2), (1.9, 5.2), (0.02, 5.3), (0.67, 3.1))
 """Lower and upper joint damping of the five joints of one side in ``JOINT_NAMES`` order [N·m·s/rad]; the left side is equal."""
 
 

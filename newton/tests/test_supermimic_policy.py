@@ -50,7 +50,7 @@ class TestSupermimicPolicy(unittest.TestCase):
         torch.testing.assert_close(action[..., 2], torch.full((5, 10), 5.0))
 
     def test_default_bounds_are_human_impedance_limits_on_both_sides(self):
-        """Bound K and B of every joint from loose swing to the human short-time impedance limits on both sides."""
+        """Bound K and B of every joint from the lowest walking to the short-time human impedance on both sides."""
         torch.manual_seed(0)
         low, high, log_scale = impedance_action_bounds(BodyParams().joint_limits)
         actor = Actor(7, low, high, log_scale, hidden=(32,))
@@ -65,9 +65,8 @@ class TestSupermimicPolicy(unittest.TestCase):
             self.assertAlmostEqual(float(damping[JOINT_NAMES.index(f"knee_flexion_{side}")]), 5.3, delta=1e-2)
             self.assertAlmostEqual(float(damping[JOINT_NAMES.index(f"ankle_dorsiflexion_{side}")]), 3.1, delta=1e-2)
         torch.testing.assert_close(high[:5], high[5:])
-        torch.testing.assert_close(
-            action[..., 1:].amin(0), torch.tensor([1.0, 0.02]).expand(10, 2), rtol=1e-3, atol=0.0
-        )
+        swing = torch.tensor([[34.0, 1.9]] * 3 + [[1.0, 0.02], [23.0, 0.67]]).repeat(2, 1)
+        torch.testing.assert_close(action[..., 1:].amin(0), swing, rtol=1e-3, atol=0.0)
         self.assertLessEqual(float(stiffness.max()), 1141.0 * (1 + 1e-6))
         self.assertLessEqual(float(damping.max()), 5.3 * (1 + 1e-6))
 
