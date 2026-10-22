@@ -85,13 +85,13 @@ class TestColumnBedPitchedSole(unittest.TestCase):
                 )
 
     def test_implicit_carrier_gains_no_energy_on_the_wall(self):
-        """A heavy block dropped at 4 m/s on its edge rebounds slower than it fell, with no energy gained on the wall."""
+        """A heavy block sliding at 2 m/s and dropped at 4 m/s on its edge gains no energy on the wall."""
         spacing, thickness, mass, dt = 0.005, 0.03, 20.0, 1.25e-4
         anchors, neighbors = _flat_bed(12, 6, spacing)
         n = len(anchors)
         com = np.array([anchors[:, 0].mean(), 0.0, 0.03])
         inertia = mass * np.diag([0.002, 0.01, 0.01])
-        mobility = wp.zeros(1, dtype=wp.mat44)
+        mobility = wp.zeros(1, dtype=wp.spatial_matrix)
         bed = ColumnBed(
             anchors,
             np.full(n, thickness),
@@ -108,7 +108,8 @@ class TestColumnBedPitchedSole(unittest.TestCase):
         bed.set_timesteps(dt)
         rotation = np.array(wp.quat_to_matrix(wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), 0.4))).reshape(3, 3)
         center = np.array([0.0, 0.0, -(anchors @ rotation.T)[:, 2].min()]) + rotation @ com
-        velocity, omega = np.array([0.0, 0.0, -4.0]), np.zeros(3)
+        velocity, omega = np.array([2.0, 0.0, -4.0]), np.zeros(3)
+        speed = np.linalg.norm(velocity)
         state = SimpleNamespace(
             body_q=wp.zeros(1, dtype=wp.transform),
             body_qd=wp.zeros(1, dtype=wp.spatial_vector),
@@ -117,9 +118,9 @@ class TestColumnBedPitchedSole(unittest.TestCase):
         strain = 0.0
         for _ in range(400):
             world_inertia = rotation @ inertia @ rotation.T
-            w = np.zeros((4, 4))
-            w[0, 0] = 1.0 / mass
-            w[1:, 1:] = np.linalg.inv(world_inertia)
+            w = np.zeros((6, 6))
+            w[:3, :3] = np.eye(3) / mass
+            w[3:, 3:] = np.linalg.inv(world_inertia)
             mobility.assign(w[None].astype(np.float32))
             quat = wp.quat_from_matrix(wp.mat33(*rotation.ravel()))
             state.body_q.assign([[*(center - rotation @ com), *quat]])
@@ -138,6 +139,7 @@ class TestColumnBedPitchedSole(unittest.TestCase):
             self.assertTrue(np.isfinite(wrench).all())
         self.assertLess(strain, 0.95)
         self.assertLess(abs(velocity[2]), 4.0)
+        self.assertLess(np.linalg.norm(velocity), speed)
 
 
 if __name__ == "__main__":

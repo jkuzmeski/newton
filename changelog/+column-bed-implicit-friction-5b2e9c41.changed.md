@@ -1,0 +1,1 @@
+Stiffen each digital-shoe column's friction bristle with its shear layer and solve the bristles in the carrier's implicit step; ``ColumnBed`` ``carrier_mobility`` is now a :class:`warp.spatial_matrix` over the carrier's ``(v, w)``.
