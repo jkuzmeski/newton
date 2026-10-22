@@ -19,8 +19,7 @@ The joint-limit penalty is omitted because the body has no joint limits.
 :class:`ADDiscriminator` replaces the hand weights with a learned
 discriminator on the same error vector (Zhang et al. 2025, arXiv 2505.04961).
 
-States and references must be in the same frame; the simulator reports the
-treadmill frame, so the reference root velocity must exclude the belt speed.
+States and references are both in the treadmill (lab) frame.
 All functions are batch-first torch code and differentiable in the state.
 """
 
