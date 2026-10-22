@@ -211,14 +211,17 @@ def _repeat_metrics(
     }
 
 
-def process_sweep(path: str | Path, output_root: str | Path | None = None) -> dict[str, Any]:
-    """Validate one raw sweep and write train/validation traces plus an index."""
+def process_sweep(path: str | Path, output_root: str | Path | None = None, shoe: str | None = None) -> dict[str, Any]:
+    """Validate one raw sweep and write train/validation traces plus an index.
+
+    ``shoe`` labels the sweep; the October 2026 sweeps infer it from their folder name.
+    """
     path = Path(path)
     columns = read_numeric_csv(path)
     for name in ("Total Time (s)", "Cycle Elapsed Time (s)", "Elapsed Cycles", "Step", "Position (mm)", "Force (N)"):
         if name not in columns:
             raise ValueError(f"{path} is missing required column {name!r}")
-    shoe = _source_shoe(path)
+    shoe = shoe or _source_shoe(path)
     out_dir = Path(output_root) if output_root else path.parents[1] / "processed" / shoe
     out_dir.mkdir(parents=True, exist_ok=True)
     # Compression makes force positive and displacement increase as raw position falls.

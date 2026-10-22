@@ -20,6 +20,7 @@ contact.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 from dataclasses import asdict
@@ -112,11 +113,11 @@ def _mesh_json(vertices: np.ndarray, triangles: np.ndarray) -> dict[str, Any]:
 
 
 def _validation_curves(
-    sweep: Path, grid: ColumnGrid, registration: LastRegistration, material: Material
+    sweep: Path, grid: ColumnGrid, registration: LastRegistration, material: Material, substeps: int
 ) -> list[dict[str, Any]]:
     """Replay the held-out trace of every sweep condition with the fitted material.
 
-    The stroke, preload indentation and frame interval follow :func:`sweep_fit.run`.
+    The stroke, preload indentation, frame interval and contact substeps follow :func:`sweep_fit.run`.
     """
     index = json.loads((sweep / "conditions.json").read_text())
     conditions = [c for c in index["conditions"] if c["role"] == "condition"]
@@ -124,7 +125,7 @@ def _validation_curves(
     indentation = registration.qc["preload"]["indentation_m"]
     depth = np.stack([np.maximum(t["displacement_m"], 0.0) + indentation for t in traces], axis=1)
     dt = float(np.mean(np.diff(traces[0]["time_s"])))
-    force = LastReplay(last_bed(grid, registration), depth, dt, candidates=1).run([material])[0]
+    force = LastReplay(last_bed(grid, registration), depth, dt, candidates=1, substeps=substeps).run([material])[0]
     return [
         {
             "name": f"{c['stance_ms']}ms_{c['target_n']}N",
@@ -145,7 +146,15 @@ def _validation_curves(
     ]
 
 
-def build_artifact(shoe: Path, fit_path: Path, sweep: Path, last_path: Path = DEFAULT_LAST) -> dict[str, Any]:
+def build_artifact(
+    shoe: Path,
+    fit_path: Path,
+    sweep: Path,
+    last_path: Path = DEFAULT_LAST,
+    *,
+    mass_kg: float | None = None,
+    mass_source: str | None = None,
+) -> dict[str, Any]:
     """Bake the shoe's columns, fitted material, last placement, validation and hashes into JSON values.
 
     Args:
@@ -153,6 +162,9 @@ def build_artifact(shoe: Path, fit_path: Path, sweep: Path, last_path: Path = DE
         fit_path: The shoe's ``material_fit.json`` from :mod:`sweep_fit`.
         sweep: Processed sweep folder holding ``conditions.json``.
         last_path: Instron last STL with its merged attachment.
+        mass_kg: Mass of one shoe [kg]; without it loaders use
+            :data:`~projects.digital_shoe.artifact.DEFAULT_SHOE_MASS_KG`.
+        mass_source: Where ``mass_kg`` was measured or published.
     """
     fit = json.loads(fit_path.read_text())
     if fit["shoe"] != shoe.name:
@@ -185,7 +197,7 @@ def build_artifact(shoe: Path, fit_path: Path, sweep: Path, last_path: Path = DE
     tread = np.isfinite(registration.surface_m)
     tread_uv = grid.uv_m[tread]
     last_vertices, last_triangles = _last_mesh(last_path, last, grid, registration)
-    curves = _validation_curves(sweep, grid, registration, material)
+    curves = _validation_curves(sweep, grid, registration, material, fit["substeps"])
     index = json.loads((sweep / "conditions.json").read_text())
     sources = [
         ("material_fit", fit_path),
@@ -203,6 +215,7 @@ def build_artifact(shoe: Path, fit_path: Path, sweep: Path, last_path: Path = DE
         "shoe": {
             "id": f"{shoe.name.replace('-', '_')}_{fit['side']}",
             "model_scope": "effective intact-shoe response for the tested geometry and conditions",
+            **({} if mass_kg is None else {"mass_kg": float(mass_kg), "mass_source": mass_source}),
         },
         "coordinate_system": {
             "handedness": "right",
@@ -252,6 +265,7 @@ def build_artifact(shoe: Path, fit_path: Path, sweep: Path, last_path: Path = DE
                 "area_m2": np.full(int(tread.sum()), grid.area_m2).tolist(),
                 "neighbors": neighbor_indices(tread_uv, grid.uv_m, grid.spacing_m).tolist(),
                 "spacing_m": float(grid.spacing_m),
+                "bed_bottom_above_platen_m": np.asarray(registration.bottom_above_platen_m, dtype=float).tolist(),
             }
         },
         "identification": {
@@ -295,14 +309,65 @@ def build_artifact(shoe: Path, fit_path: Path, sweep: Path, last_path: Path = DE
     return artifact
 
 
-def export(shoe: Path, fit_path: Path, sweep: Path, output: Path, last_path: Path = DEFAULT_LAST) -> tuple[Path, Path]:
-    """Write ``digital_shoe.json`` and its HTML validation report to ``output``."""
-    artifact = build_artifact(shoe, fit_path, sweep, last_path)
+OPPOSITE_SIDE = {"left": "right", "right": "left"}
+
+
+def mirror_artifact(data: dict[str, Any], source_sha256: str) -> dict[str, Any]:
+    """Return the opposite foot's shoe as the mirror image of ``data`` about the shoe's x-z plane.
+
+    Every y coordinate changes sign, the -y and +y neighbor slots swap and
+    triangle winding reverses so outward normals stay outward. The material,
+    the bench pose heights and the validation are unchanged: the mirror is a
+    geometric assumption, not a measured shoe of the other foot.
+    """
+    stem, _, side = data["shoe"]["id"].rpartition("_")
+    mirrored = copy.deepcopy(data)
+    reflect = np.array([1.0, -1.0, 1.0])
+    slots = [0, 1, 3, 2]
+    bed = mirrored["column_bed"]
+    bed["anchor_bottom_m"] = (np.asarray(bed["anchor_bottom_m"]) * reflect).tolist()
+    bed["neighbors"] = np.asarray(bed["neighbors"])[:, slots].tolist()
+    for fixture in mirrored["instron_fixtures"].values():
+        fixture["carrier_anchor_m"] = (np.asarray(fixture["carrier_anchor_m"]) * reflect).tolist()
+        fixture["neighbors"] = np.asarray(fixture["neighbors"])[:, slots].tolist()
+    for mesh in mirrored["visual_meshes"].values():
+        mesh["vertices_m"] = (np.asarray(mesh["vertices_m"], dtype=np.float32) * reflect).tolist()
+        mesh["triangles"] = np.asarray(mesh["triangles"])[:, [0, 2, 1]].tolist()
+    pose = mirrored["identification"]["registration"]["pose"]
+    pose["y_m"], pose["yaw_rad"] = -pose["y_m"], -pose["yaw_rad"]
+    mirrored["shoe"]["id"] = f"{stem}_{OPPOSITE_SIDE[side]}"
+    mirrored["shoe"]["mirrored_from"] = data["shoe"]["id"]
+    mirrored["provenance"]["mirror"] = {
+        "source_shoe_id": data["shoe"]["id"],
+        "source_sha256": source_sha256,
+        "operation": "reflect y -> -y; swap -y/+y neighbor slots; reverse triangle winding; negate last y and yaw",
+        "claim": "Geometric mirror of the source shoe; not a measured opposite-foot shoe.",
+    }
+    validate_artifact(mirrored)
+    return mirrored
+
+
+def export(
+    shoe: Path,
+    fit_path: Path,
+    sweep: Path,
+    output: Path,
+    last_path: Path = DEFAULT_LAST,
+    *,
+    mass_kg: float | None = None,
+    mass_source: str | None = None,
+) -> tuple[Path, Path, Path]:
+    """Write the fitted ``digital_shoe.json``, its mirror ``digital_shoe_<other side>.json`` and the HTML report."""
+    artifact = build_artifact(shoe, fit_path, sweep, last_path, mass_kg=mass_kg, mass_source=mass_source)
     output.mkdir(parents=True, exist_ok=True)
     artifact_path = output / "digital_shoe.json"
-    artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+    text = json.dumps(artifact, indent=2, sort_keys=True) + "\n"
+    artifact_path.write_text(text)
+    mirrored = mirror_artifact(artifact, hashlib.sha256(text.encode()).hexdigest())
+    mirror_path = output / f"digital_shoe_{mirrored['shoe']['id'].rpartition('_')[2]}.json"
+    mirror_path.write_text(json.dumps(mirrored, indent=2, sort_keys=True) + "\n")
     report_path = write_report(artifact_path, output / "validation_report.html", media_dir=output)
-    return artifact_path, report_path
+    return artifact_path, mirror_path, report_path
 
 
 def main() -> None:
@@ -312,11 +377,17 @@ def main() -> None:
     parser.add_argument("--fit", type=Path, required=True, help="The shoe's material_fit.json from sweep_fit.")
     parser.add_argument("--sweep", type=Path, required=True, help="Processed sweep folder holding conditions.json.")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--mass-kg", type=float, help="Mass of one shoe [kg]; omit when unknown.")
+    parser.add_argument("--mass-source", help="Where the shoe mass was measured or published.")
     parser.add_argument("--last", type=Path, default=DEFAULT_LAST)
     args = parser.parse_args()
-    artifact, report = export(args.shoe, args.fit, args.sweep, args.output, args.last)
-    print(f"artifact: {artifact}")
-    print(f"validation report: {report}")
+    if (args.mass_kg is None) != (args.mass_source is None):
+        parser.error("--mass-kg and --mass-source go together")
+    paths = export(
+        args.shoe, args.fit, args.sweep, args.output, args.last, mass_kg=args.mass_kg, mass_source=args.mass_source
+    )
+    for path in paths:
+        print(path)
 
 
 if __name__ == "__main__":

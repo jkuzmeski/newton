@@ -222,6 +222,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
             "material": asdict(CALIBRATED_MATERIAL),
             "registration": {"pose": registration.pose, "qc": {"preload": preload}},
             "conditions": {},
+            "substeps": 1,
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -238,13 +239,18 @@ class TestDigitalShoeArtifact(unittest.TestCase):
                 comments="",
             )
             with patch.object(export_digital_shoe, "register_last", return_value=registration):
-                artifact = export_digital_shoe.build_artifact(shoe, root / "material_fit.json", root)
+                artifact = export_digital_shoe.build_artifact(
+                    shoe, root / "material_fit.json", root, mass_kg=0.173, mass_source="test scale"
+                )
         validate_artifact(artifact)
+        self.assertEqual(artifact["shoe"]["mass_kg"], 0.173)
         bed = np.asarray(artifact["column_bed"]["anchor_bottom_m"])
         fixture = artifact["instron_fixtures"]["fullfoot_last"]
         self.assertEqual(len(bed), len(grid.slack_m))
         self.assertEqual(fixture["column_count"], int(np.isfinite(registration.surface_m).sum()))
         self.assertEqual(bed[:, 2].min(), 0.0)
+        # The bench replays the shoe in the pose the fit stood it on the platen.
+        np.testing.assert_array_equal(fixture["bed_bottom_above_platen_m"], registration.bottom_above_platen_m)
         # The baked last bottoms out on the first-contact surface the fixture records.
         last = np.asarray(artifact["visual_meshes"]["fullfoot_last"]["vertices_m"])
         anchors = np.asarray(fixture["carrier_anchor_m"])
@@ -255,6 +261,21 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         encoded = json.dumps(artifact, sort_keys=True)
         self.assertNotIn(str(Path.cwd()), encoded)
         self.assertNotIn(directory, encoded)
+
+        right = export_digital_shoe.mirror_artifact(artifact, "0" * 64)
+        self.assertEqual(right["shoe"]["id"], "puma_fast_r_nitro_elite_3_right")
+        np.testing.assert_array_equal(np.asarray(right["column_bed"]["anchor_bottom_m"]), bed * [1.0, -1.0, 1.0])
+        np.testing.assert_array_equal(
+            np.asarray(right["column_bed"]["neighbors"]),
+            np.asarray(artifact["column_bed"]["neighbors"])[:, [0, 1, 3, 2]],
+        )
+        self.assertEqual(
+            right["instron_fixtures"]["fullfoot_last"]["bed_bottom_above_platen_m"],
+            fixture["bed_bottom_above_platen_m"],
+        )
+        left = export_digital_shoe.mirror_artifact(right, "0" * 64)
+        self.assertEqual(left["column_bed"], artifact["column_bed"])
+        self.assertEqual(left["instron_fixtures"], artifact["instron_fixtures"])
 
 
 class TestDigitalShoeRendering(unittest.TestCase):
