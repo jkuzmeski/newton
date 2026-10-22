@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import unittest
 
 import numpy as np
@@ -43,7 +44,8 @@ class TestSupermimicAnalysis(unittest.TestCase):
 
     def test_recovers_simulated_joint_torques(self):
         """Recover the joint torques driving a free-flying runner from its simulated coordinates."""
-        params = BodyParams()
+        # Free joints: the swinging segments must not reach the range-of-motion limits.
+        params = dataclasses.replace(BodyParams(), joint_limits=((-1.0e6, 1.0e6),) * 5)
         builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
         add_body(builder, params)
         model = builder.finalize(device="cpu")
