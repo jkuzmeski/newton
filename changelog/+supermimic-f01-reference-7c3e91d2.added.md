@@ -1,0 +1,1 @@
+Add the F01 running reference for the SuperMimic runner: body parameters from the static trials and de Leva (1996), marker-fitted generalized coordinates and velocities, per-foot plate forces, and 2 s train and evaluation windows with flight-phase episode starts.
