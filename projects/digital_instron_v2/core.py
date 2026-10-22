@@ -7,11 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from projects.digital_shoe.material import (
-    SOLID_MODULUS_PA,
-    densification_onset,
-    hyperfoam_pressure_from_stretch_numpy,
-)
+from projects.digital_shoe.material import hyperfoam_pressure_from_stretch_numpy
 
 # Confined and unconfined compression of racing-shoe midsole foam agree within
 # scatter, so the effective Poisson ratio is zero (McCulloch, Delp and Kuhl,
@@ -109,10 +105,11 @@ CALIBRATED_MATERIAL = Material(
 
 
 def _hyperfoam_pressure(strain: np.ndarray, material: Material) -> np.ndarray:
-    """Evaluate the shared two-term equilibrium compression pressure [Pa], linear past the densification onset."""
+    """Evaluate the shared two-term equilibrium compression pressure [Pa]."""
     poisson = EFFECTIVE_POISSON_RATIO
     fraction = material.equilibrium_fraction
-    law = (
+    return hyperfoam_pressure_from_stretch_numpy(
+        np.clip(1.0 - strain, 1.0e-3, 1.0),
         material.instantaneous_shear_modulus_pa * fraction,
         material.hyperfoam_exponent,
         material.instantaneous_shear_modulus_2_pa * fraction,
@@ -120,10 +117,6 @@ def _hyperfoam_pressure(strain: np.ndarray, material: Material) -> np.ndarray:
         poisson / (1.0 - 2.0 * poisson),
         1.0 - 2.0 * poisson,
     )
-    stretch = 1.0 - np.asarray(strain)
-    onset, onset_pressure = densification_onset(*law)
-    pressure = hyperfoam_pressure_from_stretch_numpy(np.clip(stretch, max(onset, 1.0e-3), 1.0), *law)
-    return np.where(stretch < onset, onset_pressure + SOLID_MODULUS_PA * (onset - stretch), pressure)
 
 
 HYSTERESIS_WEIGHT = 5.0
