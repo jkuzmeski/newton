@@ -12,7 +12,8 @@ history lets the model infer it.
 A state row holds ``root_pos`` (3) [m], ``root_quat`` (4, xyzw), ``root_lin_vel``
 (3) [m/s] and ``root_ang_vel`` (3) [rad/s] in world frame, then ``q`` and ``qd``
 of the ``joint_count`` joints [rad, rad/s]. The model ignores the horizontal root
-position, which does not affect the dynamics on flat ground, and predicts the
+position, which does not affect the dynamics on flat ground, so aux outputs must
+not depend on it either (positions in the aux are relative to the root), and predicts the
 step change: position and velocity increments, and the world-frame rotation
 vector that takes the root orientation to the next one.
 """

@@ -26,7 +26,9 @@ folder.
 State rows are root position [m], root quaternion (``xyzw``), root linear
 [m/s] and angular [rad/s] velocity in world axes and the treadmill frame, joint
 angles [rad] and joint velocities [rad/s]. Aux rows are, per foot
-(right, left), the ground reaction [N] and center of pressure [m], then the
+(right, left), the ground reaction [N] and center of pressure [m], with x
+and y relative to the root position at the start of the step (a world model
+does not see the horizontal root position), then the
 mean joint torques [N m] and the positive and negative joint work over the
 step [J]. Action rows have the
 ``[10, 3]`` layout of :attr:`RunnerSim.action`: equilibrium, stiffness and
@@ -96,11 +98,13 @@ def sim_state(sim: RunnerSim) -> torch.Tensor:
     return torch.cat((q[:, :7], qd[:, :6], q[:, 7:], qd[:, 6:]), dim=1)
 
 
-def sim_aux(sim: RunnerSim) -> torch.Tensor:
-    """Return the aux rows [W, :data:`AUX_DIM`] of ``sim``'s last step."""
+def sim_aux(sim: RunnerSim, state: torch.Tensor) -> torch.Tensor:
+    """Return the aux rows [W, :data:`AUX_DIM`] of ``sim``'s last step, taken from the state rows ``state``."""
     w = sim.world_count
-    parts = (sim.grf, sim.cop, sim.joint_torque, sim.joint_work_pos, sim.joint_work_neg)
-    return torch.cat([wp.to_torch(a).reshape(w, -1) for a in parts], dim=1)
+    grf, cop = wp.to_torch(sim.grf), wp.to_torch(sim.cop).clone()
+    cop[..., :2] -= torch.where(grf[..., 2:] > 0.0, state[:, None, :2], 0.0)
+    parts = (grf, cop, *(wp.to_torch(a) for a in (sim.joint_torque, sim.joint_work_pos, sim.joint_work_neg)))
+    return torch.cat([a.reshape(w, -1) for a in parts], dim=1)
 
 
 def _log_uniform(limits: torch.Tensor, count: int, generator: torch.Generator) -> torch.Tensor:
@@ -287,7 +291,7 @@ def collect(
             q_eq = (q_ref + moment / stiffness + noise).clamp(q_limits[:, 0], q_limits[:, 1])
             action = torch.stack((q_eq, stiffness, damping), dim=2)
             sim.step(wp.from_torch(action.contiguous()))
-            aux, after = sim_aux(sim), sim_state(sim)
+            aux, after = sim_aux(sim, state), sim_state(sim)
             failed = ~(
                 torch.isfinite(aux).all(1) & (after[:, -JOINT_COUNT:].abs().amax(1) < config.failure_joint_speed_rad_s)
             )
@@ -368,7 +372,8 @@ def read_episode(folder: str | Path, world: int, episode: int) -> dict:
         episode: Episode index within the world, in order.
 
     Returns:
-        ``joint_q`` [T, 17], ``joint_qd`` [T, 16], ``grf`` and ``cop`` [T, 2, 3],
+        ``joint_q`` [T, 17], ``joint_qd`` [T, 16], ``grf`` and ``cop`` [T, 2, 3]
+        (in the treadmill frame),
         ``joint_torque`` and step-mean ``joint_power`` [T, 10], ``action`` [T, 10, 3],
         ``dt``, ``shoe``, and the reference window and frame of the first row,
         ``reference_window`` and ``reference_frame``.
@@ -381,11 +386,13 @@ def read_episode(folder: str | Path, world: int, episode: int) -> dict:
     rows = slice(bounds[episode], bounds[episode + 1])
     state, action, aux = state[rows], action[rows], aux[rows]
     j = JOINT_COUNT
+    grf, cop = aux[:, :6].reshape(-1, 2, 3), aux[:, 6:12].reshape(-1, 2, 3).copy()
+    cop[..., :2] += np.where(grf[..., 2:] > 0.0, state[:, None, :2], 0.0)
     return {
         "joint_q": np.concatenate((state[:, :7], state[:, 13 : 13 + j]), 1),
         "joint_qd": np.concatenate((state[:, 7:13], state[:, 13 + j :]), 1),
-        "grf": aux[:, :6].reshape(-1, 2, 3),
-        "cop": aux[:, 6:12].reshape(-1, 2, 3),
+        "grf": grf,
+        "cop": cop,
         "joint_torque": aux[:, 12 : 12 + j],
         "joint_power": (aux[:, 12 + j : 12 + 2 * j] + aux[:, 12 + 2 * j :]) / meta["dt_s"],
         "action": action,

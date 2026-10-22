@@ -1,0 +1,1 @@
+Log the SuperMimic aux center of pressure relative to the root position at the start of the step, so a world model that ignores the horizontal root position can predict it; ``read_episode`` returns it in the treadmill frame.

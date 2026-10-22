@@ -5,8 +5,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import warp as wp
 
 try:
     import torch
@@ -18,6 +20,7 @@ try:
         make_sim,
         moment_stiffness_floor,
         read_episode,
+        sim_aux,
         summarize,
     )
 except ImportError:
@@ -87,6 +90,27 @@ class TestSupermimicCollect(unittest.TestCase):
         floor = moment_stiffness_floor(q_ref, moment, q_limits, stiffness_limits, 0.35)
         torch.testing.assert_close(floor, torch.tensor([100.0, 10.0 / 0.35, 200.0, 1.0], device="cuda"))
 
+    def test_sim_aux_makes_the_center_of_pressure_root_relative(self):
+        """Subtract the start root x/y from a loaded foot's center of pressure and keep zero without contact."""
+        grf = np.zeros((1, 2, 3), dtype=np.float32)
+        grf[0, 0, 2] = 500.0
+        cop = np.zeros((1, 2, 3), dtype=np.float32)
+        cop[0, 0] = (0.5, -0.25, 0.0)
+        joints = np.zeros((1, 10), dtype=np.float32)
+        sim = SimpleNamespace(
+            world_count=1,
+            grf=wp.array(grf, device="cuda"),
+            cop=wp.array(cop, device="cuda"),
+            joint_torque=wp.array(joints, device="cuda"),
+            joint_work_pos=wp.array(joints, device="cuda"),
+            joint_work_neg=wp.array(joints, device="cuda"),
+        )
+        state = torch.zeros((1, STATE_DIM), device="cuda")
+        state[0, :2] = torch.tensor((0.125, 0.25))
+        aux = sim_aux(sim, state)
+        torch.testing.assert_close(aux[0, 6:12].cpu(), torch.tensor((0.375, -0.5, 0.0, 0.0, 0.0, 0.0)))
+        self.assertEqual(float(wp.to_torch(sim.cop)[0, 0, 0]), 0.5)
+
     def test_read_episode_restores_sim_layouts(self):
         """Split a world into episodes and rebuild joint_q, joint_qd and aux arrays."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -102,6 +126,7 @@ class TestSupermimicCollect(unittest.TestCase):
         np.testing.assert_array_equal(episode["joint_qd"][0], np.concatenate((state[7:13], state[23:])) + 300.0)
         self.assertEqual(episode["grf"][1, 0, 2], 200.0)
         np.testing.assert_array_equal(episode["cop"][0].ravel(), np.arange(6, 12))
+        np.testing.assert_array_equal(episode["cop"][1, 0], [6.0 + 400.0, 7.0 + 401.0, 8.0])
         np.testing.assert_allclose(episode["joint_power"][0], (np.arange(22, 32) + np.arange(32, 42)) / 0.01)
         np.testing.assert_array_equal(episode["action"][0, :, 1], np.arange(1, 30, 3))
         self.assertEqual((episode["dt"], episode["shoe"]), (0.01, "a"))
