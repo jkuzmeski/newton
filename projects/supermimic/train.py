@@ -13,6 +13,7 @@ Learning code only: no Newton import.
 
 from __future__ import annotations
 
+import copy
 import math
 import time
 from collections.abc import Callable
@@ -82,6 +83,8 @@ class TrainerConfig:
     """Critic passes over each imagined batch."""
     critic_minibatches: int = 4
     """Shuffled minibatches per critic pass."""
+    critic_target_rate: float = 1.0
+    """Polyak rate per update of the target critic that gives the lambda targets; 1 makes it the critic."""
     lr_decay_iterations: int = 250_000
     """Updates over which the learning rates decay on a cosine to :attr:`lr_final_scale`, then stay."""
     lr_final_scale: float = 0.03
@@ -152,6 +155,7 @@ class Trainer:
     def __init__(self, actor: Actor, critic: Critic, config: TrainerConfig):
         self.actor = actor
         self.critic = critic
+        self.target_critic = copy.deepcopy(critic).requires_grad_(False)
         self.config = config
         self.actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_lr, betas=(0.9, 0.95))
         self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=config.critic_lr)
@@ -210,7 +214,7 @@ class Trainer:
         self.actor_optimizer.zero_grad(set_to_none=True)
         self.actor.normalizer.update(torch.stack(observations))
 
-        critic_loss = self._fit_critic(
+        critic_loss, target_max = self._fit_critic(
             hooks, torch.stack(states, dim=1).detach(), xi, k0, rewards.detach(), done.detach()
         )
         for schedule in self.schedules:
@@ -221,13 +225,15 @@ class Trainer:
             "reward": rewards.detach().mean().item(),
             "survival": survival.mean().item(),
             "value": value_last.detach().mean().item(),
+            "value_max_abs": value_last.detach().abs().max().item(),
+            "critic_target_max_abs": target_max,
             "actor_grad_norm": actor_grad_norm.item(),
             "critic_loss": critic_loss,
         }
 
     def _fit_critic(
         self, hooks: ImaginationHooks, states: Tensor, xi: Tensor, k0: Tensor, rewards: Tensor, done: Tensor
-    ) -> float:
+    ) -> tuple[float, float]:
         cfg = self.config
         batch, steps = states.shape[:2]
         frames = k0[:, None] + hooks.frame_stride * torch.arange(steps, device=k0.device)
@@ -236,8 +242,9 @@ class Trainer:
             dim=-1,
         )
         self.critic.normalizer.update(inputs)
+        self.target_critic.normalizer.load_state_dict(self.critic.normalizer.state_dict())
         with torch.no_grad():
-            targets = lambda_returns(rewards, done, self.critic(inputs), cfg.gamma, cfg.lam)
+            targets = lambda_returns(rewards, done, self.target_critic(inputs), cfg.gamma, cfg.lam)
         inputs = inputs[:, :-1].reshape(-1, inputs.shape[-1])
         targets = targets.reshape(-1)
         size = inputs.shape[0] // cfg.critic_minibatches
@@ -250,7 +257,10 @@ class Trainer:
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.critic.parameters(), cfg.critic_grad_norm)
                 self.critic_optimizer.step()
-        return loss.item()
+        with torch.no_grad():
+            for target, source in zip(self.target_critic.parameters(), self.critic.parameters(), strict=True):
+                target.lerp_(source, cfg.critic_target_rate)
+        return loss.item(), targets.abs().max().item()
 
 
 def train(

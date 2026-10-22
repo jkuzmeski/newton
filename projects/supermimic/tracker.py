@@ -429,6 +429,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--batch", type=int, default=4096, help="imagined rollouts per policy update")
     parser.add_argument("--model-hidden", type=int, nargs="+", default=[2048, 2048, 2048])
+    parser.add_argument(
+        "--critic-target-rate", type=float, default=1.0, help="Polyak rate of the target critic per update"
+    )
     parser.add_argument("--checkpoint-every", type=int, default=500, help="iterations between checkpoints")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=Path, help="new or empty output folder")
@@ -454,7 +457,7 @@ def main(argv: list[str] | None = None) -> None:
         sim, xi = make_sim(body, buffer.world_count, "train", np.random.default_rng(args.seed), belt_speed)
     stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
 
-    config = TrainerConfig()
+    config = TrainerConfig(critic_target_rate=args.critic_target_rate)
     world_model = WorldModel(JOINT_COUNT, XI_DIM, AUX_DIM, hidden=tuple(args.model_hidden)).to(device)
     h = world_model.history_length
     rows = buffer.sample(16384, 8, history=h)
@@ -491,12 +494,15 @@ def main(argv: list[str] | None = None) -> None:
         buffer,
     )
 
-    def save() -> None:
+    def save(iteration: int) -> None:
         torch.save(
             {
                 "actor": trainer.actor.state_dict(),
                 "critic": critic.state_dict(),
                 "world_model": world_model.state_dict(),
+                "iteration": iteration,
+                "args": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
+                "goal_frames": task.config.goal_frames,
             },
             output / "checkpoint.pt",
         )
@@ -511,7 +517,7 @@ def main(argv: list[str] | None = None) -> None:
         metrics["gpu_used_gb"] = (total - free) / 2**30
         print(json.dumps({"iteration": iteration, **metrics}), file=log, flush=True)
         if (iteration + 1) % args.checkpoint_every == 0:
-            save()
+            save(iteration + 1)
 
     train(
         trainer,
@@ -522,7 +528,7 @@ def main(argv: list[str] | None = None) -> None:
         sample_starts=lambda: task.sample_starts(buffer, args.batch, config.horizon),
         log=write,
     )
-    save()
+    save(args.iterations)
 
 
 if __name__ == "__main__":
