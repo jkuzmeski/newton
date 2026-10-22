@@ -7,7 +7,9 @@ import numpy as np
 import warp as wp
 
 import newton
-from projects.supermimic.body import BODY_NAMES, BodyParams, add_body
+from projects.supermimic.body import BODY_NAMES, JOINT_NAMES, BodyParams, add_body
+
+CUDA = wp.is_cuda_available()
 
 
 def _body_q(q: np.ndarray) -> np.ndarray:
@@ -25,6 +27,15 @@ def _body_q(q: np.ndarray) -> np.ndarray:
 
 def _origin(body_q: np.ndarray, name: str) -> np.ndarray:
     return body_q[BODY_NAMES.index(name), :3]
+
+
+def _kinetic_energy(model: newton.Model, state: newton.State) -> float:
+    pose, twist = state.body_q.numpy(), state.body_qd.numpy()
+    energy = 0.0
+    for p, v, m, inertia in zip(pose, twist, model.body_mass.numpy(), model.body_inertia.numpy(), strict=True):
+        omega = np.array(wp.quat_rotate_inv(wp.quat(*p[3:]), wp.vec3(*v[3:])))
+        energy += 0.5 * m * float(v[:3] @ v[:3]) + 0.5 * float(omega @ inertia @ omega)
+    return energy
 
 
 class TestSupermimicBody(unittest.TestCase):
@@ -73,6 +84,34 @@ class TestSupermimicBody(unittest.TestCase):
         np.testing.assert_allclose(model.joint_limit_lower.numpy()[6:], limits[:, 0], atol=1e-6)
         np.testing.assert_allclose(model.joint_limit_upper.numpy()[6:], limits[:, 1], atol=1e-6)
         self.assertLess(params.joint_limits[3][0], 0.0)
+
+    @unittest.skipUnless(CUDA, "needs CUDA")
+    def test_joint_limit_absorbs_energy(self):
+        """Take energy out of an ankle that a stiff torque drives into its limit and then releases."""
+        builder = newton.ModelBuilder(up_axis=newton.Axis.Z, gravity=(0.0, 0.0, 0.0))
+        add_body(builder, BodyParams())
+        model = builder.finalize(device="cuda:0")
+        lower, upper = model.joint_limit_lower.numpy(), model.joint_limit_upper.numpy()
+        ankle = 6 + JOINT_NAMES.index("ankle_dorsiflexion_r")
+        state_0, state_1, control = model.state(), model.state(), model.control()
+        q = state_0.joint_q.numpy()
+        q[7:] = np.clip(q[7:], lower[6:] + 0.05, upper[6:] - 0.05)
+        q[ankle + 1] = 0.5 * (lower[ankle] + upper[ankle])
+        state_0.joint_q.assign(q)
+        newton.eval_fk(model, state_0.joint_q, state_0.joint_qd, state_0)
+        solver = newton.solvers.SolverMuJoCo(model, integrator="euler", jacobian="dense", disable_contacts=True)
+        dt, start, work = 1.25e-4, _kinetic_energy(model, state_0), 0.0
+        torque = np.zeros(model.joint_dof_count, np.float32)
+        for n in range(2400):
+            # For 0.15 s a 300 N m/rad spring pulls the ankle 0.3 rad past its upper limit, then lets go.
+            angle, speed = state_0.joint_q.numpy()[ankle + 1], state_0.joint_qd.numpy()[ankle]
+            torque[ankle] = 300.0 * (upper[ankle] + 0.3 - angle) - 2.0 * speed if n < 1200 else 0.0
+            control.joint_f.assign(torque)
+            solver.step(state_0, state_1, control, None, dt)
+            state_0, state_1 = state_1, state_0
+            work += torque[ankle] * 0.5 * (speed + state_0.joint_qd.numpy()[ankle]) * dt
+        self.assertLess(state_0.joint_q.numpy()[ankle + 1], upper[ankle])
+        self.assertLess(_kinetic_energy(model, state_0) - start - work, 0.0)
 
 
 if __name__ == "__main__":

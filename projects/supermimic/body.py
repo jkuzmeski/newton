@@ -23,6 +23,7 @@ import newton
 __all__ = [
     "BODY_NAMES",
     "JOINT_COUNT",
+    "JOINT_LIMIT_DAMPING",
     "JOINT_NAMES",
     "STATE_DIM",
     "BodyParams",
@@ -50,6 +51,13 @@ JOINT_NAMES = (
 
 JOINT_COUNT = len(JOINT_NAMES)
 """Number of actuated joints."""
+
+JOINT_LIMIT_DAMPING = 100.0
+"""Damping of every leg joint limit [N m s/rad].
+
+With Newton's default 10 N m s/rad the soft limits return more energy than
+they absorb when a stiff joint torque presses into them.
+"""
 
 STATE_DIM = 13 + 2 * JOINT_COUNT
 """Width of a runner state row: root position (3), root quaternion xyzw (4), root linear and
@@ -147,7 +155,9 @@ def add_body(builder: newton.ModelBuilder, params: BodyParams) -> None:
                 pelvis,
                 thigh,
                 angular_axes=[
-                    newton.ModelBuilder.JointDofConfig(axis=tuple(axis(a)), limit_lower=lo, limit_upper=hi)
+                    newton.ModelBuilder.JointDofConfig(
+                        axis=tuple(axis(a)), limit_lower=lo, limit_upper=hi, limit_kd=JOINT_LIMIT_DAMPING
+                    )
                     for a, (lo, hi) in zip(params.hip_axes, params.joint_limits[:3], strict=True)
                 ],
                 parent_xform=wp.transform(wp.vec3(*_mirror_point(params.hip_offset, s)), wp.quat_identity()),
@@ -165,6 +175,7 @@ def add_body(builder: newton.ModelBuilder, params: BodyParams) -> None:
                     axis=tuple(axis(joint_axis)),
                     limit_lower=lo,
                     limit_upper=hi,
+                    limit_kd=JOINT_LIMIT_DAMPING,
                     parent_xform=wp.transform(wp.vec3(*_mirror_point(offset, s)), wp.quat_identity()),
                     label=f"{name}_{s}",
                 )
