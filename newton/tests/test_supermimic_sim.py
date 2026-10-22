@@ -12,7 +12,17 @@ from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE
 from projects.supermimic.body import BODY_NAMES, BodyParams
 from projects.supermimic.sim import FOOT_BODIES, SIDES, RunnerSim, RunnerSimConfig, load_shoes
 
-DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v3")
+DATASET = next(
+    (
+        p
+        for p in (
+            Path("Z:/newton_grid/data/dataset_3d_column_bed_v3"),
+            Path.home() / "newton_grid/data/dataset_3d_column_bed_v3",
+        )
+        if p.exists()
+    ),
+    None,
+)
 CUDA = wp.is_cuda_available()
 
 
@@ -49,7 +59,102 @@ def _run(shoes, shoe_of_world, steps):
     return sim
 
 
-@unittest.skipUnless(CUDA and DATASET.exists(), "needs CUDA and the column-bed dataset")
+# fmt: off
+_HEEL_STRIKES = (
+    (
+        [0.6852, 0.5036, 0.1573, 0.2404, -0.1801, 0.4757, 0.8267],
+        [1.547, -1.652, -2.744, 20.449, -8.724, -4.363],
+        [
+            [0.398, 0.036, 0.117, 0.38, -0.248, -0.679],
+            [0.036, 0.374, 0.148, -1.577, 0.704, 0.819],
+            [0.117, 0.148, 0.497, 5.384, -2.718, -1.176],
+            [0.38, -1.577, 5.384, 100.318, -46.36, -28.894],
+            [-0.248, 0.704, -2.718, -46.36, 33.534, 1.274],
+            [-0.679, 0.819, -1.176, -28.894, 1.274, 22.02],
+        ],
+    ),
+    (
+        [0.578, 0.3748, 0.1407, 0.2868, -0.2061, 0.3554, 0.8654],
+        [2.033, -0.094, -1.363, 17.932, -11.449, -7.857],
+        [
+            [0.447, 0.051, 0.136, 0.385, -0.48, -0.614],
+            [0.051, 0.38, 0.077, -1.782, 1.434, 1.317],
+            [0.136, 0.077, 0.489, 4.603, -3.688, -1.894],
+            [0.385, -1.782, 4.603, 67.452, -49.398, -35.181],
+            [-0.48, 1.434, -3.688, -49.398, 50.624, 13.713],
+            [-0.614, 1.317, -1.894, -35.181, 13.713, 30.384],
+        ],
+    ),
+    (
+        [0.5144, 0.3582, 0.1274, 0.3002, -0.1805, 0.3301, 0.8766],
+        [2.148, 0.369, -0.944, 17.79, -12.287, -9.356],
+        [
+            [0.471, 0.055, 0.139, 0.599, -0.758, -0.738],
+            [0.055, 0.377, 0.066, -1.67, 1.544, 1.454],
+            [0.139, 0.066, 0.469, 4.3, -3.752, -2.213],
+            [0.599, -1.67, 4.3, 58.903, -47.972, -37.305],
+            [-0.758, 1.544, -3.752, -47.972, 53.228, 18.517],
+            [-0.738, 1.454, -2.213, -37.305, 18.517, 35.887],
+        ],
+    ),
+)
+# fmt: on
+
+
+def _drop_foot(shoe, q0, qd0, mobility, substeps=1200):
+    """Return the energy [J] a bare right foot gains falling on its bed, from a recorded pose and twist.
+
+    The foot has the articulated inverse mass ``mobility`` of a runner's foot, and no other force acts on it.
+    """
+    sim = RunnerSim(BodyParams(), [shoe], [0], config=RunnerSimConfig(belt_speed_m_s=0.0))
+    bed = sim.beds[0]
+    foot = FOOT_BODIES[bed.side]
+    dt = sim.config.substep_dt_s
+    state = sim.model.state()
+    count = len(BODY_NAMES)
+    pose = np.tile([0.0, 0.0, 5.0, 0.0, 0.0, 0.0, 1.0], (count, 1))
+    twist = np.zeros((count, 6))
+    pose[foot], twist[foot] = q0, qd0
+    inverse_mass = np.asarray(mobility, np.float64)
+    bed.mobility.assign(inverse_mass[None].astype(np.float32))
+    mass = np.linalg.inv(inverse_mass)
+    com_local = sim.model.body_com.numpy()[foot]
+
+    def rotate(q, v):
+        return v + 2.0 * np.cross(q[:3], np.cross(q[:3], v) + q[3] * v)
+
+    def energy():
+        return 0.5 * twist[foot] @ mass @ twist[foot]
+
+    start = energy()
+    for _ in range(substeps):
+        state.body_q.assign(pose.astype(np.float32))
+        state.body_qd.assign(twist.astype(np.float32))
+        bed.bed.apply(state)
+        wrench = state.body_f.numpy()[foot].astype(np.float64)
+        twist[foot] += dt * inverse_mass @ wrench
+        q = pose[foot, 3:]
+        center = pose[foot, :3] + rotate(q, com_local) + dt * twist[foot, :3]
+        x, y, z, w = q
+        turn = (
+            0.5
+            * dt
+            * np.array(
+                [
+                    twist[foot, 3] * w + twist[foot, 4] * z - twist[foot, 5] * y,
+                    twist[foot, 4] * w + twist[foot, 5] * x - twist[foot, 3] * z,
+                    twist[foot, 5] * w + twist[foot, 3] * y - twist[foot, 4] * x,
+                    -(twist[foot, 3] * x + twist[foot, 4] * y + twist[foot, 5] * z),
+                ]
+            )
+        )
+        q = (q + turn) / np.linalg.norm(q + turn)
+        pose[foot, 3:] = q
+        pose[foot, :3] = center - rotate(q, com_local)
+    return energy() - start
+
+
+@unittest.skipUnless(CUDA and DATASET, "needs CUDA and the column-bed dataset")
 class TestSupermimicSim(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -132,6 +237,13 @@ class TestSupermimicSim(unittest.TestCase):
         self.assertTrue(np.any(before[0] != 0.0))
         np.testing.assert_array_equal(after[1], before[1])
         np.testing.assert_array_equal(sim._fresh.numpy()[:, 0], [1, 0])
+
+    def test_heel_strikes_gain_no_energy_on_the_bed(self):
+        """A foot dropped on its heel with the pitch and speed of recorded heel strikes leaves with less energy."""
+        for index, (q0, qd0, mobility) in enumerate(_HEEL_STRIKES):
+            with self.subTest(strike=index):
+                gain = _drop_foot(self.shoes[0], q0, qd0, mobility)
+                self.assertLess(gain, 1.0)
 
 
 if __name__ == "__main__":
