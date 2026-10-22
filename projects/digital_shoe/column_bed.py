@@ -764,15 +764,19 @@ def _column_bed_step(
         # solve took out of it: a force or torque rebuilt from the end-of-step
         # friction no longer matches the friction the solve used and adds work.
         change = mass * (u - u0) / wp.float64(dt)
-        lift = wp.max(wp.float32(change[2]), 0.0)
-        # The ground reaction and its center follow the carried load.
+        # A carrier that no column carries gets no wrench, not the round-off of the solve.
         if carried_total > 0.0:
+            lift = wp.max(wp.float32(change[2]), 0.0)
+            # The ground reaction and its center follow the carried load.
             ratio = lift / carried_total
             normal_total = normal_total * ratio
             moment_total = moment_total * ratio
-        carried_total = lift
-        force_total = wp.vec3(wp.float32(change[0]), wp.float32(change[1]), lift)
-        torque_total = wp.vec3(wp.float32(change[3]), wp.float32(change[4]), wp.float32(change[5]))
+            carried_total = lift
+            force_total = wp.vec3(wp.float32(change[0]), wp.float32(change[1]), lift)
+            torque_total = wp.vec3(wp.float32(change[3]), wp.float32(change[4]), wp.float32(change[5]))
+        else:
+            force_total = wp.vec3(0.0)
+            torque_total = wp.vec3(0.0)
     if lane == 0:
         body_f[body] = wp.spatial_vector(force_total, torque_total)
         bed.normal_force[w] = normal_total
