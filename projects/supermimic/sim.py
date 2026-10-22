@@ -51,6 +51,71 @@ _BODIES = wp.constant(len(BODY_NAMES))
 _MIRROR = np.diag([1.0, -1.0, 1.0])
 
 
+_Dense = wp.types.matrix(shape=(DOFS, DOFS), dtype=wp.float32)
+_Rows = wp.types.matrix(shape=(DOFS, 4), dtype=wp.float32)
+
+
+@wp.kernel
+def _foot_mobility(
+    world_index: wp.array[wp.int32],
+    link: int,
+    mass_matrix: wp.array3d[wp.float32],
+    armature: wp.array[wp.float32],
+    jacobian: wp.array3d[wp.float32],
+    mobility: wp.array[wp.mat44],
+):
+    """Write ``J H^-1 J^T`` of one foot's ``(v_z, w_x, w_y, w_z)`` per world.
+
+    ``H`` is the articulation's mass matrix with its joint armature, as MuJoCo
+    integrates it; its Cholesky factor solves the four Jacobian rows.
+    """
+    k = wp.tid()
+    w = world_index[k]
+    h = _Dense()
+    for i in range(_DOFS):
+        for j in range(_DOFS):
+            h[i, j] = mass_matrix[w, i, j]
+        h[i, i] += armature[w * _DOFS + i]
+    # Cholesky in place, lower triangle.
+    for j in range(_DOFS):
+        d = h[j, j]
+        for m in range(j):
+            d -= h[j, m] * h[j, m]
+        d = wp.sqrt(d)
+        h[j, j] = d
+        for i in range(j + 1, _DOFS):
+            v = h[i, j]
+            for m in range(j):
+                v -= h[i, m] * h[j, m]
+            h[i, j] = v / d
+    rows = _Rows()
+    for i in range(_DOFS):
+        rows[i, 0] = jacobian[w, link * 6 + 2, i]
+        for a in range(3):
+            rows[i, a + 1] = jacobian[w, link * 6 + 3 + a, i]
+    x = rows
+    for c in range(4):
+        for i in range(_DOFS):
+            v = x[i, c]
+            for m in range(i):
+                v -= h[i, m] * x[m, c]
+            x[i, c] = v / h[i, i]
+        for ii in range(_DOFS):
+            i = _DOFS - 1 - ii
+            v = x[i, c]
+            for m in range(i + 1, _DOFS):
+                v -= h[m, i] * x[m, c]
+            x[i, c] = v / h[i, i]
+    result = wp.mat44()
+    for a in range(4):
+        for b in range(4):
+            s = float(0.0)
+            for i in range(_DOFS):
+                s += rows[i, a] * x[i, b]
+            result[a, b] = s
+    mobility[k] = result
+
+
 @dataclass(frozen=True)
 class Shoe:
     """A fitted shoe pair placed on the foot as in the dataset manifest."""
@@ -298,6 +363,7 @@ class _Bed:
         self.world_index = wp.array(worlds, dtype=wp.int32, device=d)
         self.feet = wp.array(worlds * len(BODY_NAMES) + FOOT_BODIES[self.side], dtype=wp.int32, device=d)
         self.mask = wp.zeros(len(worlds), dtype=bool, device=d)
+        self.mobility = wp.zeros(len(worlds), dtype=wp.mat44, device=d)
         self.bed = ColumnBed(
             shoe.anchors_in_foot(side, sim.body.sole_pitch),
             bed.rest_length_m,
@@ -309,6 +375,7 @@ class _Bed:
             FoundationConfig(ground_height_m=0.0, mu=sim.config.friction_coefficient),
             self.feet.numpy(),
             sim.model.body_com,
+            carrier_mobility=self.mobility,
             device=d,
         )
         self.bed.set_timesteps(sim.config.substep_dt_s)
@@ -383,6 +450,13 @@ class RunnerSim:
             self.model, integrator="euler", jacobian="dense", disable_contacts=True
         )
         self._add_shoe_masses(shoes)
+        # Each bed's implicit carrier term needs its foot's effective mass, from
+        # the articulation's Jacobian and mass matrix.
+        links = self.model.max_joints_per_articulation
+        self._jacobian = wp.zeros((w, links * 6, DOFS), dtype=float, device=d)
+        self._mass_matrix = wp.zeros((w, DOFS, DOFS), dtype=float, device=d)
+        self._motion = wp.zeros(self.model.joint_dof_count, dtype=wp.spatial_vector, device=d)
+        self._spatial_inertia = wp.zeros(self.model.body_count, dtype=wp.spatial_matrix, device=d)
         self.beds = [
             _Bed(self, shoes[s], side, np.flatnonzero(self.shoe_of_world == s).astype(np.int32))
             for s in np.unique(self.shoe_of_world)
@@ -478,6 +552,23 @@ class RunnerSim:
             self.joint_work_neg,
         ):
             array.zero_()
+        # The foot's effective mass changes little over one control step.
+        s0 = self.state_0
+        newton.eval_jacobian(self.model, s0, self._jacobian, joint_S_s=self._motion)
+        newton.eval_mass_matrix(self.model, s0, self._mass_matrix, self._jacobian, body_I_s=self._spatial_inertia)
+        for bed in self.beds:
+            wp.launch(
+                _foot_mobility,
+                dim=len(bed.worlds),
+                inputs=[
+                    bed.world_index,
+                    FOOT_BODIES[bed.side],
+                    self._mass_matrix,
+                    self.model.joint_armature,
+                    self._jacobian,
+                ],
+                outputs=[bed.mobility],
+            )
         for k in range(self.substeps):
             s0, s1 = self.state_0, self.state_1
             wp.launch(
