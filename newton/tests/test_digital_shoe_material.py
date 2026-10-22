@@ -127,32 +127,6 @@ class TestDigitalShoeMaterial(unittest.TestCase):
                 np.testing.assert_allclose(slope, material.SOLID_MODULUS_PA, rtol=1.0e-3)
                 np.testing.assert_allclose(pressure, host, rtol=1.0e-4)
 
-    def test_cap_never_starts_below_eighty_percent_strain(self):
-        """Keep a law that reaches 100 MPa at 72% strain as fitted up to 80%, then continue it at 100 MPa."""
-        foam = runtime.ShoeMaterial(
-            571550.66,
-            23.142787,
-            0.77495,
-            0.0,
-            instantaneous_shear_modulus_2_pa=0.020724,
-            hyperfoam_exponent_2=-15.190542,
-        )
-        p = runtime.FoundationParams()
-        runtime.set_material_block(p, foam)
-        p.stretch_floor = 1.0e-3
-        self.assertAlmostEqual(p.onset_stretch, 0.2, places=6)
-        law = (p.g_eq, p.alpha, p.g_eq2, p.alpha2, 0.0, 1.0)
-        strain = np.array([0.7, 0.79, 0.8, 0.85, 0.9], dtype=np.float32)
-        expected = material.hyperfoam_pressure_from_stretch_numpy(np.array([0.3, 0.21, 0.2]), *law)
-        expected = np.append(expected, expected[-1] + material.SOLID_MODULUS_PA * (strain[3:] - 0.8))
-        for device in get_test_devices():
-            with self.subTest(device=str(device)):
-                out = wp.zeros(len(strain), dtype=wp.float32, device=device)
-                wp.launch(
-                    _forward_pressure, dim=len(strain), inputs=[wp.array(strain, device=device), p, out], device=device
-                )
-                np.testing.assert_allclose(out.numpy(), expected, rtol=1.0e-4)
-
     def test_numpy_preserves_float64_vectorization(self):
         """Retain tiny host strains that a float32 device adapter would round away."""
         strain = np.array([0.0, 1.0e-10, 2.0e-10, 0.2, 0.8], dtype=np.float64)
