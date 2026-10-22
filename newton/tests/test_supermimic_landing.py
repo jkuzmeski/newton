@@ -60,6 +60,20 @@ class TestSupermimicLandingRig(unittest.TestCase):
         np.testing.assert_array_equal(log["touchdown_s"], -1.0)
         self.assertEqual(log["loaded_columns"].max(), 0)
 
+    def test_rig_gives_the_beds_the_foot_mobility(self):
+        """Give each bed its foot's current effective mobility while the rig steps."""
+        sim = RunnerSim(BodyParams(), load_shoes(DATASET), [0], config=RunnerSimConfig(belt_speed_m_s=0.0))
+        q = np.zeros((1, 17))
+        q[0, 2], q[0, 6] = 5.0, 1.0
+        q[0, 10] = -0.8
+        LandingRig(sim, 2 * sim.config.substep_dt_s).run(q, np.zeros((1, 16)), _schedule(q[:, 7:], 200.0, 5.0))
+        used = [bed.mobility.numpy() for bed in sim.beds]
+        sim.update_foot_mobility(sim.state_0)
+        for bed, mobility in zip(sim.beds, used, strict=True):
+            self.assertGreater(np.abs(mobility).max(), 0.0)
+            # One substep separates the rig's last update from this state.
+            np.testing.assert_allclose(mobility, bed.mobility.numpy(), rtol=2e-2, atol=1e-5)
+
     def test_sim_steps_from_its_reset_after_an_odd_landing(self):
         """Let RunnerSim.step advance the reset state after a landing of an odd number of substeps."""
         sim = RunnerSim(BodyParams(), load_shoes(DATASET), [0], config=RunnerSimConfig(belt_speed_m_s=0.0))
