@@ -4,8 +4,7 @@
 """Newton verification of SuperMimic F01 trackers (M4 exit gate).
 
 A policy runs in :class:`~projects.supermimic.sim.RunnerSim` worlds that all
-wear the subject's fitted shoe (the held-out context of
-:func:`~projects.supermimic.collect.make_sim`). Each world starts at one
+wear the subject's fitted shoe (:func:`~projects.supermimic.tracker.fixed_shoe_sim`). Each world starts at one
 reference flight frame of the first flight phase of a reference window and
 runs to the end of the window, a fall (:func:`~projects.supermimic.tracking.termination`)
 or a sim failure (non-finite outputs or a joint speed above
@@ -22,6 +21,9 @@ The report compares the rollouts with F01:
   propulsive impulse; flight time and cadence over both feet. F01 values come
   from the unfiltered 1 kHz plate signals of every trial;
 - the commanded stiffness and damping against the human bounds of :mod:`.policy`;
+- the work of the ground on the body per stance, the change of mechanical energy
+  minus the joint work, which a passive bed keeps negative; its error is the
+  same balance over flight steps, where it should vanish;
 - positive and negative joint work as mean power, and stance peak moments and
   quasi-stiffness (:func:`~projects.supermimic.analysis.joint_summary`), against
   F01 inverse dynamics.
@@ -48,7 +50,6 @@ from .collect import (
     Stage0Config,
     episode_starts,
     loaded_moment,
-    make_sim,
     reference_action,
     reference_moments,
     sim_aux,
@@ -58,7 +59,7 @@ from .context import XI_DIM
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
 from .reference import Subject, load_body_params, load_shoe, load_subject, trial_reference
 from .sim import RunnerSim
-from .tracker import TrackerConfig, TrackerTask, reference_states
+from .tracker import TrackerConfig, TrackerTask, fixed_shoe_sim, reference_states
 from .tracking import termination
 from .world_model import WorldModel
 
@@ -69,6 +70,7 @@ __all__ = [
     "first_flight_starts",
     "main",
     "markdown",
+    "mechanical_energy",
     "rollout",
     "rollout_summary",
     "stage0_policy",
@@ -88,6 +90,8 @@ STANCE_KEYS = (
     "braking_impulse_bw_s",
     "propulsive_impulse_bw_s",
 )
+BED_WORK_TOLERANCE_J = 1.0
+"""Ground work over a stance above which the bed counts as adding energy [J]."""
 BOUND_FRACTION = 0.02
 """Commands within this log-fraction of a stiffness or damping bound count as at the bound."""
 
@@ -109,6 +113,33 @@ def first_flight_starts(starts: np.ndarray) -> np.ndarray:
         frames = frames[: end[0] + 1] if len(end) else frames
         keep.append(np.stack((np.full_like(frames, window), frames), 1))
     return np.concatenate(keep)
+
+
+def mechanical_energy(sim: RunnerSim) -> torch.Tensor:
+    """Return the kinetic plus gravitational energy [J] of each world's bodies, shape [world_count].
+
+    It is computed in the belt frame, the inertial frame the sim integrates in.
+    """
+    model, state = sim.model, sim.state_0
+    pose, twist = wp.to_torch(state.body_q), wp.to_torch(state.body_qd)
+    mass, inertia = wp.to_torch(model.body_mass), wp.to_torch(model.body_inertia)
+    x, y, z, w = pose[:, 3:7].unbind(-1)
+    rotation = torch.stack(
+        (
+            torch.stack((1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)), -1),
+            torch.stack((2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)), -1),
+            torch.stack((2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)), -1),
+        ),
+        -2,
+    )
+    com_height = pose[:, 2] + (rotation[:, 2] * wp.to_torch(model.body_com)).sum(-1)
+    omega = (rotation.transpose(1, 2) @ twist[:, 3:, None]).squeeze(-1)
+    energy = (
+        0.5 * mass * twist[:, :3].square().sum(-1)
+        + 0.5 * (omega * (inertia @ omega[:, :, None]).squeeze(-1)).sum(-1)
+        + mass * GRAVITY * com_height
+    )
+    return energy.reshape(sim.world_count, -1).sum(1)
 
 
 def actor_policy(task: TrackerTask, weights: dict[str, torch.Tensor]) -> Policy:
@@ -183,7 +214,8 @@ def rollout(
         Arrays over [world, step]: ``state`` after the step, ``k`` the flat reference
         frame of that state, ``action``, ``grf`` (step mean) and ``grf_fine``
         [W, T, fine, 2, 3], ``torque``, ``work_pos`` and ``work_neg`` [W, T, 10],
-        and per world ``steps`` (recorded steps) and ``outcome`` (index into :data:`OUTCOMES`).
+        ``energy`` (:func:`mechanical_energy` after the step), and per world
+        ``start_energy``, ``steps`` (recorded steps) and ``outcome`` (index into :data:`OUTCOMES`).
     """
     w, device = sim.world_count, joint_q.device
     window, frame = starts[:, 0].clone(), starts[:, 1].clone()
@@ -198,12 +230,14 @@ def rollout(
         "torque": torch.zeros((steps, w, JOINT_COUNT), device=device),
         "work_pos": torch.zeros((steps, w, JOINT_COUNT), device=device),
         "work_neg": torch.zeros((steps, w, JOINT_COUNT), device=device),
+        "energy": torch.zeros((steps, w), device=device),
     }
     count = torch.zeros(w, dtype=torch.int64, device=device)
     outcome = torch.full((w,), -1, dtype=torch.int64, device=device)
     start_q, start_qd = joint_q[window, frame], joint_qd[window, frame]
     with torch.cuda.stream(wp.stream_to_torch(sim.device)):
         sim.reset(wp.from_torch(all_worlds), wp.from_torch(start_q), wp.from_torch(start_qd))
+        start_energy = mechanical_energy(sim)
         previous = task.start_action(window * task.frames + frame)
         loaded = torch.zeros((w, 2), dtype=torch.bool, device=device)
         for t in range(steps):
@@ -224,6 +258,7 @@ def rollout(
                 ("torque", wp.to_torch(sim.joint_torque)),
                 ("work_pos", wp.to_torch(sim.joint_work_pos)),
                 ("work_neg", wp.to_torch(sim.joint_work_neg)),
+                ("energy", mechanical_energy(sim)),
             ):
                 record[name][t] = value
             failed = ~(
@@ -243,6 +278,7 @@ def rollout(
             previous = action
             loaded = aux[:, [2, 5]] > Stage0Config.touchdown_force_n
     result = {name: value.transpose(0, 1).cpu().numpy() for name, value in record.items()}
+    result["start_energy"] = start_energy.cpu().numpy()
     result["steps"] = count.cpu().numpy()
     result["outcome"] = outcome.cpu().numpy()
     return result
@@ -369,6 +405,7 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
     q_error = np.degrees(state[:, 13 : 13 + JOINT_COUNT] - ref[:, 13 : 13 + JOINT_COUNT])
 
     records, stance_counts, joint_rows, joint_stances = [], [], [], ([], [])
+    bed_work, flight_work, step_max = [], [], []
     offset = 0
     for i in range(w):
         n = result["steps"][i]
@@ -380,6 +417,13 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
             )
         joint_rows.append((result["state"][i, :n, 13 : 13 + JOINT_COUNT], result["torque"][i, :n]))
         offset += n
+        # Work of the ground on the body per step: the energy change minus the joint work.
+        energy = np.concatenate(([result["start_energy"][i]], result["energy"][i, :n]))
+        ground = np.diff(energy) - (result["work_pos"][i, :n] + result["work_neg"][i, :n]).sum(-1)
+        flight_work.extend(ground[(result["grf"][i, :n, :, 2] == 0.0).all(-1)])
+        step_max.append(ground.max(initial=0.0))
+        for side in range(2):
+            bed_work.extend(ground[a:b].sum() for a, b in stance_intervals(result["grf"][i, :n, side, 2]))
     angles = np.concatenate([a for a, _ in joint_rows])
     torques = np.concatenate([m for _, m in joint_rows])
     stances = tuple(np.array(s, dtype=np.int64).reshape(-1, 2) for s in joint_stances)
@@ -424,6 +468,17 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
         "stance": _stance_summary(records),
         "impedance": impedance,
         "joint_power": {"positive_w_kg": work_pos.tolist(), "negative_w_kg": work_neg.tolist()},
+        "bed_work": {
+            "stance_j": _stats(bed_work),
+            "stance_percentiles_0_50_95_100_j": np.percentile(bed_work, (0, 50, 95, 100)).tolist()
+            if bed_work
+            else None,
+            "stances_adding_energy": int((np.asarray(bed_work) > BED_WORK_TOLERANCE_J).sum()),
+            "step_max_j": float(np.max(step_max)),
+            "flight_step_abs_percentiles_50_95_100_j": np.percentile(np.abs(flight_work), (50, 95, 100)).tolist()
+            if flight_work
+            else None,
+        },
         "joints": joint_summary(angles, torques, stances, mass) if all(len(s) for s in stances) else None,
     }
 
@@ -450,6 +505,12 @@ def markdown(report: dict) -> str:
         f"| failures per s | {survival['failures_per_s']:.3f} |",
         f"| episode [s] | {_cell(survival['episode_s'], 3)} |",
         f"| stances per episode | {_cell(survival['stances_per_episode'], 2)} |",
+        f"| stances where the bed adds > {BED_WORK_TOLERANCE_J:g} J | {sim['bed_work']['stances_adding_energy']} "
+        f"of {sim['bed_work']['stance_j']['n']} |",
+        f"| bed work per stance [J] | {_cell(sim['bed_work']['stance_j'], 1)} |",
+        f"| largest ground work in one step [J] | {sim['bed_work']['step_max_j']:.1f} |",
+        f"| flight-step energy error p50/p95/max [J] | "
+        f"{'/'.join(f'{e:.2f}' for e in sim['bed_work']['flight_step_abs_percentiles_50_95_100_j'] or [])} |",
         "",
         "| stance metric | foot | sim | F01 | sim in F01 ± 2 SD |",
         "| --- | --- | --- | --- | --- |",
@@ -516,9 +577,7 @@ def main(argv: list[str] | None = None) -> None:
     shoe = load_shoe(subject.shoe)
     starts = first_flight_starts(np.concatenate([episode_starts(ref, s, "cpu").numpy() for s in SPLITS[args.split]]))
     starts = torch.as_tensor(starts, device=device)
-    sim, _ = make_sim(
-        body, len(starts), "eval", np.random.default_rng(0), float(ref["belt_speed_m_s"]), shoe.name, device
-    )
+    sim, _ = fixed_shoe_sim(body, shoe, len(starts), float(ref["belt_speed_m_s"]))
     joint_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     joint_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
     moment = torch.as_tensor(reference_moments(ref, body, shoe), dtype=torch.float32, device=device)
