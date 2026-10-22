@@ -13,7 +13,7 @@ simulated runs go through the same :func:`joint_summary` and
 Joint quasi-stiffness follows Hirschman, Montgomery and Grabowski (2024), The
 contribution of lower-limb joint quasi-stiffness to theoretical leg stiffness
 during level, uphill and downhill running at different speeds, R. Soc. Open
-Sci. 11:231181: the change in joint moment over the change in joint angle in
+Sci. 11:231133: the change in joint moment over the change in joint angle in
 two stance phases. The loading phase runs from the instant the moment first
 reaches 20 % of its stance peak to the maximum joint displacement against
 that peak moment (peak knee flexion, peak dorsiflexion); the unloading phase
