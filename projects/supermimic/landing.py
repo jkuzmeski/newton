@@ -277,6 +277,7 @@ class LandingRig:
                 outputs=[logs["root_qd"], logs["foot_q"], logs["foot_qd"]],
                 device=d,
             )
+            sim.update_foot_mobility(s0)
             for bed in sim.beds:
                 bed.bed.apply(s0)
                 columns = bed.bed.bed
