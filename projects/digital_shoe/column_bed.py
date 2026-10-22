@@ -17,7 +17,9 @@ The bed minimises the Hyperfoam/Maxwell foam energy of every column plus two
 Pasternak shear layers, ``1/2 sum k_ij (dt^2 + db^2)`` over faces, one at the
 tops and one at the bottoms (:func:`~projects.digital_shoe.contact.column_balance_pressures`).
 Each column's layers shear with :func:`~projects.digital_shoe.runtime.shear_layer_modulus`
-at its compression at the start of the step, so shear follows the axial tangent.
+at its current compression, so shear follows the axial tangent, and each
+column carries the derivative of its layers' energy over its own compression
+so that the layer forces stay conservative.
 Held tops load the carrier with ``T``, landed bottoms load the plane with
 ``R``. Columns are one-dimensional: a column bottom moves sideways with the
 carrier, so friction acts between the carrier and the plane. A landed bottom
@@ -159,6 +161,30 @@ return value;
 def _support_shared(index: int, value: int, write: int) -> int: ...
 
 
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+__shared__ float column_modulus_buffer[1024];
+if (write) column_modulus_buffer[index] = value;
+return column_modulus_buffer[index];
+#else
+return value;
+#endif
+""")
+def _modulus_shared(index: int, value: float, write: int) -> float: ...
+
+
+@wp.func_native("""
+#if defined(__CUDA_ARCH__)
+__shared__ float column_modulus_slope_buffer[1024];
+if (write) column_modulus_slope_buffer[index] = value;
+return column_modulus_slope_buffer[index];
+#else
+return value;
+#endif
+""")
+def _modulus_slope_shared(index: int, value: float, write: int) -> float: ...
+
+
 @wp.struct
 class _Bed:
     column_count: int
@@ -200,16 +226,29 @@ class _Bed:
     tangential_load: wp.array[wp.vec2]
 
 
+_STRAIN_STEP = wp.constant(1.0e-3)
+"""Strain step of the finite differences of the foam and shear-layer laws."""
+
+
 @wp.func
-def _face_coupling(bed: _Bed, base: int, column: int, j: int) -> float:
+def _set_modulus(column: int, compression: float, thickness: float, p: FoundationParams):
+    """Store a column's shear-layer modulus and its slope over strain at ``compression``."""
+    strain = wp.max(compression, 0.0) / thickness
+    modulus = shear_layer_modulus(strain, p)
+    _modulus_shared(column, modulus, 1)
+    _modulus_slope_shared(column, (shear_layer_modulus(strain + _STRAIN_STEP, p) - modulus) / _STRAIN_STEP, 1)
+
+
+@wp.func
+def _face_coupling(bed: _Bed, column: int, j: int) -> float:
     """Return the shear conductance between two columns of one world [N/m]."""
     return pasternak_coupling(
-        bed.rest_len[column], bed.rest_len[j], bed.shear_modulus[base + column], bed.shear_modulus[base + j]
+        bed.rest_len[column], bed.rest_len[j], _modulus_shared(column, 0.0, 0), _modulus_shared(j, 0.0, 0)
     )
 
 
 @wp.func
-def _face_sums(bed: _Bed, base: int, column: int, top: float, bottom: float) -> tuple[float, float, float]:
+def _face_sums(bed: _Bed, column: int, top: float, bottom: float) -> tuple[float, float, float]:
     """Return ``sum k_ij``, ``sum k_ij (t - t_j)`` and ``sum k_ij (b - b_j)`` over a column's faces."""
     coupling_sum = float(0.0)
     top_pull = float(0.0)
@@ -217,11 +256,35 @@ def _face_sums(bed: _Bed, base: int, column: int, top: float, bottom: float) -> 
     for side in range(4):
         j = bed.neighbors[column, side]
         if j >= 0:
-            k = _face_coupling(bed, base, column, j)
+            k = _face_coupling(bed, column, j)
             coupling_sum += k
             top_pull += k * (top - _top_shared(j, 0.0, 0))
             bottom_pull += k * (bottom - _bottom_shared(j, 0.0, 0))
     return coupling_sum, top_pull, bottom_pull
+
+
+@wp.func
+def _layer_squeeze(bed: _Bed, column: int, top: float, bottom: float, modulus: float, slope: float) -> float:
+    """Return the compression force of a column's shear layers [N].
+
+    The layers store ``1/2 sum_j k_ij (dt^2 + db^2)`` with ``k_ij`` following
+    both columns' compression. Its derivative over this column's compression,
+    ``1/2 sum_j dk_ij/dc (dt^2 + db^2)``, is the force that makes the layer
+    forces conservative: without it a load and unload cycle on the
+    densification wall returns more work than it took. ``modulus`` and
+    ``slope`` are the column's shear modulus [Pa] and its slope over strain [Pa].
+    """
+    own = modulus * bed.rest_len[column]
+    total = float(0.0)
+    for side in range(4):
+        j = bed.neighbors[column, side]
+        if j >= 0:
+            other = _modulus_shared(j, 0.0, 0) * bed.rest_len[j]
+            share = other / wp.max(own + other, 1.0e-30)
+            d_top = top - _top_shared(j, 0.0, 0)
+            d_bottom = bottom - _bottom_shared(j, 0.0, 0)
+            total += share * share * slope * (d_top * d_top + d_bottom * d_bottom)
+    return total
 
 
 @wp.func
@@ -345,9 +408,8 @@ def _column_bed_step(
         _bottom_shared(column, bed.bottom[i], 1)
         _clearance_shared(column, wp.transform_point(pose, bed.anchor_local[column])[2] - bed.ground_height, 1)
         _overstress_shared(column, decay * bed.q_state[i] - gain * bed.peq_prev[i], 1)
-        # The shear layers follow each column's compression at the start of the step.
-        strain = wp.max(bed.top[i] - bed.bottom[i], 0.0) / bed.rest_len[column]
-        bed.shear_modulus[i] = shear_layer_modulus(strain, p)
+        # The shear layers follow each column's compression, updated with it below.
+        _set_modulus(column, bed.top[i] - bed.bottom[i], bed.rest_len[column], p)
     _sync_threads()
     # Red-black Gauss-Seidel: lanes hold columns sorted by color and a color
     # reads only the other color, so each half sweep updates in place and then
@@ -373,8 +435,18 @@ def _column_bed_step(
             thickness = bed.rest_len[column]
             top = _top_shared(column, 0.0, 0)
             bottom = _bottom_shared(column, 0.0, 0)
-            coupling_sum, top_pull, bottom_pull = _face_sums(bed, base, column, top, bottom)
+            coupling_sum, top_pull, bottom_pull = _face_sums(bed, column, top, bottom)
             c = top - bottom
+            # The layer squeeze enters as foam pressure, at c and one strain step ahead.
+            modulus = _modulus_shared(column, 0.0, 0)
+            slope = _modulus_slope_shared(column, 0.0, 0)
+            strain_ahead = wp.max(c, 0.0) / thickness + 2.0 * _STRAIN_STEP
+            slope_ahead = (shear_layer_modulus(strain_ahead, p) - modulus) / _STRAIN_STEP - slope
+            per_pressure = 1.0 / (bed.area[column] * (1.0 + gain))
+            squeeze = per_pressure * _layer_squeeze(bed, column, top, bottom, modulus, slope)
+            squeeze_ahead = per_pressure * _layer_squeeze(
+                bed, column, top, bottom, modulus + _STRAIN_STEP * slope, slope_ahead
+            )
             t, b, state = column_balance_pressures(
                 top,
                 bottom,
@@ -389,12 +461,13 @@ def _column_bed_step(
                 _overstress_shared(column, 0.0, 0),
                 gain,
                 bed.area[column],
-                _hyperfoam_pressure(c / thickness, p),
-                _hyperfoam_pressure((c + 1.0e-3 * thickness) / thickness, p),
+                _hyperfoam_pressure(c / thickness, p) + squeeze,
+                _hyperfoam_pressure((c + _STRAIN_STEP * thickness) / thickness, p) + squeeze_ahead,
                 bed.over_relaxation,
             )
             if t != top or b != bottom:
                 _changed_shared(sweep % 3, 1, 1)
+                _set_modulus(column, t - b, thickness, p)
             _top_shared(column, t, 1)
             _bottom_shared(column, b, 1)
             _support_shared(column, state, 1)
@@ -433,7 +506,7 @@ def _column_bed_step(
         for side in range(4):
             j = bed.neighbors[column, side]
             if j >= 0:
-                k = _face_coupling(bed, base, column, j)
+                k = _face_coupling(bed, column, j)
                 on_top += k * (top - _top_shared(j, 0.0, 0))
                 on_bottom += k * (bottom - _bottom_shared(j, 0.0, 0))
         point, com, velocity, _gap = contact_kinematics(
@@ -443,7 +516,11 @@ def _column_bed_step(
         landed = (support & BOTTOM_LANDED) != 0
         # Axial column force. A column free at one end passes on exactly the shear
         # that balances that end, including the reaction of its compression bounds.
-        axial = area * wp.max(peq + q, 0.0)
+        modulus = _modulus_shared(column, 0.0, 0)
+        slope = _modulus_slope_shared(column, 0.0, 0)
+        bed.shear_modulus[i] = modulus
+        squeeze = _layer_squeeze(bed, column, top, bottom, modulus, slope)
+        axial = wp.max(area * wp.max(peq + q, 0.0) + squeeze, 0.0)
         if held and landed:
             if comp > 0.0:
                 axial = wp.max(axial - p.normal_damping * velocity[2], 0.0)
@@ -455,8 +532,13 @@ def _column_bed_step(
         if bed.implicit != 0 and held and comp > 0.0:
             # Axial tangent of the foam, by a backward difference so it never
             # steps onto the stretch floor.
-            h = 1.0e-3 * thickness
+            h = _STRAIN_STEP * thickness
             foam = area * (1.0 + gain) * (peq - _hyperfoam_pressure((comp - h) / thickness, p)) / h
+            # Forward difference of the layer squeeze, as in the column balance.
+            strain_ahead = comp / thickness + 2.0 * _STRAIN_STEP
+            slope_ahead = (shear_layer_modulus(strain_ahead, p) - modulus) / _STRAIN_STEP - slope
+            ahead = _layer_squeeze(bed, column, top, bottom, modulus + _STRAIN_STEP * slope, slope_ahead)
+            foam += (ahead - squeeze) / h
             if not landed:
                 # A floating bottom reaches the ground only through the shear
                 # layer to its landed neighbours, in series with the foam.
@@ -464,8 +546,29 @@ def _column_bed_step(
                 for side in range(4):
                     j = bed.neighbors[column, side]
                     if j >= 0 and (_support_shared(j, 0, 0) & BOTTOM_LANDED) != 0:
-                        anchored += _face_coupling(bed, base, column, j)
+                        anchored += _face_coupling(bed, column, j)
                 foam = foam * anchored / (foam + anchored + 1.0e-12)
+            # The shear layer to a landed neighbour with a free top acts in series
+            # with that neighbour's foam, or alone once it is pinned at its
+            # compression limit.
+            for side in range(4):
+                j = bed.neighbors[column, side]
+                if j >= 0 and (_support_shared(j, 0, 0) & (TOP_HELD | BOTTOM_LANDED)) == BOTTOM_LANDED:
+                    layer = _face_coupling(bed, column, j)
+                    t_j = bed.rest_len[j]
+                    c_j = wp.max(_top_shared(j, 0.0, 0) - _bottom_shared(j, 0.0, 0), 0.0)
+                    if c_j >= bed.max_strain * t_j * (1.0 - 1.0e-4):
+                        foam += layer
+                    else:
+                        h_j = _STRAIN_STEP * t_j
+                        under = (
+                            bed.area[j]
+                            * (1.0 + gain)
+                            * (_hyperfoam_pressure(c_j / t_j, p) - _hyperfoam_pressure((c_j - h_j) / t_j, p))
+                            / h_j
+                        )
+                        under = wp.max(under, 0.0)
+                        foam += layer * under / (layer + under + 1.0e-12)
             bed.stiffness[i] = dt * wp.max(foam, 0.0)
         carried = float(0.0)
         if held:
