@@ -401,7 +401,6 @@ class _Static:
     """Measured hip, knee and ankle centers and the mid-hip point [m]."""
     rotations: dict[str, np.ndarray]
     """Body rotations of the static pose."""
-    foot_level: dict[str, np.ndarray]
     """Level anatomical foot frames per side."""
 
 
@@ -414,7 +413,7 @@ def _static_pose(trial_root: Path, params: BodyParams) -> _Static:
     up = np.array([0.0, 0.0, 1.0])
     origins = {"pelvis": 0.5 * (centers["RHIP"] + centers["LHIP"])}
     pelvis = _frame(up, points["LASI"] - points["RASI"], primary_axis="z")
-    rotations, foot_level, angles = {"pelvis": pelvis}, {}, []
+    rotations, angles = {"pelvis": pelvis}, []
     for side in SIDES:
         p = side.upper()
         hip, knee, ankle = centers[f"{p}HIP"], centers[f"{p}KNEE"], centers[f"{p}ANKLE"]
@@ -438,10 +437,9 @@ def _static_pose(trial_root: Path, params: BodyParams) -> _Static:
             }
         )
         origins.update({f"thigh_{side}": hip, f"shank_{side}": knee, f"foot_{side}": ankle})
-        foot_level[side] = level
         angles.extend((*hip_angles, knee_angle, ankle_angle))
     joint_q = np.concatenate((origins["pelvis"], _matrix_quaternion(pelvis), angles))
-    return _Static(points, joint_q, origins, rotations, foot_level)
+    return _Static(points, joint_q, origins, rotations)
 
 
 def _vector(values) -> tuple[float, float, float]:
@@ -470,12 +468,12 @@ def body_params(subject: Subject) -> BodyParams:
     upright above the mid-hip point with the arms hanging at a shoulder width
     of :data:`SHOULDER_WIDTH` times stature, scaled in mass so the body mass
     equals the Visual3D model mass less the shoes it was weighed in, which
-    the simulator adds to the feet. ``sole_pitch`` levels the shoe frame in
-    the static pose.
+    the simulator adds to the feet. The foot frame is level in the static
+    pose, so the shoe needs no pitch.
     """
     shoe_pair_mass_kg = load_shoe(subject.weighed_in).pair_mass_kg if subject.weighed_in else 0.0
     reference = BodyParams()
-    hip, knee, ankle, heel, heel_to_toe, pitch, mass = [], [], [], [], [], [], []
+    hip, knee, ankle, heel, heel_to_toe, mass = [], [], [], [], [], []
     for trial in subject.trials:
         root = REPOSITORY / subject.data / trial
         mass.append(float((root / "model_mass.txt").read_text().split()[-1]))
@@ -492,7 +490,6 @@ def body_params(subject: Subject) -> BodyParams:
             heel_point = np.mean([static.points[f"{p}CAL{i}"] for i in (1, 2, 3)], axis=0)
             heel.append(m * (foot.T @ (heel_point - o[f"foot_{side}"])))
             heel_to_toe.append(m * (foot.T @ (static.points[f"{p}TOE"] - heel_point)))
-            pitch.append(_hinge_angle(foot.T @ static.foot_level[side], np.array((0.0, 1.0, 0.0))))
     body_mass = float(np.mean(mass))
     stature, rows = _DE_LEVA[subject.sex]
     scale = subject.stature_m / stature
@@ -544,7 +541,6 @@ def body_params(subject: Subject) -> BodyParams:
         hip_offset=_vector(hip_offset),
         knee_offset=_vector(knee_offset),
         ankle_offset=_vector(ankle_offset),
-        sole_pitch=float(np.mean(pitch)),
     )
 
 
@@ -589,7 +585,8 @@ def trial_reference(subject: Subject, trial: str, params: BodyParams) -> dict[st
         velocity [m/s] and angular velocity [rad/s] in world, then joint rates
         [rad/s]), ``valid`` (frames; marker fit within the limits),
         ``contact`` (frames, 2), ``grf`` [N], ``cop`` [m] and ``free_moment``
-        [N m] (frames, 2, 3); the plate arrays at the analog rate as
+        [N m] (frames, 2, 3), low-pass filtered for inverse dynamics; the
+        unfiltered plate arrays at the analog rate for impact metrics as
         ``analog_time_s``, ``analog_grf``, ``analog_cop`` and
         ``analog_free_moment``; and the ``checks`` of ``report.json``.
     """
@@ -629,7 +626,9 @@ def trial_reference(subject: Subject, trial: str, params: BodyParams) -> dict[st
     rms = {s: np.sqrt(np.mean(error[:, bounds[s] : bounds[s] + len(local[s])] ** 2, axis=1)) for s in SEGMENTS}
 
     # One plate under both feet: forces and plate moments are filtered, the COP and free moment are
-    # recomputed from them, and each contact belongs to the foot nearest its COP.
+    # recomputed from them, and each contact belongs to the foot nearest its COP. The filtered signals
+    # feed the marker-rate reference; impact metrics need the unfiltered plate at the analog rate,
+    # split by the same feet.
     analog_rate = export.analog_rate_hz
     loaded = np.isfinite(export.cop_m[:, 0])
     plate_z = float(np.median(export.cop_m[loaded, 2]))
@@ -669,13 +668,21 @@ def trial_reference(subject: Subject, trial: str, params: BodyParams) -> dict[st
         f0, f1 = np.searchsorted(frame_sample, (a + 2 * (b - a) // 5, b - 2 * (b - a) // 5))
         midstance_speed.append(-float(np.mean(np.gradient(feet[SIDES[foot]][:, 0], dt)[f0:f1])))
     time = export.marker_time_s - export.marker_time_s[0]
-    plate = {}
-    for name, values, off in (("grf", force, 0.0), ("cop", cop, np.nan), ("free_moment", free_moment, 0.0)):
-        per_foot = np.full((len(force), 2, 3), off)
-        for i in range(2):
-            per_foot[analog_foot == i, i] = values[analog_foot == i]
-        plate[name] = per_foot
+    raw = _intervals(export.force_n[:, 2] > CONTACT_THRESHOLD_N)
+    raw_foot = np.full(len(force), -1)
+    for a, b in raw:
+        raw_foot[a:b] = analog_foot[a + np.argmax(export.force_n[a:b, 2])]
 
+    def by_foot(values: np.ndarray, foot: np.ndarray, off: float) -> np.ndarray:
+        per_foot = np.full((len(values), 2, 3), off)
+        for i in range(2):
+            per_foot[foot == i, i] = values[foot == i]
+        return per_foot
+
+    signals = (("grf", force, export.force_n, 0.0), ("cop", cop, export.cop_m - center, np.nan))
+    signals += (("free_moment", free_moment, export.free_moment_nm, 0.0),)
+    filtered = {name: by_foot(values, analog_foot, off)[frame_sample] for name, values, _, off in signals}
+    unfiltered = {f"analog_{name}": by_foot(values, raw_foot, off) for name, _, values, off in signals}
     root_rotation = _quaternion_matrix(joint_q[:, 3:7])
     com = joint_q[:, :3] + root_rotation @ np.asarray(params.pelvis.com)
     joint_qd = np.concatenate(
@@ -684,7 +691,6 @@ def trial_reference(subject: Subject, trial: str, params: BodyParams) -> dict[st
     )
 
     # Checks against the unfiltered plate and the Visual3D joint angles.
-    raw = _intervals(export.force_n[:, 2] > CONTACT_THRESHOLD_N)
     inner = [(a, b, foot) for a, b, foot, _ in contacts[1:-1]]
     timing = []
     for a, b, _ in inner:
@@ -753,9 +759,9 @@ def trial_reference(subject: Subject, trial: str, params: BodyParams) -> dict[st
         "joint_qd": joint_qd,
         "valid": valid,
         "contact": analog_foot[frame_sample, None] == np.arange(2),
-        **{name: values[frame_sample] for name, values in plate.items()},
+        **filtered,
         "analog_time_s": export.analog_time_s - export.marker_time_s[0],
-        **{f"analog_{name}": values for name, values in plate.items()},
+        **unfiltered,
         "checks": checks,
     }
 

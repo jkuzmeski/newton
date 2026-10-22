@@ -1,0 +1,1 @@
+Keep the SuperMimic reference's analog-rate plate signals (`analog_grf`, `analog_cop`, `analog_free_moment`) unfiltered so impact metrics use the raw 1 kHz plate; only the marker-rate signals are low-pass filtered. The reference no longer fits a sole pitch.

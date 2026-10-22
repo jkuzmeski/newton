@@ -11,9 +11,12 @@ from pathlib import Path
 import numpy as np
 
 import newton
+from projects.impedance_instron.cartesian.visual3d import load_visual3d_export
 from projects.supermimic.body import BODY_NAMES, BodyParams, add_body
 from projects.supermimic.reference import (
+    CONTACT_THRESHOLD_N,
     F01,
+    REPOSITORY,
     DeLevaTable,
     _hinge_angle,
     _hip_angles,
@@ -26,6 +29,7 @@ from projects.supermimic.reference import (
     forward_kinematics,
     load_body_params,
     load_subject,
+    trial_reference,
 )
 
 
@@ -126,6 +130,15 @@ class TestSupermimicReference(unittest.TestCase):
         """Return start and end indices of each true run."""
         mask = np.array([1, 1, 0, 0, 1, 0, 1, 1, 1], dtype=bool)
         np.testing.assert_array_equal(_intervals(mask), [[0, 2], [4, 5], [6, 9]])
+
+    def test_analog_plate_is_unfiltered(self):
+        """Split the 1 kHz plate force by foot without filtering it."""
+        subject = load_subject(F01)
+        trial = next(iter(subject.trials))
+        ref = trial_reference(subject, trial, body_params(subject))
+        force = load_visual3d_export(REPOSITORY / subject.data / trial).force_n
+        on = force[:, 2] > CONTACT_THRESHOLD_N
+        np.testing.assert_array_equal(ref["analog_grf"].sum(axis=1)[on], force[on])
 
 
 if __name__ == "__main__":
