@@ -36,13 +36,24 @@ import numpy as np
 import torch
 import warp as wp
 
-from .body import JOINT_NAMES
+from .body import JOINT_NAMES, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
 from .reference import DeLevaTable, f01_body_params
 from .sim import RunnerSim, load_shoes
 
-__all__ = ["AUX_DIM", "STATE_DIM", "Stage0Config", "collect", "main", "read_episode"]
+__all__ = [
+    "AUX_DIM",
+    "STATE_DIM",
+    "Stage0Config",
+    "collect",
+    "episode_starts",
+    "main",
+    "make_sim",
+    "read_episode",
+    "sim_aux",
+    "sim_state",
+]
 
 JOINT_COUNT = len(JOINT_NAMES)
 STATE_DIM = 13 + 2 * JOINT_COUNT
@@ -91,6 +102,39 @@ def _log_uniform(low: float, high: float, shape, generator: torch.Generator, dev
     return low * (high / low) ** u
 
 
+def make_sim(
+    body: BodyParams, world_count: int, split: str, rng: np.random.Generator, device: str = "cuda"
+) -> tuple[RunnerSim, np.ndarray]:
+    """Build a :class:`RunnerSim` whose worlds wear shoes from sampled contexts.
+
+    Args:
+        body: Runner body parameters.
+        world_count: Simulated worlds.
+        split: ``"train"`` samples training contexts, ``"eval"`` held-out contexts
+            around the :data:`HELD_OUT_SHOE` foam.
+        rng: Generator of the context draws.
+        device: Simulation device.
+
+    Returns:
+        The simulator and the context ``xi`` [world_count, XI_DIM] of each world.
+    """
+    shoes = {s.name: s for s in load_shoes(SHOE_DATASET)}
+    # The friction entry of the held-out center is unused.
+    held_out = encode(shoes[HELD_OUT_SHOE].left.material, 0.8, GEOMETRY_NAMES.index(HELD_OUT_SHOE))
+    space = ShoeSpace(held_out=held_out)
+    xi = space.sample_training(world_count, rng) if split == "train" else space.sample_held_out(world_count, rng)
+    materials, friction, geometry = decode(xi)
+    sim = RunnerSim(body, [shoes[name] for name in GEOMETRY_NAMES], geometry, device=device)
+    sim.set_world_materials(materials, friction)
+    return sim, xi
+
+
+def episode_starts(ref: dict, split: str, device: str = "cuda") -> torch.Tensor:
+    """Return the reference flight frames of ``split`` windows as (window, frame) rows [n, 2]."""
+    in_split = ref["split"][ref["flight_window"]] == split
+    return torch.as_tensor(np.stack((ref["flight_window"][in_split], ref["flight_frame"][in_split]), 1), device=device)
+
+
 def collect(
     reference: Path,
     world_count: int,
@@ -120,24 +164,14 @@ def collect(
     with np.load(reference / "reference.npz") as f:
         ref = {k: f[k] for k in f.files}
 
-    shoes = {s.name: s for s in load_shoes(SHOE_DATASET)}
-    # The friction entry of the held-out center is unused.
-    held_out = encode(shoes[HELD_OUT_SHOE].left.material, 0.8, GEOMETRY_NAMES.index(HELD_OUT_SHOE))
-    space = ShoeSpace(held_out=held_out)
-    xi = space.sample_training(world_count, rng) if split == "train" else space.sample_held_out(world_count, rng)
-    materials, friction, geometry = decode(xi)
-    sim = RunnerSim(body, [shoes[name] for name in GEOMETRY_NAMES], geometry, device=device)
-    sim.set_world_materials(materials, friction)
+    sim, xi = make_sim(body, world_count, split, rng, device)
 
     sim_cfg = sim.config
     stride = round(sim_cfg.control_dt_s / float(ref["frame_dt"]))
     frames = ref["joint_q"].shape[1]
     ref_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     ref_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
-    in_split = ref["split"][ref["flight_window"]] == split
-    starts = torch.as_tensor(
-        np.stack((ref["flight_window"][in_split], ref["flight_frame"][in_split]), 1), device=device
-    )
+    starts = episode_starts(ref, split, device)
 
     w = world_count
     xi_t = torch.as_tensor(xi, device=device)
@@ -190,7 +224,7 @@ def collect(
 
     meta = {
         "dt_s": sim_cfg.control_dt_s,
-        "shoe": [GEOMETRY_NAMES[g] for g in geometry],
+        "shoe": [GEOMETRY_NAMES[g] for g in decode(xi)[2]],
         "split": split,
         "seed": seed,
         "reference": str(reference),
