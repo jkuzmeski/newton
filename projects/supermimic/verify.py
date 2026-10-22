@@ -4,7 +4,8 @@
 """Newton verification of SuperMimic F01 trackers (M4 exit gate).
 
 A policy runs in :class:`~projects.supermimic.sim.RunnerSim` worlds that all
-wear the subject's fitted shoe (:func:`~projects.supermimic.tracker.fixed_shoe_sim`). Each world starts at one
+wear the subject's fitted shoe, or the ``--shoe`` one
+(:func:`~projects.supermimic.tracker.fixed_shoe_sim`). Each world starts at one
 reference flight frame of the first flight phase of a reference window and
 runs to the end of the window, a fall (:func:`~projects.supermimic.tracking.termination`)
 or a sim failure (non-finite outputs or a joint speed above
@@ -56,7 +57,7 @@ from .collect import (
     sim_aux,
     sim_state,
 )
-from .context import XI_DIM
+from .context import GEOMETRY_NAMES, XI_DIM
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
 from .reference import Subject, load_body_params, load_shoe, load_subject, trial_reference
 from .sim import FOOT_BODIES, RunnerSim
@@ -834,6 +835,12 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--bed-cases", type=int, default=0, help="write the stances where the bed adds the most work, this many"
     )
+    parser.add_argument(
+        "--shoe", choices=GEOMETRY_NAMES, help="shoe the worlds wear; the subject's fitted shoe by default"
+    )
+    parser.add_argument(
+        "--worlds", type=int, nargs="+", help="run only these worlds of each split, by index, to replay single cases"
+    )
     parser.add_argument("--plot", action="store_true", help="plot the longest episode against the reference")
     parser.add_argument("--output", type=Path, required=True, help="folder of one NAME_SPLIT report folder per run")
     args = parser.parse_args(argv)
@@ -844,7 +851,8 @@ def main(argv: list[str] | None = None) -> None:
     body = load_body_params(args.reference / "body_params.json")
     subject = load_subject(args.subject or args.reference / "subject.json")
     shoe = load_shoe(subject.shoe)
-    mass = body.mass + shoe.pair_mass_kg
+    sim_shoe = load_shoe(args.shoe) if args.shoe else shoe
+    mass = body.mass + sim_shoe.pair_mass_kg
     f01 = f01_summary(args.reference, subject)
     joint_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     joint_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
@@ -858,8 +866,10 @@ def main(argv: list[str] | None = None) -> None:
 
     for split in args.split:
         starts = first_flight_starts(np.concatenate([episode_starts(ref, s, "cpu").numpy() for s in SPLITS[split]]))
+        if args.worlds:
+            starts = starts[args.worlds]
         starts = torch.as_tensor(starts, device=device)
-        sim, _ = fixed_shoe_sim(body, shoe, len(starts), float(ref["belt_speed_m_s"]))
+        sim, _ = fixed_shoe_sim(body, sim_shoe, len(starts), float(ref["belt_speed_m_s"]))
         work = SubstepWork(sim)
         stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
         runs = list(checkpoints.items()) + ([("stage0", None)] if args.stage0 else [])
@@ -877,7 +887,7 @@ def main(argv: list[str] | None = None) -> None:
                 "policy": paths.get(name, "stage-0 law"),
                 "reference": str(args.reference),
                 "split": split,
-                "shoe": shoe.name,
+                "shoe": sim_shoe.name,
                 "sim": rollout_summary(result, task, sim.config.control_dt_s, mass),
                 "f01": f01,
             }
