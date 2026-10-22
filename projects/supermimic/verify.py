@@ -300,6 +300,25 @@ class BedProbe:
         return torch.stack(after, 1).cpu().numpy()
 
 
+def strain_summary(probed: np.ndarray, steps: np.ndarray) -> dict:
+    """Return the largest column strain at step ends over the live steps of every foot.
+
+    Args:
+        probed: :meth:`BedProbe.steps` output.
+        steps: Steps of each world's episode.
+    """
+    alive = np.arange(probed.shape[1])[None] < np.asarray(steps)[:, None]
+    strain = probed[..., 0][alive]
+    strain = strain[np.isfinite(strain) & (strain > 0.0)]
+    return {
+        "loaded_foot_steps": int(strain.size),
+        "max": float(strain.max(initial=0.0)),
+        "p99_9": float(np.percentile(strain, 99.9)) if strain.size else 0.0,
+        "over_0_90": int((strain > 0.90).sum()),
+        "over_0_95": int((strain > 0.95).sum()),
+    }
+
+
 PROBE_FIELDS = (
     "max_strain",
     "max_column",
@@ -891,6 +910,9 @@ def main(argv: list[str] | None = None) -> None:
                 "sim": rollout_summary(result, task, sim.config.control_dt_s, mass),
                 "f01": f01,
             }
+            if args.bed_cases:
+                probed = probe.steps()
+                report["sim"]["bed_strain"] = strain_summary(probed, result["steps"])
             folder = args.output / f"{name}_{split}"
             folder.mkdir(parents=True, exist_ok=True)
             (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -899,7 +921,7 @@ def main(argv: list[str] | None = None) -> None:
             if args.bed_cases:
                 anchors = {bed.side: bed.bed.bed.anchor_local.numpy() for bed in sim.beds}
                 cases = bed_gain_cases(
-                    result, probe.steps(), starts, anchors, args.bed_cases, f"Bed energy gain: {name}, {split}"
+                    result, probed, starts, anchors, args.bed_cases, f"Bed energy gain: {name}, {split}"
                 )
                 (folder / "bed_gain_cases.md").write_text(cases, encoding="utf-8")
             if args.plot:
