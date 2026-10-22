@@ -63,6 +63,17 @@ class TestSupermimicBody(unittest.TestCase):
             moved = _origin(_body_q(q), f"foot_{side}")[1] - _origin(rest, f"foot_{side}")[1]
             self.assertAlmostEqual(-medial * moved, 0.43, places=4)
 
+    def test_joint_limits_bound_both_legs(self):
+        """Give every actuated joint the range of motion of the parameters on both sides."""
+        params = BodyParams()
+        builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
+        add_body(builder, params)
+        model = builder.finalize(device="cpu")
+        limits = np.array(params.joint_limits * 2)
+        np.testing.assert_allclose(model.joint_limit_lower.numpy()[6:], limits[:, 0], atol=1e-6)
+        np.testing.assert_allclose(model.joint_limit_upper.numpy()[6:], limits[:, 1], atol=1e-6)
+        self.assertLess(params.joint_limits[3][0], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

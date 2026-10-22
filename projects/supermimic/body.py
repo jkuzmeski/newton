@@ -52,6 +52,15 @@ class SegmentParams:
     """Principal moments of inertia about the center of mass along the body axes [kg m^2]."""
 
 
+# Adult range of motion (American Academy of Orthopaedic Surgeons, Greene and
+# Heckman, "The Clinical Measurement of Joint Motion", 1994), widened by 10 deg
+# for running; the knee may hyperextend by 5 deg.
+_JOINT_LIMITS = tuple(
+    (float(np.radians(lower)), float(np.radians(upper)))
+    for lower, upper in ((-40.0, 130.0), (-55.0, 40.0), (-55.0, 55.0), (-5.0, 145.0), (-60.0, 30.0))
+)
+
+
 @dataclass(frozen=True)
 class BodyParams:
     """Geometry and inertia of the runner. Leg values are for the right side.
@@ -79,6 +88,8 @@ class BodyParams:
     """Right ankle dorsiflexion axis."""
     sole_pitch: float = 0.0
     """Rotation about the foot y axis from the foot frame to the measured shoe's frame [rad]."""
+    joint_limits: tuple[tuple[float, float], ...] = _JOINT_LIMITS
+    """Lower and upper angle of the five right joints in :data:`JOINT_NAMES` order [rad]; the left side is equal."""
 
     @property
     def mass(self) -> float:
@@ -118,20 +129,25 @@ def add_body(builder: newton.ModelBuilder, params: BodyParams) -> None:
             builder.add_joint_d6(
                 pelvis,
                 thigh,
-                angular_axes=[newton.ModelBuilder.JointDofConfig(axis=tuple(axis(a))) for a in params.hip_axes],
+                angular_axes=[
+                    newton.ModelBuilder.JointDofConfig(axis=tuple(axis(a)), limit_lower=lo, limit_upper=hi)
+                    for a, (lo, hi) in zip(params.hip_axes, params.joint_limits[:3], strict=True)
+                ],
                 parent_xform=wp.transform(wp.vec3(*_mirror_point(params.hip_offset, s)), wp.quat_identity()),
                 label=f"hip_{s}",
             )
         )
-        for parent, child, offset, joint_axis, name in (
-            (thigh, shank, params.knee_offset, params.knee_axis, "knee"),
-            (shank, foot, params.ankle_offset, params.ankle_axis, "ankle"),
+        for parent, child, offset, joint_axis, (lo, hi), name in (
+            (thigh, shank, params.knee_offset, params.knee_axis, params.joint_limits[3], "knee"),
+            (shank, foot, params.ankle_offset, params.ankle_axis, params.joint_limits[4], "ankle"),
         ):
             joints.append(
                 builder.add_joint_revolute(
                     parent,
                     child,
                     axis=tuple(axis(joint_axis)),
+                    limit_lower=lo,
+                    limit_upper=hi,
                     parent_xform=wp.transform(wp.vec3(*_mirror_point(offset, s)), wp.quat_identity()),
                     label=f"{name}_{s}",
                 )
