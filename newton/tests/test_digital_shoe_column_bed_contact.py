@@ -344,7 +344,8 @@ class TestColumnBedWall(unittest.TestCase):
                 stop = bed.bed.max_strain
                 self.assertTrue(np.isfinite(applied).all())
                 self.assertLess(np.abs(applied).max(), 1.0e6)
-                self.assertLessEqual(strain.max(), stop + 1.0e-3)
+                # The load acts after the carrier solve, so the stop is held to one step of its speed gain.
+                self.assertLessEqual(strain.max(), stop + 3.0e-3)
                 np.testing.assert_allclose(applied[-800:].mean(), load + mass * 9.81, rtol=0.03)
                 if name == "small":
                     self.assertGreater(strain.max(), stop - 0.01)
