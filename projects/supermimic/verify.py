@@ -721,6 +721,8 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
             "stances_adding_energy": int((np.asarray(bed_work) > BED_WORK_TOLERANCE_J).sum()),
             "carrier_stance_j": _stats(carrier_work),
             "carrier_stances_adding_energy": int((np.asarray(carrier_work) > BED_WORK_TOLERANCE_J).sum()),
+            "carrier_stances_over_j": {str(j): int((np.asarray(carrier_work) > j).sum()) for j in (1, 5, 20, 100)},
+            "carrier_stance_max_j": float(np.max(carrier_work, initial=0.0)),
             "step_max_j": float(np.max(step_max)),
             "joint_limit_episode_percentiles_0_50_95_100_j": np.percentile(constraint_work, (0, 50, 95, 100)).tolist(),
             "flight_step_abs_percentiles_50_95_100_j": np.percentile(np.abs(flight_work), (50, 95, 100)).tolist()
@@ -759,6 +761,9 @@ def markdown(report: dict) -> str:
         f"| stances where the foot's bed wrench adds > {BED_WORK_TOLERANCE_J:g} J | "
         f"{sim['bed_work']['carrier_stances_adding_energy']} |",
         f"| foot bed-wrench work per stance [J] | {_cell(sim['bed_work']['carrier_stance_j'], 1)} |",
+        f"| stances where the foot's bed wrench adds > 1/5/20/100 J | "
+        f"{'/'.join(str(v) for v in sim['bed_work']['carrier_stances_over_j'].values())} |",
+        f"| largest bed-wrench work in one stance [J] | {sim['bed_work']['carrier_stance_max_j']:.1f} |",
         f"| largest ground work in one step [J] | {sim['bed_work']['step_max_j']:.1f} |",
         f"| joint-limit work per episode p0/p50/p95/max [J] | "
         f"{'/'.join(f'{e:.1f}' for e in sim['bed_work']['joint_limit_episode_percentiles_0_50_95_100_j'])} |",
