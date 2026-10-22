@@ -1,0 +1,1 @@
+Add the SuperMimic world model in ``projects.supermimic.world_model``: a differentiable MLP that predicts the next runner state and the step's ground reaction forces, joint torques and joint work from the state, the action, the shoe context and a short history of past states and actions, with a k-step autoregressive training loss.
