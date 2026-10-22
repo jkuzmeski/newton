@@ -162,7 +162,12 @@ class WorldModel(nn.Module):
     def fit_normalization(
         self, states: torch.Tensor, actions: torch.Tensor, xi: torch.Tensor, aux: torch.Tensor
     ) -> None:
-        """Set the input and output scales from logged windows."""
+        """Set the input and output scales from logged windows.
+
+        An input that does not vary in the data keeps its own unit as scale,
+        so a value never seen in training, such as the one-hot geometry of
+        another shoe in ``xi``, enters the network at its own size.
+        """
         for name, values in (
             ("feature", self._features(states)),
             ("action", actions.flatten(2)),
@@ -171,8 +176,11 @@ class WorldModel(nn.Module):
             ("aux", aux),
         ):
             rows = values.reshape(-1, values.shape[-1])
+            std = rows.std(0)
+            if name in ("feature", "action", "xi"):
+                std = torch.where(std > 1.0e-6, std, 1.0)
             getattr(self, f"{name}_mean").copy_(rows.mean(0))
-            getattr(self, f"{name}_std").copy_(rows.std(0).clamp_min(1.0e-6))
+            getattr(self, f"{name}_std").copy_(std.clamp_min(1.0e-6))
 
     def start(self, states: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
         """Build model states from logged steps.

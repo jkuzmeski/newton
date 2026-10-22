@@ -112,6 +112,16 @@ class TestSupermimicWorldModel(unittest.TestCase):
         rotation = model._features(state)[:, 1:10].unflatten(1, (3, 3))
         self.assertLess((rotation @ rotation.transpose(1, 2) - torch.eye(3)).abs().max().item(), 1.0e-5)
 
+    def test_constant_inputs_keep_unit_scale(self):
+        """Scale an xi entry that is constant in the data by one, not by its zero spread."""
+        model = WorldModel(1, 3, 3, history_length=1, hidden=(8,))
+        states, actions, xi, aux = _hopper(16, 6, 0, "cpu")
+        xi = torch.cat((xi, torch.ones(16, 1)), -1)
+        model.fit_normalization(states, actions, xi, aux)
+        self.assertEqual(model.xi_std[2].item(), 1.0)
+        self.assertGreater(model.xi_std[:2].min().item(), 0.0)
+        self.assertLess(model.xi_std[:2].max().item(), 1.0)
+
     def test_rollout_is_differentiable_and_shifts_history(self):
         """Propagate gradients to actions and xi and carry past states and actions in the model state."""
         torch.manual_seed(0)
