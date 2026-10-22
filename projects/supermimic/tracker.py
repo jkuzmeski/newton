@@ -346,7 +346,9 @@ def world_model_fit(
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Train the SuperMimic F01 tracker (M4).")
-    parser.add_argument("--reference", type=Path, required=True, help="F01 reference folder")
+    parser.add_argument(
+        "--reference", type=Path, default=Path("outputs/supermimic/reference_F01_2026-10-22"), help="reference folder"
+    )
     parser.add_argument("--stage0", type=Path, required=True, help="stage-0 buffer.npz; its world count sets --worlds")
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--pretrain", type=int, default=2000, help="world-model steps on stage-0 data before the loop")
@@ -367,7 +369,9 @@ def main(argv: list[str] | None = None) -> None:
     joint_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     joint_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
     buffer = ReplayBuffer.load(args.stage0, device=device)
-    sim, xi = make_sim(body, buffer.world_count, "train", np.random.default_rng(args.seed))
+    sim, xi = make_sim(
+        body, buffer.world_count, "train", np.random.default_rng(args.seed), float(ref["belt_speed_m_s"])
+    )
     stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
 
     world_model = WorldModel(JOINT_COUNT, XI_DIM, AUX_DIM, hidden=tuple(args.model_hidden)).to(device)

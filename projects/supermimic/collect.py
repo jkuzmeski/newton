@@ -51,7 +51,7 @@ from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
 from .reference import SHOE_DATASET, load_body_params, load_shoe, load_subject
-from .sim import RunnerSim, Shoe, load_shoes
+from .sim import RunnerSim, RunnerSimConfig, Shoe, load_shoes
 
 __all__ = [
     "AUX_DIM",
@@ -160,7 +160,12 @@ def reference_moments(ref: dict, body: BodyParams, shoe: Shoe) -> np.ndarray:
 
 
 def make_sim(
-    body: BodyParams, world_count: int, split: str, rng: np.random.Generator, device: str = "cuda"
+    body: BodyParams,
+    world_count: int,
+    split: str,
+    rng: np.random.Generator,
+    belt_speed_m_s: float,
+    device: str = "cuda",
 ) -> tuple[RunnerSim, np.ndarray]:
     """Build a :class:`RunnerSim` whose worlds wear shoes from sampled contexts.
 
@@ -170,6 +175,7 @@ def make_sim(
         split: ``"train"`` samples training contexts, ``"eval"`` held-out contexts
             around the :data:`HELD_OUT_SHOE` foam.
         rng: Generator of the context draws.
+        belt_speed_m_s: Treadmill belt speed of the reference [m/s].
         device: Simulation device.
 
     Returns:
@@ -181,7 +187,13 @@ def make_sim(
     space = ShoeSpace(held_out=held_out)
     xi = space.sample_training(world_count, rng) if split == "train" else space.sample_held_out(world_count, rng)
     materials, friction, geometry = decode(xi)
-    sim = RunnerSim(body, [shoes[name] for name in GEOMETRY_NAMES], geometry, device=device)
+    sim = RunnerSim(
+        body,
+        [shoes[name] for name in GEOMETRY_NAMES],
+        geometry,
+        config=RunnerSimConfig(belt_speed_m_s=belt_speed_m_s),
+        device=device,
+    )
     sim.set_world_materials(materials, friction)
     return sim, xi
 
@@ -221,7 +233,7 @@ def collect(
     with np.load(reference / "reference.npz") as f:
         ref = {k: f[k] for k in f.files}
 
-    sim, xi = make_sim(body, world_count, split, rng, device)
+    sim, xi = make_sim(body, world_count, split, rng, float(ref["belt_speed_m_s"]), device)
 
     sim_cfg = sim.config
     stride = round(sim_cfg.control_dt_s / float(ref["frame_dt"]))
@@ -389,7 +401,9 @@ def read_episode(folder: str | Path, world: int, episode: int) -> dict:
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Collect stage-0 SuperMimic transitions.")
-    parser.add_argument("--reference", type=Path, required=True, help="F01 reference folder")
+    parser.add_argument(
+        "--reference", type=Path, default=Path("outputs/supermimic/reference_F01_2026-10-22"), help="reference folder"
+    )
     parser.add_argument("--worlds", type=int, default=1024)
     parser.add_argument("--steps", type=int, default=1000, help="control steps per world")
     parser.add_argument("--split", choices=("train", "eval"), default="train")
