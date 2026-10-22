@@ -508,6 +508,7 @@ def _column_bed_step(
     force_sum = wp.vec3(0.0)
     torque_sum = wp.vec3(0.0)
     normal_sum = float(0.0)
+    pressing_sum = float(0.0)
     carried_sum = float(0.0)
     moment_sum = wp.vec2(0.0)
     largest = float(0.0)
@@ -633,11 +634,13 @@ def _column_bed_step(
         if bed.stiffness[i] == 0.0:
             free_load += _row(wp.vec3(0.0, 0.0, 1.0), point - com) * carried
         normal_sum += reaction
+        pressing_sum += wp.max(reaction, 0.0)
         carried_sum += carried
         moment_sum += wp.vec2(point[0], point[1]) * reaction
     force_total = wp.vec3(_block_sum(force_sum[0]), _block_sum(force_sum[1]), _block_sum(force_sum[2]))
     torque_total = wp.vec3(_block_sum(torque_sum[0]), _block_sum(torque_sum[1]), _block_sum(torque_sum[2]))
     normal_total = _block_sum(normal_sum)
+    pressing_total = _block_sum(pressing_sum)
     carried_total = _block_sum(carried_sum)
     moment_total = wp.vec2(_block_sum(moment_sum[0]), _block_sum(moment_sum[1]))
     largest_total = wp.tile_max(wp.tile(largest))[0]
@@ -668,6 +671,15 @@ def _column_bed_step(
         ey = wp.vec3(0.0, 1.0, 0.0)
         ez = wp.vec3(0.0, 0.0, 1.0)
         u = u0
+        # The ground holds the bottoms with at most the friction of the load the
+        # carrier presses down with; an unconverged balance can leave pushing and
+        # pulling bottoms whose reactions are decades larger.
+        share = float(1.0)
+        if pressing_total > carried_total:
+            share = wp.max(carried_total, 0.0) / pressing_total
+            for slot in range(lane, count, _BLOCK):
+                i = base + bed.order[slot]
+                bed.tangential_stiffness[i] = share * bed.tangential_stiffness[i]
         # The bed pushes and never pulls, and a bottom sticks only up to mu R: a
         # column whose end-of-step axial force would pull leaves the system, and
         # a bottom whose friction would exceed its capacity slides at capacity.
@@ -735,7 +747,7 @@ def _column_bed_step(
                     dropped += 1.0
                 s_t = bed.tangential_stiffness[i]
                 slip = wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r))
-                capacity = wp.max(p.mu, 0.0) * bed.reaction[i]
+                capacity = wp.max(p.mu, 0.0) * share * bed.reaction[i]
                 if s_t > 0.0:
                     trial = bed.tangential_load[i] - s_t * slip
                     if wp.length(trial) > capacity:
