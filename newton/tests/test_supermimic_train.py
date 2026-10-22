@@ -145,6 +145,7 @@ if _HAS_TORCH:
                     self.s[reset], _, self.k[reset] = _starts(count, self.device)
                     self.episode[reset] = self.episode_count + torch.arange(count, device=self.device)
                     self.episode_count += count
+            return {}
 
         def windows(self, batch, length):
             """Return up to ``batch`` windows of ``length`` transitions inside one episode."""
@@ -208,6 +209,33 @@ class TestSupermimicTrain(unittest.TestCase):
         self.assertIsNone(model.weight.grad)
         self.assertTrue(any(not torch.equal(a, p) for a, p in zip(actor, trainer.actor.parameters(), strict=True)))
         self.assertTrue(any(not torch.equal(c, p) for c, p in zip(critic, trainer.critic.parameters(), strict=True)))
+
+    def test_update_advances_reference_by_frame_stride(self):
+        """Advance the reference frame of goal, reward and termination by the frame stride per step."""
+        seen = {"goal": [], "reward": [], "termination": []}
+
+        def goal(k):
+            seen["goal"].append(k[0].item())
+            return _goal(k)
+
+        def reward(s, a, s_next, aux, k):
+            seen["reward"].append(k[0].item())
+            return _reward(s, a, s_next, aux, k)
+
+        def termination(s_next, k):
+            seen["termination"].append(k[0].item())
+            return _termination(s_next, k)
+
+        hooks = ImaginationHooks(_pendulum, _observe, goal, reward, termination, frame_stride=3)
+        trainer = _trainer("cpu", horizon=4)
+        s0, xi, _ = _starts(8, "cpu")
+
+        trainer.update(hooks, s0, xi, torch.full((8,), 7))
+
+        # Actor inputs at 7, 10, 13, 16, then the bootstrap value at 19 and the critic inputs at 7 .. 19.
+        self.assertEqual(seen["goal"][:5], [7, 10, 13, 16, 19])
+        self.assertEqual(seen["reward"], [10, 13, 16, 19])
+        self.assertEqual(seen["termination"], [10, 13, 16, 19])
 
     def test_actor_learns_tracking_through_true_dynamics(self):
         """Learn to track the swing when imagination uses the true dynamics."""

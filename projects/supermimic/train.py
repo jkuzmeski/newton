@@ -31,7 +31,7 @@ class ImaginationHooks:
     """Model and task functions for imagined rollouts; all tensors are batch first.
 
     ``k`` is the per-rollout reference frame index (long, shape [batch]); it
-    advances by one per step.
+    advances by :attr:`frame_stride` per step.
     """
 
     dynamics: Callable[[Tensor, Tensor, Tensor], tuple[Tensor, Tensor]]
@@ -44,6 +44,8 @@ class ImaginationHooks:
     """Reward ``(s, a, s_next, aux, k_next) -> r`` of shape [batch]."""
     termination: Callable[[Tensor, Tensor], Tensor]
     """Differentiable termination probability ``(s_next, k_next) -> d`` in [0, 1], shape [batch]."""
+    frame_stride: int = 1
+    """Reference frames per step."""
 
 
 @dataclass(frozen=True)
@@ -157,18 +159,20 @@ class Trainer:
         cfg = self.config
         s = s0
         states, observations, rewards, done = [s0], [], [], []
+        stride = hooks.frame_stride
         for t in range(cfg.horizon):
-            o = torch.cat([hooks.observe(s, xi), hooks.goal(k0 + t)], dim=-1)
+            k, k_next = k0 + t * stride, k0 + (t + 1) * stride
+            o = torch.cat([hooks.observe(s, xi), hooks.goal(k)], dim=-1)
             a = self.actor(o)
             s_next, aux = hooks.dynamics(s, a, xi)
-            rewards.append(hooks.reward(s, a, s_next, aux, k0 + t + 1))
-            done.append(hooks.termination(s_next, k0 + t + 1))
+            rewards.append(hooks.reward(s, a, s_next, aux, k_next))
+            done.append(hooks.termination(s_next, k_next))
             observations.append(o.detach())
             states.append(s_next)
             s = s_next
         rewards = torch.stack(rewards, dim=1)
         done = torch.stack(done, dim=1)
-        value_last = self.value(hooks, s, xi, k0 + cfg.horizon)
+        value_last = self.value(hooks, s, xi, k0 + cfg.horizon * stride)
         objective = imagined_return(rewards, done, value_last, cfg.gamma).mean() / cfg.horizon
 
         actor_params = [p for p in self.actor.parameters() if p.requires_grad]
@@ -200,7 +204,7 @@ class Trainer:
     ) -> float:
         cfg = self.config
         batch, steps = states.shape[:2]
-        frames = k0[:, None] + torch.arange(steps, device=k0.device)
+        frames = k0[:, None] + hooks.frame_stride * torch.arange(steps, device=k0.device)
         inputs = torch.cat(
             [states, hooks.goal(frames.reshape(-1)).reshape(batch, steps, -1), xi[:, None].expand(-1, steps, -1)],
             dim=-1,
@@ -228,7 +232,7 @@ def train(
     hooks: ImaginationHooks,
     iterations: int,
     *,
-    collect: Callable[[Trainer], None],
+    collect: Callable[[Trainer], dict[str, float]],
     fit_world_model: Callable[[], dict[str, float]],
     sample_starts: Callable[[], tuple[Tensor, Tensor, Tensor]],
     log: Callable[[int, dict[str, float]], None] | None = None,
@@ -240,8 +244,8 @@ def train(
         hooks: Imagination functions; ``hooks.dynamics`` must use the model that
             ``fit_world_model`` trains.
         iterations: Loop iterations.
-        collect: Rolls out ``trainer`` (with action noise) in the simulator and
-            stores the transitions.
+        collect: Rolls out ``trainer`` (with action noise) in the simulator,
+            stores the transitions and returns diagnostics.
         fit_world_model: Updates the world model on stored windows and returns
             diagnostics.
         sample_starts: Returns imagination start states, sim context and
@@ -249,8 +253,8 @@ def train(
         log: Receives the iteration and its diagnostics.
     """
     for iteration in range(iterations):
-        collect(trainer)
-        metrics = fit_world_model()
+        metrics = collect(trainer)
+        metrics.update(fit_world_model())
         metrics.update(trainer.update(hooks, *sample_starts()))
         if log is not None:
             log(iteration, metrics)
