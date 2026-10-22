@@ -164,6 +164,27 @@ class Trainer:
             for optimizer in (self.actor_optimizer, self.critic_optimizer)
         ]
 
+    def state_dict(self) -> dict[str, dict]:
+        """Return the networks, the target critic, the optimizers and the learning-rate schedules."""
+        return {
+            "actor": self.actor.state_dict(),
+            "critic": self.critic.state_dict(),
+            "target_critic": self.target_critic.state_dict(),
+            "actor_optimizer": self.actor_optimizer.state_dict(),
+            "critic_optimizer": self.critic_optimizer.state_dict(),
+            "schedules": [schedule.state_dict() for schedule in self.schedules],
+        }
+
+    def load_state_dict(self, state: dict[str, dict]) -> None:
+        """Restore a :meth:`state_dict`, so that training continues as if uninterrupted."""
+        self.actor.load_state_dict(state["actor"])
+        self.critic.load_state_dict(state["critic"])
+        self.target_critic.load_state_dict(state["target_critic"])
+        self.actor_optimizer.load_state_dict(state["actor_optimizer"])
+        self.critic_optimizer.load_state_dict(state["critic_optimizer"])
+        for schedule, schedule_state in zip(self.schedules, state["schedules"], strict=True):
+            schedule.load_state_dict(schedule_state)
+
     def act(self, hooks: ImaginationHooks, s: Tensor, xi: Tensor, k: Tensor) -> Tensor:
         """Return the actor's action in state ``s`` at reference frame ``k``."""
         return self.actor(torch.cat([hooks.observe(s, xi), hooks.goal(k)], dim=-1))

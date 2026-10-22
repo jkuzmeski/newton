@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import importlib.util
+import io
 import math
 import unittest
 
@@ -210,6 +211,29 @@ class TestSupermimicTrain(unittest.TestCase):
         self.assertIsNone(model.weight.grad)
         self.assertTrue(any(not torch.equal(a, p) for a, p in zip(actor, trainer.actor.parameters(), strict=True)))
         self.assertTrue(any(not torch.equal(c, p) for c, p in zip(critic, trainer.critic.parameters(), strict=True)))
+
+    def test_resume_continues_like_an_uninterrupted_run(self):
+        """Restore networks, target critic, optimizers and schedules, so a resumed update matches an uninterrupted one."""
+        hooks = ImaginationHooks(_pendulum, _observe, _goal, _reward, _termination)
+        torch.manual_seed(0)
+        trainer = _trainer("cpu", horizon=4, critic_target_rate=0.5)
+        s0, xi, k0 = _starts(16, "cpu")
+        trainer.update(hooks, s0, xi, k0)
+        checkpoint = io.BytesIO()
+        torch.save(trainer.state_dict(), checkpoint)
+        checkpoint.seek(0)
+        resumed = _trainer("cpu", horizon=4, critic_target_rate=0.5)
+        resumed.load_state_dict(torch.load(checkpoint))
+
+        torch.manual_seed(1)
+        trainer.update(hooks, s0, xi, k0)
+        torch.manual_seed(1)
+        resumed.update(hooks, s0, xi, k0)
+
+        for name in ("actor", "critic", "target_critic"):
+            expected, actual = getattr(trainer, name).state_dict(), getattr(resumed, name).state_dict()
+            for key, value in expected.items():
+                torch.testing.assert_close(actual[key], value, atol=0, rtol=0)
 
     def test_learning_rates_decay_on_a_cosine_then_stay(self):
         """Decay both learning rates to the final factor over the decay updates, then hold them."""

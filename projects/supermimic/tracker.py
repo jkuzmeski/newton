@@ -497,8 +497,7 @@ def main(argv: list[str] | None = None) -> None:
     def save(iteration: int) -> None:
         torch.save(
             {
-                "actor": trainer.actor.state_dict(),
-                "critic": critic.state_dict(),
+                **trainer.state_dict(),
                 "world_model": world_model.state_dict(),
                 "iteration": iteration,
                 "args": {key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
