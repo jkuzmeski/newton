@@ -667,10 +667,15 @@ def trial_reference(subject: Subject, trial: str, params: BodyParams) -> dict[st
     center = np.array((*joint_q[:, :2].mean(axis=0), 0.0))
     joint_q[:, :3] -= center
     cop -= center
+    # The foot rolls over the belt, so only its material point at the contact moves at belt speed.
+    frames = forward_kinematics(joint_q, params)
+    contact_point = cop[frame_sample] * (1.0, 1.0, 0.0)
     midstance_speed = []
     for a, b, foot, _ in contacts[1:-1]:
         f0, f1 = np.searchsorted(frame_sample, (a + 2 * (b - a) // 5, b - 2 * (b - a) // 5))
-        midstance_speed.append(-float(np.mean(np.gradient(feet[SIDES[foot]][:, 0], dt)[f0:f1])))
+        rotation, origin = frames[f"foot_{SIDES[foot]}"]
+        velocity = np.gradient(origin, dt, axis=0) + np.cross(_angular_velocity(rotation, dt), contact_point - origin)
+        midstance_speed.append(-float(np.mean(velocity[f0:f1, 0])))
     time = export.marker_time_s - export.marker_time_s[0]
     raw = _intervals(export.force_n[:, 2] > CONTACT_THRESHOLD_N)
     raw_foot = np.full(len(force), -1)
