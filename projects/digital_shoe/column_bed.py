@@ -16,6 +16,8 @@ connected to the carrier per column:
 The bed minimises the Hyperfoam/Maxwell foam energy of every column plus two
 Pasternak shear layers, ``1/2 sum k_ij (dt^2 + db^2)`` over faces, one at the
 tops and one at the bottoms (:func:`~projects.digital_shoe.contact.column_balance_pressures`).
+Each column's layers shear with :func:`~projects.digital_shoe.runtime.shear_layer_modulus`
+at its compression at the start of the step, so shear follows the axial tangent.
 Held tops load the carrier with ``T``, landed bottoms load the plane with
 ``R``; friction follows ``R``.
 
@@ -43,7 +45,7 @@ from .contact import (
     contact_kinematics,
     pasternak_coupling,
 )
-from .friction_maxwell import bristle_elastic_coulomb_step, elastic_coulomb_stiffness
+from .friction_maxwell import bristle_maxwell_step, elastic_coulomb_stiffness
 from .material import maxwell_coefficients, maxwell_step
 from .runtime import (
     FoundationConfig,
@@ -51,6 +53,7 @@ from .runtime import (
     _hyperfoam_pressure,
     material_shear_modulus,
     set_material_block,
+    shear_layer_modulus,
 )
 
 __all__ = [
@@ -64,6 +67,7 @@ __all__ = [
     "column_colors",
 ]
 
+_CARRIER_PASSES = wp.constant(4)
 _BLOCK = wp.constant(256)
 MAX_COLUMNS = 1024
 """Columns one block holds in shared memory."""
@@ -154,6 +158,8 @@ class _Bed:
     column_count: int
     carrier: wp.array[wp.int32]
     body_com: wp.array[wp.vec3]
+    implicit: int
+    carrier_mobility: wp.array[wp.mat44]
     anchor_local: wp.array[wp.vec3]
     rest_len: wp.array[wp.float32]
     area: wp.array[wp.float32]
@@ -173,6 +179,7 @@ class _Bed:
     q_state: wp.array[wp.float32]
     peq_prev: wp.array[wp.float32]
     deflection: wp.array[wp.vec2]
+    tangential_q: wp.array[wp.vec2]
     stuck: wp.array[wp.int32]
     dwell: wp.array[wp.float32]
     compression: wp.array[wp.float32]
@@ -183,29 +190,73 @@ class _Bed:
     carried_force: wp.array[wp.float32]
     pressure_center: wp.array[wp.vec2]
     held_strain: wp.array[wp.float32]
+    shear_modulus: wp.array[wp.float32]
+    stiffness: wp.array[wp.float32]
+    lever: wp.array[wp.vec2]
 
 
 @wp.func
-def _face_sums(bed: _Bed, column: int, shear: float) -> tuple[float, float, float]:
-    """Return ``sum k_ij``, ``sum k_ij t_j`` and ``sum k_ij b_j`` over a column's faces."""
-    thickness = bed.rest_len[column]
+def _face_coupling(bed: _Bed, base: int, column: int, j: int) -> float:
+    """Return the shear conductance between two columns of one world [N/m]."""
+    return pasternak_coupling(
+        bed.rest_len[column], bed.rest_len[j], bed.shear_modulus[base + column], bed.shear_modulus[base + j]
+    )
+
+
+@wp.func
+def _face_sums(bed: _Bed, base: int, column: int, top: float, bottom: float) -> tuple[float, float, float]:
+    """Return ``sum k_ij``, ``sum k_ij (t - t_j)`` and ``sum k_ij (b - b_j)`` over a column's faces."""
     coupling_sum = float(0.0)
-    top_sum = float(0.0)
-    bottom_sum = float(0.0)
+    top_pull = float(0.0)
+    bottom_pull = float(0.0)
     for side in range(4):
         j = bed.neighbors[column, side]
         if j >= 0:
-            k = pasternak_coupling(thickness, bed.rest_len[j], shear)
+            k = _face_coupling(bed, base, column, j)
             coupling_sum += k
-            top_sum += k * _top_shared(j, 0.0, 0)
-            bottom_sum += k * _bottom_shared(j, 0.0, 0)
-    return coupling_sum, top_sum, bottom_sum
+            top_pull += k * (top - _top_shared(j, 0.0, 0))
+            bottom_pull += k * (bottom - _bottom_shared(j, 0.0, 0))
+    return coupling_sum, top_pull, bottom_pull
 
 
 @wp.func
 def _block_sum(value: float) -> float:
     """Sum one value over the block in a fixed order."""
     return wp.tile_sum(wp.tile(value))[0]
+
+
+@wp.func
+def _carrier_velocity(
+    mass: wp.mat44d, u0: wp.vec4d, stiff: wp.vec3, stiff_moments: wp.vec3, load: wp.vec4, dt: float
+) -> wp.vec4d:
+    """Solve (M + dt A) u = M u0 + dt w for the end-of-step carrier velocity.
+
+    ``A`` is the bed stiffness times dt over (v_z, w_x, w_y, w_z) from the sums
+    ``stiff`` = (s, s r_x, s r_y) and ``stiff_moments`` = (s r_x^2, s r_y^2, s r_x r_y).
+    On the densification wall ``A`` spans many decades, so the solve runs in double
+    precision on a unit diagonal.
+    """
+    s0 = wp.float64(stiff[0])
+    sx = wp.float64(stiff[1])
+    sy = wp.float64(stiff[2])
+    sxx = wp.float64(stiff_moments[0])
+    syy = wp.float64(stiff_moments[1])
+    sxy = wp.float64(stiff_moments[2])
+    zero = wp.float64(0.0)
+    a = wp.mat44d(s0, sy, -sx, zero, sy, syy, -sxy, zero, -sx, -sxy, sxx, zero, zero, zero, zero, zero)
+    step = wp.float64(dt)
+    system = mass + step * a
+    scale = wp.vec4d()
+    for row in range(4):
+        scale[row] = wp.float64(1.0) / wp.sqrt(system[row, row])
+    scaled = wp.mat44d()
+    for row in range(4):
+        for col in range(4):
+            scaled[row, col] = scale[row] * system[row, col] * scale[col]
+    rhs = mass * u0 + step * wp.vec4d(
+        wp.float64(load[0]), wp.float64(load[1]), wp.float64(load[2]), wp.float64(load[3])
+    )
+    return wp.cw_mul(scale, wp.inverse(scaled) * wp.cw_mul(scale, rhs))
 
 
 def _column_bed_step(
@@ -234,6 +285,9 @@ def _column_bed_step(
         _bottom_shared(column, bed.bottom[i], 1)
         _clearance_shared(column, wp.transform_point(pose, bed.anchor_local[column])[2] - bed.ground_height, 1)
         _overstress_shared(column, decay * bed.q_state[i] - gain * bed.peq_prev[i], 1)
+        # The shear layers follow each column's compression at the start of the step.
+        strain = wp.max(bed.top[i] - bed.bottom[i], 0.0) / bed.rest_len[column]
+        bed.shear_modulus[i] = shear_layer_modulus(strain, p)
     _sync_threads()
     # Red-black Gauss-Seidel: lanes hold columns sorted by color and a color
     # reads only the other color, so each half sweep updates in place and then
@@ -257,9 +311,9 @@ def _column_bed_step(
         for slot in range(start + lane, end, _BLOCK):
             column = bed.order[slot]
             thickness = bed.rest_len[column]
-            coupling_sum, top_sum, bottom_sum = _face_sums(bed, column, shear)
             top = _top_shared(column, 0.0, 0)
             bottom = _bottom_shared(column, 0.0, 0)
+            coupling_sum, top_pull, bottom_pull = _face_sums(bed, base, column, top, bottom)
             c = top - bottom
             t, b, state = column_balance_pressures(
                 top,
@@ -269,8 +323,8 @@ def _column_bed_step(
                 _clearance_shared(column, 0.0, 0),
                 bed.max_strain * thickness,
                 coupling_sum,
-                top_sum,
-                bottom_sum,
+                top_pull,
+                bottom_pull,
                 thickness,
                 _overstress_shared(column, 0.0, 0),
                 gain,
@@ -296,6 +350,12 @@ def _column_bed_step(
     carried_sum = float(0.0)
     moment_sum = wp.vec2(0.0)
     largest = float(0.0)
+    # Axial stiffness of the held columns times dt, for the implicit carrier.
+    stiff = float(0.0)
+    reach = float(0.0)
+    # Load on the carrier from everything but the implicit columns' axial force.
+    free_z = float(0.0)
+    free_torque = wp.vec3(0.0)
     for slot in range(lane, count, _BLOCK):
         column = bed.order[slot]
         i = base + column
@@ -315,7 +375,7 @@ def _column_bed_step(
         for side in range(4):
             j = bed.neighbors[column, side]
             if j >= 0:
-                k = pasternak_coupling(thickness, bed.rest_len[j], shear)
+                k = _face_coupling(bed, base, column, j)
                 on_top += k * (top - _top_shared(j, 0.0, 0))
                 on_bottom += k * (bottom - _bottom_shared(j, 0.0, 0))
         point, com, velocity, _gap = contact_kinematics(
@@ -333,6 +393,27 @@ def _column_bed_step(
             axial = on_bottom
         elif landed:
             axial = -on_top
+        bed.stiffness[i] = 0.0
+        if bed.implicit != 0 and held and comp > 0.0:
+            # Axial tangent of the foam, by a backward difference so it never
+            # steps onto the stretch floor.
+            h = 1.0e-3 * thickness
+            foam = area * (1.0 + gain) * (peq - _hyperfoam_pressure((comp - h) / thickness, p)) / h
+            if not landed:
+                # A floating bottom reaches the ground only through the shear
+                # layer to its landed neighbours, in series with the foam.
+                anchored = float(0.0)
+                for side in range(4):
+                    j = bed.neighbors[column, side]
+                    if j >= 0 and (_support_shared(j, 0, 0) & BOTTOM_LANDED) != 0:
+                        anchored += _face_coupling(bed, base, column, j)
+                foam = foam * anchored / (foam + anchored + 1.0e-12)
+            s_col = dt * wp.max(foam, 0.0)
+            r = point - com
+            bed.stiffness[i] = s_col
+            bed.lever[i] = wp.vec2(r[0], r[1])
+            stiff += s_col
+            reach = wp.max(reach, wp.length(wp.vec2(r[0], r[1])))
         carried = float(0.0)
         if held:
             carried = axial + on_top
@@ -341,18 +422,23 @@ def _column_bed_step(
         if landed:
             reaction = axial - on_bottom
         kt = elastic_coulomb_stiffness(shear, area, thickness)
-        tangential, _jacobian, z, s, elapsed = bristle_elastic_coulomb_step(
+        # The bristle shears the column, so it relaxes with the foam's Maxwell branch.
+        tangential, _jacobian, z, tq, s, elapsed = bristle_maxwell_step(
             wp.vec2(velocity[0], velocity[1]),
             dt,
             reaction,
             kt,
+            p.overstress * kt * p.tau_s,
+            p.tau_s,
             p.mu,
             p.friction_release_dwell_s,
             bed.deflection[i],
+            bed.tangential_q[i],
             bed.stuck[i],
             bed.dwell[i],
         )
         bed.deflection[i] = z
+        bed.tangential_q[i] = tq
         bed.stuck[i] = s
         bed.dwell[i] = elapsed
         bed.top[i] = top
@@ -364,6 +450,11 @@ def _column_bed_step(
         force = wp.vec3(tangential[0], tangential[1], carried)
         force_sum += force
         torque_sum += wp.cross(point - com, force)
+        free = force
+        if bed.stiffness[i] > 0.0:
+            free = wp.vec3(tangential[0], tangential[1], 0.0)
+        free_z += free[2]
+        free_torque += wp.cross(point - com, free)
         normal_sum += reaction
         carried_sum += carried
         moment_sum += wp.vec2(point[0], point[1]) * reaction
@@ -373,6 +464,95 @@ def _column_bed_step(
     carried_total = _block_sum(carried_sum)
     moment_total = wp.vec2(_block_sum(moment_sum[0]), _block_sum(moment_sum[1]))
     largest_total = wp.tile_max(wp.tile(largest))[0]
+    if bed.implicit != 0:
+        s0 = _block_sum(stiff)
+        reach_total = wp.tile_max(wp.tile(reach))[0]
+        if s0 > 0.0:
+            # Linearized backward Euler of the carrier on the bed: the vertical
+            # force and its moments are taken at the end-of-step velocity u of
+            # the carrier with the effective mass of its articulation. Every lane
+            # solves the same 4x4 system, so the active set below needs no broadcast.
+            mobility = bed.carrier_mobility[w]
+            mass = wp.inverse(
+                wp.mat44d(
+                    wp.float64(mobility[0, 0]),
+                    wp.float64(mobility[0, 1]),
+                    wp.float64(mobility[0, 2]),
+                    wp.float64(mobility[0, 3]),
+                    wp.float64(mobility[1, 0]),
+                    wp.float64(mobility[1, 1]),
+                    wp.float64(mobility[1, 2]),
+                    wp.float64(mobility[1, 3]),
+                    wp.float64(mobility[2, 0]),
+                    wp.float64(mobility[2, 1]),
+                    wp.float64(mobility[2, 2]),
+                    wp.float64(mobility[2, 3]),
+                    wp.float64(mobility[3, 0]),
+                    wp.float64(mobility[3, 1]),
+                    wp.float64(mobility[3, 2]),
+                    wp.float64(mobility[3, 3]),
+                )
+            )
+            omega = wp.spatial_bottom(twist)
+            u0 = wp.vec4d(
+                wp.float64(wp.spatial_top(twist)[2]), wp.float64(omega[0]), wp.float64(omega[1]), wp.float64(omega[2])
+            )
+            free_load = wp.vec4(
+                _block_sum(free_z), _block_sum(free_torque[0]), _block_sum(free_torque[1]), _block_sum(free_torque[2])
+            )
+            u = u0
+            # The bed pushes and never pulls: a column whose end-of-step force
+            # B - s v would be negative leaves the system, and the rest re-solve.
+            # Sums are rebuilt from the active columns rather than reduced, since
+            # on the wall a column carries many decades more than the result.
+            for _pass in range(_CARRIER_PASSES):
+                stiff_sums = wp.vec3(0.0)
+                moment_sums = wp.vec3(0.0)
+                held_load = wp.vec3(0.0)
+                for slot in range(lane, count, _BLOCK):
+                    i = base + bed.order[slot]
+                    s_col = bed.stiffness[i]
+                    if s_col > 0.0:
+                        lever = bed.lever[i]
+                        carried = bed.carried[i]
+                        stiff_sums += s_col * wp.vec3(1.0, lever[0], lever[1])
+                        moment_sums += s_col * wp.vec3(lever[0] * lever[0], lever[1] * lever[1], lever[0] * lever[1])
+                        held_load += carried * wp.vec3(1.0, lever[1], -lever[0])
+                stiff_sums = wp.vec3(_block_sum(stiff_sums[0]), _block_sum(stiff_sums[1]), _block_sum(stiff_sums[2]))
+                moment_sums = wp.vec3(
+                    _block_sum(moment_sums[0]), _block_sum(moment_sums[1]), _block_sum(moment_sums[2])
+                )
+                held_load = wp.vec3(_block_sum(held_load[0]), _block_sum(held_load[1]), _block_sum(held_load[2]))
+                load = free_load + wp.vec4(held_load[0], held_load[1], held_load[2], 0.0)
+                u = _carrier_velocity(mass, u0, stiff_sums, moment_sums, load, dt)
+                dropped = float(0.0)
+                for slot in range(lane, count, _BLOCK):
+                    i = base + bed.order[slot]
+                    s_col = bed.stiffness[i]
+                    if s_col > 0.0:
+                        lever = bed.lever[i]
+                        speed = wp.float32(u[0] + u[1] * wp.float64(lever[1]) - u[2] * wp.float64(lever[0]))
+                        if s_col * speed > bed.carried[i]:
+                            bed.stiffness[i] = 0.0
+                            dropped += 1.0
+                if _block_sum(dropped) == 0.0:
+                    break
+            # The load is the carrier's momentum change M (u - u0) / dt, not the
+            # difference w - A u of two terms that are large on the wall.
+            change = mass * (u - u0) / wp.float64(dt)
+            lift = wp.max(wp.float32(change[0]), 0.0)
+            # Pushing columns cannot make a moment beyond their reach.
+            moment = wp.vec2(wp.float32(change[1]), wp.float32(change[2]))
+            if wp.length(moment) > lift * reach_total:
+                moment = moment * (lift * reach_total / wp.length(moment))
+            # The ground reaction and its center follow the carried load.
+            if carried_total > 0.0:
+                ratio = lift / carried_total
+                normal_total = normal_total * ratio
+                moment_total = moment_total * ratio
+            carried_total = lift
+            force_total = wp.vec3(force_total[0], force_total[1], lift)
+            torque_total = wp.vec3(moment[0], moment[1], torque_total[2])
     if lane == 0:
         body_f[body] = wp.spatial_vector(force_total, torque_total)
         bed.normal_force[w] = normal_total
@@ -398,6 +578,7 @@ def _reset_worlds(
     q_state: wp.array[wp.float32],
     peq_prev: wp.array[wp.float32],
     deflection: wp.array[wp.vec2],
+    tangential_q: wp.array[wp.vec2],
     stuck: wp.array[wp.int32],
     dwell: wp.array[wp.float32],
 ):
@@ -409,6 +590,7 @@ def _reset_worlds(
         q_state[i] = 0.0
         peq_prev[i] = 0.0
         deflection[i] = wp.vec2(0.0)
+        tangential_q[i] = wp.vec2(0.0)
         stuck[i] = 0
         dwell[i] = 0.0
 
@@ -457,6 +639,13 @@ class ColumnBed:
         body_com: Center of mass per body in its frame [m].
         top_gap_m: Rest clearance between the carrier surface and each top [m];
             zero by default.
+        carrier_mobility: Inverse effective mass of each world's carrier in
+            ``(v_z, w_x, w_y, w_z)`` at its center of mass, in world axes
+            [1/kg, 1/(kg m), 1/(kg m^2)], one :class:`warp.mat44` per world, kept
+            current by the caller. With it, each carrier takes the bed's normal
+            force at its end-of-step velocity (linearized backward Euler), which
+            stays stable on the foam's densification wall. Without, carriers see
+            the explicit force, as kinematically driven fixtures do.
         max_strain: Compression limit of a free top as a fraction of rest
             thickness.
         sweeps: Red-black sweeps per step, warm started from the previous step.
@@ -476,6 +665,7 @@ class ColumnBed:
     carrier: np.ndarray
     body_com: wp.array
     top_gap_m: np.ndarray | None = None
+    carrier_mobility: wp.array | None = None
     max_strain: float = 0.9
     sweeps: int = 16
     over_relaxation: float = 1.8
@@ -510,6 +700,10 @@ class ColumnBed:
         bed.column_count = n
         bed.carrier = wp.array(carrier, dtype=wp.int32, device=d)
         bed.body_com = self.body_com
+        bed.implicit = int(self.carrier_mobility is not None)
+        bed.carrier_mobility = (
+            self.carrier_mobility if bed.implicit else wp.zeros(1, dtype=wp.mat44, device=self.device)
+        )
         bed.anchor_local = wp.array(anchors, dtype=wp.vec3, device=d)
         bed.rest_len = wp.array(np.asarray(self.rest_len, np.float32), dtype=wp.float32, device=d)
         bed.area = wp.array(np.broadcast_to(np.asarray(self.area, np.float32), (n,)).copy(), dtype=wp.float32, device=d)
@@ -525,9 +719,22 @@ class ColumnBed:
         bed.sweeps = int(self.sweeps)
         bed.params = wp.zeros(self.world_count, dtype=FoundationParams, device=d)
         bed.dt = wp.zeros(self.world_count, dtype=wp.float32, device=d)
-        for name in ("top", "bottom", "q_state", "peq_prev", "dwell", "compression", "carried", "reaction"):
+        for name in (
+            "top",
+            "bottom",
+            "q_state",
+            "peq_prev",
+            "dwell",
+            "compression",
+            "carried",
+            "reaction",
+            "shear_modulus",
+            "stiffness",
+        ):
             setattr(bed, name, wp.zeros(total, dtype=wp.float32, device=d))
         bed.deflection = wp.zeros(total, dtype=wp.vec2, device=d)
+        bed.tangential_q = wp.zeros(total, dtype=wp.vec2, device=d)
+        bed.lever = wp.zeros(total, dtype=wp.vec2, device=d)
         bed.stuck = wp.zeros(total, dtype=wp.int32, device=d)
         bed.support = wp.zeros(total, dtype=wp.int32, device=d)
         bed.normal_force = wp.zeros(self.world_count, dtype=wp.float32, device=d)
@@ -573,14 +780,32 @@ class ColumnBed:
         """Return the worlds in ``mask``, or every world, to the unloaded rest shape with no history."""
         bed = self.bed
         if mask is None:
-            for array in (bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.deflection, bed.stuck, bed.dwell):
+            for array in (
+                bed.top,
+                bed.bottom,
+                bed.q_state,
+                bed.peq_prev,
+                bed.deflection,
+                bed.tangential_q,
+                bed.stuck,
+                bed.dwell,
+            ):
                 array.zero_()
             return
         wp.launch(
             _reset_worlds,
             dim=self.world_count * self.column_count,
             inputs=[mask, self.column_count],
-            outputs=[bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.deflection, bed.stuck, bed.dwell],
+            outputs=[
+                bed.top,
+                bed.bottom,
+                bed.q_state,
+                bed.peq_prev,
+                bed.deflection,
+                bed.tangential_q,
+                bed.stuck,
+                bed.dwell,
+            ],
             device=self.device,
         )
 

@@ -31,7 +31,9 @@ class ShoeMaterial:
     derives each column's own Pasternak coefficient from the equilibrium
     Ogden-Hill shear modulus and that column's rest thickness,
     ``k_i = mu_eq * t_i``, which is the shear-layer definition ``G * t`` and adds
-    no free parameter. Exporters write the bed-mean of that rule here.
+    no free parameter. Exporters write the bed-mean of that rule here. Under
+    load the column bed scales ``mu_eq`` with the column's axial tangent
+    (:func:`shear_layer_modulus`).
     """
 
     instantaneous_shear_modulus_pa: float
@@ -182,10 +184,26 @@ def material_shear_modulus(p: FoundationParams) -> wp.float32:
 
 
 @wp.func
-def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -> wp.float32:
-    """Pasternak coefficient of the shear layer between two columns [N/m].
+def shear_layer_modulus(strain: wp.float32, p: FoundationParams) -> wp.float32:
+    """Return the shear modulus of a column's shear layer at a compressive strain [Pa].
 
-    A Pasternak layer coefficient is ``G * t``. The shear modulus is the foam's
+    The layer follows compression: :func:`material_shear_modulus` scaled by the
+    equilibrium Hyperfoam tangent at ``strain`` over the tangent at rest, so a
+    foam that softens on its plateau or stiffens on its densification wall
+    shears alike. A backward difference keeps the tangent off the stretch floor.
+    """
+    h = wp.float32(1.0e-3)
+    lo = wp.max(strain - h, 0.0)
+    rest = _hyperfoam_pressure(h, p) / h
+    tangent = (_hyperfoam_pressure(lo + h, p) - _hyperfoam_pressure(lo, p)) / h
+    return material_shear_modulus(p) * tangent / rest
+
+
+@wp.func
+def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -> wp.float32:
+    """Pasternak coefficient of the shear layer between two columns at rest [N/m].
+
+    A Pasternak layer coefficient is ``G * t``. The shear modulus at rest is the foam's
     own equilibrium Ogden-Hill modulus ``mu_eq``, which for a two-term series is
     the *sum* :attr:`FoundationParams.g_eq` + :attr:`FoundationParams.g_eq2`, and
     the layer thickness at the shared face is the mean of the two column rest
@@ -193,7 +211,8 @@ def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -
     flux summed over the bed is exactly zero and the layer can only move load,
     never create it.
     """
-    return pasternak_coupling(t_i, t_j, material_shear_modulus(p))
+    shear = material_shear_modulus(p)
+    return pasternak_coupling(t_i, t_j, shear, shear)
 
 
 @dataclass
