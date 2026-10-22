@@ -1,1 +1,1 @@
-Bound the SuperMimic policy's joint stiffness and damping per joint by human short-time impedance limits.
+Bound the SuperMimic policy's joint stiffness and damping per joint by human impedance limits, from loose swing to short-time stance impedance.

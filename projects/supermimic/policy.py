@@ -18,11 +18,12 @@ __all__ = ["DAMPING_LIMITS", "STIFFNESS_LIMITS", "Actor", "Critic", "RunningNorm
 # Short-time human joint impedance bounds (R3 of whitepapers/supermimic_neuromech_params.md):
 # K_max = 4.8 rad^-1 times the joint torque capacity, B_max = 0.0046 s times K_max. The source has
 # no hip adduction or rotation values; they take the hip flexion values. Lower bounds are the
-# stage-0 minimums.
-STIFFNESS_LIMITS = ((30.0, 1127.0), (30.0, 1127.0), (30.0, 1127.0), (30.0, 1141.0), (30.0, 665.0))
+# loosest measured swing impedance (knee in swing: K 0-3.5 N m/rad, B 0.02-0.14 N m s/rad), with
+# K raised from 0 to 1 N m/rad for the log scale.
+STIFFNESS_LIMITS = ((1.0, 1127.0), (1.0, 1127.0), (1.0, 1127.0), (1.0, 1141.0), (1.0, 665.0))
 """Lower and upper joint stiffness of the five joints of one side in ``JOINT_NAMES`` order [N·m/rad]; the left side is equal."""
 
-DAMPING_LIMITS = ((0.5, 5.2), (0.5, 5.2), (0.5, 5.2), (0.5, 5.3), (0.5, 3.1))
+DAMPING_LIMITS = ((0.02, 5.2), (0.02, 5.2), (0.02, 5.2), (0.02, 5.3), (0.02, 3.1))
 """Lower and upper joint damping of the five joints of one side in ``JOINT_NAMES`` order [N·m·s/rad]; the left side is equal."""
 
 
