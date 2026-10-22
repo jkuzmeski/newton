@@ -552,7 +552,7 @@ def markdown(report: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Verify a SuperMimic F01 tracker in Newton (M4 exit gate).")
+    parser = argparse.ArgumentParser(description="Verify SuperMimic F01 trackers in Newton (M4 exit gate).")
     parser.add_argument(
         "--reference",
         type=Path,
@@ -562,12 +562,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--subject", type=Path, help="subject spec whose data folder holds the trials; the reference's by default"
     )
-    parser.add_argument("--checkpoint", type=Path, help="tracker checkpoint.pt; the stage-0 law when omitted")
-    parser.add_argument("--split", choices=("eval", "train", "all"), default="eval", help="reference windows")
+    parser.add_argument(
+        "--policy",
+        action="append",
+        default=[],
+        metavar="NAME=CHECKPOINT",
+        help="tracker checkpoint.pt to verify under NAME; repeatable",
+    )
+    parser.add_argument("--stage0", action="store_true", help="also verify the stage-0 law, as NAME stage0")
+    parser.add_argument(
+        "--split", choices=tuple(SPLITS), nargs="+", default=["eval"], help="reference windows, one run each"
+    )
     parser.add_argument("--plot", action="store_true", help="plot the longest episode against the reference")
-    parser.add_argument("--output", type=Path, required=True, help="report folder")
+    parser.add_argument("--output", type=Path, required=True, help="folder of one NAME_SPLIT report folder per run")
     args = parser.parse_args(argv)
-    args.output.mkdir(parents=True, exist_ok=True)
     device = "cuda"
 
     with np.load(args.reference / "reference.npz") as f:
@@ -575,53 +583,63 @@ def main(argv: list[str] | None = None) -> None:
     body = load_body_params(args.reference / "body_params.json")
     subject = load_subject(args.subject or args.reference / "subject.json")
     shoe = load_shoe(subject.shoe)
-    starts = first_flight_starts(np.concatenate([episode_starts(ref, s, "cpu").numpy() for s in SPLITS[args.split]]))
-    starts = torch.as_tensor(starts, device=device)
-    sim, _ = fixed_shoe_sim(body, shoe, len(starts), float(ref["belt_speed_m_s"]))
+    mass = body.mass + shoe.pair_mass_kg
+    f01 = f01_summary(args.reference, subject)
     joint_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     joint_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
+    reference = reference_states(joint_q, joint_qd)
     moment = torch.as_tensor(reference_moments(ref, body, shoe), dtype=torch.float32, device=device)
-    stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
-    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=True) if args.checkpoint else {}
-    config = TrackerConfig(goal_frames=checkpoint.get("goal_frames", TrackerConfig.goal_frames))
+    contact = torch.as_tensor(ref["contact"], device=device).reshape(-1, 2)
+    paths = dict(item.split("=", 1) for item in args.policy)
+    checkpoints = {name: torch.load(path, map_location=device, weights_only=True) for name, path in paths.items()}
     # The task reads only the history length of its world model; the sim replaces the dynamics.
     world_model = WorldModel(JOINT_COUNT, XI_DIM, 0, hidden=()).to(device)
-    task = TrackerTask(
-        world_model, reference_states(joint_q, joint_qd), moment, stride, body, sim.config.control_dt_s, config
-    )
-    if args.checkpoint:
-        policy, name = actor_policy(task, checkpoint["actor"]), str(args.checkpoint)
-    else:
-        contact = torch.as_tensor(ref["contact"], device=device).reshape(-1, 2)
-        policy, name = stage0_policy(task, contact), "stage-0 law"
 
-    result = rollout(sim, task, joint_q, joint_qd, starts, policy)
-    mass = body.mass + shoe.pair_mass_kg
-    report = {
-        "policy": name,
-        "reference": str(args.reference),
-        "split": args.split,
-        "shoe": shoe.name,
-        "sim": rollout_summary(result, task, sim.config.control_dt_s, mass),
-        "f01": f01_summary(args.reference, subject),
+    for split in args.split:
+        starts = first_flight_starts(np.concatenate([episode_starts(ref, s, "cpu").numpy() for s in SPLITS[split]]))
+        starts = torch.as_tensor(starts, device=device)
+        sim, _ = fixed_shoe_sim(body, shoe, len(starts), float(ref["belt_speed_m_s"]))
+        stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
+        runs = list(checkpoints.items()) + ([("stage0", None)] if args.stage0 else [])
+        for name, checkpoint in runs:
+            goal_frames = (checkpoint or {}).get("goal_frames", TrackerConfig.goal_frames)
+            task = TrackerTask(
+                world_model, reference, moment, stride, body, sim.config.control_dt_s, TrackerConfig(goal_frames)
+            )
+            policy = actor_policy(task, checkpoint["actor"]) if checkpoint else stage0_policy(task, contact)
+            result = rollout(sim, task, joint_q, joint_qd, starts, policy)
+            report = {
+                "policy": paths.get(name, "stage-0 law"),
+                "reference": str(args.reference),
+                "split": split,
+                "shoe": shoe.name,
+                "sim": rollout_summary(result, task, sim.config.control_dt_s, mass),
+                "f01": f01,
+            }
+            folder = args.output / f"{name}_{split}"
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+            (folder / "report.md").write_text(markdown(report), encoding="utf-8")
+            print(markdown(report))
+            if args.plot:
+                _plot_longest(result, starts, args.reference, stride, sim.config.control_dt_s, folder)
+
+
+def _plot_longest(result: dict, starts: torch.Tensor, reference: Path, stride: int, dt: float, folder: Path) -> None:
+    """Plot the longest episode of a :func:`rollout` against its reference window."""
+    from .viz import plot_trajectory, reference_trajectory  # noqa: PLC0415, needs matplotlib
+
+    i = int(np.argmax(result["steps"]))
+    n = result["steps"][i]
+    trajectory = {
+        "joint_q": np.concatenate((result["state"][i, :n, :7], result["state"][i, :n, 13 : 13 + JOINT_COUNT]), 1),
+        "grf": result["grf"][i, :n],
+        "action": result["action"][i, :n],
+        "dt": dt,
     }
-    (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    (args.output / "report.md").write_text(markdown(report), encoding="utf-8")
-    print(markdown(report))
-    if args.plot:
-        from .viz import plot_trajectory, reference_trajectory  # noqa: PLC0415, needs matplotlib
-
-        i = int(np.argmax(result["steps"]))
-        n = result["steps"][i]
-        trajectory = {
-            "joint_q": np.concatenate((result["state"][i, :n, :7], result["state"][i, :n, 13 : 13 + JOINT_COUNT]), 1),
-            "grf": result["grf"][i, :n],
-            "action": result["action"][i, :n],
-            "dt": sim.config.control_dt_s,
-        }
-        window, frame = (int(v) for v in starts[i])
-        reference, _ = reference_trajectory(args.reference, window, frame + stride)
-        plot_trajectory(trajectory, reference, args.output / f"window{window}_frame{frame}.png")
+    window, frame = (int(v) for v in starts[i])
+    window_reference, _ = reference_trajectory(reference, window, frame + stride)
+    plot_trajectory(trajectory, window_reference, folder / f"window{window}_frame{frame}.png")
 
 
 if __name__ == "__main__":
