@@ -1,0 +1,11 @@
+{
+  "name": "F01",
+  "data": "data/F01",
+  "sex": "male",
+  "stature_m": 1.65,
+  "weighed_in": "puma-fast-r-nitro-elite-3",
+  "trials": {
+    "FR3_1": "puma-fast-r-nitro-elite-3",
+    "FR3_2": "puma-fast-r-nitro-elite-3"
+  }
+}

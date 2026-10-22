@@ -50,7 +50,7 @@ from .body import JOINT_NAMES, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
-from .reference import SHOE_DATASET, DeLevaTable, f01_body_params, f01_shoe
+from .reference import SHOE_DATASET, load_body_params, load_shoe, load_subject
 from .sim import RunnerSim, Shoe, load_shoes
 
 __all__ = [
@@ -216,9 +216,8 @@ def collect(
     device = "cuda"
     rng = np.random.default_rng(seed)
     generator = torch.Generator(device).manual_seed(seed)
-    report = json.loads((reference / "report.json").read_text())
-    shoe = f01_shoe()
-    body = f01_body_params(DeLevaTable(report["body_table"]), shoe.pair_mass_kg)
+    shoe = load_shoe(load_subject(reference / "subject.json").shoe)
+    body = load_body_params(reference / "body_params.json")
     with np.load(reference / "reference.npz") as f:
         ref = {k: f[k] for k in f.files}
 

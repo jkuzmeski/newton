@@ -34,25 +34,24 @@ import numpy as np
 from .body import JOINT_NAMES, BodyParams, mirror_axis
 from .reference import (
     CONTACT_THRESHOLD_N,
-    F01_ROOT,
-    TRIALS,
-    DeLevaTable,
-    f01_body_params,
-    f01_shoe,
+    Subject,
+    body_params,
     forward_kinematics,
+    load_shoe,
+    load_subject,
     trial_reference,
 )
 from .sim import Shoe, shod_foot
 
 __all__ = [
     "GRAVITY",
-    "f01_summary",
     "inverse_dynamics",
     "joint_summary",
     "main",
     "quasi_stiffness",
     "stance_intervals",
     "stride_metrics",
+    "subject_summary",
 ]
 
 GRAVITY = 9.81
@@ -262,29 +261,29 @@ def joint_summary(angles: np.ndarray, moments: np.ndarray, stances: tuple[np.nda
     return joints
 
 
-def f01_summary(table: DeLevaTable) -> dict:
-    """Inverse dynamics, joint summary and stride metrics of the F01 FR3 trials.
+def subject_summary(subject: Subject) -> dict:
+    """Inverse dynamics, joint summary and stride metrics of the trials of ``subject``.
 
     Joint moments come from the marker-rate reference and plate signals. The
     exported free moment is not used: it has a trial-dependent offset of the
     same sign under both feet (median 13-24 N m in stance) and 23-31 Hz
     oscillation, unrelated to the plate forces, so it is not a physiological
     free moment. Stances with a rejected marker fit are dropped. Stride metrics
-    use the 1 kHz plate force. The feet wear :func:`f01_shoe`, and body
-    weight includes it.
+    use the analog-rate plate force. The feet wear the subject's shoe, and
+    body weight includes it.
 
     Args:
-        table: Sex-specific de Leva table of the body parameters.
+        subject: The runner.
 
     Returns:
         Per trial, ``stride`` (:func:`stride_metrics`) and ``joints`` (:func:`joint_summary`).
     """
-    shoe = f01_shoe()
-    params = f01_body_params(table, shoe.pair_mass_kg)
+    shoe = load_shoe(subject.shoe)
+    params = body_params(subject)
     mass = params.mass + shoe.pair_mass_kg
     summary = {}
-    for trial in TRIALS:
-        data = trial_reference(F01_ROOT / trial, params)
+    for trial in subject.trials:
+        data = trial_reference(subject, trial, params)
         dt = float(np.mean(np.diff(data["time_s"])))
         grf = data["grf"]
         moments = inverse_dynamics(
@@ -303,11 +302,13 @@ def f01_summary(table: DeLevaTable) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Summarize the F01 FR3 joint moments, quasi-stiffness and strides.")
-    parser.add_argument("--table", required=True, choices=[t.value for t in DeLevaTable], help="de Leva (1996) table")
+    parser = argparse.ArgumentParser(description="Summarize a subject's joint moments, quasi-stiffness and strides.")
+    parser.add_argument(
+        "--subject", type=Path, required=True, help="subject spec JSON, e.g. projects/supermimic/subjects/F01.json"
+    )
     parser.add_argument("--output", type=Path, help="JSON file to write")
     args = parser.parse_args(argv)
-    text = json.dumps(f01_summary(DeLevaTable(args.table)), indent=2) + "\n"
+    text = json.dumps(subject_summary(load_subject(args.subject)), indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(text, encoding="utf-8")

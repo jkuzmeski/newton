@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import json
 import tempfile
 import unittest
@@ -12,19 +13,20 @@ import numpy as np
 import newton
 from projects.supermimic.body import BODY_NAMES, BodyParams, add_body
 from projects.supermimic.reference import (
+    F01,
     DeLevaTable,
     _hinge_angle,
     _hip_angles,
     _intervals,
     _matrix_quaternion,
     _rotvec_rotation,
-    f01_body_params,
+    _subject_json,
+    body_params,
     fit_coordinates,
     forward_kinematics,
     load_body_params,
+    load_subject,
 )
-
-SHOE_PAIR_MASS_KG = 0.35
 
 
 def _random_q(rng: np.random.Generator, count: int) -> np.ndarray:
@@ -36,7 +38,7 @@ def _random_q(rng: np.random.Generator, count: int) -> np.ndarray:
 class TestSupermimicReference(unittest.TestCase):
     def test_forward_kinematics_matches_newton(self):
         """Match Newton's body poses of the runner articulation with the reference forward kinematics."""
-        params = f01_body_params(DeLevaTable.MALE, SHOE_PAIR_MASS_KG)
+        params = body_params(dataclasses.replace(load_subject(F01), weighed_in=None))
         builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
         add_body(builder, params)
         model = builder.finalize(device="cpu")
@@ -88,12 +90,13 @@ class TestSupermimicReference(unittest.TestCase):
         np.testing.assert_allclose(fitted[:, 7:], q[:, 7:], atol=1e-6)
         np.testing.assert_allclose(np.abs(np.sum(fitted[:, 3:7] * q[:, 3:7], axis=1)), 1.0, atol=1e-9)
 
-    def test_f01_body_params(self):
+    def test_body_params(self):
         """Build F01 parameters with the measured mass and leg lengths, per de Leva table."""
-        male = f01_body_params(DeLevaTable.MALE, SHOE_PAIR_MASS_KG)
-        female = f01_body_params(DeLevaTable.FEMALE, SHOE_PAIR_MASS_KG)
+        barefoot = dataclasses.replace(load_subject(F01), weighed_in=None)
+        male = body_params(barefoot)
+        female = body_params(dataclasses.replace(barefoot, sex=DeLevaTable.FEMALE))
         for params in (male, female):
-            self.assertAlmostEqual(params.mass + SHOE_PAIR_MASS_KG, 66.5, places=9)
+            self.assertAlmostEqual(params.mass, 66.5, places=9)
             self.assertGreater(-params.knee_offset[2], 0.35)
             self.assertLess(-params.knee_offset[2], 0.42)
             self.assertLess(params.hip_offset[1], -0.07)
@@ -101,9 +104,19 @@ class TestSupermimicReference(unittest.TestCase):
         self.assertAlmostEqual(male.thigh.mass, 0.1416 * 66.5)
         self.assertAlmostEqual(female.thigh.mass, 0.1478 * 66.5)
 
+    def test_load_subject(self):
+        """Read the F01 spec and read back a written subject."""
+        subject = load_subject(F01)
+        self.assertEqual(subject.sex, DeLevaTable.MALE)
+        self.assertEqual(subject.shoe, subject.weighed_in)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "subject.json"
+            path.write_text(_subject_json(subject), encoding="utf-8")
+            self.assertEqual(load_subject(path), subject)
+
     def test_load_body_params(self):
         """Read back body parameters written as JSON."""
-        params = f01_body_params(DeLevaTable.MALE, SHOE_PAIR_MASS_KG)
+        params = body_params(dataclasses.replace(load_subject(F01), weighed_in=None))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "body_params.json"
             path.write_text(json.dumps(asdict(params)), encoding="utf-8")

@@ -15,8 +15,8 @@ from projects.supermimic.analysis import (
     stride_metrics,
 )
 from projects.supermimic.body import BodyParams, add_body
-from projects.supermimic.reference import F01_SHOE, SHOE_DATASET
-from projects.supermimic.sim import FOOT_BODIES, SIDES, load_shoes, shod_foot
+from projects.supermimic.reference import F01, SHOE_DATASET, load_shoe, load_subject
+from projects.supermimic.sim import FOOT_BODIES, SIDES, shod_foot
 
 
 def _standing(frames: int = 5) -> np.ndarray:
@@ -51,7 +51,7 @@ class TestSupermimicAnalysis(unittest.TestCase):
     @unittest.skipUnless(SHOE_DATASET.exists(), "needs the column-bed dataset")
     def test_recovers_simulated_joint_torques_with_shoes(self):
         """Recover the joint torques of a free-flying runner whose feet carry the shoe mass."""
-        shoe = next(s for s in load_shoes(SHOE_DATASET) if s.name == F01_SHOE)
+        shoe = load_shoe(load_subject(F01).shoe)
         shoe = dataclasses.replace(
             shoe, left=dataclasses.replace(shoe.left, mass_kg=1.0), right=dataclasses.replace(shoe.right, mass_kg=1.0)
         )

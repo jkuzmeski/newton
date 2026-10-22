@@ -1,12 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""F01 running reference for the SuperMimic runner.
+"""Running reference of a subject for the SuperMimic runner.
 
-Builds :class:`~projects.supermimic.body.BodyParams` for subject F01 and
-reference trajectories in the runner's generalized coordinates from the
-Visual3D exports in ``data/F01`` (trials FR3_1 and FR3_2, 200 Hz markers,
-1000 Hz single treadmill force plate).
+Builds :class:`~projects.supermimic.body.BodyParams` and reference
+trajectories in the runner's generalized coordinates for a :class:`Subject`
+from its Visual3D exports (markers and a single treadmill force plate). The
+first subject is F01 (``subjects/F01.json``).
 
 Segment frames are set in each trial's static pose. The pelvis frame is the
 static stance frame: z vertical and y along the anterior superior iliac spines.
@@ -43,37 +43,30 @@ from .sim import Shoe, load_shoes
 
 __all__ = [
     "COORDINATE_NAMES",
-    "F01_ROOT",
-    "F01_SHOE",
+    "F01",
     "SHOE_DATASET",
-    "TRIALS",
     "DeLevaTable",
-    "f01_body_params",
-    "f01_shoe",
+    "Subject",
+    "body_params",
     "fit_coordinates",
     "forward_kinematics",
     "load_body_params",
+    "load_shoe",
+    "load_subject",
     "main",
     "prepare_reference",
     "trial_reference",
 ]
 
-F01_ROOT = Path(__file__).resolve().parents[2] / "data" / "F01"
-"""Visual3D exports of subject F01."""
-
-TRIALS = ("FR3_1", "FR3_2")
-"""Running trials in the FR3 shoe; each has its own static calibration."""
+REPOSITORY = Path(__file__).resolve().parents[2]
+F01 = Path(__file__).resolve().parent / "subjects" / "F01.json"
+"""Subject spec of F01."""
 
 SHOE_DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
 """Column-bed dataset of the fitted shoes."""
-F01_SHOE = "puma-fast-r-nitro-elite-3"
-"""The FR3 shoe F01 ran in, by its :data:`SHOE_DATASET` name."""
 
 COORDINATE_NAMES = ("x", "y", "z", "qx", "qy", "qz", "qw", *JOINT_NAMES)
 """Generalized coordinates: root position [m], root quaternion (xyzw), joint angles [rad]."""
-
-STATURE_M = 1.65
-"""F01 stature, the Visual3D model metric ``Height`` in ``data/F01/Simple_model.mdh`` [m]."""
 
 FILTER_CUTOFF_HZ = 20.0
 CONTACT_THRESHOLD_N = 50.0
@@ -140,6 +133,41 @@ _DE_LEVA = {
 }
 SHOULDER_WIDTH = 0.259
 """Biacromial width as a fraction of stature (Winter, Biomechanics and Motor Control of Human Movement, 2009, Fig. 4.1)."""
+
+
+@dataclass(frozen=True)
+class Subject:
+    """A runner: the Visual3D exports and what they do not record.
+
+    Each trial folder is a Visual3D export with its own static calibration,
+    model mass and manifest (with the belt speed); see the README.
+    """
+
+    name: str
+    data: Path
+    """Folder holding the trial folders [relative to the repository root]."""
+    sex: DeLevaTable
+    stature_m: float
+    weighed_in: str | None
+    """Shoe worn when the model mass was weighed, by :data:`SHOE_DATASET` name; ``None`` if barefoot."""
+    trials: dict[str, str]
+    """Running trial folder to the shoe worn, by :data:`SHOE_DATASET` name."""
+
+    @property
+    def shoe(self) -> str:
+        """The shoe of all trials; a reference holds one shoe."""
+        (name,) = set(self.trials.values())
+        return name
+
+
+def load_subject(path: Path) -> Subject:
+    """Read a subject spec, for example :data:`F01` or a reference's ``subject.json``."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return Subject(**{**data, "data": Path(data["data"]), "sex": DeLevaTable(data["sex"])})
+
+
+def _subject_json(subject: Subject) -> str:
+    return json.dumps({**asdict(subject), "data": subject.data.as_posix(), "sex": subject.sex.value}, indent=2) + "\n"
 
 
 # Rotations ---------------------------------------------------------------
@@ -427,37 +455,29 @@ def _segment_inertia(mass: float, length: float, row, axes: tuple[int, int, int]
     return inertia
 
 
-def f01_shoe() -> Shoe:
-    """Load the :data:`F01_SHOE` pair from :data:`SHOE_DATASET`."""
-    return next(shoe for shoe in load_shoes(SHOE_DATASET) if shoe.name == F01_SHOE)
+def load_shoe(name: str) -> Shoe:
+    """Load the shoe pair ``name`` from :data:`SHOE_DATASET`."""
+    return next(shoe for shoe in load_shoes(SHOE_DATASET) if shoe.name == name)
 
 
-def f01_body_params(table: DeLevaTable, shoe_pair_mass_kg: float) -> BodyParams:
-    """Return F01 body parameters from the static trials of :data:`TRIALS`.
+def body_params(subject: Subject) -> BodyParams:
+    """Return the body parameters of ``subject`` from the static poses of its trials.
 
     Joint offsets are averaged over the trials and the two sides. Leg masses,
     COM positions and radii of gyration follow de Leva (1996) Table 4 on the
     measured segment lengths. The pelvis carries the head, trunk and arms of
-    the same table, scaled from the table's mean stature to
-    :data:`STATURE_M`, upright above the mid-hip point with the arms hanging
-    at a shoulder width of :data:`SHOULDER_WIDTH` times stature, scaled in
-    mass so the body mass equals the Visual3D model mass less the shoes,
-    which the simulator adds to the feet. F01 is assumed weighed in the
-    shoes of the trials. ``sole_pitch`` levels the FR3 shoe frame in the
-    static pose.
-
-    Args:
-        table: Sex-specific de Leva table; F01 is male.
-        shoe_pair_mass_kg: Mass of the shoes worn when F01 was weighed [kg],
-            for example ``f01_shoe().pair_mass_kg``.
-
-    Returns:
-        Body parameters of F01.
+    the same table, scaled from the table's mean stature to the subject's,
+    upright above the mid-hip point with the arms hanging at a shoulder width
+    of :data:`SHOULDER_WIDTH` times stature, scaled in mass so the body mass
+    equals the Visual3D model mass less the shoes it was weighed in, which
+    the simulator adds to the feet. ``sole_pitch`` levels the shoe frame in
+    the static pose.
     """
+    shoe_pair_mass_kg = load_shoe(subject.weighed_in).pair_mass_kg if subject.weighed_in else 0.0
     reference = BodyParams()
     hip, knee, ankle, heel, heel_to_toe, pitch, mass = [], [], [], [], [], [], []
-    for trial in TRIALS:
-        root = F01_ROOT / trial
+    for trial in subject.trials:
+        root = REPOSITORY / subject.data / trial
         mass.append(float((root / "model_mass.txt").read_text().split()[-1]))
         static = _static_pose(root, reference)
         pelvis = static.rotations["pelvis"]
@@ -474,8 +494,8 @@ def f01_body_params(table: DeLevaTable, shoe_pair_mass_kg: float) -> BodyParams:
             heel_to_toe.append(m * (foot.T @ (static.points[f"{p}TOE"] - heel_point)))
             pitch.append(_hinge_angle(foot.T @ static.foot_level[side], np.array((0.0, 1.0, 0.0))))
     body_mass = float(np.mean(mass))
-    stature, rows = _DE_LEVA[table]
-    scale = STATURE_M / stature
+    stature, rows = _DE_LEVA[subject.sex]
+    scale = subject.stature_m / stature
     hip_offset, knee_offset, ankle_offset, heel, heel_to_toe = (
         np.mean(v, axis=0) for v in (hip, knee, ankle, heel, heel_to_toe)
     )
@@ -505,7 +525,7 @@ def f01_body_params(table: DeLevaTable, shoe_pair_mass_kg: float) -> BodyParams:
     vertical("trunk", cervicale)
     vertical("head", cervicale + np.array((0.0, 0.0, rows["head"][0] * scale)))
     for y in (0.5, -0.5):
-        shoulder = cervicale + np.array((0.0, y * SHOULDER_WIDTH * STATURE_M, 0.0))
+        shoulder = cervicale + np.array((0.0, y * SHOULDER_WIDTH * subject.stature_m, 0.0))
         vertical("hand", vertical("forearm", vertical("upper_arm", shoulder)))
     leg_mass = thigh.mass + shank.mass + foot.mass
     part_mass = sum(m for m, _, _ in parts)
@@ -550,7 +570,7 @@ def _angular_velocity(rotation: np.ndarray, dt: float) -> np.ndarray:
     )
 
 
-def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarray | dict]:
+def trial_reference(subject: Subject, trial: str, params: BodyParams) -> dict[str, np.ndarray | dict]:
     """Fit one trial and split its plate signals by foot.
 
     Positions are in the treadmill frame, whose belt runs backward along -x,
@@ -559,8 +579,9 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
     and a NaN COP.
 
     Args:
-        trial_root: Visual3D export directory of one trial.
-        params: Body parameters, for example from :func:`f01_body_params`.
+        subject: The runner.
+        trial: Trial folder of ``subject``.
+        params: Body parameters, for example from :func:`body_params`.
 
     Returns:
         Marker-rate arrays ``time_s`` [s] (frames), ``joint_q`` (frames, 17),
@@ -572,12 +593,13 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
         ``analog_time_s``, ``analog_grf``, ``analog_cop`` and
         ``analog_free_moment``; and the ``checks`` of ``report.json``.
     """
-    trial = load_visual3d_export(trial_root)
-    if not trial.marker_valid.all():
+    trial_root = REPOSITORY / subject.data / trial
+    export = load_visual3d_export(trial_root)
+    if not export.marker_valid.all():
         raise ValueError(f"{trial_root} has missing marker samples")
-    rate, dt = trial.point_rate_hz, 1.0 / trial.point_rate_hz
+    rate, dt = export.point_rate_hz, 1.0 / export.point_rate_hz
     names = [n for s in SEGMENTS for n in _cluster_names(s)]
-    targets = _low_pass(trial.marker_positions_m, rate)[:, [trial.marker_names.index(n) for n in names]]
+    targets = _low_pass(export.marker_positions_m, rate)[:, [export.marker_names.index(n) for n in names]]
 
     static = _static_pose(trial_root, params)
     static_frames = forward_kinematics(static.joint_q, params)
@@ -608,12 +630,14 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
 
     # One plate under both feet: forces and plate moments are filtered, the COP and free moment are
     # recomputed from them, and each contact belongs to the foot nearest its COP.
-    analog_rate = trial.analog_rate_hz
-    loaded = np.isfinite(trial.cop_m[:, 0])
-    plate_z = float(np.median(trial.cop_m[loaded, 2]))
-    arm = np.where(loaded[:, None], trial.cop_m, 0.0)
-    force = _low_pass(trial.force_n, analog_rate)
-    moment = _low_pass(np.cross(arm, trial.force_n) + np.where(loaded[:, None], trial.free_moment_nm, 0.0), analog_rate)
+    analog_rate = export.analog_rate_hz
+    loaded = np.isfinite(export.cop_m[:, 0])
+    plate_z = float(np.median(export.cop_m[loaded, 2]))
+    arm = np.where(loaded[:, None], export.cop_m, 0.0)
+    force = _low_pass(export.force_n, analog_rate)
+    moment = _low_pass(
+        np.cross(arm, export.force_n) + np.where(loaded[:, None], export.free_moment_nm, 0.0), analog_rate
+    )
     on = force[:, 2] > CONTACT_THRESHOLD_N
     cop = np.full_like(force, np.nan)
     cop[on, 0] = (plate_z * force[on, 0] - moment[on, 1]) / force[on, 2]
@@ -622,8 +646,8 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
     free_moment = np.zeros_like(force)
     free_moment[on, 2] = moment[on, 2] - cop[on, 0] * force[on, 1] + cop[on, 1] * force[on, 0]
 
-    frame_sample = np.rint((trial.marker_time_s - trial.analog_time_s[0]) * analog_rate).astype(int)
-    if not np.allclose(trial.analog_time_s[frame_sample], trial.marker_time_s, atol=0.25 / analog_rate):
+    frame_sample = np.rint((export.marker_time_s - export.analog_time_s[0]) * analog_rate).astype(int)
+    if not np.allclose(export.analog_time_s[frame_sample], export.marker_time_s, atol=0.25 / analog_rate):
         raise ValueError(f"{trial_root} marker and analog clocks do not align")
     feet = {side: cluster[f"foot_{side}"].mean(1) for side in SIDES}
     contacts = []
@@ -644,7 +668,7 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
     for a, b, foot, _ in contacts[1:-1]:
         f0, f1 = np.searchsorted(frame_sample, (a + 2 * (b - a) // 5, b - 2 * (b - a) // 5))
         midstance_speed.append(-float(np.mean(np.gradient(feet[SIDES[foot]][:, 0], dt)[f0:f1])))
-    time = trial.marker_time_s - trial.marker_time_s[0]
+    time = export.marker_time_s - export.marker_time_s[0]
     plate = {}
     for name, values, off in (("grf", force, 0.0), ("cop", cop, np.nan), ("free_moment", free_moment, 0.0)):
         per_foot = np.full((len(force), 2, 3), off)
@@ -660,7 +684,7 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
     )
 
     # Checks against the unfiltered plate and the Visual3D joint angles.
-    raw = _intervals(trial.force_n[:, 2] > CONTACT_THRESHOLD_N)
+    raw = _intervals(export.force_n[:, 2] > CONTACT_THRESHOLD_N)
     inner = [(a, b, foot) for a, b, foot, _ in contacts[1:-1]]
     timing = []
     for a, b, _ in inner:
@@ -697,7 +721,7 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
             s: {"mean": 1e3 * float(r.mean()), "p95": 1e3 * float(np.percentile(r, 95)), "max": 1e3 * float(r.max())}
             for s, r in rms.items()
         },
-        "belt_speed_manifest_m_s": float(trial.manifest["belt_speed_m_s"]),
+        "belt_speed_manifest_m_s": float(export.manifest["belt_speed_m_s"]),
         "midstance_foot_speed_m_s": float(np.median(midstance_speed)),
         "contacts": {"reference": len(contacts), "raw_plate": len(raw), "right": sum(c[2] == 0 for c in contacts)},
         "alternating": bool(np.all(np.diff([c[2] for c in contacts]) != 0)),
@@ -730,7 +754,7 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
         "valid": valid,
         "contact": analog_foot[frame_sample, None] == np.arange(2),
         **{name: values[frame_sample] for name, values in plate.items()},
-        "analog_time_s": trial.analog_time_s - trial.marker_time_s[0],
+        "analog_time_s": export.analog_time_s - export.marker_time_s[0],
         **{f"analog_{name}": values for name, values in plate.items()},
         "checks": checks,
     }
@@ -750,8 +774,8 @@ def load_body_params(path: Path) -> BodyParams:
     return BodyParams(**segments, **data)
 
 
-def prepare_reference(output: Path, table: DeLevaTable) -> dict:
-    """Write the F01 reference windows, body parameters and checks to ``output``.
+def prepare_reference(subject: Subject, output: Path) -> dict:
+    """Write the reference windows, body parameters and checks of ``subject`` to ``output``.
 
     Each trial is cut into consecutive :data:`WINDOW_S` windows; windows with a
     rejected frame are dropped. The last :data:`EVAL_WINDOWS` windows of each
@@ -763,22 +787,23 @@ def prepare_reference(output: Path, table: DeLevaTable) -> dict:
     [windows, frames, ...]), ``trial``, ``start_frame`` and ``split``
     (``train`` or ``eval``); the episode starts ``flight_window`` and
     ``flight_frame``, where both feet are off the plate for
-    :data:`FLIGHT_MARGIN_FRAMES` frames on either side; ``coordinate_names``
-    and ``frame_dt`` [s]. ``body_params.json`` holds the body parameters.
+    :data:`FLIGHT_MARGIN_FRAMES` frames on either side; ``coordinate_names``,
+    ``frame_dt`` [s] and the trials' ``belt_speed_m_s``. ``body_params.json``
+    holds the body parameters and ``subject.json`` the subject.
 
     Returns:
         The checks written to ``report.json``.
     """
-    params = f01_body_params(table, f01_shoe().pair_mass_kg)
+    params = body_params(subject)
     output.mkdir(parents=True, exist_ok=False)
     arrays = {k: [] for k in ("joint_q", "joint_qd", "contact", "grf", "cop", "trial", "start_frame", "split")}
     report = {
-        "body_table": table.value,
+        "body_table": subject.sex.value,
         "trials": {},
         "marker_limits_m": {"rms": MARKER_RMS_LIMIT_M, "max": MARKER_MAX_LIMIT_M},
     }
-    for trial in TRIALS:
-        data = trial_reference(F01_ROOT / trial, params)
+    for trial in subject.trials:
+        data = trial_reference(subject, trial, params)
         report["trials"][trial] = data["checks"]
         rate = 1.0 / (data["time_s"][1] - data["time_s"][0])
         length = round(WINDOW_S * rate)
@@ -798,6 +823,7 @@ def prepare_reference(output: Path, table: DeLevaTable) -> dict:
             "total": len(starts),
             "kept": int(sum(t == trial for t in arrays["trial"])),
         }
+    (belt_speed,) = {t["belt_speed_manifest_m_s"] for t in report["trials"].values()}
     arrays = {k: np.asarray(v) for k, v in arrays.items()}
     arrays["split"] = arrays["split"].astype(str)
     airborne = ~arrays["contact"].any(-1)
@@ -814,22 +840,24 @@ def prepare_reference(output: Path, table: DeLevaTable) -> dict:
         flight_frame=flight_frame,
         coordinate_names=np.asarray(COORDINATE_NAMES),
         frame_dt=1.0 / rate,
+        belt_speed_m_s=belt_speed,
     )
     report["windows"] = {kind: int((arrays["split"] == kind).sum()) for kind in ("train", "eval")}
     report["flight_starts"] = {kind: int((arrays["split"][flight_window] == kind).sum()) for kind in ("train", "eval")}
     (output / "body_params.json").write_text(json.dumps(asdict(params), indent=2) + "\n", encoding="utf-8")
+    (output / "subject.json").write_text(_subject_json(subject), encoding="utf-8")
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description="Prepare the F01 SuperMimic reference.")
-    parser.add_argument("--table", required=True, choices=[t.value for t in DeLevaTable], help="de Leva (1996) table")
-    parser.add_argument(
-        "--output", type=Path, default=Path("outputs/supermimic") / f"reference_{datetime.date.today()}"
-    )
+    parser = argparse.ArgumentParser(description="Prepare a subject's SuperMimic reference.")
+    parser.add_argument("--subject", type=Path, required=True, help="subject spec JSON, for example the F01 spec")
+    parser.add_argument("--output", type=Path, help="default: outputs/supermimic/reference_<subject>_<date>")
     args = parser.parse_args(argv)
-    report = prepare_reference(args.output, DeLevaTable(args.table))
+    subject = load_subject(args.subject)
+    output = args.output or Path("outputs/supermimic") / f"reference_{subject.name}_{datetime.date.today()}"
+    report = prepare_reference(subject, output)
     print(json.dumps(report, indent=2))
 
 
