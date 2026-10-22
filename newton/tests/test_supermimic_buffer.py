@@ -28,7 +28,7 @@ def _fill(buffer: ReplayBuffer, steps: int, reset_at: dict[int, list[int]], done
         )
         buffer.push(
             state,
-            torch.full((w, 1), float(t), device=buffer.device),
+            torch.full((w, 1, 1), float(t), device=buffer.device),
             torch.zeros((w, 2), device=buffer.device),
             torch.zeros((w, 3), device=buffer.device),
             torch.full((w,), t, dtype=torch.int64, device=buffer.device),
@@ -40,7 +40,7 @@ def _fill(buffer: ReplayBuffer, steps: int, reset_at: dict[int, list[int]], done
 @unittest.skipUnless(torch is not None and torch.cuda.is_available(), "PyTorch with CUDA is required")
 class TestSupermimicBuffer(unittest.TestCase):
     def setUp(self):
-        self.buffer = ReplayBuffer(3, 20, state_dim=2, action_dim=1, xi_dim=2, aux_dim=3)
+        self.buffer = ReplayBuffer(3, 20, state_shape=2, action_shape=(1, 1), xi_shape=2, aux_shape=3)
 
     def _check_windows(self, batch, steps, history):
         """Assert that windows are contiguous rows of one world and one episode."""

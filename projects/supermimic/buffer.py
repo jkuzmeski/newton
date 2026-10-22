@@ -36,10 +36,10 @@ class ReplayBuffer:
     Args:
         world_count: Number of simulated worlds.
         capacity: Rows kept per world.
-        state_dim: Length of a state row.
-        action_dim: Length of an action row.
-        xi_dim: Length of a sim-context row.
-        aux_dim: Length of an auxiliary-output row.
+        state_shape: Shape of a state row.
+        action_shape: Shape of an action row.
+        xi_shape: Shape of a sim-context row.
+        aux_shape: Shape of an auxiliary-output row.
         device: Torch device of the storage.
     """
 
@@ -48,10 +48,10 @@ class ReplayBuffer:
         world_count: int,
         capacity: int,
         *,
-        state_dim: int,
-        action_dim: int,
-        xi_dim: int,
-        aux_dim: int,
+        state_shape: int | tuple[int, ...],
+        action_shape: int | tuple[int, ...],
+        xi_shape: int | tuple[int, ...],
+        aux_shape: int | tuple[int, ...],
         device: torch.device | str = "cuda",
     ):
         self.world_count = world_count
@@ -59,9 +59,12 @@ class ReplayBuffer:
         self.device = torch.device(device)
         self.rows = 0
         """Rows pushed per world since creation."""
-        dims = {"state": state_dim, "action": action_dim, "xi": xi_dim, "aux": aux_dim}
+        rows = {"state": state_shape, "action": action_shape, "xi": xi_shape, "aux": aux_shape}
         shape = (world_count, capacity)
-        self.data = {k: torch.zeros((*shape, d), dtype=torch.float32, device=self.device) for k, d in dims.items()}
+        self.data = {
+            k: torch.zeros((*shape, *torch.Size(np.atleast_1d(s))), dtype=torch.float32, device=self.device)
+            for k, s in rows.items()
+        }
         self.data["reference"] = torch.zeros(shape, dtype=torch.int64, device=self.device)
         self.data["reset"] = torch.zeros(shape, dtype=torch.bool, device=self.device)
         self.data["done"] = torch.zeros(shape, dtype=torch.bool, device=self.device)
@@ -167,8 +170,8 @@ class ReplayBuffer:
         with np.load(path) as f:
             arrays = {key: f[key] for key in f.files}
         world_count, n = arrays["reset"].shape
-        dims = {f"{key}_dim": arrays[key].shape[-1] for key in _FLOAT_FIELDS}
-        buffer = cls(world_count, capacity or n, **dims, device=device)
+        shapes = {f"{key}_shape": arrays[key].shape[2:] for key in _FLOAT_FIELDS}
+        buffer = cls(world_count, capacity or n, **shapes, device=device)
         keep = min(n, buffer.capacity)
         for key, value in arrays.items():
             buffer.data[key][:, :keep] = torch.from_numpy(value[:, n - keep :]).to(buffer.device)
