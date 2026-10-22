@@ -16,7 +16,6 @@ def physics_source_identity() -> str:
         "runtime.py",
         "material.py",
         "contact.py",
-        "friction_maxwell.py",
     ):
         digest.update(name.encode("utf-8") + b"\0")
         digest.update((base / name).read_bytes())

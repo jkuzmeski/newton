@@ -19,11 +19,13 @@ tops and one at the bottoms (:func:`~projects.digital_shoe.contact.column_balanc
 Each column's layers shear with :func:`~projects.digital_shoe.runtime.shear_layer_modulus`
 at its compression at the start of the step, so shear follows the axial tangent.
 Held tops load the carrier with ``T``, landed bottoms load the plane with
-``R``; friction follows ``R``.
+``R``. Columns are one-dimensional: a column bottom moves sideways with the
+carrier, so friction acts between the carrier and the plane. A landed bottom
+sticks to the plane or slides at ``mu R`` (Coulomb).
 
 One CUDA block of 256 lanes advances one world: it keeps the bed in shared
 memory, runs the red-black over-relaxed sweeps, the Maxwell update, the column
-reactions, elastic-Coulomb friction and the carrier wrench in one launch, so a
+reactions, Coulomb friction and the carrier wrench in one launch, so a
 step costs one launch however many sweeps it takes.
 """
 
@@ -45,7 +47,6 @@ from .contact import (
     contact_kinematics,
     pasternak_coupling,
 )
-from .friction_maxwell import bristle_maxwell_step, elastic_coulomb_stiffness
 from .material import maxwell_coefficients, maxwell_step
 from .runtime import (
     FoundationConfig,
@@ -67,6 +68,12 @@ __all__ = [
 ]
 
 _CARRIER_PASSES = wp.constant(4)
+_STICK_SPEED = wp.constant(1.0e-4)
+"""Speed at which a sticking column's friction reaches its ground reaction [m/s].
+
+A sticking bottom resists sliding as a damper of ``R / _STICK_SPEED``, so it
+creeps at most ``mu * _STICK_SPEED`` before it slides. This is a solver
+constant, not a material property."""
 _BLOCK = wp.constant(256)
 MAX_COLUMNS = 1024
 """Columns one block holds in shared memory."""
@@ -177,10 +184,7 @@ class _Bed:
     bottom: wp.array[wp.float32]
     q_state: wp.array[wp.float32]
     peq_prev: wp.array[wp.float32]
-    deflection: wp.array[wp.vec2]
-    tangential_q: wp.array[wp.vec2]
     stuck: wp.array[wp.int32]
-    dwell: wp.array[wp.float32]
     compression: wp.array[wp.float32]
     carried: wp.array[wp.float32]
     reaction: wp.array[wp.float32]
@@ -218,6 +222,18 @@ def _face_sums(bed: _Bed, base: int, column: int, top: float, bottom: float) -> 
             top_pull += k * (top - _top_shared(j, 0.0, 0))
             bottom_pull += k * (bottom - _bottom_shared(j, 0.0, 0))
     return coupling_sum, top_pull, bottom_pull
+
+
+@wp.func
+def _coulomb(velocity: wp.vec2, reaction: float, mu: float) -> tuple[wp.vec2, int]:
+    """Return the friction on a bottom moving at ``velocity`` over the plane and whether it sticks."""
+    if reaction <= 0.0 or mu <= 0.0:
+        return wp.vec2(0.0), 0
+    force = -(reaction / _STICK_SPEED) * velocity
+    capacity = mu * reaction
+    if wp.length(force) > capacity:
+        return force * (capacity / wp.length(force)), 0
+    return force, 1
 
 
 @wp.func
@@ -331,12 +347,7 @@ def _column_bed_step(
         _overstress_shared(column, decay * bed.q_state[i] - gain * bed.peq_prev[i], 1)
         # The shear layers follow each column's compression at the start of the step.
         strain = wp.max(bed.top[i] - bed.bottom[i], 0.0) / bed.rest_len[column]
-        modulus = shear_layer_modulus(strain, p)
-        # The bristle force carries over when its stiffness changes, so a
-        # stiffening column does not release work stored at a softer one.
-        if modulus > 0.0:
-            bed.deflection[i] = bed.deflection[i] * (bed.shear_modulus[i] / modulus)
-        bed.shear_modulus[i] = modulus
+        bed.shear_modulus[i] = shear_layer_modulus(strain, p)
     _sync_threads()
     # Red-black Gauss-Seidel: lanes hold columns sorted by color and a color
     # reads only the other color, so each half sweep updates in place and then
@@ -463,40 +474,18 @@ def _column_bed_step(
         reaction = float(0.0)
         if landed:
             reaction = axial - on_bottom
-        # The bristle shears the column, so it stiffens with the column's shear
-        # layer and relaxes with the foam's Maxwell branch.
-        kt = elastic_coulomb_stiffness(bed.shear_modulus[i], area, thickness)
         tangential = wp.vec2(0.0)
         if bed.implicit != 0:
-            # The bristle is solved with the carrier below; here only its force
-            # at the start of the step and its stiffness times dt.
+            # Friction is solved with the carrier below: a landed bottom starts
+            # out sticking, as a damper of R / _STICK_SPEED.
             bed.lever[i] = point - com
             bed.tangential_stiffness[i] = 0.0
             bed.tangential_load[i] = wp.vec2(0.0)
-            if reaction > 0.0 and kt > 0.0:
-                decay_t = p.tau_s / (p.tau_s + dt)
-                if bed.stuck[i] != 0:
-                    bed.tangential_load[i] = -(kt * bed.deflection[i] + decay_t * bed.tangential_q[i])
-                bed.tangential_stiffness[i] = dt * kt * (1.0 + decay_t * p.overstress)
+            if reaction > 0.0 and p.mu > 0.0:
+                bed.tangential_stiffness[i] = reaction / _STICK_SPEED
         else:
-            tangential, _jacobian, z, tq, s, elapsed = bristle_maxwell_step(
-                wp.vec2(velocity[0], velocity[1]),
-                dt,
-                reaction,
-                kt,
-                p.overstress * kt * p.tau_s,
-                p.tau_s,
-                p.mu,
-                p.friction_release_dwell_s,
-                bed.deflection[i],
-                bed.tangential_q[i],
-                bed.stuck[i],
-                bed.dwell[i],
-            )
-            bed.deflection[i] = z
-            bed.tangential_q[i] = tq
-            bed.stuck[i] = s
-            bed.dwell[i] = elapsed
+            tangential, sticking = _coulomb(wp.vec2(velocity[0], velocity[1]), reaction, p.mu)
+            bed.stuck[i] = sticking
         bed.top[i] = top
         bed.bottom[i] = bottom
         bed.compression[i] = comp
@@ -547,9 +536,9 @@ def _column_bed_step(
         ey = wp.vec3(0.0, 1.0, 0.0)
         ez = wp.vec3(0.0, 0.0, 1.0)
         u = u0
-        # The bed pushes and never pulls, and a bristle holds only up to mu R: a
+        # The bed pushes and never pulls, and a bottom sticks only up to mu R: a
         # column whose end-of-step axial force would pull leaves the system, and
-        # a bristle whose force would exceed its capacity slides at capacity.
+        # a bottom whose friction would exceed its capacity slides at capacity.
         # Sums are rebuilt from the active columns rather than reduced, since on
         # the wall a column carries many decades more than the result.
         for _pass in range(_CARRIER_PASSES):
@@ -597,32 +586,20 @@ def _column_bed_step(
                         dropped += 1.0
             if _block_sum(dropped) == 0.0:
                 break
-        # Advance every bristle with the end-of-step speed of its point.
+        # Friction at the end-of-step speed of each bottom; sliding bottoms keep
+        # the capacity force of the active set.
         tangential_force = wp.vec3(0.0)
         tangential_torque = wp.vec3(0.0)
         for slot in range(lane, count, _BLOCK):
-            column = bed.order[slot]
-            i = base + column
+            i = base + bed.order[slot]
             r = bed.lever[i]
-            kt = elastic_coulomb_stiffness(bed.shear_modulus[i], bed.area[column], bed.rest_len[column])
-            traction, _slope, bristle, branch, holding, dwelt = bristle_maxwell_step(
-                wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r)),
-                dt,
-                bed.reaction[i],
-                kt,
-                p.overstress * kt * p.tau_s,
-                p.tau_s,
-                p.mu,
-                p.friction_release_dwell_s,
-                bed.deflection[i],
-                bed.tangential_q[i],
-                bed.stuck[i],
-                bed.dwell[i],
-            )
-            bed.deflection[i] = bristle
-            bed.tangential_q[i] = branch
-            bed.stuck[i] = holding
-            bed.dwell[i] = dwelt
+            traction = bed.tangential_load[i]
+            sticking = int(0)
+            if bed.tangential_stiffness[i] > 0.0:
+                traction, sticking = _coulomb(
+                    wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r)), bed.reaction[i], p.mu
+                )
+            bed.stuck[i] = sticking
             f = wp.vec3(traction[0], traction[1], 0.0)
             tangential_force += f
             tangential_torque += wp.cross(r, f)
@@ -670,10 +647,6 @@ def _reset_worlds(
     bottom: wp.array[wp.float32],
     q_state: wp.array[wp.float32],
     peq_prev: wp.array[wp.float32],
-    deflection: wp.array[wp.vec2],
-    tangential_q: wp.array[wp.vec2],
-    stuck: wp.array[wp.int32],
-    dwell: wp.array[wp.float32],
 ):
     """Clear the columns of the masked worlds."""
     i = wp.tid()
@@ -682,10 +655,6 @@ def _reset_worlds(
         bottom[i] = 0.0
         q_state[i] = 0.0
         peq_prev[i] = 0.0
-        deflection[i] = wp.vec2(0.0)
-        tangential_q[i] = wp.vec2(0.0)
-        stuck[i] = 0
-        dwell[i] = 0.0
 
 
 def column_colors(neighbors: np.ndarray) -> np.ndarray:
@@ -726,8 +695,8 @@ class ColumnBed:
             per column.
         materials: One material for every world, or one per world.
         config: Contact settings: the plane ``ground_height_m``, ``mu``,
-            ``friction_release_dwell_s``, ``normal_damping`` and
-            ``stretch_floor``. Friction is always elastic Coulomb.
+            ``normal_damping`` and ``stretch_floor``. Friction is Coulomb:
+            a landed bottom sticks to the plane or slides at ``mu R``.
         carrier: Carrier body index per world.
         body_com: Center of mass per body in its frame [m].
         top_gap_m: Rest clearance between the carrier surface and each top [m];
@@ -817,7 +786,6 @@ class ColumnBed:
             "bottom",
             "q_state",
             "peq_prev",
-            "dwell",
             "compression",
             "carried",
             "reaction",
@@ -825,8 +793,6 @@ class ColumnBed:
             "stiffness",
         ):
             setattr(bed, name, wp.zeros(total, dtype=wp.float32, device=d))
-        bed.deflection = wp.zeros(total, dtype=wp.vec2, device=d)
-        bed.tangential_q = wp.zeros(total, dtype=wp.vec2, device=d)
         bed.lever = wp.zeros(total, dtype=wp.vec3, device=d)
         bed.tangential_stiffness = wp.zeros(total, dtype=wp.float32, device=d)
         bed.tangential_load = wp.zeros(total, dtype=wp.vec2, device=d)
@@ -845,7 +811,6 @@ class ColumnBed:
         params.inv_h2 = 1.0 / self.spacing_m**2
         params.stretch_floor = self.config.stretch_floor
         params.normal_damping = self.config.normal_damping
-        params.friction_release_dwell_s = self.config.friction_release_dwell_s
         params.mu = mu
         return params
 
@@ -875,32 +840,14 @@ class ColumnBed:
         """Return the worlds in ``mask``, or every world, to the unloaded rest shape with no history."""
         bed = self.bed
         if mask is None:
-            for array in (
-                bed.top,
-                bed.bottom,
-                bed.q_state,
-                bed.peq_prev,
-                bed.deflection,
-                bed.tangential_q,
-                bed.stuck,
-                bed.dwell,
-            ):
+            for array in (bed.top, bed.bottom, bed.q_state, bed.peq_prev):
                 array.zero_()
             return
         wp.launch(
             _reset_worlds,
             dim=self.world_count * self.column_count,
             inputs=[mask, self.column_count],
-            outputs=[
-                bed.top,
-                bed.bottom,
-                bed.q_state,
-                bed.peq_prev,
-                bed.deflection,
-                bed.tangential_q,
-                bed.stuck,
-                bed.dwell,
-            ],
+            outputs=[bed.top, bed.bottom, bed.q_state, bed.peq_prev],
             device=self.device,
         )
 

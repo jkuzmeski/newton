@@ -5,9 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Friction-only Digital Shoe mechanics
 
-> **Live shoe friction:** the column bed (`column_bed.ColumnBed`) always uses
-> area-scaled elastic Coulomb friction
-> (`friction_maxwell.bristle_elastic_coulomb_step`). The solver modes below are a
+> **Live shoe friction:** the column bed (`column_bed.ColumnBed`) has no tangential
+> column compliance: each column bottom sticks to the ground or slides at `mu R`,
+> solved in the carrier's implicit step. The solver modes below are a
 > standalone research comparison run by the `friction` example; they do not
 > attach to the column bed.
 

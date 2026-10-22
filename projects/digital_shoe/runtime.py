@@ -96,7 +96,6 @@ class FoundationParams:
     inv_h2: wp.float32  # 1 / spacing^2 [1/m^2]
     stretch_floor: wp.float32  # minimum stretch (foam densification limit)
     normal_damping: wp.float32  # per-column Kelvin-Voigt normal damping [N.s/m]
-    friction_release_dwell_s: wp.float32  # unloaded dwell before the stick point is discarded [s]
     mu: wp.float32  # Coulomb friction coefficient
 
 
@@ -220,18 +219,14 @@ class FoundationConfig:
     """Contact settings layered on the calibrated constitutive law.
 
     ``ground_height_m`` is the horizontal contact plane [m] the column bottoms
-    land on. ``mu`` bounds the elastic Coulomb traction at ``mu * R`` for the
-    unilateral ground reaction ``R``; each column's tangential stiffness is
-    ``G_eq * area / rest_length``, a geometry-scaled contact assumption that
-    normal compression does not identify. ``friction_release_dwell_s`` preserves
-    the stick point through short normal dropouts. ``normal_damping`` is a
-    per-column Kelvin-Voigt normal damping [N.s/m] and ``stretch_floor`` the
-    minimum stretch (foam densification limit).
+    land on. ``mu`` is the Coulomb coefficient: a landed bottom sticks to the
+    plane or slides at ``mu * R`` for the unilateral ground reaction ``R``.
+    ``normal_damping`` is a per-column Kelvin-Voigt normal damping [N.s/m] and
+    ``stretch_floor`` the minimum stretch (foam densification limit).
     """
 
     stretch_floor: float = 0.05
     normal_damping: float = 0.0
-    friction_release_dwell_s: float = 0.0005
     mu: float = 0.0
     ground_height_m: float | None = None
 
@@ -240,5 +235,3 @@ class FoundationConfig:
             not np.isfinite(self.ground_height_m) or abs(self.ground_height_m) > float(np.finfo(np.float32).max)
         ):
             raise ValueError("ground_height_m must be finite in float32 or None")
-        if self.friction_release_dwell_s < 0.0:
-            raise ValueError("friction release dwell must be nonnegative")
