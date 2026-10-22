@@ -33,7 +33,7 @@ import warp as wp
 
 import newton
 from projects.digital_shoe.artifact import DigitalShoe, load_artifact
-from projects.digital_shoe.column_bed import TOP_BONDED, ColumnBed
+from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE, ColumnBed
 from projects.digital_shoe.runtime import FoundationConfig, ShoeMaterial
 
 from .body import BODY_NAMES, JOINT_NAMES, BodyParams, add_body
@@ -355,7 +355,6 @@ class _Bed:
     def __init__(self, sim: RunnerSim, shoe: Shoe, side: str, worlds: np.ndarray):
         artifact = shoe.right if side == "right" else shoe.left
         bed = artifact.column_bed
-        count = len(bed.rest_length_m)
         d = sim.device
         self.side = SIDES.index(side)
         self.worlds = worlds
@@ -363,13 +362,15 @@ class _Bed:
         self.feet = wp.array(worlds * len(BODY_NAMES) + FOOT_BODIES[self.side], dtype=wp.int32, device=d)
         self.mask = wp.zeros(len(worlds), dtype=bool, device=d)
         self.mobility = wp.zeros(len(worlds), dtype=wp.spatial_matrix, device=d)
+        # As in the bench fit, the foot holds only the tops under the last;
+        # the rim tops follow it through the shear layer.
         self.bed = ColumnBed(
             shoe.anchors_in_foot(side, sim.body.sole_pitch),
             bed.rest_length_m,
             bed.area_m2,
             bed.neighbors,
             bed.spacing_m,
-            np.full(count, TOP_BONDED, dtype=np.int32),
+            np.where(bed.top_bonded, TOP_BONDED, TOP_FREE).astype(np.int32),
             artifact.material,
             FoundationConfig(ground_height_m=0.0, mu=sim.config.friction_coefficient),
             self.feet.numpy(),

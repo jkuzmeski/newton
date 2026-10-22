@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import warp as wp
 
+from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE
 from projects.supermimic.body import BODY_NAMES, BodyParams
 from projects.supermimic.sim import FOOT_BODIES, SIDES, RunnerSim, RunnerSimConfig, load_shoes
 
@@ -110,6 +111,15 @@ class TestSupermimicSim(unittest.TestCase):
         self.assertGreater(sim.grf.numpy()[0, :, 2].sum(), 300.0)
         cop = sim.cop.numpy()[0]
         np.testing.assert_allclose(cop[:, 1], [-0.085, 0.085], atol=0.02)
+
+    def test_feet_hold_only_the_tops_under_the_last(self):
+        """Bond the tops under the bench last to the foot and leave the rim tops free."""
+        sim = RunnerSim(BodyParams(), self.shoes, [0, 1])
+        for bed in sim.beds:
+            shoe = self.shoes[bed.worlds[0]]
+            bonded = (shoe.right if SIDES[bed.side] == "right" else shoe.left).column_bed.top_bonded
+            self.assertTrue(bonded.any() and not bonded.all())
+            np.testing.assert_array_equal(bed.bed.bed.connection.numpy(), np.where(bonded, TOP_BONDED, TOP_FREE))
 
     def test_masked_reset_clears_only_masked_worlds(self):
         """Unload the masked world's shoes and leave the other world running."""
