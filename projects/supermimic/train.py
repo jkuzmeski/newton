@@ -14,6 +14,7 @@ Learning code only: no Newton import.
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -275,11 +276,18 @@ def train(
             diagnostics.
         sample_starts: Returns imagination start states, sim context and
             reference frame indices ``(s0, xi, k0)``.
-        log: Receives the iteration and its diagnostics.
+        log: Receives the iteration and its diagnostics, with the wall time of
+            each phase [s]; a phase ends when its scalar diagnostics reach the host.
     """
     for iteration in range(iterations):
+        start = time.perf_counter()
         metrics = collect(trainer)
+        collected = time.perf_counter()
         metrics.update(fit_world_model())
+        fitted = time.perf_counter()
         metrics.update(trainer.update(hooks, *sample_starts()))
+        metrics["time_collect_s"] = collected - start
+        metrics["time_world_model_s"] = fitted - collected
+        metrics["time_policy_s"] = time.perf_counter() - fitted
         if log is not None:
             log(iteration, metrics)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,10 +42,10 @@ from .collect import (
     sim_aux,
     sim_state,
 )
-from .context import XI_DIM
+from .context import GEOMETRY_NAMES, XI_DIM, encode
 from .policy import Actor, Critic, impedance_action_bounds
 from .reference import load_body_params, load_shoe, load_subject
-from .sim import RunnerSim
+from .sim import RunnerSim, RunnerSimConfig, Shoe
 from .tracking import (
     LegKinematics,
     joint_limit_violation,
@@ -57,7 +58,15 @@ from .tracking import (
 from .train import ImaginationHooks, Trainer, TrainerConfig, cosine_lr_scale, train
 from .world_model import WorldModel
 
-__all__ = ["TrackerCollector", "TrackerConfig", "TrackerTask", "main", "reference_states", "world_model_fit"]
+__all__ = [
+    "TrackerCollector",
+    "TrackerConfig",
+    "TrackerTask",
+    "fixed_shoe_sim",
+    "main",
+    "reference_states",
+    "world_model_fit",
+]
 
 
 @dataclass(frozen=True)
@@ -282,6 +291,9 @@ class TrackerCollector:
         self.frame = torch.zeros_like(self.window)
         self.reset = torch.ones(w, dtype=torch.bool, device=device)
         self.previous = torch.zeros((w, *task.action_shape), device=device)
+        self.episode_steps = torch.full_like(self.window, -1)
+        """Alive steps of each world's episode; -1 before the first episode."""
+        self.episode_return = torch.zeros(w, device=device)
 
     @torch.no_grad()
     def __call__(self, trainer: Trainer, steps: int = 1) -> dict[str, float]:
@@ -289,10 +301,15 @@ class TrackerCollector:
         task, sim, actor = self.task, self.sim, trainer.actor
         reward = torch.zeros((), device=self.xi.device)
         tracked = falls = failures = 0
+        ended_steps, ended_return = [], []
         with torch.cuda.stream(wp.stream_to_torch(sim.device)):
             for _ in range(steps):
                 reset = self.reset
                 if reset.any():
+                    ended = reset & (self.episode_steps >= 0)
+                    ended_steps.append(self.episode_steps[ended])
+                    ended_return.append(self.episode_return[ended])
+                    self.episode_steps[reset], self.episode_return[reset] = 0, 0.0
                     pick = self.starts[torch.randint(len(self.starts), (int(reset.sum()),), device=reset.device)]
                     self.window[reset], self.frame[reset] = pick[:, 0], pick[:, 1]
                     q, qd = self.joint_q[self.window, self.frame], self.joint_qd[self.window, self.frame]
@@ -311,8 +328,11 @@ class TrackerCollector:
                 )
                 self.buffer.push(state, action, self.xi, aux.masked_fill(failed[:, None], 0.0), k, reset, done)
                 alive = ~(done | failed)
-                errors = tracking_errors(after[alive], task.reference[task.frame_index(k[alive], 1)], task.kinematics)
-                reward += tracking_reward(errors).sum()
+                errors = tracking_errors(after, task.reference[task.frame_index(k, 1)], task.kinematics)
+                step = torch.where(alive, tracking_reward(errors), 0.0)
+                reward += step.sum()
+                self.episode_return += step * sim.config.control_dt_s
+                self.episode_steps += alive.long()
                 tracked += int(alive.sum())
                 falls += int(done.sum())
                 failures += int(failed.sum())
@@ -320,11 +340,38 @@ class TrackerCollector:
                 self.frame += task.frame_stride
                 self.reset = done | failed | (self.frame >= task.frames)
         seconds = steps * sim.world_count * sim.config.control_dt_s
-        return {
+        metrics = {
             "sim_tracking_reward": reward.item() / max(tracked, 1),
             "sim_falls_per_s": falls / seconds,
             "sim_failures_per_s": failures / seconds,
         }
+        ended_steps = torch.cat(ended_steps) if ended_steps else self.episode_steps[:0]
+        if len(ended_steps):
+            metrics["sim_episodes"] = len(ended_steps)
+            metrics["sim_episode_s"] = ended_steps.float().mean().item() * sim.config.control_dt_s
+            metrics["sim_episode_return"] = torch.cat(ended_return).mean().item()
+        return metrics
+
+
+def fixed_shoe_sim(
+    body: BodyParams, shoe: Shoe, world_count: int, belt_speed_m_s: float
+) -> tuple[RunnerSim, np.ndarray]:
+    """Build a :class:`RunnerSim` whose worlds all wear ``shoe`` with its fitted foams.
+
+    Args:
+        body: Runner body parameters.
+        shoe: Shoe pair from the shoe dataset; its geometry must be one of
+            :data:`~projects.supermimic.context.GEOMETRY_NAMES`.
+        world_count: Simulated worlds.
+        belt_speed_m_s: Treadmill belt speed of the reference [m/s].
+
+    Returns:
+        The simulator and the context ``xi`` [world_count, XI_DIM] of the shoe, equal in every world.
+    """
+    config = RunnerSimConfig(belt_speed_m_s=belt_speed_m_s)
+    sim = RunnerSim(body, [shoe], np.zeros(world_count, dtype=np.int32), config=config)
+    xi = encode(shoe.left.material, config.friction_coefficient, GEOMETRY_NAMES.index(shoe.name))
+    return sim, np.tile(xi, (world_count, 1))
 
 
 def world_model_fit(
@@ -348,6 +395,7 @@ def world_model_fit(
     h = world_model.history_length
 
     def fit() -> dict[str, float]:
+        total = 0.0
         for _ in range(batches):
             rows = buffer.sample(batch_size, window, history=h)
             loss = world_model.loss(rows["state"], rows["action"][:, :-1], rows["xi"][:, 0], rows["aux"][:, :-1])
@@ -355,8 +403,9 @@ def world_model_fit(
             loss.backward()
             torch.nn.utils.clip_grad_norm_(world_model.parameters(), 1.0)
             optimizer.step()
+            total += loss.detach()
         schedule.step()
-        return {"world_model_loss": loss.item()}
+        return {"world_model_loss": (total / batches).item()}
 
     return fit
 
@@ -367,6 +416,12 @@ def main(argv: list[str] | None = None) -> None:
         "--reference", type=Path, default=Path("outputs/supermimic/reference_F01_2026-10-22"), help="reference folder"
     )
     parser.add_argument("--stage0", type=Path, required=True, help="stage-0 buffer.npz; its world count sets --worlds")
+    parser.add_argument(
+        "--shoe",
+        choices=("contexts", "subject"),
+        default="contexts",
+        help="worlds wear shoes from sampled training contexts, or all wear the subject's fitted shoe",
+    )
     parser.add_argument("--iterations", type=int, default=1000)
     parser.add_argument("--pretrain", type=int, default=200, help="world-model updates on stage-0 data before the loop")
     parser.add_argument(
@@ -374,23 +429,29 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--batch", type=int, default=4096, help="imagined rollouts per policy update")
     parser.add_argument("--model-hidden", type=int, nargs="+", default=[2048, 2048, 2048])
+    parser.add_argument("--checkpoint-every", type=int, default=500, help="iterations between checkpoints")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--output", type=Path)
+    parser.add_argument("--output", type=Path, help="new or empty output folder")
     args = parser.parse_args(argv)
     output = args.output or Path("outputs/supermimic") / f"tracker_{datetime.date.today()}"
-    output.mkdir(parents=True, exist_ok=False)
+    output.mkdir(parents=True, exist_ok=True)
+    if any(output.iterdir()):
+        raise SystemExit(f"{output} is not empty")
     torch.manual_seed(args.seed)
     device = "cuda"
 
     with np.load(args.reference / "reference.npz") as f:
         ref = {k: f[k] for k in f.files}
     body = load_body_params(args.reference / "body_params.json")
+    shoe = load_shoe(load_subject(args.reference / "subject.json").shoe)
     joint_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     joint_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
     buffer = ReplayBuffer.load(args.stage0, device=device)
-    sim, xi = make_sim(
-        body, buffer.world_count, "train", np.random.default_rng(args.seed), float(ref["belt_speed_m_s"])
-    )
+    belt_speed = float(ref["belt_speed_m_s"])
+    if args.shoe == "subject":
+        sim, xi = fixed_shoe_sim(body, shoe, buffer.world_count, belt_speed)
+    else:
+        sim, xi = make_sim(body, buffer.world_count, "train", np.random.default_rng(args.seed), belt_speed)
     stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
 
     config = TrainerConfig()
@@ -400,12 +461,15 @@ def main(argv: list[str] | None = None) -> None:
     world_model.fit_normalization(rows["state"], rows["action"][:, :-1], rows["xi"][:, 0], rows["aux"][:, :-1])
     fit_world_model = world_model_fit(world_model, buffer, config)
     log = (output / "log.jsonl").open("w", encoding="utf-8")
+    start = time.perf_counter()
     for step in range(args.pretrain):
         metrics = fit_world_model()
-        if step % 10 == 0:
-            print(json.dumps({"pretrain": step, **metrics}), file=log, flush=True)
+        if step % 10 == 0 or step == args.pretrain - 1:
+            print(
+                json.dumps({"pretrain": step, "wall_s": time.perf_counter() - start, **metrics}), file=log, flush=True
+            )
 
-    moment = reference_moments(ref, body, load_shoe(load_subject(args.reference / "subject.json").shoe))
+    moment = reference_moments(ref, body, shoe)
     task = TrackerTask(
         world_model,
         reference_states(joint_q, joint_qd),
@@ -427,11 +491,27 @@ def main(argv: list[str] | None = None) -> None:
         buffer,
     )
 
+    def save() -> None:
+        torch.save(
+            {
+                "actor": trainer.actor.state_dict(),
+                "critic": critic.state_dict(),
+                "world_model": world_model.state_dict(),
+            },
+            output / "checkpoint.pt",
+        )
+
     # Sim steps per iteration alternate (e.g. 2, 3, 2, 3) so that their mean is 1 / update_to_data.
     collect_steps = iter(np.diff(np.floor(np.arange(args.iterations + 1) / args.update_to_data)).astype(int).tolist())
 
     def write(iteration: int, metrics: dict[str, float]) -> None:
+        metrics["wall_s"] = time.perf_counter() - start
+        metrics["gpu_peak_gb"] = torch.cuda.max_memory_allocated() / 2**30
+        free, total = torch.cuda.mem_get_info()
+        metrics["gpu_used_gb"] = (total - free) / 2**30
         print(json.dumps({"iteration": iteration, **metrics}), file=log, flush=True)
+        if (iteration + 1) % args.checkpoint_every == 0:
+            save()
 
     train(
         trainer,
@@ -442,10 +522,7 @@ def main(argv: list[str] | None = None) -> None:
         sample_starts=lambda: task.sample_starts(buffer, args.batch, config.horizon),
         log=write,
     )
-    torch.save(
-        {"actor": trainer.actor.state_dict(), "critic": critic.state_dict(), "world_model": world_model.state_dict()},
-        output / "checkpoint.pt",
-    )
+    save()
 
 
 if __name__ == "__main__":
