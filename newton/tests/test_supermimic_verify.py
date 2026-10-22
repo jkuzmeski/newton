@@ -92,4 +92,5 @@ class TestSupermimicVerifyWork(unittest.TestCase):
 
         self.assertEqual(np.abs(sim.grf.numpy()).max(), 0.0)
         self.assertGreater(np.abs(constraint_work).sum(), 1.0)
+        self.assertEqual(np.abs(work.carrier_work.numpy()).max(), 0.0)
         np.testing.assert_allclose(np.diff(energy), np.add(joint_work, constraint_work), atol=0.1)

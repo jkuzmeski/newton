@@ -46,7 +46,7 @@ import torch
 import warp as wp
 
 from .analysis import GRAVITY, impact_metrics, inverse_dynamics, joint_summary, stance_intervals
-from .body import JOINT_COUNT, JOINT_NAMES, STATE_DIM
+from .body import BODY_NAMES, JOINT_COUNT, JOINT_NAMES, STATE_DIM
 from .collect import (
     Stage0Config,
     episode_starts,
@@ -59,15 +59,18 @@ from .collect import (
 from .context import XI_DIM
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
 from .reference import Subject, load_body_params, load_shoe, load_subject, trial_reference
-from .sim import RunnerSim
+from .sim import FOOT_BODIES, RunnerSim
 from .tracker import TrackerConfig, TrackerTask, fixed_shoe_sim, reference_states
 from .tracking import termination
 from .world_model import WorldModel
 
 __all__ = [
+    "PROBE_FIELDS",
+    "BedProbe",
     "Policy",
     "SubstepWork",
     "actor_policy",
+    "bed_gain_cases",
     "f01_summary",
     "first_flight_starts",
     "main",
@@ -92,6 +95,9 @@ STANCE_KEYS = (
     "braking_impulse_bw_s",
     "propulsive_impulse_bw_s",
 )
+_BODIES = wp.constant(len(BODY_NAMES))
+_FOOT_R = wp.constant(FOOT_BODIES[0])
+_FOOT_L = wp.constant(FOOT_BODIES[1])
 BED_WORK_TOLERANCE_J = 1.0
 """Ground work over a stance above which the bed counts as adding energy [J]."""
 BOUND_FRACTION = 0.02
@@ -162,12 +168,30 @@ def _add_substep_work(
     wp.atomic_add(constraint_work, w, constraint[w, d] * qd * dt)
 
 
-class SubstepWork:
-    """Joint and MuJoCo constraint work of each world over one :meth:`RunnerSim.step`.
+@wp.kernel
+def _add_carrier_work(
+    dt: float,
+    body_f: wp.array[wp.spatial_vector],
+    qd_start: wp.array[wp.spatial_vector],
+    qd_end: wp.array[wp.spatial_vector],
+    carrier_work: wp.array2d[float],
+):
+    w, side = wp.tid()
+    body = w * _BODIES + wp.where(side == 0, _FOOT_R, _FOOT_L)
+    f = body_f[body]
+    v = 0.5 * (qd_start[body] + qd_end[body])
+    power = wp.dot(wp.spatial_top(f), wp.spatial_top(v)) + wp.dot(wp.spatial_bottom(f), wp.spatial_bottom(v))
+    carrier_work[w, side] += power * dt
 
-    Both are summed over the substeps with the mid-substep joint velocity:
-    ``joint_work`` [J] from the applied joint torques and ``constraint_work`` [J]
-    from ``qfrc_constraint``, the joint-limit forces. The sim's own
+
+class SubstepWork:
+    """Joint, MuJoCo constraint and bed work of each world over one :meth:`RunnerSim.step`.
+
+    All are summed over the substeps with the mid-substep velocity:
+    ``joint_work`` [J] from the applied joint torques, ``constraint_work`` [J]
+    from ``qfrc_constraint``, the joint-limit forces, and ``carrier_work`` [J],
+    shape ``[world_count, 2]``, from the wrench each foot's bed applies to the
+    foot (right, left). The sim's own
     ``joint_work_pos``/``joint_work_neg`` use the start-of-substep velocity, which
     leaves an energy-balance error of about 1 J per step.
 
@@ -182,6 +206,7 @@ class SubstepWork:
         solver, device = sim.solver, sim.device
         self.joint_work = wp.zeros(sim.world_count, dtype=float, device=device)
         self.constraint_work = wp.zeros(sim.world_count, dtype=float, device=device)
+        self.carrier_work = wp.zeros((sim.world_count, 2), dtype=float, device=device)
         solver_step = solver.step
 
         def step(state_in, state_out, control, contacts, dt):
@@ -199,13 +224,155 @@ class SubstepWork:
                 ],
                 outputs=[self.joint_work, self.constraint_work],
             )
+            wp.launch(
+                _add_carrier_work,
+                dim=(sim.world_count, 2),
+                inputs=[dt, state_in.body_f, state_in.body_qd, state_out.body_qd],
+                outputs=[self.carrier_work],
+            )
 
         solver.step = step
         with wp.ScopedCapture(device=device) as capture:
             self.joint_work.zero_()
             self.constraint_work.zero_()
+            self.carrier_work.zero_()
             sim._simulate()
         sim._graph = capture.graph
+
+
+class BedProbe:
+    """Per-step bed and foot state of each world, read before every policy call.
+
+    A policy call sees the state after the previous step, so :meth:`steps`
+    shifts the samples by one; the last step has none (NaN).
+
+    Fields per world, step and foot (:data:`PROBE_FIELDS`): the largest column
+    strain, the column holding it, the columns within 0.01 of the bed's strain
+    stop, the stuck and supported columns, the largest Maxwell overstress
+    state, and the foot's height [m] and fore-aft and vertical speed [m/s].
+
+    Args:
+        sim: Sim whose beds and feet to read.
+    """
+
+    def __init__(self, sim: RunnerSim):
+        self.sim = sim
+        self.samples: list[torch.Tensor] = []
+
+    def wrap(self, policy: Policy) -> Policy:
+        """Return ``policy`` sampling the sim before every call."""
+
+        def probed(state, previous, k, loaded):
+            self.samples.append(self.sample())
+            return policy(state, previous, k, loaded)
+
+        return probed
+
+    def sample(self) -> torch.Tensor:
+        """Return the current fields, shape ``[world_count, 2, len(PROBE_FIELDS)]``."""
+        sim = self.sim
+        out = torch.zeros((sim.world_count, 2, len(PROBE_FIELDS)), device=wp.device_to_torch(sim.device))
+        for bed in sim.beds:
+            columns = bed.bed
+            state = columns.bed
+            n = columns.column_count
+            strain = wp.to_torch(state.compression).reshape(-1, n) / wp.to_torch(state.rest_len)
+            worlds = torch.as_tensor(bed.worlds, device=out.device, dtype=torch.int64)
+            largest, column = strain.max(1)
+            out[worlds, bed.side, 0] = largest
+            out[worlds, bed.side, 1] = column.float()
+            out[worlds, bed.side, 2] = (strain > columns.max_strain - 0.01).sum(1).float()
+            out[worlds, bed.side, 3] = (wp.to_torch(state.stuck).reshape(-1, n) != 0).sum(1).float()
+            out[worlds, bed.side, 4] = (wp.to_torch(state.support).reshape(-1, n) != 0).sum(1).float()
+            out[worlds, bed.side, 5] = wp.to_torch(state.q_state).reshape(-1, n).abs().amax(1)
+        body_q = wp.to_torch(sim.state_0.body_q).reshape(sim.world_count, -1, 7)[:, list(FOOT_BODIES)]
+        body_qd = wp.to_torch(sim.state_0.body_qd).reshape(sim.world_count, -1, 6)[:, list(FOOT_BODIES)]
+        out[:, :, 6] = body_q[:, :, 2]
+        out[:, :, 7] = body_qd[:, :, 0]
+        out[:, :, 8] = body_qd[:, :, 2]
+        return out
+
+    def steps(self) -> np.ndarray:
+        """Return the fields after every step, shape ``[world_count, steps, 2, len(PROBE_FIELDS)]``."""
+        after = [*self.samples[1:], torch.full_like(self.samples[0], torch.nan)]
+        self.samples = []
+        return torch.stack(after, 1).cpu().numpy()
+
+
+PROBE_FIELDS = (
+    "max_strain",
+    "max_column",
+    "columns_at_stop",
+    "stuck",
+    "supported",
+    "max_overstress",
+    "foot_z_m",
+    "foot_vx_m_s",
+    "foot_vz_m_s",
+)
+
+
+def bed_gain_cases(
+    result: dict, probe: np.ndarray, starts: torch.Tensor, anchors: dict[int, np.ndarray], count: int, title: str
+) -> str:
+    """Return markdown tables of the ``count`` stances whose bed wrench adds the most work.
+
+    Args:
+        result: Output of :func:`rollout`.
+        probe: :meth:`BedProbe.steps` of the same rollout.
+        starts: Episode starts as (window, frame) rows.
+        anchors: Column anchors in the foot frame [m], shape [columns, 3], per side (0 right, 1 left).
+        count: Number of stances.
+        title: Heading.
+    """
+    stances = []
+    for i, n in enumerate(result["steps"]):
+        energy = np.concatenate(([result["start_energy"][i]], result["energy"][i, :n]))
+        ground = np.diff(energy) - result["joint_work"][i, :n] - result["constraint_work"][i, :n]
+        for side in range(2):
+            for a, b in stance_intervals(result["grf"][i, :n, side, 2]):
+                carrier = result["carrier_work"][i, a:b, side].sum()
+                if carrier > BED_WORK_TOLERANCE_J:
+                    stances.append((carrier, ground[a:b].sum(), i, side, a, b, ground))
+    stances.sort(key=lambda s: -s[0])
+    lines = [
+        f"# {title}",
+        "",
+        f"{len(stances)} stances where the foot's bed wrench adds > {BED_WORK_TOLERANCE_J:g} J; "
+        f"the {min(count, len(stances))} largest follow.",
+        "Per step (10 ms): carrier = work of the foot's bed wrench over the step's substeps, ground = energy change "
+        "minus joint and joint-limit work (both beds), limit = joint-limit work. Bed state after the step: "
+        "strain = largest column strain, column (x, y mm in the foot frame), stop = columns at the strain stop, "
+        "stuck/supported column counts, q = largest overstress state.",
+    ]
+    for carrier, balance, i, side, a, b, ground in stances[:count]:
+        window, frame = (int(v) for v in starts[i])
+        outcome = OUTCOMES[result["outcome"][i]] if result["outcome"][i] >= 0 else "running"
+        lines += [
+            "",
+            f"## world {i}, window {window} frame {frame}, {('right', 'left')[side]} foot, steps {a}-{b - 1} "
+            f"of {result['steps'][i]} ({outcome})",
+            "",
+            f"Stance work: carrier {carrier:.1f} J, ground balance {balance:.1f} J.",
+            "",
+            "| step | Fz [N] | Fx [N] | carrier [J] | ground [J] | limit [J] | strain | column | stop | stuck | "
+            "supported | q | foot z [mm] | foot vx, vz [m/s] |",
+            "|" + " --- |" * 14,
+        ]
+        for t in range(max(a - 2, 0), min(b + 2, result["steps"][i])):
+            p = probe[i, t, side]
+            if np.isfinite(p[1]):
+                c = int(p[1])
+                column = f"{c} ({anchors[side][c, 0] * 1e3:.0f}, {anchors[side][c, 1] * 1e3:.0f})"
+            else:
+                column = "-"
+            lines.append(
+                f"| {t} | {result['grf'][i, t, side, 2]:.0f} | {result['grf'][i, t, side, 0]:.0f} | "
+                f"{result['carrier_work'][i, t, side]:.2f} | {ground[t]:.2f} | {result['constraint_work'][i, t]:.2f} | "
+                f"{p[0]:.3f} | {column} | {p[2]:.0f} | {p[3]:.0f} | {p[4]:.0f} | {p[5]:.3g} | {p[6] * 1e3:.0f} | "
+                f"{p[7]:.2f}, {p[8]:.2f} |"
+            )
+    return "\n".join(lines) + "\n"
 
 
 def actor_policy(task: TrackerTask, weights: dict[str, torch.Tensor]) -> Policy:
@@ -283,7 +450,7 @@ def rollout(
         frame of that state, ``action``, ``grf`` (step mean) and ``grf_fine``
         [W, T, fine, 2, 3], ``torque``, ``work_pos`` and ``work_neg`` [W, T, 10],
         ``energy`` (:func:`mechanical_energy` after the step), ``joint_work`` and
-        ``constraint_work`` (:class:`SubstepWork`) [W, T], and per world
+        ``constraint_work`` [W, T] and ``carrier_work`` [W, T, 2] (:class:`SubstepWork`), and per world
         ``start_energy``, ``steps`` (recorded steps) and ``outcome`` (index into :data:`OUTCOMES`).
     """
     w, device = sim.world_count, joint_q.device
@@ -302,6 +469,7 @@ def rollout(
         "energy": torch.zeros((steps, w), device=device),
         "joint_work": torch.zeros((steps, w), device=device),
         "constraint_work": torch.zeros((steps, w), device=device),
+        "carrier_work": torch.zeros((steps, w, 2), device=device),
     }
     count = torch.zeros(w, dtype=torch.int64, device=device)
     outcome = torch.full((w,), -1, dtype=torch.int64, device=device)
@@ -332,6 +500,7 @@ def rollout(
                 ("energy", mechanical_energy(sim)),
                 ("joint_work", wp.to_torch(work.joint_work)),
                 ("constraint_work", wp.to_torch(work.constraint_work)),
+                ("carrier_work", wp.to_torch(work.carrier_work)),
             ):
                 record[name][t] = value
             failed = ~(
@@ -478,7 +647,7 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
     q_error = np.degrees(state[:, 13 : 13 + JOINT_COUNT] - ref[:, 13 : 13 + JOINT_COUNT])
 
     records, stance_counts, joint_rows, joint_stances = [], [], [], ([], [])
-    bed_work, flight_work, step_max, constraint_work = [], [], [], []
+    bed_work, flight_work, step_max, constraint_work, carrier_work = [], [], [], [], []
     offset = 0
     for i in range(w):
         n = result["steps"][i]
@@ -497,7 +666,9 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
         flight_work.extend(ground[(result["grf"][i, :n, :, 2] == 0.0).all(-1)])
         step_max.append(ground.max(initial=0.0))
         for side in range(2):
-            bed_work.extend(ground[a:b].sum() for a, b in stance_intervals(result["grf"][i, :n, side, 2]))
+            intervals = stance_intervals(result["grf"][i, :n, side, 2])
+            bed_work.extend(ground[a:b].sum() for a, b in intervals)
+            carrier_work.extend(result["carrier_work"][i, a:b, side].sum() for a, b in intervals)
     angles = np.concatenate([a for a, _ in joint_rows])
     torques = np.concatenate([m for _, m in joint_rows])
     stances = tuple(np.array(s, dtype=np.int64).reshape(-1, 2) for s in joint_stances)
@@ -548,6 +719,8 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
             if bed_work
             else None,
             "stances_adding_energy": int((np.asarray(bed_work) > BED_WORK_TOLERANCE_J).sum()),
+            "carrier_stance_j": _stats(carrier_work),
+            "carrier_stances_adding_energy": int((np.asarray(carrier_work) > BED_WORK_TOLERANCE_J).sum()),
             "step_max_j": float(np.max(step_max)),
             "joint_limit_episode_percentiles_0_50_95_100_j": np.percentile(constraint_work, (0, 50, 95, 100)).tolist(),
             "flight_step_abs_percentiles_50_95_100_j": np.percentile(np.abs(flight_work), (50, 95, 100)).tolist()
@@ -583,6 +756,9 @@ def markdown(report: dict) -> str:
         f"| stances where the bed adds > {BED_WORK_TOLERANCE_J:g} J | {sim['bed_work']['stances_adding_energy']} "
         f"of {sim['bed_work']['stance_j']['n']} |",
         f"| bed work per stance [J] | {_cell(sim['bed_work']['stance_j'], 1)} |",
+        f"| stances where the foot's bed wrench adds > {BED_WORK_TOLERANCE_J:g} J | "
+        f"{sim['bed_work']['carrier_stances_adding_energy']} |",
+        f"| foot bed-wrench work per stance [J] | {_cell(sim['bed_work']['carrier_stance_j'], 1)} |",
         f"| largest ground work in one step [J] | {sim['bed_work']['step_max_j']:.1f} |",
         f"| joint-limit work per episode p0/p50/p95/max [J] | "
         f"{'/'.join(f'{e:.1f}' for e in sim['bed_work']['joint_limit_episode_percentiles_0_50_95_100_j'])} |",
@@ -650,6 +826,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--split", choices=tuple(SPLITS), nargs="+", default=["eval"], help="reference windows, one run each"
     )
+    parser.add_argument(
+        "--bed-cases", type=int, default=0, help="write the stances where the bed adds the most work, this many"
+    )
     parser.add_argument("--plot", action="store_true", help="plot the longest episode against the reference")
     parser.add_argument("--output", type=Path, required=True, help="folder of one NAME_SPLIT report folder per run")
     args = parser.parse_args(argv)
@@ -685,6 +864,9 @@ def main(argv: list[str] | None = None) -> None:
                 world_model, reference, moment, stride, body, sim.config.control_dt_s, TrackerConfig(goal_frames)
             )
             policy = actor_policy(task, checkpoint["actor"]) if checkpoint else stage0_policy(task, contact)
+            probe = BedProbe(sim)
+            if args.bed_cases:
+                policy = probe.wrap(policy)
             result = rollout(sim, task, joint_q, joint_qd, starts, policy, work)
             report = {
                 "policy": paths.get(name, "stage-0 law"),
@@ -699,6 +881,12 @@ def main(argv: list[str] | None = None) -> None:
             (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             (folder / "report.md").write_text(markdown(report), encoding="utf-8")
             print(markdown(report))
+            if args.bed_cases:
+                anchors = {bed.side: bed.bed.bed.anchor_local.numpy() for bed in sim.beds}
+                cases = bed_gain_cases(
+                    result, probe.steps(), starts, anchors, args.bed_cases, f"Bed energy gain: {name}, {split}"
+                )
+                (folder / "bed_gain_cases.md").write_text(cases, encoding="utf-8")
             if args.plot:
                 _plot_longest(result, starts, args.reference, stride, sim.config.control_dt_s, folder)
 
