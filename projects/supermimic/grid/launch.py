@@ -42,6 +42,8 @@ SNAPSHOT_PATHS = ("newton", "projects", "pyproject.toml", ":(exclude)newton/test
 TASK_SCRIPT = "projects/supermimic/grid/task.sbatch"
 PACKAGES = ("warp-lang", "numpy", "scipy", "trimesh", "rtree", "matplotlib")
 """Grid environment packages, pinned to the versions of the local environment."""
+TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
+"""PyTorch wheel index of the local ``torch`` build; the H100 nodes run CUDA 12.8 wheels."""
 MAX_GPUS = 4
 """Tasks per submission without asking the user first."""
 
@@ -64,12 +66,15 @@ def setup() -> None:
     for name in ("code", "data", "runs", "logs", "warp_cache"):
         (LOCAL_ROOT / name).mkdir(parents=True, exist_ok=True)
     pins = " ".join(f"'{name}=={version(name)}'" for name in PACKAGES)
+    torch = f"'torch=={version('torch')}'"
     print(
         ssh(
             "source /etc/profile >/dev/null 2>&1; module load proxy-mitll >/dev/null 2>&1; "
             f"cd {REMOTE_ROOT} && ~/.local/bin/uv venv --allow-existing --python 3.12 venv && "
             f"~/.local/bin/uv pip install --python venv/bin/python {pins} && "
-            "venv/bin/python -c 'import warp, numpy, scipy; print(warp.__version__, numpy.__version__, scipy.__version__)'"
+            f"~/.local/bin/uv pip install --python venv/bin/python --index-url {TORCH_INDEX} {torch} && "
+            "venv/bin/python -c 'import warp, numpy, scipy, torch; "
+            "print(warp.__version__, numpy.__version__, scipy.__version__, torch.__version__)'"
         )
     )
 
