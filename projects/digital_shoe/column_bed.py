@@ -85,6 +85,8 @@ A column at the stop is rigid to the implicit carrier: this makes it a hundred
 times stiffer than any carrier it can meet. It is a solver constant, not a
 material property."""
 _BLOCK = wp.constant(256)
+_SWEEP_TOLERANCE = wp.constant(1.0e-6)
+"""Largest end move of a converged sweep, as a fraction of the column thickness."""
 MAX_COLUMNS = 1024
 """Columns one block holds in shared memory."""
 
@@ -425,8 +427,8 @@ def _column_bed_step(
     _sync_threads()
     # Red-black Gauss-Seidel: lanes hold columns sorted by color and a color
     # reads only the other color, so each half sweep updates in place and then
-    # synchronizes once. A sweep that moves no column leaves the next one
-    # nothing to move, so the bed stops there with the same result. The flag of
+    # synchronizes once. A sweep that moves no column end by more than
+    # _SWEEP_TOLERANCE of its thickness ends the solve. The flag of
     # sweep s + 1 is cleared during sweep s; its last reader finished two
     # synchronizations earlier.
     if lane < 3:
@@ -477,7 +479,7 @@ def _column_bed_step(
                 _hyperfoam_pressure((c + _STRAIN_STEP * thickness) / thickness, p) + squeeze_ahead,
                 bed.over_relaxation,
             )
-            if t != top or b != bottom:
+            if wp.abs(t - top) > _SWEEP_TOLERANCE * thickness or wp.abs(b - bottom) > _SWEEP_TOLERANCE * thickness:
                 _changed_shared(sweep % 3, 1, 1)
                 _set_modulus(column, t - b, thickness, p)
             _top_shared(column, t, 1)
