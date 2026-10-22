@@ -430,7 +430,7 @@ def f01_body_params(table: DeLevaTable) -> BodyParams:
     mass so the body mass equals the Visual3D model mass. ``sole_pitch`` levels the FR3 shoe frame in the static pose.
 
     Args:
-        table: Sex-specific de Leva table; the subject's sex is not recorded with the data.
+        table: Sex-specific de Leva table; F01 is male.
 
     Returns:
         Body parameters of F01.
