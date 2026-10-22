@@ -11,8 +11,16 @@ import numpy as np
 try:
     import torch
 
+    from projects.supermimic.body import BodyParams
     from projects.supermimic.buffer import ReplayBuffer
-    from projects.supermimic.collect import AUX_DIM, STATE_DIM, moment_stiffness_floor, read_episode, summarize
+    from projects.supermimic.collect import (
+        AUX_DIM,
+        STATE_DIM,
+        make_sim,
+        moment_stiffness_floor,
+        read_episode,
+        summarize,
+    )
 except ImportError:
     torch = None
 
@@ -63,6 +71,13 @@ class TestSupermimicCollect(unittest.TestCase):
         self.assertAlmostEqual(summary["sim_failures_per_world_s_by_shoe"]["a"], 1.0 / 0.06)
         self.assertEqual(summary["sim_failures_per_world_s_by_xi_quarter"]["c"][3], 0.0)
         self.assertEqual(summary["stiffness_short_fraction"]["knee"], 0.25)
+
+    def test_make_sim_runs_the_belt_at_the_reference_speed(self):
+        """Run the treadmill at the belt speed passed from the reference."""
+        sim, xi = make_sim(BodyParams(), 2, "train", np.random.default_rng(0), 3.1)
+
+        self.assertEqual(sim.config.belt_speed_m_s, 3.1)
+        self.assertEqual(xi.shape[0], 2)
 
     def test_moment_stiffness_floor_bounds_posture_lead(self):
         """Use the room to the limit in the moment's direction, capped at the largest lead."""
