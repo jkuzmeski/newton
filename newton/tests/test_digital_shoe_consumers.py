@@ -36,6 +36,7 @@ def _fixture_artifact():
             "area_m2": [0.0001],
             "neighbors": [[-1, -1, -1, -1]],
             "spacing_m": 0.01,
+            "bed_bottom_above_platen_m": [0.0, 0.002],
         }
     }
     curve = data["validation"]["curves"][0]
@@ -67,6 +68,12 @@ class TestDigitalShoeConsumers(unittest.TestCase):
         np.testing.assert_allclose(bed.rest_len.numpy(), [0.02, 0.02])
         np.testing.assert_allclose(bed.area.numpy(), [0.0001, 0.0001])
 
+    def test_instron_stands_the_bed_in_its_bench_pose(self):
+        """Stand every column on the platen at its fitted bench height, not at its shoe-frame bottom."""
+        bottoms = self.example.bed.bed.anchor_local.numpy()
+        np.testing.assert_allclose(bottoms[:, 2], [0.0, 0.002], atol=1e-9)
+        np.testing.assert_allclose(bottoms[:, :2], [[-0.01, 0.0], [0.01, 0.0]], atol=1e-9)
+
     def test_both_fixture_adapters_keep_the_same_neighbor_bed(self):
         """Keep the full bed for both full-foot and rearfoot fixture adapters."""
         data = _fixture_artifact()
@@ -82,7 +89,8 @@ class TestDigitalShoeConsumers(unittest.TestCase):
                 anchor, rest, area, neighbors, _, connection, _ = Example._build_instron(scene, MagicMock())
                 self.assertEqual(len(rest), 2)
                 np.testing.assert_array_equal(connection, [TOP_PRESSED, TOP_FREE])
-                np.testing.assert_array_equal(anchor, shoe.column_bed.anchor_bottom_m)
+                np.testing.assert_array_equal(anchor[:, :2], shoe.column_bed.anchor_bottom_m[:, :2])
+                np.testing.assert_array_equal(anchor[:, 2], [0.0, 0.002])
                 np.testing.assert_array_equal(neighbors, shoe.column_bed.neighbors)
                 np.testing.assert_array_equal(area, shoe.column_bed.area_m2)
 

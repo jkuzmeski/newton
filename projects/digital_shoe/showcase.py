@@ -227,8 +227,10 @@ class Example:
         surface = fixture.carrier_anchor_m.copy()
         surface[:, 2] += datum_shift
         self._fixture_visual_anchor_m = surface
-        # The shoe stands on the platen at its lowest outsole point; the rest of the outsole floats.
-        self.foundation_config = FoundationConfig(stretch_floor=0.05, ground_height_m=float(bottom.min()))
+        # The shoe stands on the platen (z = 0) in its fitted bench pose; the rest of the outsole floats.
+        anchor = bed.anchor_bottom_m.copy()
+        anchor[:, 2] = fixture.bed_bottom_above_platen_m
+        self.foundation_config = FoundationConfig(stretch_floor=0.05, ground_height_m=0.0)
         builder.add_ground_plane(height=self.foundation_config.ground_height_m)
         self._add_instron_indenter_visual(builder)
         # The indenter presses the tops under it; the rest of the shoe surface is free.
@@ -236,7 +238,7 @@ class Example:
         connection[supported] = TOP_PRESSED
         top_gap = np.zeros(len(bottom))
         top_gap[supported] = surface[:, 2] - free_top[supported]
-        return bed.anchor_bottom_m, bed.rest_length_m, bed.area_m2, bed.neighbors, bed.spacing_m, connection, top_gap
+        return anchor, bed.rest_length_m, bed.area_m2, bed.neighbors, bed.spacing_m, connection, top_gap
 
     def _build_drop(self, builder, args):
         builder.add_ground_plane()

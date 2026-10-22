@@ -54,6 +54,7 @@ def _tiny_artifact() -> dict:
             "area_m2": [0.0001, 0.0001],
             "neighbors": [[1, -1, -1, -1], [0, -1, -1, -1]],
             "spacing_m": 0.01,
+            "top_bonded": [True, True],
         },
         "identification": {"passed_all_declared_gates": False},
         "validation": {
@@ -120,6 +121,10 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self_neighbor["column_bed"]["neighbors"][0][0] = 0
         with self.assertRaisesRegex(ValueError, "self-neighbor"):
             validate_artifact(self_neighbor)
+        short_bond = _tiny_artifact()
+        short_bond["column_bed"]["top_bonded"] = [True]
+        with self.assertRaisesRegex(ValueError, "top_bonded has shape"):
+            validate_artifact(short_bond)
 
     def test_renders_deterministic_visible_failure_report(self):
         """Render byte-stable escaped HTML that keeps failed gates visible."""

@@ -32,6 +32,7 @@ class MaterialsGeometryTests(unittest.TestCase):
                 "area_m2": [area[i] for i in indices],
                 "neighbors": [neighbors[i] for i in indices],
                 "spacing_m": 0.01,
+                "bed_bottom_above_platen_m": [0.0 for _ in xy],
             }
 
         self.source = {
@@ -58,6 +59,7 @@ class MaterialsGeometryTests(unittest.TestCase):
                 "area_m2": area,
                 "neighbors": neighbors,
                 "spacing_m": 0.01,
+                "top_bonded": [True] * len(rest),
             },
             "instron_fixtures": {"fullfoot_last": fixture(range(3)), "rearfoot_punch": fixture(range(2))},
             "visual_meshes": {

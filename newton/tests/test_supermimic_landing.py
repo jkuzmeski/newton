@@ -11,7 +11,7 @@ from projects.supermimic.body import BodyParams
 from projects.supermimic.landing import LandingRig, LandingSchedule, touchdown_starts
 from projects.supermimic.sim import RunnerSim, RunnerSimConfig, load_shoes
 
-DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
+DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v3")
 CUDA = wp.is_cuda_available()
 
 

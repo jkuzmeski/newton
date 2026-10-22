@@ -66,7 +66,7 @@ F01 = Path(__file__).resolve().parent / "subjects" / "F01.json"
 GRID_HOME = Path("Z:/") if sys.platform == "win32" else Path.home()
 """LLSC grid home: the mapped ``Z:`` drive on Windows workstations and the home folder on the grid nodes."""
 
-SHOE_DATASET = GRID_HOME / "newton_grid/data/dataset_3d_column_bed_v2"
+SHOE_DATASET = GRID_HOME / "newton_grid/data/dataset_3d_column_bed_v3"
 """Column-bed dataset of the fitted shoes."""
 
 COORDINATE_NAMES = ("x", "y", "z", "qx", "qy", "qz", "qw", *JOINT_NAMES)

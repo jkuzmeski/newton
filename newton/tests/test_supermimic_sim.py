@@ -11,7 +11,7 @@ import warp as wp
 from projects.supermimic.body import BODY_NAMES, BodyParams
 from projects.supermimic.sim import FOOT_BODIES, SIDES, RunnerSim, RunnerSimConfig, load_shoes
 
-DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
+DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v3")
 CUDA = wp.is_cuda_available()
 
 
