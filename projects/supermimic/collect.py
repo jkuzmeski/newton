@@ -4,19 +4,24 @@
 """Stage-0 transition collection for the SuperMimic world model.
 
 A simple controller runs batched :class:`~projects.supermimic.sim.RunnerSim`
-worlds. The stiffness ``K`` and damping ``B`` of every joint are drawn per
-episode, log-uniformly within human joint impedance
+worlds within human joint impedance
 (:data:`~projects.supermimic.policy.STIFFNESS_LIMITS`,
-:data:`~projects.supermimic.policy.DAMPING_LIMITS`). The equilibrium angles are ``q_ref + M_ref / K`` plus
-smooth noise, where ``q_ref`` is the F01 reference and ``M_ref`` its
-inverse-dynamics joint moment, so the reference posture carries the reference
-moment without a stiff joint. Each world's shoe geometry, foam and friction
+:data:`~projects.supermimic.policy.DAMPING_LIMITS`). The equilibrium angles
+are ``q_ref + M_ref / K`` plus smooth noise, clipped to the joint limits, where
+``q_ref`` is the F01 reference and ``M_ref`` its inverse-dynamics joint moment,
+so the reference posture carries the reference moment without a stiff joint.
+The damping ``B`` of every joint is drawn per episode, log-uniformly. The
+stiffness ``K`` sits at a per-episode log-uniform quantile between
+:func:`moment_stiffness_floor`, which bounds the posture lead ``M_ref / K``,
+and the upper limit; where the floor exceeds the upper limit, ``K`` is the
+upper limit and the torque falls short of ``M_ref``. Each world's shoe geometry, foam and friction
 come from its sim context ``xi`` of :mod:`.context`. Episodes start
 at reference flight frames and end on a fall or at the end of the reference
 window. A step whose outputs are not finite or whose joint speeds are not
 physical is a sim failure: the world is reset, and the failed step's state is
-not stored, so its last row ends the episode as a truncation. Rows are pushed to a :class:`~projects.supermimic.buffer.ReplayBuffer`
-and written as a dataset folder.
+not stored, so its last row ends the episode as a truncation. Rows are pushed
+to a :class:`~projects.supermimic.buffer.ReplayBuffer` and written as a dataset
+folder.
 
 State rows are root position [m], root quaternion (``xyzw``), root linear
 [m/s] and angular [rad/s] velocity in world axes and the treadmill frame, joint
@@ -56,6 +61,7 @@ __all__ = [
     "episode_starts",
     "main",
     "make_sim",
+    "moment_stiffness_floor",
     "read_episode",
     "reference_moments",
     "sim_aux",
@@ -81,6 +87,8 @@ class Stage0Config:
     """Correlation time of the Ornstein-Uhlenbeck equilibrium-angle noise [s]."""
     fall_height_m: float = 0.6
     """A world falls when its root is below this height [m]."""
+    max_posture_lead_rad: float = 0.35
+    """Largest lead of the equilibrium angle over the reference posture, ``M_ref / K`` [rad]."""
     failure_joint_speed_rad_s: float = 100.0
     """A step fails when a joint speed exceeds this; running stays below about 30 rad/s [rad/s]."""
     touchdown_force_n: float = 50.0
@@ -103,6 +111,37 @@ def sim_aux(sim: RunnerSim) -> torch.Tensor:
 def _log_uniform(limits: torch.Tensor, count: int, generator: torch.Generator) -> torch.Tensor:
     u = torch.rand((count, len(limits)), generator=generator, device=limits.device)
     return limits[:, 0] * (limits[:, 1] / limits[:, 0]) ** u
+
+
+def moment_stiffness_floor(
+    q_ref: torch.Tensor,
+    moment: torch.Tensor,
+    q_limits: torch.Tensor,
+    stiffness_limits: torch.Tensor,
+    max_lead_rad: float,
+) -> torch.Tensor:
+    """Return the lowest stiffness that carries ``moment`` with a bounded posture lead.
+
+    The equilibrium angle ``q_ref + moment / K`` leads the reference posture by
+    ``moment / K``. The floor keeps that lead within the room ``d`` between
+    ``q_ref`` and the equilibrium-angle limit in the direction of ``moment``, and
+    within ``max_lead_rad``: ``max(K_low, |moment| / min(d, max_lead_rad))``. A
+    floor above the upper stiffness limit means the human bound cannot carry
+    the moment.
+
+    Args:
+        q_ref: Reference joint angles [..., joints] [rad].
+        moment: Reference joint moments [..., joints] [N m].
+        q_limits: Equilibrium-angle limits (lower, upper) [joints, 2] [rad].
+        stiffness_limits: Stiffness limits (lower, upper) [joints, 2] [N m/rad].
+        max_lead_rad: Largest posture lead [rad].
+
+    Returns:
+        Stiffness floor [..., joints] [N m/rad], not capped by the upper stiffness limit.
+    """
+    room = torch.where(moment > 0, q_limits[:, 1] - q_ref, q_ref - q_limits[:, 0])
+    room = room.clamp(1e-6, max_lead_rad)
+    return torch.maximum(stiffness_limits[:, 0], moment.abs() / room)
 
 
 def reference_moments(ref: dict, body: BodyParams) -> np.ndarray:
@@ -194,6 +233,7 @@ def collect(
     # The left joints have the limits of the right ones.
     stiffness_limits = torch.tensor(STIFFNESS_LIMITS * 2, device=device)
     damping_limits = torch.tensor(DAMPING_LIMITS * 2, device=device)
+    q_limits = torch.tensor(body.joint_limits * 2, device=device)
     starts = episode_starts(ref, split, device)
 
     w = world_count
@@ -209,12 +249,13 @@ def collect(
     )
     window = torch.zeros(w, dtype=torch.int64, device=device)
     frame = torch.zeros_like(window)
-    stiffness = torch.zeros((w, JOINT_COUNT), device=device)
-    damping = torch.zeros_like(stiffness)
-    noise = torch.zeros_like(stiffness)
+    stiffness_quantile = torch.zeros((w, JOINT_COUNT), device=device)
+    damping = torch.zeros_like(stiffness_quantile)
+    noise = torch.zeros_like(stiffness_quantile)
     decay = float(np.exp(-sim_cfg.control_dt_s / config.noise_time_constant_s))
     reset = torch.ones(w, dtype=torch.bool, device=device)
     failures = torch.zeros(w, dtype=torch.int64, device=device)
+    short_steps = torch.zeros(JOINT_COUNT, dtype=torch.int64, device=device)
 
     with torch.cuda.stream(wp.stream_to_torch(sim.device)):
         for _ in range(steps):
@@ -225,12 +266,17 @@ def collect(
                 sim.reset(
                     wp.from_torch(reset), wp.from_torch(ref_q[window, frame]), wp.from_torch(ref_qd[window, frame])
                 )
-                stiffness[reset] = _log_uniform(stiffness_limits, n, generator)
+                stiffness_quantile[reset] = torch.rand((n, JOINT_COUNT), generator=generator, device=device)
                 damping[reset] = _log_uniform(damping_limits, n, generator)
                 noise[reset] = config.noise_std_rad * torch.randn((n, JOINT_COUNT), generator=generator, device=device)
             state = sim_state(sim)
             done = state[:, 2] < config.fall_height_m
-            q_eq = ref_q[window, frame, 7:] + ref_moment[window, frame] / stiffness + noise
+            q_ref, moment = ref_q[window, frame, 7:], ref_moment[window, frame]
+            floor = moment_stiffness_floor(q_ref, moment, q_limits, stiffness_limits, config.max_posture_lead_rad)
+            short_steps += (floor > stiffness_limits[:, 1]).sum(0)
+            low = torch.minimum(floor, stiffness_limits[:, 1])
+            stiffness = low * (stiffness_limits[:, 1] / low) ** stiffness_quantile
+            q_eq = (q_ref + moment / stiffness + noise).clamp(q_limits[:, 0], q_limits[:, 1])
             action = torch.stack((q_eq, stiffness, damping), dim=2)
             sim.step(wp.from_torch(action.contiguous()))
             aux, after = sim_aux(sim), sim_state(sim)
@@ -256,13 +302,14 @@ def collect(
         "xi_coordinates": [c[0] for c in XI_COORDINATES],
         "config": asdict(config),
         "failures": failures.tolist(),
+        "stiffness_short_steps": dict(zip(JOINT_NAMES, short_steps.tolist(), strict=True)),
         "xi": xi.tolist(),
     }
     return buffer, meta
 
 
 def summarize(buffer: ReplayBuffer, meta: dict) -> dict:
-    """Count rows, episodes, falls, touchdowns and sim failures of a collection.
+    """Count rows, episodes, falls, touchdowns, short stiffness and sim failures of a collection.
 
     Failure rates are per simulated world-second, overall, per shoe geometry
     and per quarter of each ``xi`` coordinate's range.
@@ -294,6 +341,9 @@ def summarize(buffer: ReplayBuffer, meta: dict) -> dict:
         "touchdowns": int(touchdown.sum()),
         "completed_episode_steps_mean": float(lengths.float().mean()) if len(lengths) else 0.0,
         "windows_k8": int(buffer.valid_starts(8).sum()),
+        "stiffness_short_fraction": {
+            name: count / (buffer.size * buffer.world_count) for name, count in meta["stiffness_short_steps"].items()
+        },
         "sim_failures": int(failures.sum()),
         "sim_failures_per_world_s": float(failures.sum() / (seconds * buffer.world_count)),
         "sim_failures_per_world_s_by_shoe": by_shoe,

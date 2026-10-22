@@ -12,7 +12,7 @@ try:
     import torch
 
     from projects.supermimic.buffer import ReplayBuffer
-    from projects.supermimic.collect import AUX_DIM, STATE_DIM, read_episode, summarize
+    from projects.supermimic.collect import AUX_DIM, STATE_DIM, moment_stiffness_floor, read_episode, summarize
 except ImportError:
     torch = None
 
@@ -51,6 +51,7 @@ class TestSupermimicCollect(unittest.TestCase):
             "shoe": ["a", "b"],
             "xi_coordinates": ["c"],
             "config": {"touchdown_force_n": 50.0},
+            "stiffness_short_steps": {"knee": 3},
         }
         summary = summarize(self._buffer(), meta)
         self.assertEqual(summary["rows"], 12)
@@ -61,6 +62,16 @@ class TestSupermimicCollect(unittest.TestCase):
         self.assertAlmostEqual(summary["sim_failures_per_world_s"], 1.0 / 0.12)
         self.assertAlmostEqual(summary["sim_failures_per_world_s_by_shoe"]["a"], 1.0 / 0.06)
         self.assertEqual(summary["sim_failures_per_world_s_by_xi_quarter"]["c"][3], 0.0)
+        self.assertEqual(summary["stiffness_short_fraction"]["knee"], 0.25)
+
+    def test_moment_stiffness_floor_bounds_posture_lead(self):
+        """Use the room to the limit in the moment's direction, capped at the largest lead."""
+        q_limits = torch.tensor([[-1.0, 1.0]] * 4, device="cuda")
+        stiffness_limits = torch.tensor([[1.0, 1000.0]] * 4, device="cuda")
+        q_ref = torch.tensor([0.9, 0.9, 0.0, 0.0], device="cuda")
+        moment = torch.tensor([10.0, -10.0, 70.0, 0.1], device="cuda")
+        floor = moment_stiffness_floor(q_ref, moment, q_limits, stiffness_limits, 0.35)
+        torch.testing.assert_close(floor, torch.tensor([100.0, 10.0 / 0.35, 200.0, 1.0], device="cuda"))
 
     def test_read_episode_restores_sim_layouts(self):
         """Split a world into episodes and rebuild joint_q, joint_qd and aux arrays."""
