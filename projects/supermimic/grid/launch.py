@@ -40,7 +40,7 @@ REMOTE_ROOT = "/home/gridsan/JO31399/newton_grid/supermimic"
 LOCAL_ROOT = Path("Z:/newton_grid/supermimic")
 SNAPSHOT_PATHS = ("newton", "projects", "pyproject.toml", ":(exclude)newton/tests", ":(exclude)newton/examples")
 TASK_SCRIPT = "projects/supermimic/grid/task.sbatch"
-PACKAGES = ("warp-lang", "numpy", "scipy", "trimesh", "rtree", "matplotlib")
+PACKAGES = ("warp-lang", "mujoco", "mujoco-warp", "numpy", "scipy", "trimesh", "rtree", "matplotlib")
 """Grid environment packages, pinned to the versions of the local environment."""
 TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 """PyTorch wheel index of the local ``torch`` build; the H100 nodes run CUDA 12.8 wheels."""
