@@ -389,6 +389,30 @@ def _column_bed_step(
 _STEP = wp.kernel(_column_bed_step, module="unique", launch_bounds=(256, 2), module_options={"fast_math": True})
 
 
+@wp.kernel
+def _reset_worlds(
+    mask: wp.array[bool],
+    column_count: int,
+    top: wp.array[wp.float32],
+    bottom: wp.array[wp.float32],
+    q_state: wp.array[wp.float32],
+    peq_prev: wp.array[wp.float32],
+    deflection: wp.array[wp.vec2],
+    stuck: wp.array[wp.int32],
+    dwell: wp.array[wp.float32],
+):
+    """Clear the columns of the masked worlds."""
+    i = wp.tid()
+    if mask[i / column_count]:
+        top[i] = 0.0
+        bottom[i] = 0.0
+        q_state[i] = 0.0
+        peq_prev[i] = 0.0
+        deflection[i] = wp.vec2(0.0)
+        stuck[i] = 0
+        dwell[i] = 0.0
+
+
 def column_colors(neighbors: np.ndarray) -> np.ndarray:
     """Two-color a column grid so that no face joins two columns of one color."""
     neighbors = np.asarray(neighbors)
@@ -513,23 +537,30 @@ class ColumnBed:
         self.bed = bed
         self.set_world_materials(self.materials)
 
-    def _params(self, material) -> FoundationParams:
+    def _params(self, material, mu: float) -> FoundationParams:
         params = FoundationParams()
         set_material_block(params, material)
         params.inv_h2 = 1.0 / self.spacing_m**2
         params.stretch_floor = self.config.stretch_floor
         params.normal_damping = self.config.normal_damping
         params.friction_release_dwell_s = self.config.friction_release_dwell_s
-        params.mu = self.config.mu
+        params.mu = mu
         return params
 
-    def set_world_materials(self, materials) -> None:
-        """Set one material for every world, or one material per world."""
+    def set_world_materials(self, materials, *, friction: Sequence[float] | None = None) -> None:
+        """Set one material for every world, or one material per world.
+
+        Args:
+            materials: One material, or one per world.
+            friction: Coulomb friction coefficient per world; ``None`` uses the configured ``mu``.
+        """
         if not isinstance(materials, Sequence):
             materials = [materials] * self.world_count
-        if len(materials) != self.world_count:
-            raise ValueError(f"Expected {self.world_count} materials, got {len(materials)}")
-        self.bed.params.assign([self._params(material) for material in materials])
+        if friction is None:
+            friction = [self.config.mu] * self.world_count
+        if len(materials) != self.world_count or len(friction) != self.world_count:
+            raise ValueError(f"Expected {self.world_count} materials and friction coefficients")
+        self.bed.params.assign([self._params(m, float(mu)) for m, mu in zip(materials, friction, strict=True)])
 
     def set_timesteps(self, dt) -> None:
         """Set one step for every world, or one step per world [s]."""
@@ -538,11 +569,20 @@ class ColumnBed:
             raise ValueError("Timesteps must be positive")
         self.bed.dt.assign(values.copy())
 
-    def reset(self) -> None:
-        """Return every world to the unloaded rest shape with no history."""
+    def reset(self, mask: wp.array[bool] | None = None) -> None:
+        """Return the worlds in ``mask``, or every world, to the unloaded rest shape with no history."""
         bed = self.bed
-        for array in (bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.deflection, bed.stuck, bed.dwell):
-            array.zero_()
+        if mask is None:
+            for array in (bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.deflection, bed.stuck, bed.dwell):
+                array.zero_()
+            return
+        wp.launch(
+            _reset_worlds,
+            dim=self.world_count * self.column_count,
+            inputs=[mask, self.column_count],
+            outputs=[bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.deflection, bed.stuck, bed.dwell],
+            device=self.device,
+        )
 
     def apply(self, state) -> None:
         """Advance every world one step and set its carrier's ``body_f``.
