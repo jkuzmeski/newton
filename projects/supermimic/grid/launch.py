@@ -124,11 +124,18 @@ def stage(name: str, source: Path) -> None:
 
 
 def submit(
-    name: str, commit: str, tasks: list[dict], data: dict[str, Path], time_limit: str, after: str | None = None
+    name: str,
+    commit: str,
+    tasks: list[dict],
+    data: dict[str, Path],
+    time_limit: str,
+    after: str | None = None,
+    exclude: str | None = None,
 ) -> dict:
     """Push the code and inputs, write the task list and queue the array; return the submission record.
 
-    The array waits until every task of job ``after`` succeeded, if given.
+    The array waits until every task of job ``after`` succeeded, if given, and
+    avoids the comma-separated nodes ``exclude``, if given.
     """
     if not 0 < len(tasks) <= MAX_GPUS:
         raise SystemExit(f"{len(tasks)} tasks; at most {MAX_GPUS} GPUs without asking the user")
@@ -142,9 +149,10 @@ def submit(
     log = f"{REMOTE_ROOT}/logs/{name}-%A_%a.out"
     exports = f"ALL,GRID_ROOT={REMOTE_ROOT},GRID_CODE_DIR={REMOTE_ROOT}/code/{sha[:12]},RUN_DIR={run_dir}"
     dependency = f"--dependency=afterok:{after} --kill-on-invalid-dep=yes " if after else ""
+    excluded = f"--exclude={exclude} " if exclude else ""
     output = ssh(
         f"cd {REMOTE_ROOT} && sbatch --parsable --job-name=sm-{name} --array=0-{len(tasks) - 1} --time={time_limit} "
-        f"{dependency}"
+        f"{dependency}{excluded}"
         f"--output={log} --error={log} --export={exports} {REMOTE_ROOT}/code/{sha[:12]}/{TASK_SCRIPT}"
     )
     job = output.strip().split(";")[0]
@@ -176,6 +184,7 @@ def main() -> None:
     sub.add_argument("--data", action="append", default=[], help="NAME=FOLDER input staged to data/NAME.")
     sub.add_argument("--time", default="01:00:00")
     sub.add_argument("--after", help="Job id whose tasks must all succeed first.")
+    sub.add_argument("--exclude", help="Comma-separated nodes to avoid, such as nodes with a broken GPU.")
     args = parser.parse_args()
     if args.command == "setup":
         setup()
@@ -184,7 +193,7 @@ def main() -> None:
     else:
         data = {key: Path(value) for key, value in (item.split("=", 1) for item in args.data)}
         tasks = json.loads(args.tasks.read_text())
-        print(json.dumps(submit(args.name, args.commit, tasks, data, args.time, args.after)))
+        print(json.dumps(submit(args.name, args.commit, tasks, data, args.time, args.after, args.exclude)))
 
 
 if __name__ == "__main__":

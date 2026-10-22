@@ -101,8 +101,9 @@ def chain(
     iterations: int,
     collect_time: str,
     fit_time: str,
+    exclude: str | None = None,
 ) -> list[dict]:
-    """Queue the four dependent arrays; return their submission records."""
+    """Queue the four dependent arrays, off the comma-separated nodes ``exclude``; return their submission records."""
     subject = json.loads(F01.read_text())
     plates = REPOSITORY / subject["data"]
     reference_name = f"{reference.name}_{digest(reference)[:8]}"
@@ -124,7 +125,7 @@ def chain(
             {"name": "eval", "args": [*collect, "--split", "eval", "--worlds", str(eval_worlds),
                                       "--seed", str(EVAL_SEED), "--output", "{out}/stage0"]}
         )  # fmt: skip
-        records = [submit("stage0", commit, tasks, data, collect_time)]
+        records = [submit("stage0", commit, tasks, data, collect_time, exclude=exclude)]
     run = records[-1]["run_dir"]
     train_shards = [f"{run}/train_{s}/stage0" for s in range(shards)]
     merge_task = {
@@ -132,7 +133,9 @@ def chain(
         "args": ["projects.supermimic.grid.stage0", "merge", "--out", "{out}/train", *train_shards,
                  "--held-out", f"{run}/eval/stage0"],
     }  # fmt: skip
-    records.append(submit("stage0_merge", commit, [merge_task], {}, "00:30:00", after=records[-1]["job"]))
+    records.append(
+        submit("stage0_merge", commit, [merge_task], {}, "00:30:00", after=records[-1]["job"], exclude=exclude)
+    )
     buffers = records[-1]["run_dir"] + "/merge"
     fits = [
         {"name": f"h{h}_s{seed}", "args": ["projects.supermimic.m3", "fit", "--train", f"{buffers}/train/buffer.npz",
@@ -141,7 +144,7 @@ def chain(
         for h in HISTORIES
         for seed in FIT_SEEDS
     ]  # fmt: skip
-    records.append(submit("m3", commit, fits, {}, fit_time, after=records[-1]["job"]))
+    records.append(submit("m3", commit, fits, {}, fit_time, after=records[-1]["job"], exclude=exclude))
     models = [f"{records[-1]['run_dir']}/{fit['name']}" for fit in fits]
     evaluate = {
         "name": "evaluate",
@@ -149,7 +152,7 @@ def chain(
                  f"train={buffers}/train/buffer.npz", "--buffer", f"held_out={buffers}/held_out/buffer.npz",
                  "--held-out", "held_out", "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
     }  # fmt: skip
-    records.append(submit("m3_evaluate", commit, [evaluate], {}, "00:30:00", after=records[-1]["job"]))
+    records.append(submit("m3_evaluate", commit, [evaluate], {}, "00:30:00", after=records[-1]["job"], exclude=exclude))
     return records
 
 
@@ -167,6 +170,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_argument("--iterations", type=int, default=50000, help="m3 fit iterations")
     sub.add_argument("--collect-time", default="04:00:00")
     sub.add_argument("--fit-time", default="01:00:00")
+    sub.add_argument("--exclude", help="comma-separated nodes to avoid, such as nodes with a broken GPU")
     sub = commands.add_parser("merge", help="merge collect shards (runs as a grid task)")
     sub.add_argument("--out", type=Path, required=True, help="merged train folder")
     sub.add_argument("shards", type=Path, nargs="+")
@@ -189,6 +193,7 @@ def main(argv: list[str] | None = None) -> None:
         iterations=args.iterations,
         collect_time=args.collect_time,
         fit_time=args.fit_time,
+        exclude=args.exclude,
     )
     for record in records:
         print(json.dumps(record))
