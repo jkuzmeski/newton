@@ -57,6 +57,8 @@ OTHER_SHOE = "puma-deviate-nitro-elite-3"
 """Default shoe of the ``held_out_other_shoe`` shard."""
 HELD_OUT = ("held_out_windows", "held_out_beyond", "held_out_other_shoe")
 """Names of the held-out shards."""
+MEMORY = "128G"
+"""Host memory of the merge, fit and evaluate tasks, which hold the train buffer (~0.5 kB per row) up to three times."""
 GATE = ("held_out_windows", "held_out_beyond")
 """Held-out shards that decide M3; ``held_out_other_shoe`` is reported only."""
 _PER_WORLD = ("shoe", "failures", "carrier_stances", "carrier_work_violations", "xi")
@@ -159,7 +161,16 @@ def chain(
                  *[a for name in HELD_OUT for a in ("--held-out", f"{name}={run}/held_out/{name}")]],
     }  # fmt: skip
     records.append(
-        submit("stage0_merge", commit, [merge_task], {}, "00:30:00", after=records[-1]["job"], exclude=exclude)
+        submit(
+            "stage0_merge",
+            commit,
+            [merge_task],
+            {},
+            "00:30:00",
+            after=records[-1]["job"],
+            exclude=exclude,
+            memory=MEMORY,
+        )
     )
     buffers = records[-1]["run_dir"] + "/merge"
     fits = [
@@ -169,7 +180,7 @@ def chain(
         for h in HISTORIES
         for seed in FIT_SEEDS
     ]  # fmt: skip
-    records.append(submit("m3", commit, fits, {}, fit_time, after=records[-1]["job"], exclude=exclude))
+    records.append(submit("m3", commit, fits, {}, fit_time, after=records[-1]["job"], exclude=exclude, memory=MEMORY))
     models = [f"{records[-1]['run_dir']}/{fit['name']}" for fit in fits]
     evaluate = {
         "name": "evaluate",
@@ -178,7 +189,11 @@ def chain(
                  *[a for name in HELD_OUT for a in ("--buffer", f"{name}={buffers}/{name}/buffer.npz")],
                  "--held-out", *HELD_OUT, "--gate", *GATE, "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
     }  # fmt: skip
-    records.append(submit("m3_evaluate", commit, [evaluate], {}, "00:30:00", after=records[-1]["job"], exclude=exclude))
+    records.append(
+        submit(
+            "m3_evaluate", commit, [evaluate], {}, "00:30:00", after=records[-1]["job"], exclude=exclude, memory=MEMORY
+        )
+    )
     return records
 
 

@@ -46,8 +46,8 @@ PACKAGES = ("warp-lang", "mujoco", "mujoco-warp", "numpy", "scipy", "trimesh", "
 """Grid environment packages, pinned to the versions of the local environment."""
 TORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 """PyTorch wheel index of the local ``torch`` build; the H100 nodes run CUDA 12.8 wheels."""
-MAX_GPUS = 4
-"""Tasks per submission without asking the user first."""
+MAX_GPUS = 8
+"""Tasks per submission without asking the user first (the user allowed up to about 8 nodes)."""
 
 
 def ssh(command: str) -> str:
@@ -134,11 +134,13 @@ def submit(
     time_limit: str,
     after: str | None = None,
     exclude: str | None = None,
+    memory: str | None = None,
 ) -> dict:
     """Push the code and inputs, write the task list and queue the array; return the submission record.
 
     The array waits until every task of job ``after`` succeeded, if given, and
-    avoids the comma-separated nodes ``exclude``, if given.
+    avoids the comma-separated nodes ``exclude``, if given. ``memory`` replaces
+    the host memory per task of the task script, such as ``"128G"``.
     """
     if not 0 < len(tasks) <= MAX_GPUS:
         raise SystemExit(f"{len(tasks)} tasks; at most {MAX_GPUS} GPUs without asking the user")
@@ -152,10 +154,10 @@ def submit(
     log = f"{REMOTE_ROOT}/logs/{name}-%A_%a.out"
     exports = f"ALL,GRID_ROOT={REMOTE_ROOT},GRID_CODE_DIR={REMOTE_ROOT}/code/{sha[:12]},RUN_DIR={run_dir}"
     dependency = f"--dependency=afterok:{after} --kill-on-invalid-dep=yes " if after else ""
-    excluded = f"--exclude={exclude} " if exclude else ""
+    options = (f"--exclude={exclude} " if exclude else "") + (f"--mem={memory} " if memory else "")
     output = ssh(
         f"cd {REMOTE_ROOT} && sbatch --parsable --job-name=sm-{name} --array=0-{len(tasks) - 1} --time={time_limit} "
-        f"{dependency}{excluded}"
+        f"{dependency}{options}"
         f"--output={log} --error={log} --export={exports} {REMOTE_ROOT}/code/{sha[:12]}/{TASK_SCRIPT}"
     )
     job = output.strip().split(";")[0]
