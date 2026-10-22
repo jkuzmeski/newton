@@ -31,7 +31,17 @@ import warp as wp
 
 from .body import BodyParams
 from .buffer import ReplayBuffer
-from .collect import AUX_DIM, JOINT_COUNT, episode_starts, make_sim, sim_aux, sim_state
+from .collect import (
+    AUX_DIM,
+    JOINT_COUNT,
+    Stage0Config,
+    episode_starts,
+    make_sim,
+    moment_stiffness_floor,
+    reference_moments,
+    sim_aux,
+    sim_state,
+)
 from .context import XI_DIM
 from .policy import Actor, Critic, impedance_action_bounds
 from .reference import load_body_params
@@ -111,6 +121,32 @@ class TrackerTask:
         self.action_shape = (joints, 3)
         self.observation_size = STATE_DIM - 2 + 3 * joints
         self.goal_size = (STATE_DIM - 2) * config.goal_frames
+
+    def start_action(self, q_ref: torch.Tensor, moment: torch.Tensor) -> torch.Tensor:
+        """Return the episode-start action that carries the reference moment like the stage-0 data.
+
+        The stiffness is the stage-0 floor :func:`~projects.supermimic.collect.moment_stiffness_floor`
+        capped at its upper bound, ``q_eq = q_ref + moment / K`` within the joint limits, and the
+        damping is the geometric middle of its bounds.
+
+        Args:
+            q_ref: Reference joint angles [batch, joints] [rad].
+            moment: Reference joint moments [batch, joints] [N m].
+
+        Returns:
+            Actions of shape [batch, joints, 3].
+        """
+        low, high = self.action_low, self.action_high
+        stiffness = moment_stiffness_floor(
+            q_ref,
+            moment,
+            torch.stack((low[:, 0], high[:, 0]), -1),
+            torch.stack((low[:, 1], high[:, 1]), -1),
+            Stage0Config.max_posture_lead_rad,
+        ).minimum(high[:, 1])
+        q_eq = torch.clamp(q_ref + moment / stiffness, low[:, 0], high[:, 0])
+        damping = (low[:, 2] * high[:, 2]).sqrt().expand_as(q_ref)
+        return torch.stack((q_eq, stiffness, damping), -1)
 
     @property
     def hooks(self) -> ImaginationHooks:
@@ -205,8 +241,7 @@ class TrackerCollector:
     Episodes start at reference flight frames and end on :func:`~projects.supermimic.tracking.termination`,
     on a sim failure (non-finite aux or a joint speed above ``failure_joint_speed``)
     or at the end of the reference window. A failed step's state is not stored.
-    At an episode start the previous action is the reference pose with the
-    geometric middle of the stiffness and damping bounds.
+    At an episode start the previous action is :meth:`TrackerTask.start_action`.
 
     Args:
         task: Tracker task.
@@ -214,6 +249,7 @@ class TrackerCollector:
         xi: Sim context per world, shape [worlds, XI_DIM].
         joint_q: Reference coordinates, shape [windows, frames, 17].
         joint_qd: Reference velocities, shape [windows, frames, 16].
+        moment: Reference joint moments, shape [windows, frames, joints] [N m].
         starts: Episode starts as (window, frame) rows, shape [starts, 2].
         buffer: Buffer with one row per sim world.
         noise_std: Standard deviation of the noise on the actor's logits.
@@ -227,6 +263,7 @@ class TrackerCollector:
         xi: torch.Tensor,
         joint_q: torch.Tensor,
         joint_qd: torch.Tensor,
+        moment: torch.Tensor,
         starts: torch.Tensor,
         buffer: ReplayBuffer,
         *,
@@ -234,7 +271,7 @@ class TrackerCollector:
         failure_joint_speed: float = 100.0,
     ):
         self.task, self.sim, self.xi, self.buffer = task, sim, xi, buffer
-        self.joint_q, self.joint_qd, self.starts = joint_q, joint_qd, starts
+        self.joint_q, self.joint_qd, self.moment, self.starts = joint_q, joint_qd, moment, starts
         self.noise_std = noise_std
         self.failure_joint_speed = failure_joint_speed
         w, device = sim.world_count, xi.device
@@ -242,7 +279,6 @@ class TrackerCollector:
         self.frame = torch.zeros_like(self.window)
         self.reset = torch.ones(w, dtype=torch.bool, device=device)
         self.previous = torch.zeros((w, *task.action_shape), device=device)
-        self.middle = (task.action_low[:, 1:] * task.action_high[:, 1:]).sqrt()
 
     @torch.no_grad()
     def __call__(self, trainer: Trainer, steps: int = 1) -> dict[str, float]:
@@ -258,9 +294,8 @@ class TrackerCollector:
                     self.window[reset], self.frame[reset] = pick[:, 0], pick[:, 1]
                     q, qd = self.joint_q[self.window, self.frame], self.joint_qd[self.window, self.frame]
                     sim.reset(wp.from_torch(reset), wp.from_torch(q), wp.from_torch(qd))
-                    self.previous[reset] = torch.cat(
-                        (q[reset, 7:, None], self.middle.expand(int(reset.sum()), -1, -1)), -1
-                    )
+                    moment = self.moment[self.window[reset], self.frame[reset]]
+                    self.previous[reset] = task.start_action(q[reset, 7:], moment)
                 state = sim_state(sim)
                 k = self.window * task.frames + self.frame
                 done = termination(state, task.reference[k])
@@ -358,6 +393,7 @@ def main(argv: list[str] | None = None) -> None:
         torch.as_tensor(xi, dtype=torch.float32, device=device),
         joint_q,
         joint_qd,
+        torch.as_tensor(reference_moments(ref, body), dtype=torch.float32, device=device),
         episode_starts(ref, "train"),
         buffer,
     )

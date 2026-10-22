@@ -80,6 +80,26 @@ class TestSupermimicTracker(unittest.TestCase):
         torch.testing.assert_close(normalized[0, :, 1:], torch.zeros(10, 2))
         torch.testing.assert_close(normalized[1, :, 1:], torch.ones(10, 2))
 
+    def test_start_action_carries_the_reference_moment(self):
+        """Carry the reference moment with a lead of at most 0.35 rad below the stiffness cap, and loose K without moment."""
+        task = _task()
+        q_ref = task.reference[[3, FRAMES + 5], 13:23]
+        moment = torch.tensor([[0.0] * 10, [50.0, -20.0, 5.0, -150.0, 2000.0] * 2])
+
+        action = task.start_action(q_ref, moment)
+        q_eq, stiffness = action[..., 0], action[..., 1]
+
+        torch.testing.assert_close(q_eq[0], q_ref[0])
+        torch.testing.assert_close(stiffness[0], task.action_low[:, 1])
+        self.assertTrue(bool(((q_eq >= task.action_low[:, 0]) & (q_eq <= task.action_high[:, 0])).all()))
+        self.assertTrue(bool((stiffness <= task.action_high[:, 1]).all()))
+        # Below the stiffness cap the posture lead carries the moment exactly.
+        carried = stiffness[1] < task.action_high[:, 1]
+        lead = (q_eq - q_ref)[1]
+        torch.testing.assert_close((stiffness[1] * lead)[carried], moment[1][carried])
+        self.assertTrue(bool((lead[carried].abs() <= 0.35 + 1e-6).all()))
+        self.assertTrue(bool((~carried).any()))
+
     def test_starts_leave_room_for_the_horizon(self):
         """Sample only non-terminal starts whose horizon stays inside the reference window."""
         task = _task()
