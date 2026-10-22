@@ -49,14 +49,14 @@ from .collect import (
     episode_starts,
     loaded_moment,
     make_sim,
-    moment_stiffness_floor,
+    reference_action,
     reference_moments,
     sim_aux,
     sim_state,
 )
 from .context import XI_DIM
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
-from .reference import load_body_params, load_shoe, load_subject, trial_reference
+from .reference import Subject, load_body_params, load_shoe, load_subject, trial_reference
 from .sim import RunnerSim
 from .tracker import TrackerConfig, TrackerTask, reference_states
 from .tracking import termination
@@ -144,12 +144,18 @@ def stage0_policy(task: TrackerTask, contact: torch.Tensor, stiffness_quantile: 
 
     def policy(state, previous, k, loaded):
         q_ref = task.reference[k, 13 : 13 + JOINT_COUNT]
-        moment = loaded_moment(task.moment[k], contact[k], loaded)
-        floor = moment_stiffness_floor(q_ref, moment, q_limits, k_limits, Stage0Config.max_posture_lead_rad)
-        floor = torch.minimum(floor, high[:, 1])
-        stiffness = floor * (high[:, 1] / floor) ** stiffness_quantile
-        q_eq = (q_ref + moment / stiffness).clamp(low[:, 0], high[:, 0])
-        return torch.stack((q_eq, stiffness, damping.expand_as(q_eq)), -1)
+        action, _ = reference_action(
+            q_ref,
+            task.reference[k, 13 + JOINT_COUNT : 13 + 2 * JOINT_COUNT],
+            loaded_moment(task.moment[k], contact[k], loaded),
+            damping.expand_as(q_ref),
+            torch.full_like(q_ref, stiffness_quantile),
+            torch.zeros_like(q_ref),
+            q_limits,
+            k_limits,
+            Stage0Config.max_posture_lead_rad,
+        )
+        return action
 
     return policy
 
@@ -314,15 +320,14 @@ def _joint_power(moments: np.ndarray, rates: np.ndarray, mass: float) -> dict:
     }
 
 
-def f01_summary(reference: Path) -> dict:
-    """Return the F01 values of the report from every trial of the reference's subject.
+def f01_summary(reference: Path, subject: Subject) -> dict:
+    """Return the F01 values of the report from every trial of ``subject``, the reference's runner.
 
     Stance metrics use the unfiltered 1 kHz plate force; joint work, peak
     moments and quasi-stiffness use inverse dynamics on the marker-rate
     reference, over frames with a valid marker fit, as
     :func:`~projects.supermimic.analysis.subject_summary`.
     """
-    subject = load_subject(reference / "subject.json")
     body = load_body_params(reference / "body_params.json")
     shoe = load_shoe(subject.shoe)
     mass = body.mass + shoe.pair_mass_kg
@@ -493,6 +498,9 @@ def main(argv: list[str] | None = None) -> None:
         default=Path("outputs/supermimic/reference_F01_2026-10-22-v3"),
         help="reference folder",
     )
+    parser.add_argument(
+        "--subject", type=Path, help="subject spec whose data folder holds the trials; the reference's by default"
+    )
     parser.add_argument("--checkpoint", type=Path, help="tracker checkpoint.pt; the stage-0 law when omitted")
     parser.add_argument("--split", choices=("eval", "train", "all"), default="eval", help="reference windows")
     parser.add_argument("--plot", action="store_true", help="plot the longest episode against the reference")
@@ -504,7 +512,8 @@ def main(argv: list[str] | None = None) -> None:
     with np.load(args.reference / "reference.npz") as f:
         ref = {k: f[k] for k in f.files}
     body = load_body_params(args.reference / "body_params.json")
-    shoe = load_shoe(load_subject(args.reference / "subject.json").shoe)
+    subject = load_subject(args.subject or args.reference / "subject.json")
+    shoe = load_shoe(subject.shoe)
     starts = first_flight_starts(np.concatenate([episode_starts(ref, s, "cpu").numpy() for s in SPLITS[args.split]]))
     starts = torch.as_tensor(starts, device=device)
     sim, _ = make_sim(
@@ -535,7 +544,7 @@ def main(argv: list[str] | None = None) -> None:
         "split": args.split,
         "shoe": shoe.name,
         "sim": rollout_summary(result, task, sim.config.control_dt_s, mass),
-        "f01": f01_summary(args.reference),
+        "f01": f01_summary(args.reference, subject),
     }
     (args.output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     (args.output / "report.md").write_text(markdown(report), encoding="utf-8")
