@@ -136,13 +136,15 @@ def fit_material(
     traces: list[dict[str, np.ndarray]],
     starts: list[Material],
     evaluations: int,
+    substeps: int,
 ) -> tuple[Material, list[dict]]:
     """Fit the replayed traces from every start at once and keep the lowest loss.
 
     Each start is a bounded least-squares solve on :func:`core.force_residual`
     with up to ``evaluations`` residual evaluations. A Jacobian is a forward
     difference; the materials every start asks for in a round, Jacobian columns
-    included, run as candidate worlds of one launch.
+    included, run as candidate worlds of one launch. Each trace frame is
+    replayed in ``substeps`` contact steps.
 
     Returns:
         The best material by training loss and one record per start.
@@ -157,7 +159,7 @@ def fit_material(
         # Launch sizes are rounded up to whole Jacobians so few replays are built.
         size = width * -(-len(points) // width)
         if size not in replays:
-            replays[size] = LastReplay(bed, depth_m, dt_s, candidates=size)
+            replays[size] = LastReplay(bed, depth_m, dt_s, candidates=size, substeps=substeps)
         materials = [Material(*p) for p in points]
         force = replays[size].run(materials + [materials[0]] * (size - len(materials)))
         return [
@@ -295,9 +297,12 @@ def run(
     evaluations: int,
     random_starts: int,
     seed: int,
+    substeps: int,
     start_fits: tuple[Path, ...] = (),
 ) -> dict:
     """Register the last, fit the material to the train traces from many starts, and score every trace.
+
+    Every trace frame is replayed in ``substeps`` contact steps.
 
     The starts are :data:`CALIBRATED_MATERIAL`, the materials of ``start_fits``
     (earlier ``material_fit.json`` files), and ``random_starts`` Latin-hypercube
@@ -333,11 +338,15 @@ def run(
     starts = [initial, *(Material(**json.loads(path.read_text())["material"]) for path in start_fits)]
     starts += latin_hypercube_starts(random_starts, seed)
     start = time.perf_counter()
-    material, records = fit_material(bed, depth[:, train], dt, [traces[k] for k in train], starts, evaluations)
+    material, records = fit_material(
+        bed, depth[:, train], dt, [traces[k] for k in train], starts, evaluations, substeps
+    )
     fit_seconds = time.perf_counter() - start
 
     peaks = np.argmax(depth, axis=0)
-    force, columns = LastReplay(bed, depth, dt, candidates=2).run([initial, material], snapshot_frames=peaks)
+    force, columns = LastReplay(bed, depth, dt, candidates=2, substeps=substeps).run(
+        [initial, material], snapshot_frames=peaks
+    )
     broken = [
         f"{key} {name} {split}"
         for c, key in enumerate(("initial", "fitted"))
@@ -362,6 +371,7 @@ def run(
         "side": side,
         "sweep": index["shoe"],
         "evaluations_per_start": evaluations,
+        "substeps": substeps,
         "registration": {"pose": registration.pose, "qc": registration.qc},
         "initial_material": asdict(initial),
         "material": asdict(material),
@@ -389,6 +399,12 @@ def main() -> None:
     parser.add_argument("--random-starts", type=int, default=6, help="Latin-hypercube starts inside the bounds.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--substeps",
+        type=int,
+        default=8,
+        help="Contact steps per 1 ms trace frame; 8 is the runner's 1.25e-4 s contact step.",
+    )
+    parser.add_argument(
         "--start", type=Path, action="append", default=[], help="Earlier material_fit.json to start from; repeatable."
     )
     args = parser.parse_args()
@@ -401,6 +417,7 @@ def main() -> None:
         evaluations=args.evaluations,
         random_starts=args.random_starts,
         seed=args.seed,
+        substeps=args.substeps,
         start_fits=tuple(args.start),
     )
     print(json.dumps({k: report[k] for k in ("shoe", "material", "registration")}, indent=2, default=float))
