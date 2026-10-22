@@ -1,0 +1,1 @@
+Add the SuperMimic world-model go/no-go in ``projects.supermimic.m3``: a CUDA-graph world-model fit on stage-0 buffers and a touchdown report of the vertical ground reaction force error per 10 ms step after touchdown at 1, 8 and 32 step horizons, against the measured stride-to-stride spread.
