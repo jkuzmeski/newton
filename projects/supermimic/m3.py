@@ -20,8 +20,8 @@ all phases, is reported next to it. A
 horizon ``H`` scores the force of a step predicted from a logged state ``H - 1``
 steps earlier.
 
-The verdict is *go* when, on every held-out buffer, the 8-step error of bins 1
-to 4 is at most the touchdown-aligned standard deviation of that bin. Bin 0 is
+Each held-out buffer gets its own verdict: *go* when the 8-step error of bins
+1 to 4 is at most the touchdown-aligned standard deviation of that bin. Bin 0 is
 reported apart as its error-to-SD ratio: its sim step starts before touchdown
 and the subject's at touchdown, so its narrow spread does not decide alone.
 
@@ -32,7 +32,7 @@ From the repository root::
     uv run --extra dev --extra torch-cu12 python -m projects.supermimic.m3 evaluate \
         --model outputs/supermimic/m3/h4 outputs/supermimic/m3/h0 \
         --buffer train=outputs/supermimic/stage0_train/buffer.npz \
-        --buffer held_out=outputs/supermimic/stage0_eval/buffer.npz --held-out held_out \
+        --buffer held_out_windows=outputs/supermimic/stage0_eval/buffer.npz --held-out held_out_windows \
         --out outputs/supermimic/m3/report.json
 """
 
@@ -269,7 +269,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = commands.add_parser("evaluate")
     sub.add_argument("--model", type=Path, nargs="+", required=True, help="Folders written by fit")
     sub.add_argument("--buffer", action="append", required=True, help="NAME=PATH of a buffer .npz")
-    sub.add_argument("--held-out", nargs="+", required=True, help="Buffer names that decide the verdict")
+    sub.add_argument("--held-out", nargs="+", required=True, help="Buffer names that each get a verdict")
     sub.add_argument("--subject", type=Path, default=F01, help="Subject spec of the measured spread")
     sub.add_argument("--out", type=Path, required=True, help="Report .json; a .md table is written next to it")
     args = parser.parse_args(argv)
@@ -320,24 +320,28 @@ def main(argv: list[str] | None = None) -> None:
         for folder in args.model:
             report["models"].setdefault(folder.name, {})[name] = evaluate(load_model(folder), buffer)
     sd = report["measured"]["aligned"]["sd_n"]
-    scores = {
-        model: [results[name][str(GO_HORIZON)] for name in args.held_out] for model, results in report["models"].items()
-    }
     report["go"] = {
-        model: all(bins[b]["rmse_n"] <= sd[b] for bins in buffers for b in range(1, BINS))
-        for model, buffers in scores.items()
+        model: {
+            name: all(results[name][str(GO_HORIZON)][b]["rmse_n"] <= sd[b] for b in range(1, BINS))
+            for name in args.held_out
+        }
+        for model, results in report["models"].items()
     }
     report["first_bin_ratio"] = {
-        model: max(bins[0]["rmse_n"] / sd[0] for bins in buffers) for model, buffers in scores.items()
+        model: {name: results[name][str(GO_HORIZON)][0]["rmse_n"] / sd[0] for name in args.held_out}
+        for model, results in report["models"].items()
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=1) + "\n")
-    held_out = ", ".join(args.held_out)
-    table = _table(report) + f"\n\nGo (8-step error <= touchdown-aligned SD at 10-50 ms on {held_out}): "
-    table += ", ".join(f"{m}: {'go' if g else 'no-go'}" for m, g in report["go"].items())
-    table += "\n\n0-10 ms error / SD (the sim step starts before touchdown, the subject's at touchdown): "
-    table += ", ".join(f"{m}: {r:.1f}" for m, r in report["first_bin_ratio"].items()) + "\n"
+    table = _table(report)
+    for name in args.held_out:
+        table += f"\n\nGo on {name} (8-step error <= touchdown-aligned SD at 10-50 ms): "
+        table += ", ".join(f"{m}: {'go' if g[name] else 'no-go'}" for m, g in report["go"].items())
+        table += "; 0-10 ms error / SD: " + ", ".join(
+            f"{m}: {r[name]:.1f}" for m, r in report["first_bin_ratio"].items()
+        )
+    table += "\n\nThe 0-10 ms sim step starts before touchdown, the subject's at touchdown.\n"
     args.out.with_suffix(".md").write_text(table)
     print(table)
 

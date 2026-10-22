@@ -56,6 +56,8 @@ def _shard(folder: Path, worlds: int, seed: int) -> None:
         "xi_coordinates": [c[0] for c in XI_COORDINATES],
         "config": asdict(Stage0Config()),
         "failures": [seed] * worlds,
+        "carrier_stances": [2] * worlds,
+        "carrier_work_violations": [seed] * worlds,
         "stiffness_short_steps": {"knee_flexion_r": seed + 1},
         "unloaded_stance_steps": [seed, 1],
         "xi": np.zeros((worlds, XI_DIM)).tolist(),
@@ -81,6 +83,8 @@ class TestStage0Merge(unittest.TestCase):
         self.assertEqual(meta["unloaded_stance_steps"], [1, 2])
         self.assertEqual(meta["summary"]["rows"], 25)
         self.assertEqual(meta["summary"]["sim_failures"], 3)
+        self.assertEqual(meta["summary"]["carrier_stances"], 10)
+        self.assertEqual(meta["summary"]["carrier_work_violations"], 3)
 
 
 if __name__ == "__main__":

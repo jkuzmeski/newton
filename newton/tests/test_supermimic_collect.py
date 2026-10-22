@@ -18,6 +18,7 @@ try:
     from projects.supermimic.collect import (
         AUX_DIM,
         CENTER_SHOE,
+        carrier_lift,
         loaded_moment,
         make_sim,
         moment_stiffness_floor,
@@ -66,6 +67,8 @@ class TestSupermimicCollect(unittest.TestCase):
             "xi_coordinates": ["c"],
             "config": {"touchdown_force_n": 50.0},
             "stiffness_short_steps": {"knee": 3},
+            "carrier_stances": [4, 2],
+            "carrier_work_violations": [1, 0],
         }
         summary = summarize(self._buffer(), meta)
         self.assertEqual(summary["rows"], 12)
@@ -77,6 +80,20 @@ class TestSupermimicCollect(unittest.TestCase):
         self.assertAlmostEqual(summary["sim_failures_per_world_s_by_shoe"]["a"], 1.0 / 0.06)
         self.assertEqual(summary["sim_failures_per_world_s_by_xi_quartile"]["c"][3], 0.0)
         self.assertEqual(summary["stiffness_short_fraction"]["knee"], 0.25)
+        self.assertEqual(summary["carrier_stances"], 6)
+        self.assertEqual(summary["carrier_work_violations"], 1)
+
+    def test_carrier_lift_follows_the_foot_fixed_point(self):
+        """Lower a pitching foot and lift the point under its toe by the rotation, independent of the frame's x."""
+        s, c = float(np.sin(0.2)), float(np.cos(0.2))
+        h_s, h_c = float(np.sin(0.1)), float(np.cos(0.1))
+        before = torch.tensor([[0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], device="cuda")
+        after = torch.tensor([[0.3, 0.0, -0.01, 0.0, h_s, 0.0, h_c]], device="cuda")
+        toe = torch.tensor([[0.3 + 0.1 * c, 0.0, -0.01 - 0.1 * s]], device="cuda")
+        lift = carrier_lift(before, after, toe)
+        torch.testing.assert_close(lift, torch.tensor([-0.01 - 0.1 * s], device="cuda"))
+        shift = torch.tensor([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], device="cuda")
+        torch.testing.assert_close(carrier_lift(before + shift, after + shift, toe + shift[:3]), lift)
 
     def test_make_sim_runs_the_belt_at_the_reference_speed(self):
         """Run the treadmill at the belt speed passed from the reference, on the center shoe's geometry."""

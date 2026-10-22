@@ -70,7 +70,7 @@ class TestSupermimicContext(unittest.TestCase):
         self.assertTrue(np.all((friction >= 0.4 - 1e-9) & (friction <= 1.2 + 1e-9)))
 
     def test_training_contexts_lie_in_a_ball_around_the_fit(self):
-        """Sample valid training foams and frictions in the ball on the fit's geometry; hold out the fit itself."""
+        """Sample valid training foams and frictions in the ball on the fit's geometry, and out-of-ball contexts on a shell."""
         center = encode(FR3, 0.8, 0)
         space = ShoeSpace(center=center)
         train = space.sample_training(4096, np.random.default_rng(0))
@@ -83,7 +83,14 @@ class TestSupermimicContext(unittest.TestCase):
         self.assertTrue(all(0.0 < m.equilibrium_fraction < 1.0 and m.hyperfoam_exponent_2 < 0.0 for m in materials))
         self.assertTrue(np.all(friction > 0.0))
         self.assertTrue(np.all(geometry == 0))
-        np.testing.assert_array_equal(space.sample_held_out(3), np.repeat(center[None], 3, axis=0))
+        np.testing.assert_array_equal(space.sample_center(3), np.repeat(center[None], 3, axis=0))
+        beyond = space.sample_beyond(1024, np.random.default_rng(1))
+        offset = np.linalg.norm(beyond[:, :-GEOMETRY_COUNT] - center[:-GEOMETRY_COUNT], axis=1)
+        self.assertGreaterEqual(offset.min(), space.beyond[0] - 1e-6)
+        self.assertLessEqual(offset.max(), space.beyond[1] + 1e-6)
+        np.testing.assert_array_equal(
+            beyond[:, -GEOMETRY_COUNT:], np.repeat(center[None, -GEOMETRY_COUNT:], 1024, axis=0)
+        )
 
 
 if __name__ == "__main__":

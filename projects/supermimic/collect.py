@@ -24,14 +24,23 @@ stiffness ``K`` sits at a per-episode log-uniform quantile between
 ``(M_ref + B qd_ref) / K``, and the upper limit; where the floor exceeds the
 upper limit, ``K`` is the upper limit and the torque falls short. Each world's shoe geometry, foam and friction
 come from its sim context ``xi`` of :mod:`.context`: the train split draws them
-from a ball around one fitted shoe, on that shoe's geometry, and the eval split
-uses the fit itself on the held-out reference windows. Episodes start
+from a ball around one fitted shoe, on that shoe's geometry, on the train
+reference windows. The eval split runs the fit itself on the held-out
+reference windows; the fit lies inside the training ball, so it holds out the
+windows, not the shoe. The eval_beyond split draws contexts on a shell outside
+the ball on the held-out windows, which holds out the shoe as well. Episodes start
 at reference flight frames and end on a fall or at the end of the reference
 window. A step whose outputs are not finite or whose joint speeds are not
 physical is a sim failure: the world is reset, and the failed step's state is
 not stored, so its last row ends the episode as a truncation. Rows are pushed
 to a :class:`~projects.supermimic.buffer.ReplayBuffer` and written as a dataset
 folder.
+
+A passive foam cannot add energy: over each stance, from first to last step
+with a vertical ground reaction, the vertical work of the bed on its foot
+(:func:`carrier_work`) must not be positive. Stances that gain more than the
+tolerance of :class:`Stage0Config` count as carrier-work violations in
+:func:`summarize`.
 
 State rows are root position [m], root quaternion (``xyzw``), root linear
 [m/s] and angular [rad/s] velocity in world axes and the treadmill frame, joint
@@ -58,20 +67,23 @@ import torch
 import warp as wp
 
 from .analysis import inverse_dynamics
-from .body import JOINT_COUNT, JOINT_NAMES, STATE_DIM, BodyParams
+from .body import BODY_NAMES, JOINT_COUNT, JOINT_NAMES, STATE_DIM, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
 from .cost import GenerativeCostConfig
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
 from .reference import CONTACT_THRESHOLD_N, SHOE_DATASET, load_body_params, load_shoe, load_subject
-from .sim import RunnerSim, RunnerSimConfig, Shoe, load_shoes
+from .sim import FOOT_BODIES, RunnerSim, RunnerSimConfig, Shoe, load_shoes
 
 __all__ = [
     "AUX_DIM",
     "CENTER_SHOE",
     "Stage0Config",
+    "carrier_lift",
+    "carrier_work",
     "collect",
     "episode_starts",
+    "foot_poses",
     "loaded_moment",
     "main",
     "make_sim",
@@ -85,7 +97,7 @@ __all__ = [
 
 AUX_DIM = 12 + 3 * JOINT_COUNT
 CENTER_SHOE = "puma-fast-r-nitro-elite-3"
-"""Default shoe whose fit centers the training contexts and is the held-out context."""
+"""Default shoe whose fit centers the training contexts and runs on the held-out windows."""
 
 
 @dataclass(frozen=True)
@@ -104,6 +116,13 @@ class Stage0Config:
     """A step fails when a joint speed exceeds this; running stays below about 30 rad/s [rad/s]."""
     touchdown_force_n: float = CONTACT_THRESHOLD_N
     """Vertical ground reaction that counts as foot contact [N]."""
+    carrier_work_tolerance: float = 0.1
+    """Fraction of the work its bed absorbed by which a stance's net carrier work may exceed zero [-].
+
+    It covers sampling the work at the control step (:func:`carrier_work`).
+    """
+    carrier_work_floor_j: float = 0.5
+    """Net carrier work a stance may gain on top of :attr:`carrier_work_tolerance` [J]."""
 
 
 def sim_state(sim: RunnerSim) -> torch.Tensor:
@@ -119,6 +138,57 @@ def sim_aux(sim: RunnerSim, state: torch.Tensor) -> torch.Tensor:
     cop[..., :2] -= torch.where(grf[..., 2:] > 0.0, state[:, None, :2], 0.0)
     parts = (grf, cop, *(wp.to_torch(a) for a in (sim.joint_torque, sim.joint_work_pos, sim.joint_work_neg)))
     return torch.cat([a.reshape(w, -1) for a in parts], dim=1)
+
+
+def foot_poses(sim: RunnerSim) -> torch.Tensor:
+    """Return the right and left foot poses of ``sim``, position [m] and quaternion (``xyzw``), shape ``[W, 2, 7]``."""
+    body_q = wp.to_torch(sim.state_0.body_q).view(sim.world_count, len(BODY_NAMES), 7)
+    return body_q[:, list(FOOT_BODIES)]
+
+
+def carrier_lift(before: torch.Tensor, after: torch.Tensor, point: torch.Tensor) -> torch.Tensor:
+    """Return how far the foot-fixed points at ``point`` rose between two foot poses [m].
+
+    Args:
+        before: Earlier foot poses, position [m] and quaternion (``xyzw``) [..., 7].
+        after: Later foot poses in the same frame [..., 7].
+        point: Points at the later poses [..., 3] [m].
+    """
+    q = after[..., 3:]
+    local = _rotate(torch.cat((-q[..., :3], q[..., 3:]), -1), point - after[..., :3])
+    return point[..., 2] - before[..., 2] - _rotate(before[..., 3:], local)[..., 2]
+
+
+def carrier_work(sim: RunnerSim, before: torch.Tensor) -> torch.Tensor:
+    """Return the vertical work of each bed on its foot over ``sim``'s last step [J], shape ``[W, 2]``.
+
+    The work is the step-mean vertical ground reaction times the rise of the
+    foot-fixed point at the step's pressure center. The vertical column
+    forces act on a rigid foot, so this is their work up to sampling force and
+    motion at the control step. The pressure center trails the belt within the
+    step; its force-weighted time in the step, from ``grf_fine``, places it in
+    the frame of the end-of-step foot poses.
+
+    Args:
+        sim: Simulator after its step.
+        before: :func:`foot_poses` at the start of the step.
+    """
+    cfg = sim.config
+    fine = wp.to_torch(sim.grf_fine)[..., 2]
+    t = torch.arange(fine.shape[1], device=fine.device) * cfg.fine_dt_s + 0.5 * (cfg.fine_dt_s - cfg.substep_dt_s)
+    t_mean = (fine * t[:, None]).sum(1) / fine.sum(1).clamp_min(1e-9)
+    travel = cfg.belt_speed_m_s * cfg.control_dt_s
+    point = wp.to_torch(sim.cop).clone()
+    point[..., 0] += cfg.belt_speed_m_s * t_mean - travel
+    start = before.clone()
+    start[..., 0] -= travel
+    return wp.to_torch(sim.grf)[..., 2] * carrier_lift(start, foot_poses(sim), point)
+
+
+def _rotate(q: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    u, w = q[..., :3], q[..., 3:]
+    t = 2.0 * torch.linalg.cross(u, v)
+    return v + w * t + torch.linalg.cross(u, t)
 
 
 def _log_uniform(limits: torch.Tensor, count: int, generator: torch.Generator) -> torch.Tensor:
@@ -244,7 +314,8 @@ def make_sim(
         body: Runner body parameters.
         world_count: Simulated worlds.
         split: ``"train"`` samples training contexts around the fit of
-            ``shoe``, ``"eval"`` takes that fit.
+            ``shoe``, ``"eval"`` takes that fit and ``"eval_beyond"`` samples
+            contexts outside the training ball.
         rng: Generator of the context draws.
         belt_speed_m_s: Treadmill belt speed of the reference [m/s].
         shoe: Shoe whose fit and geometry center the contexts, by :data:`GEOMETRY_NAMES` name.
@@ -257,7 +328,12 @@ def make_sim(
     space = ShoeSpace(
         center=encode(shoes[shoe].left.material, RunnerSimConfig.friction_coefficient, GEOMETRY_NAMES.index(shoe))
     )
-    xi = space.sample_training(world_count, rng) if split == "train" else space.sample_held_out(world_count)
+    if split == "train":
+        xi = space.sample_training(world_count, rng)
+    elif split == "eval":
+        xi = space.sample_center(world_count)
+    else:
+        xi = space.sample_beyond(world_count, rng)
     materials, friction, geometry = decode(xi)
     sim = RunnerSim(
         body,
@@ -293,7 +369,8 @@ def collect(
         world_count: Simulated worlds.
         steps: Control steps per world; also the buffer capacity.
         split: ``"train"`` draws training contexts and train windows,
-            ``"eval"`` takes the held-out context and eval windows.
+            ``"eval"`` the fit and eval windows, ``"eval_beyond"`` contexts
+            outside the training ball and eval windows.
         shoe: Shoe whose fit centers the contexts, by :data:`GEOMETRY_NAMES` name.
         seed: Seed of every random draw.
         config: Controller and episode settings.
@@ -320,7 +397,7 @@ def collect(
     stiffness_limits = torch.tensor(STIFFNESS_LIMITS * 2, device=device)
     damping_limits = torch.tensor(DAMPING_LIMITS * 2, device=device)
     q_limits = torch.tensor(body.joint_limits * 2, device=device)
-    starts = episode_starts(ref, split, device)
+    starts = episode_starts(ref, "train" if split == "train" else "eval", device)
 
     w = world_count
     xi_t = torch.as_tensor(xi, device=device)
@@ -344,6 +421,11 @@ def collect(
     short_steps = torch.zeros(JOINT_COUNT, dtype=torch.int64, device=device)
     loaded = torch.zeros((w, 2), dtype=torch.bool, device=device)
     unloaded_stance_steps = torch.zeros(2, dtype=torch.int64, device=device)
+    stance_work = torch.zeros((w, 2), device=device)
+    stance_absorbed = torch.zeros_like(stance_work)
+    in_stance = torch.zeros((w, 2), dtype=torch.bool, device=device)
+    stances = torch.zeros(w, dtype=torch.int64, device=device)
+    violations = torch.zeros_like(stances)
 
     with torch.cuda.stream(wp.stream_to_torch(sim.device)):
         for _ in range(steps):
@@ -374,8 +456,10 @@ def collect(
                 config.max_posture_lead_rad,
             )
             short_steps += short.sum(0)
+            feet = foot_poses(sim)
             sim.step(wp.from_torch(action.contiguous()))
             aux, after = sim_aux(sim, state), sim_state(sim)
+            work = carrier_work(sim, feet)
             failed = ~(
                 torch.isfinite(aux).all(1) & (after[:, -JOINT_COUNT:].abs().amax(1) < config.failure_joint_speed_rad_s)
             )
@@ -386,6 +470,16 @@ def collect(
             )
             frame += stride
             reset = done | failed | (frame >= frames)
+            stance_work += work
+            stance_absorbed += (-work).clamp_min(0.0)
+            contact = aux[:, [2, 5]] > 0.0
+            ended = in_stance & ~contact & ~failed[:, None]
+            gained = stance_work > config.carrier_work_tolerance * stance_absorbed + config.carrier_work_floor_j
+            stances += ended.sum(1)
+            violations += (ended & gained).sum(1)
+            in_stance = contact & ~reset[:, None]
+            stance_work = torch.where(in_stance, stance_work, 0.0)
+            stance_absorbed = torch.where(in_stance, stance_absorbed, 0.0)
             innovation = torch.randn((w, JOINT_COUNT), generator=generator, device=device)
             noise = decay * noise + config.noise_std_rad * float(np.sqrt(1.0 - decay**2)) * innovation
 
@@ -400,6 +494,8 @@ def collect(
         "xi_coordinates": [c[0] for c in XI_COORDINATES],
         "config": asdict(config),
         "failures": failures.tolist(),
+        "carrier_stances": stances.tolist(),
+        "carrier_work_violations": violations.tolist(),
         "stiffness_short_steps": dict(zip(JOINT_NAMES, short_steps.tolist(), strict=True)),
         "unloaded_stance_steps": unloaded_stance_steps.tolist(),
         "xi": xi.tolist(),
@@ -408,7 +504,7 @@ def collect(
 
 
 def summarize(buffer: ReplayBuffer, meta: dict) -> dict:
-    """Count rows, episodes, falls, touchdowns, short stiffness and sim failures of a collection.
+    """Count rows, episodes, falls, touchdowns, short stiffness, sim failures and carrier-work violations.
 
     Failure rates are per simulated world-second, overall, per shoe geometry
     and per quartile of each ``xi`` coordinate over the worlds.
@@ -449,6 +545,8 @@ def summarize(buffer: ReplayBuffer, meta: dict) -> dict:
         "sim_failures_per_world_s": float(failures.sum() / (seconds * buffer.world_count)),
         "sim_failures_per_world_s_by_shoe": by_shoe,
         "sim_failures_per_world_s_by_xi_quartile": by_xi,
+        "carrier_stances": int(np.sum(meta["carrier_stances"])),
+        "carrier_work_violations": int(np.sum(meta["carrier_work_violations"])),
     }
 
 
@@ -499,7 +597,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--worlds", type=int, default=1024)
     parser.add_argument("--steps", type=int, default=1000, help="control steps per world")
-    parser.add_argument("--split", choices=("train", "eval"), default="train")
+    parser.add_argument("--split", choices=("train", "eval", "eval_beyond"), default="train")
     parser.add_argument(
         "--shoe", choices=GEOMETRY_NAMES, default=CENTER_SHOE, help="shoe whose fit centers the contexts"
     )

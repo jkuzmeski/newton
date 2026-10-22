@@ -7,14 +7,20 @@
 
 1. ``stage0``: collect shards of the train split (distinct seeds), with
    contexts in a ball around the fit of one shoe
-   (:data:`~projects.supermimic.collect.CENTER_SHOE` by default), and one
-   shard of the eval split, which runs that fit on the held-out reference
-   windows.
-2. ``stage0_merge``: :func:`merge` the train shards into ``train/`` and copies
-   the eval shard to ``held_out/``, each a ``buffer.npz`` and ``meta.json``.
+   (:data:`~projects.supermimic.collect.CENTER_SHOE` by default), and, in one
+   task (:func:`collect_held_out`), three held-out shards on the held-out
+   reference windows (:data:`HELD_OUT`):
+   ``held_out_windows`` runs the fit itself, which lies inside the training
+   ball, so it holds out the windows only; ``held_out_beyond`` draws contexts
+   on a shell outside the ball, and ``held_out_other_shoe`` runs the fit of
+   another shoe on its own geometry
+   (:data:`OTHER_SHOE` by default); these two also hold out the shoe.
+2. ``stage0_merge``: :func:`merge` the train shards into ``train/`` and each
+   held-out shard alone into a folder of its name, each a ``buffer.npz`` and
+   ``meta.json``.
 3. ``m3``: ``m3 fit`` with history 4 and 0, two seeds each.
-4. ``m3_evaluate``: ``m3 evaluate`` of the four models, with ``held_out``
-   deciding the verdict.
+4. ``m3_evaluate``: ``m3 evaluate`` of the four models, with a verdict on
+   each held-out shard.
 
 The reference folder, the F01 plate data and a copy of the F01 subject spec
 pointing at the staged data are inputs; the shoes come from
@@ -37,16 +43,21 @@ import numpy as np
 
 from ..buffer import ReplayBuffer
 from ..collect import CENTER_SHOE, summarize
+from ..collect import main as collect_main
 from ..reference import F01, REPOSITORY
 from .launch import REMOTE_ROOT, digest, submit
 
-__all__ = ["chain", "merge"]
+__all__ = ["HELD_OUT", "OTHER_SHOE", "chain", "collect_held_out", "merge"]
 
 HISTORIES = (4, 0)
 FIT_SEEDS = (0, 1)
 EVAL_SEED = 100
-"""Seed of the eval shard, apart from the train seeds ``0 .. shards - 1``."""
-_PER_WORLD = ("shoe", "failures", "xi")
+"""Seed of the first held-out shard, apart from the train seeds ``0 .. shards - 1``."""
+OTHER_SHOE = "puma-deviate-nitro-elite-3"
+"""Default shoe of the ``held_out_other_shoe`` shard."""
+HELD_OUT = ("held_out_windows", "held_out_beyond", "held_out_other_shoe")
+"""Names of the held-out shards."""
+_PER_WORLD = ("shoe", "failures", "carrier_stances", "carrier_work_violations", "xi")
 _SHARED = ("dt_s", "split", "center_shoe", "reference", "reference_frames_per_window", "xi_coordinates", "config")
 
 
@@ -83,6 +94,16 @@ def merge(shards: list[Path], output: Path) -> dict:
     return meta
 
 
+def collect_held_out(reference: Path, shoe: str, other_shoe: str, worlds: int, steps: int, output: Path) -> None:
+    """Collect the :data:`HELD_OUT` shards one after another into folders of their names under ``output``."""
+    splits = (["--split", "eval"], ["--split", "eval_beyond"], ["--split", "eval", "--shoe", other_shoe])
+    for i, (name, split) in enumerate(zip(HELD_OUT, splits, strict=True)):
+        collect_main(
+            ["--reference", str(reference), "--shoe", shoe, *split, "--worlds", str(worlds), "--steps", str(steps),
+             "--seed", str(EVAL_SEED + i), "--output", str(output / name)]
+        )  # fmt: skip
+
+
 def _subject_input(folder: Path, data: str) -> None:
     spec = json.loads(F01.read_text())
     spec["data"] = data
@@ -94,6 +115,7 @@ def chain(
     reference: Path,
     *,
     shoe: str,
+    other_shoe: str,
     shards: int,
     worlds: int,
     eval_worlds: int,
@@ -122,8 +144,9 @@ def chain(
             for s in range(shards)
         ]  # fmt: skip
         tasks.append(
-            {"name": "eval", "args": [*collect, "--split", "eval", "--worlds", str(eval_worlds),
-                                      "--seed", str(EVAL_SEED), "--output", "{out}/stage0"]}
+            {"name": "held_out", "args": ["projects.supermimic.grid.stage0", "held-out", "--reference",
+                                          f"{{data}}/{reference_name}", "--shoe", shoe, "--other-shoe", other_shoe,
+                                          "--worlds", str(eval_worlds), "--steps", str(steps), "--out", "{out}"]}
         )  # fmt: skip
         records = [submit("stage0", commit, tasks, data, collect_time, exclude=exclude)]
     run = records[-1]["run_dir"]
@@ -131,7 +154,7 @@ def chain(
     merge_task = {
         "name": "merge",
         "args": ["projects.supermimic.grid.stage0", "merge", "--out", "{out}/train", *train_shards,
-                 "--held-out", f"{run}/eval/stage0"],
+                 *[a for name in HELD_OUT for a in ("--held-out", f"{name}={run}/held_out/{name}")]],
     }  # fmt: skip
     records.append(
         submit("stage0_merge", commit, [merge_task], {}, "00:30:00", after=records[-1]["job"], exclude=exclude)
@@ -149,8 +172,9 @@ def chain(
     evaluate = {
         "name": "evaluate",
         "args": ["projects.supermimic.m3", "evaluate", "--model", *models, "--buffer",
-                 f"train={buffers}/train/buffer.npz", "--buffer", f"held_out={buffers}/held_out/buffer.npz",
-                 "--held-out", "held_out", "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
+                 f"train={buffers}/train/buffer.npz",
+                 *[a for name in HELD_OUT for a in ("--buffer", f"{name}={buffers}/{name}/buffer.npz")],
+                 "--held-out", *HELD_OUT, "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
     }  # fmt: skip
     records.append(submit("m3_evaluate", commit, [evaluate], {}, "00:30:00", after=records[-1]["job"], exclude=exclude))
     return records
@@ -162,30 +186,47 @@ def main(argv: list[str] | None = None) -> None:
     sub = commands.add_parser("submit", help="queue the recollection and M3 chain")
     sub.add_argument("--commit", required=True)
     sub.add_argument("--reference", type=Path, required=True, help="folder written by projects.supermimic.reference")
-    sub.add_argument("--shoe", default=CENTER_SHOE, help="shoe whose fit centers the contexts and is held out")
-    sub.add_argument("--shards", type=int, default=2, help="train shards, one H100 each")
-    sub.add_argument("--worlds", type=int, default=256, help="worlds per train shard")
-    sub.add_argument("--eval-worlds", type=int, default=128)
+    sub.add_argument("--shoe", default=CENTER_SHOE, help="shoe whose fit centers the contexts")
+    sub.add_argument("--other-shoe", default=OTHER_SHOE, help="shoe of the held_out_other_shoe shard")
+    sub.add_argument("--shards", type=int, default=1, help="train shards, one H100 each")
+    sub.add_argument("--worlds", type=int, default=4096, help="worlds per train shard; an H100 is fastest at 2048-4096")
+    sub.add_argument("--eval-worlds", type=int, default=512, help="worlds per held-out shard")
     sub.add_argument("--steps", type=int, default=2000, help="control steps per world")
     sub.add_argument("--iterations", type=int, default=50000, help="m3 fit iterations")
     sub.add_argument("--collect-time", default="04:00:00")
     sub.add_argument("--fit-time", default="01:00:00")
     sub.add_argument("--exclude", help="comma-separated nodes to avoid, such as nodes with a broken GPU")
+    sub = commands.add_parser("held-out", help="collect the held-out shards (runs as a grid task)")
+    sub.add_argument("--reference", type=Path, required=True)
+    sub.add_argument("--shoe", default=CENTER_SHOE)
+    sub.add_argument("--other-shoe", default=OTHER_SHOE)
+    sub.add_argument("--worlds", type=int, required=True)
+    sub.add_argument("--steps", type=int, required=True)
+    sub.add_argument("--out", type=Path, required=True, help="folder of the held-out shard folders")
     sub = commands.add_parser("merge", help="merge collect shards (runs as a grid task)")
     sub.add_argument("--out", type=Path, required=True, help="merged train folder")
     sub.add_argument("shards", type=Path, nargs="+")
     sub.add_argument(
-        "--held-out", type=Path, required=True, help="eval shard, merged alone into a held_out folder next to --out"
+        "--held-out",
+        action="append",
+        default=[],
+        help="NAME=SHARD, a held-out shard merged alone into a NAME folder next to --out",
     )
     args = parser.parse_args(argv)
+    if args.command == "held-out":
+        collect_held_out(args.reference, args.shoe, args.other_shoe, args.worlds, args.steps, args.out)
+        return
     if args.command == "merge":
         merge(args.shards, args.out)
-        merge([args.held_out], args.out.parent / "held_out")
+        for item in args.held_out:
+            name, shard = item.split("=", 1)
+            merge([Path(shard)], args.out.parent / name)
         return
     records = chain(
         args.commit,
         args.reference,
         shoe=args.shoe,
+        other_shoe=args.other_shoe,
         shards=args.shards,
         worlds=args.worlds,
         eval_worlds=args.eval_worlds,

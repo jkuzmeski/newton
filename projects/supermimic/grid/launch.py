@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -88,7 +89,8 @@ def push_code(commit: str) -> str:
     short = sha[:12]
     if (LOCAL_ROOT / "code" / short / "GRID_COMMIT").exists():
         return sha
-    archive = LOCAL_ROOT / "code" / f"{short}.tar.gz"
+    # Unique archive and folder names let submissions of the same commit push at once.
+    archive = LOCAL_ROOT / "code" / f"{short}.{os.getpid()}.tar.gz"
     # Export with the repository's LF endings; core.autocrlf would write CRLF on Windows.
     subprocess.run(
         ["git", "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar.gz", "-o", str(archive),
@@ -97,8 +99,9 @@ def push_code(commit: str) -> str:
     )  # fmt: skip
     d = f"{REMOTE_ROOT}/code/{short}"
     ssh(
-        f"set -e; rm -rf {d}.tmp; mkdir -p {d}.tmp; tar -xzf {d}.tar.gz -C {d}.tmp; echo {sha} > {d}.tmp/GRID_COMMIT; "
-        f"chmod -R a-w {d}.tmp; mv {d}.tmp {d}; rm -f {d}.tar.gz"
+        f"set -e; t=$(mktemp -d {d}.tmp.XXXXXX); tar -xzf {REMOTE_ROOT}/code/{archive.name} -C $t; "
+        f"rm -f {REMOTE_ROOT}/code/{archive.name}; echo {sha} > $t/GRID_COMMIT; chmod -R a-w $t; "
+        f"if [ -e {d} ]; then chmod -R u+w $t; rm -rf $t; else mv $t {d}; fi"
     )
     return sha
 

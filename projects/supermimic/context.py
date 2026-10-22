@@ -32,8 +32,8 @@ quarter of their difference on every side, and now serve as the unit of each
 coordinate: the v3 refits lie outside them, FR3 at about 4 on
 ``densification_exponent`` and Dev3 at about 1.8 on ``log_plateau``.
 :class:`ShoeSpace` samples training contexts in a ball around one fitted
-shoe's context, on that shoe's geometry; its held-out context is the fit
-itself.
+shoe's context, on that shoe's geometry, and evaluation contexts at the fit
+itself (held-out windows only) and on a shell outside the ball (held-out shoe).
 """
 
 from __future__ import annotations
@@ -143,11 +143,13 @@ def decode(xi: np.ndarray) -> tuple[list[ShoeMaterial], np.ndarray, np.ndarray]:
 
 @dataclass(frozen=True)
 class ShoeSpace:
-    """Training and held-out contexts around one fitted shoe.
+    """Training and evaluation contexts around one fitted shoe.
 
     Training contexts are uniform in a ball of ``radius`` around ``center``
-    in the foam and friction coordinates, on the geometry of ``center``. The
-    held-out context is ``center``.
+    in the foam and friction coordinates, on the geometry of ``center``.
+    ``center`` itself lies inside that ball, so it only holds out the
+    reference windows it runs on; contexts on a shell of radii ``beyond``
+    lie outside the ball and also hold out the shoe.
     """
 
     center: np.ndarray
@@ -159,16 +161,25 @@ class ShoeSpace:
     the modulus, plateau, equilibrium-fraction and relaxation-time
     coordinates; the Instron sweep does not pin the densification pair.
     """
+    beyond: tuple[float, float] = (0.75, 1.0)
+    """Inner and outer radius of the shell of out-of-ball contexts [-]."""
 
     def sample_training(self, count: int, rng: np.random.Generator) -> np.ndarray:
         """Return ``count`` training contexts, shape ``[count, XI_DIM]``."""
+        return self._sample(count, rng, 0.0, self.radius)
+
+    def sample_center(self, count: int) -> np.ndarray:
+        """Return ``count`` copies of ``center``, shape ``[count, XI_DIM]``."""
+        return np.repeat(np.asarray(self.center, dtype=np.float32)[None], count, axis=0)
+
+    def sample_beyond(self, count: int, rng: np.random.Generator) -> np.ndarray:
+        """Return ``count`` contexts uniform in the shell of radii ``beyond``, shape ``[count, XI_DIM]``."""
+        return self._sample(count, rng, *self.beyond)
+
+    def _sample(self, count: int, rng: np.random.Generator, inner: float, outer: float) -> np.ndarray:
         direction = rng.standard_normal((count, _GEOMETRY))
         direction /= np.linalg.norm(direction, axis=1, keepdims=True)
-        radius = self.radius * rng.uniform(0.0, 1.0, (count, 1)) ** (1.0 / _GEOMETRY)
-        xi = np.repeat(np.asarray(self.center, dtype=np.float32)[None], count, axis=0)
-        xi[:, :_GEOMETRY] += radius * direction
+        u = rng.uniform((inner / outer) ** _GEOMETRY, 1.0, (count, 1))
+        xi = self.sample_center(count)
+        xi[:, :_GEOMETRY] += outer * u ** (1.0 / _GEOMETRY) * direction
         return xi
-
-    def sample_held_out(self, count: int) -> np.ndarray:
-        """Return ``count`` copies of the held-out context, shape ``[count, XI_DIM]``."""
-        return np.repeat(np.asarray(self.center, dtype=np.float32)[None], count, axis=0)
