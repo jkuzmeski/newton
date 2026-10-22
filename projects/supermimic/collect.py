@@ -7,18 +7,22 @@ A simple controller runs batched :class:`~projects.supermimic.sim.RunnerSim`
 worlds within human joint impedance
 (:data:`~projects.supermimic.policy.STIFFNESS_LIMITS`,
 :data:`~projects.supermimic.policy.DAMPING_LIMITS`). The equilibrium angles
-are ``q_ref + M_ref / K`` plus smooth noise, clipped to the joint limits, where
-``q_ref`` is the F01 reference and ``M_ref`` its inverse-dynamics joint moment,
-so the reference posture carries the reference moment without a stiff joint.
+are ``q_ref + (M_ref + B qd_ref) / K`` plus smooth noise, clipped to the joint
+limits (:func:`reference_action`), where ``q_ref`` and ``qd_ref`` are the F01
+reference joint angles and rates and ``M_ref`` its inverse-dynamics joint
+moment. At the reference state the joint torque ``K (q_eq - q) - B qd`` is then
+``M_ref``: the reference posture carries the reference moment without a stiff
+joint, and the damping acts on the velocity error ``qd_ref - qd`` instead of
+braking the reference motion.
 A leg whose reference foot is in stance carries ``M_ref`` only once its sim
 foot is loaded above :attr:`Stage0Config.touchdown_force_n`; until then its
-equilibrium angles are ``q_ref`` plus noise, so a late sim touchdown does not
-drive an extended leg into the belt.
+equilibrium angles are ``q_ref + B qd_ref / K`` plus noise, so a late sim
+touchdown does not drive an extended leg into the belt.
 The damping ``B`` of every joint is drawn per episode, log-uniformly. The
 stiffness ``K`` sits at a per-episode log-uniform quantile between
-:func:`moment_stiffness_floor`, which bounds the posture lead ``M_ref / K``,
-and the upper limit; where the floor exceeds the upper limit, ``K`` is the
-upper limit and the torque falls short of ``M_ref``. Each world's shoe geometry, foam and friction
+:func:`moment_stiffness_floor`, which bounds the posture lead
+``(M_ref + B qd_ref) / K``, and the upper limit; where the floor exceeds the
+upper limit, ``K`` is the upper limit and the torque falls short. Each world's shoe geometry, foam and friction
 come from its sim context ``xi`` of :mod:`.context`: the train split draws them
 from a ball around one fitted shoe, on that shoe's geometry, and the eval split
 uses the fit itself on the held-out reference windows. Episodes start
@@ -73,6 +77,7 @@ __all__ = [
     "make_sim",
     "moment_stiffness_floor",
     "read_episode",
+    "reference_action",
     "reference_moments",
     "sim_aux",
     "sim_state",
@@ -94,7 +99,7 @@ class Stage0Config:
     fall_height_m: float = GenerativeCostConfig.height_min
     """A world falls when its root is below this height [m]."""
     max_posture_lead_rad: float = 0.35
-    """Largest lead of the equilibrium angle over the reference posture, ``M_ref / K`` [rad]."""
+    """Largest lead of the equilibrium angle over the reference posture, ``(M_ref + B qd_ref) / K`` [rad]."""
     failure_joint_speed_rad_s: float = 100.0
     """A step fails when a joint speed exceeds this; running stays below about 30 rad/s [rad/s]."""
     touchdown_force_n: float = CONTACT_THRESHOLD_N
@@ -150,6 +155,49 @@ def moment_stiffness_floor(
     room = torch.where(moment > 0, q_limits[:, 1] - q_ref, q_ref - q_limits[:, 0])
     room = room.clamp(1e-6, max_lead_rad)
     return torch.maximum(stiffness_limits[:, 0], moment.abs() / room)
+
+
+def reference_action(
+    q_ref: torch.Tensor,
+    qd_ref: torch.Tensor,
+    moment: torch.Tensor,
+    damping: torch.Tensor,
+    stiffness_quantile: torch.Tensor,
+    noise: torch.Tensor,
+    q_limits: torch.Tensor,
+    stiffness_limits: torch.Tensor,
+    max_lead_rad: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return the impedance action that carries ``moment`` at the reference state.
+
+    The feed-forward torque ``tau = moment + B qd_ref`` sets the equilibrium
+    angles ``q_ref + tau / K + noise``, clipped to ``q_limits``, so the torque
+    ``K (q_eq - q) - B qd`` at ``q = q_ref`` is ``moment + B (qd_ref - qd)``.
+    ``K`` sits at ``stiffness_quantile`` between the
+    :func:`moment_stiffness_floor` of ``tau``, capped at the upper limit, and
+    the upper limit, log-uniformly.
+
+    Args:
+        q_ref: Reference joint angles [batch, joints] [rad].
+        qd_ref: Reference joint rates [batch, joints] [rad/s].
+        moment: Joint moments to carry [batch, joints] [N m].
+        damping: Joint damping ``B`` [batch, joints] [N m s/rad].
+        stiffness_quantile: Stiffness quantile in [0, 1] [batch, joints].
+        noise: Equilibrium-angle offsets [batch, joints] [rad].
+        q_limits: Equilibrium-angle limits (lower, upper) [joints, 2] [rad].
+        stiffness_limits: Stiffness limits (lower, upper) [joints, 2] [N m/rad].
+        max_lead_rad: Largest posture lead [rad].
+
+    Returns:
+        The action [batch, joints, 3] (equilibrium, stiffness, damping) and
+        whether the stiffness falls short of carrying ``tau`` [batch, joints].
+    """
+    tau = moment + damping * qd_ref
+    floor = moment_stiffness_floor(q_ref, tau, q_limits, stiffness_limits, max_lead_rad)
+    low = torch.minimum(floor, stiffness_limits[:, 1])
+    stiffness = low * (stiffness_limits[:, 1] / low) ** stiffness_quantile
+    q_eq = (q_ref + tau / stiffness + noise).clamp(q_limits[:, 0], q_limits[:, 1])
+    return torch.stack((q_eq, stiffness, damping), dim=-1), floor > stiffness_limits[:, 1]
 
 
 def loaded_moment(moment: torch.Tensor, stance: torch.Tensor, loaded: torch.Tensor) -> torch.Tensor:
@@ -314,14 +362,18 @@ def collect(
             done = state[:, 2] < config.fall_height_m
             stance = ref_contact[window, frame]
             unloaded_stance_steps += (stance & ~loaded).sum(0)
-            q_ref = ref_q[window, frame, 7:]
-            moment = loaded_moment(ref_moment[window, frame], stance, loaded)
-            floor = moment_stiffness_floor(q_ref, moment, q_limits, stiffness_limits, config.max_posture_lead_rad)
-            short_steps += (floor > stiffness_limits[:, 1]).sum(0)
-            low = torch.minimum(floor, stiffness_limits[:, 1])
-            stiffness = low * (stiffness_limits[:, 1] / low) ** stiffness_quantile
-            q_eq = (q_ref + moment / stiffness + noise).clamp(q_limits[:, 0], q_limits[:, 1])
-            action = torch.stack((q_eq, stiffness, damping), dim=2)
+            action, short = reference_action(
+                ref_q[window, frame, 7:],
+                ref_qd[window, frame, 6:],
+                loaded_moment(ref_moment[window, frame], stance, loaded),
+                damping,
+                stiffness_quantile,
+                noise,
+                q_limits,
+                stiffness_limits,
+                config.max_posture_lead_rad,
+            )
+            short_steps += short.sum(0)
             sim.step(wp.from_torch(action.contiguous()))
             aux, after = sim_aux(sim, state), sim_state(sim)
             failed = ~(

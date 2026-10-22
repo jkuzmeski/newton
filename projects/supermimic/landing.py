@@ -8,7 +8,9 @@ substep by substep with an open joint torque law
 
     ``tau = tau_ff + K (q_eq - q) - B qd``,
 
-where ``q_eq`` and the feed-forward ``tau_ff`` follow 1 kHz tables. From the
+where ``q_eq`` and the feed-forward ``tau_ff`` follow 1 kHz tables.
+:func:`reference_schedule` builds the tables that track a reference: ``tau_ff``
+carries ``B qd_ref``, so the damping acts on the velocity error. From the
 substep a foot's vertical ground reaction first exceeds
 :data:`~projects.supermimic.reference.CONTACT_THRESHOLD_N`, the five joints of that leg use the touchdown gains
 for :attr:`LandingSchedule.touchdown_hold_s`. The rig records every substep:
@@ -31,7 +33,7 @@ from .body import BODY_NAMES, JOINT_NAMES
 from .reference import CONTACT_THRESHOLD_N
 from .sim import COORDS, DOFS, FOOT_BODIES, RunnerSim
 
-__all__ = ["LandingRig", "LandingSchedule", "touchdown_starts"]
+__all__ = ["LandingRig", "LandingSchedule", "reference_schedule", "touchdown_starts"]
 
 _J = wp.constant(len(JOINT_NAMES))
 _COORDS = wp.constant(COORDS)
@@ -321,6 +323,62 @@ class LandingRig:
         result["touchdown_s"] = self._touchdown.numpy()
         result["dt"] = dt
         return result
+
+
+def reference_schedule(
+    joint_q: np.ndarray,
+    joint_qd: np.ndarray,
+    moment: np.ndarray,
+    frame_dt: float,
+    starts: np.ndarray,
+    duration_s: float,
+    stiffness: np.ndarray,
+    damping: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, LandingSchedule]:
+    """Return the start states and the reference-tracking schedule of landings from reference frames.
+
+    From each start the equilibrium angles are the reference angles ``q_ref`` and
+    the feed-forward torques are ``M_ref + B qd_ref``, both linearly interpolated
+    to 1 ms rows. At the reference state the torque law then gives ``M_ref``, and
+    the damping acts on the velocity error ``qd_ref - qd`` instead of braking
+    the reference motion. The feed-forward holds ``B``, so a leg keeps its gains
+    at touchdown.
+
+    Args:
+        joint_q: Reference generalized coordinates [windows, frames, 17].
+        joint_qd: Reference generalized velocities [windows, frames, 16].
+        moment: Reference inverse-dynamics joint moments [windows, frames, 10] [N m].
+        frame_dt: Reference frame period [s].
+        starts: Start rows ``(window, frame, ...)`` [worlds, >= 2], for example from :func:`touchdown_starts`.
+        duration_s: Schedule length [s].
+        stiffness: Joint stiffness ``K`` [worlds, 10] [N m/rad].
+        damping: Joint damping ``B`` [worlds, 10] [N m s/rad].
+
+    Returns:
+        Start ``joint_q`` [worlds, 17], start ``joint_qd`` [worlds, 16] and the schedule.
+    """
+    window, frame = starts[:, 0], starts[:, 1]
+    frames = np.arange(joint_q.shape[1])
+    position = frame[:, None] + np.arange(round(duration_s * 1000.0) + 1) * 1e-3 / frame_dt
+
+    def rows(x: np.ndarray) -> np.ndarray:
+        return np.stack(
+            [
+                np.stack([np.interp(p, frames, xw[:, j]) for j in range(xw.shape[1])], -1)
+                for p, xw in zip(position, x[window], strict=True)
+            ]
+        )
+
+    schedule = LandingSchedule(
+        equilibrium=rows(joint_q[..., 7:]),
+        feed_forward=rows(moment) + damping[:, None] * rows(joint_qd[..., 6:]),
+        stiffness=stiffness,
+        damping=damping,
+        touchdown_stiffness=stiffness,
+        touchdown_damping=damping,
+        touchdown_hold_s=0.0,
+    )
+    return joint_q[window, frame], joint_qd[window, frame], schedule
 
 
 def touchdown_starts(contact: np.ndarray, flight_window: np.ndarray, flight_frame: np.ndarray) -> np.ndarray:

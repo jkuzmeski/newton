@@ -8,7 +8,7 @@ import numpy as np
 import warp as wp
 
 from projects.supermimic.body import BodyParams
-from projects.supermimic.landing import LandingRig, LandingSchedule, touchdown_starts
+from projects.supermimic.landing import LandingRig, LandingSchedule, reference_schedule, touchdown_starts
 from projects.supermimic.sim import RunnerSim, RunnerSimConfig, load_shoes
 
 DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v3")
@@ -36,6 +36,30 @@ class TestSupermimicLandingStarts(unittest.TestCase):
         contact[0, 6:, 1] = True
         rows = touchdown_starts(contact, np.zeros(3, int), np.array([3, 4, 5]))
         np.testing.assert_array_equal(rows, [[0, 5, 1]])
+
+    def test_reference_schedule_damps_the_velocity_error(self):
+        """Track the reference at 1 ms with a feed-forward that carries the moment plus B qd_ref."""
+        t = np.arange(20) * 0.005
+        joint_q, joint_qd = np.zeros((2, 20, 17)), np.zeros((2, 20, 16))
+        joint_q[1, :, 7:] = 0.1 + 2.0 * t[:, None]
+        joint_qd[1, :, 6:] = 2.0
+        moment = np.zeros((2, 20, 10))
+        moment[1] = 30.0
+        q0, qd0, schedule = reference_schedule(
+            joint_q,
+            joint_qd,
+            moment,
+            0.005,
+            np.array([[1, 4, 0]]),
+            0.01,
+            np.full((1, 10), 200.0),
+            np.full((1, 10), 5.0),
+        )
+        np.testing.assert_allclose(q0, joint_q[1, 4][None])
+        np.testing.assert_allclose(qd0, joint_qd[1, 4][None])
+        np.testing.assert_allclose(schedule.equilibrium[0, :, 0], 0.1 + 2.0 * (0.02 + np.arange(11) * 1e-3))
+        np.testing.assert_allclose(schedule.feed_forward, np.full((1, 11, 10), 30.0 + 5.0 * 2.0))
+        np.testing.assert_array_equal(schedule.touchdown_damping, schedule.damping)
 
 
 @unittest.skipUnless(CUDA and DATASET.exists(), "needs CUDA and the column-bed dataset")

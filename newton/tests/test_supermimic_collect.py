@@ -22,6 +22,7 @@ try:
         make_sim,
         moment_stiffness_floor,
         read_episode,
+        reference_action,
         sim_aux,
         summarize,
     )
@@ -104,6 +105,24 @@ class TestSupermimicCollect(unittest.TestCase):
         moment = torch.tensor([10.0, -10.0, 70.0, 0.1], device="cuda")
         floor = moment_stiffness_floor(q_ref, moment, q_limits, stiffness_limits, 0.35)
         torch.testing.assert_close(floor, torch.tensor([100.0, 10.0 / 0.35, 200.0, 1.0], device="cuda"))
+
+    def test_reference_action_damps_the_velocity_error(self):
+        """Carry the moment at the reference state, so the damping only acts on the velocity error."""
+        q_limits = torch.tensor([[-1.0, 1.0]] * 3, device="cuda")
+        stiffness_limits = torch.tensor([[10.0, 1000.0]] * 3, device="cuda")
+        q_ref = torch.zeros((2, 3), device="cuda")
+        qd_ref = torch.tensor([[8.0, -4.0, 0.0]] * 2, device="cuda")
+        moment = torch.tensor([[0.0, 20.0, -30.0]] * 2, device="cuda")
+        damping = torch.full((2, 3), 5.0, device="cuda")
+        quantile = torch.tensor([[0.0] * 3, [0.5] * 3], device="cuda")
+        action, short = reference_action(
+            q_ref, qd_ref, moment, damping, quantile, torch.zeros_like(q_ref), q_limits, stiffness_limits, 0.35
+        )
+        q_eq, stiffness = action[..., 0], action[..., 1]
+        torch.testing.assert_close(stiffness * (q_eq - q_ref) - damping * qd_ref, moment)
+        torch.testing.assert_close(stiffness[0], torch.tensor([40.0 / 0.35, 10.0, 30.0 / 0.35], device="cuda"))
+        torch.testing.assert_close(action[..., 2], damping)
+        self.assertFalse(bool(short.any()))
 
     def test_sim_aux_makes_the_center_of_pressure_root_relative(self):
         """Subtract the start root x/y from a loaded foot's center of pressure and keep zero without contact."""

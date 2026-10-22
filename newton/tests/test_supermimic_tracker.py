@@ -88,22 +88,22 @@ class TestSupermimicTracker(unittest.TestCase):
         torch.testing.assert_close(normalized[1, :, 1:], torch.ones(10, 2))
 
     def test_start_action_carries_the_reference_moment(self):
-        """Carry the reference moment with a lead of at most 0.35 rad below the stiffness cap, and loose K without moment."""
+        """Carry the reference moment at the reference state with a lead of at most 0.35 rad below the stiffness cap."""
         task = _task()
         k = torch.tensor([3, FRAMES + 5])
-        q_ref, moment = task.reference[k, 13:23], task.moment[k]
+        q_ref, qd_ref, moment = task.reference[k, 13:23], task.reference[k, 23:33], task.moment[k]
 
         action = task.start_action(k)
-        q_eq, stiffness = action[..., 0], action[..., 1]
+        q_eq, stiffness, damping = action[..., 0], action[..., 1], action[..., 2]
 
-        torch.testing.assert_close(q_eq[0], q_ref[0])
-        torch.testing.assert_close(stiffness[0], task.action_low[:, 1])
         self.assertTrue(bool(((q_eq >= task.action_low[:, 0]) & (q_eq <= task.action_high[:, 0])).all()))
         self.assertTrue(bool((stiffness <= task.action_high[:, 1]).all()))
-        # Below the stiffness cap the posture lead carries the moment exactly.
-        carried = stiffness[1] < task.action_high[:, 1]
-        lead = (q_eq - q_ref)[1]
-        torch.testing.assert_close((stiffness[1] * lead)[carried], moment[1][carried])
+        # Below the stiffness cap the joint torque at the reference state is the moment exactly,
+        # so the damping acts on the velocity error only.
+        carried = stiffness < task.action_high[:, 1]
+        lead = q_eq - q_ref
+        torque = stiffness * lead - damping * qd_ref
+        torch.testing.assert_close(torque[carried], moment[carried])
         self.assertTrue(bool((lead[carried].abs() <= 0.35 + 1e-6).all()))
         self.assertTrue(bool((~carried).any()))
 

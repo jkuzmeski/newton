@@ -36,7 +36,7 @@ from .collect import (
     Stage0Config,
     episode_starts,
     make_sim,
-    moment_stiffness_floor,
+    reference_action,
     reference_moments,
     sim_aux,
     sim_state,
@@ -126,23 +126,25 @@ class TrackerTask:
     def start_action(self, k: torch.Tensor) -> torch.Tensor:
         """Return the previous action at an episode start at reference frame ``k``, shape [batch, joints, 3].
 
-        It carries the reference moment like the stage-0 data: the stiffness is the stage-0 floor
-        :func:`~projects.supermimic.collect.moment_stiffness_floor` capped at its upper bound,
-        ``q_eq = q_ref + moment / K`` within the joint limits, and the damping is the geometric
-        middle of its bounds.
+        It carries the reference moment like the stage-0 data: :func:`~projects.supermimic.collect.reference_action`
+        at the stage-0 stiffness floor, capped at its upper bound, without noise, and with the damping at the
+        geometric middle of its bounds.
         """
-        q_ref, moment = self.reference[k, 13 : 13 + self.world_model.joint_count], self.moment[k]
+        joints = self.world_model.joint_count
+        q_ref, qd_ref = self.reference[k, 13 : 13 + joints], self.reference[k, 13 + joints : 13 + 2 * joints]
         low, high = self.action_low, self.action_high
-        stiffness = moment_stiffness_floor(
+        action, _ = reference_action(
             q_ref,
-            moment,
+            qd_ref,
+            self.moment[k],
+            (low[:, 2] * high[:, 2]).sqrt().expand_as(q_ref),
+            torch.zeros_like(q_ref),
+            torch.zeros_like(q_ref),
             torch.stack((low[:, 0], high[:, 0]), -1),
             torch.stack((low[:, 1], high[:, 1]), -1),
             Stage0Config.max_posture_lead_rad,
-        ).minimum(high[:, 1])
-        q_eq = torch.clamp(q_ref + moment / stiffness, low[:, 0], high[:, 0])
-        damping = (low[:, 2] * high[:, 2]).sqrt().expand_as(q_ref)
-        return torch.stack((q_eq, stiffness, damping), -1)
+        )
+        return action
 
     @property
     def hooks(self) -> ImaginationHooks:
