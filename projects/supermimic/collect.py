@@ -10,6 +10,10 @@ worlds within human joint impedance
 are ``q_ref + M_ref / K`` plus smooth noise, clipped to the joint limits, where
 ``q_ref`` is the F01 reference and ``M_ref`` its inverse-dynamics joint moment,
 so the reference posture carries the reference moment without a stiff joint.
+A leg whose reference foot is in stance carries ``M_ref`` only once its sim
+foot is loaded above :attr:`Stage0Config.touchdown_force_n`; until then its
+equilibrium angles are ``q_ref`` plus noise, so a late sim touchdown does not
+drive an extended leg into the belt.
 The damping ``B`` of every joint is drawn per episode, log-uniformly. The
 stiffness ``K`` sits at a per-episode log-uniform quantile between
 :func:`moment_stiffness_floor`, which bounds the posture lead ``M_ref / K``,
@@ -51,6 +55,7 @@ from .analysis import inverse_dynamics
 from .body import JOINT_COUNT, JOINT_NAMES, STATE_DIM, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
+from .cost import GenerativeCostConfig
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
 from .reference import CONTACT_THRESHOLD_N, SHOE_DATASET, load_body_params, load_shoe, load_subject
 from .sim import RunnerSim, RunnerSimConfig, Shoe, load_shoes
@@ -60,6 +65,7 @@ __all__ = [
     "Stage0Config",
     "collect",
     "episode_starts",
+    "loaded_moment",
     "main",
     "make_sim",
     "moment_stiffness_floor",
@@ -82,7 +88,7 @@ class Stage0Config:
     """Stationary standard deviation of the equilibrium-angle noise [rad]."""
     noise_time_constant_s: float = 0.1
     """Correlation time of the Ornstein-Uhlenbeck equilibrium-angle noise [s]."""
-    fall_height_m: float = 0.6
+    fall_height_m: float = GenerativeCostConfig.height_min
     """A world falls when its root is below this height [m]."""
     max_posture_lead_rad: float = 0.35
     """Largest lead of the equilibrium angle over the reference posture, ``M_ref / K`` [rad]."""
@@ -143,6 +149,18 @@ def moment_stiffness_floor(
     return torch.maximum(stiffness_limits[:, 0], moment.abs() / room)
 
 
+def loaded_moment(moment: torch.Tensor, stance: torch.Tensor, loaded: torch.Tensor) -> torch.Tensor:
+    """Return ``moment`` with the joints of each reference-stance leg whose sim foot is unloaded set to zero.
+
+    Args:
+        moment: Reference joint moments [batch, joints] [N m], the right leg's joints first.
+        stance: Reference foot contact [batch, 2] (right, left).
+        loaded: Sim foot loaded above the touchdown force [batch, 2] (right, left).
+    """
+    unloaded_stance = (stance & ~loaded).repeat_interleave(moment.shape[-1] // 2, -1)
+    return moment.masked_fill(unloaded_stance, 0.0)
+
+
 def reference_moments(ref: dict, body: BodyParams, shoe: Shoe) -> np.ndarray:
     """Return the inverse-dynamics joint moments of the reference windows [windows, frames, 10] [N m].
 
@@ -184,7 +202,9 @@ def make_sim(
     """
     shoes = {s.name: s for s in load_shoes(SHOE_DATASET)}
     # The friction entry of the held-out center is unused.
-    held_out = encode(shoes[HELD_OUT_SHOE].left.material, 0.8, GEOMETRY_NAMES.index(HELD_OUT_SHOE))
+    held_out = encode(
+        shoes[HELD_OUT_SHOE].left.material, RunnerSimConfig.friction_coefficient, GEOMETRY_NAMES.index(HELD_OUT_SHOE)
+    )
     space = ShoeSpace(held_out=held_out)
     xi = space.sample_training(world_count, rng) if split == "train" else space.sample_held_out(world_count, rng)
     materials, friction, geometry = decode(xi)
@@ -242,6 +262,7 @@ def collect(
     ref_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     ref_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
     ref_moment = torch.as_tensor(reference_moments(ref, body, shoe), dtype=torch.float32, device=device)
+    ref_contact = torch.as_tensor(ref["contact"], device=device)
     # The left joints have the limits of the right ones.
     stiffness_limits = torch.tensor(STIFFNESS_LIMITS * 2, device=device)
     damping_limits = torch.tensor(DAMPING_LIMITS * 2, device=device)
@@ -268,6 +289,8 @@ def collect(
     reset = torch.ones(w, dtype=torch.bool, device=device)
     failures = torch.zeros(w, dtype=torch.int64, device=device)
     short_steps = torch.zeros(JOINT_COUNT, dtype=torch.int64, device=device)
+    loaded = torch.zeros((w, 2), dtype=torch.bool, device=device)
+    unloaded_stance_steps = torch.zeros(2, dtype=torch.int64, device=device)
 
     with torch.cuda.stream(wp.stream_to_torch(sim.device)):
         for _ in range(steps):
@@ -281,9 +304,13 @@ def collect(
                 stiffness_quantile[reset] = torch.rand((n, JOINT_COUNT), generator=generator, device=device)
                 damping[reset] = _log_uniform(damping_limits, n, generator)
                 noise[reset] = config.noise_std_rad * torch.randn((n, JOINT_COUNT), generator=generator, device=device)
+                loaded[reset] = False
             state = sim_state(sim)
             done = state[:, 2] < config.fall_height_m
-            q_ref, moment = ref_q[window, frame, 7:], ref_moment[window, frame]
+            stance = ref_contact[window, frame]
+            unloaded_stance_steps += (stance & ~loaded).sum(0)
+            q_ref = ref_q[window, frame, 7:]
+            moment = loaded_moment(ref_moment[window, frame], stance, loaded)
             floor = moment_stiffness_floor(q_ref, moment, q_limits, stiffness_limits, config.max_posture_lead_rad)
             short_steps += (floor > stiffness_limits[:, 1]).sum(0)
             low = torch.minimum(floor, stiffness_limits[:, 1])
@@ -296,6 +323,7 @@ def collect(
                 torch.isfinite(aux).all(1) & (after[:, -JOINT_COUNT:].abs().amax(1) < config.failure_joint_speed_rad_s)
             )
             failures += failed
+            loaded = aux[:, [2, 5]] > config.touchdown_force_n
             buffer.push(
                 state, action, xi_t, aux.masked_fill(failed[:, None], 0.0), window * frames + frame, reset, done
             )
@@ -315,6 +343,7 @@ def collect(
         "config": asdict(config),
         "failures": failures.tolist(),
         "stiffness_short_steps": dict(zip(JOINT_NAMES, short_steps.tolist(), strict=True)),
+        "unloaded_stance_steps": unloaded_stance_steps.tolist(),
         "xi": xi.tolist(),
     }
     return buffer, meta

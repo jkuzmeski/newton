@@ -17,6 +17,7 @@ try:
     from projects.supermimic.buffer import ReplayBuffer
     from projects.supermimic.collect import (
         AUX_DIM,
+        loaded_moment,
         make_sim,
         moment_stiffness_floor,
         read_episode,
@@ -80,6 +81,17 @@ class TestSupermimicCollect(unittest.TestCase):
 
         self.assertEqual(sim.config.belt_speed_m_s, 3.1)
         self.assertEqual(xi.shape[0], 2)
+
+    def test_loaded_moment_drops_stance_moment_of_unloaded_feet(self):
+        """A reference-stance leg keeps its moment only with a loaded sim foot; swing legs keep theirs."""
+        moment = torch.arange(1.0, 11.0, device="cuda").repeat(3, 1)
+        stance = torch.tensor([[True, False], [True, True], [False, True]], device="cuda")
+        loaded = torch.tensor([[False, True], [True, False], [False, False]], device="cuda")
+        out = loaded_moment(moment, stance, loaded)
+        zero = torch.zeros(5, device="cuda")
+        torch.testing.assert_close(out[0], torch.cat((zero, moment[0, 5:])))
+        torch.testing.assert_close(out[1], torch.cat((moment[1, :5], zero)))
+        torch.testing.assert_close(out[2], torch.cat((moment[2, :5], zero)))
 
     def test_moment_stiffness_floor_bounds_posture_lead(self):
         """Use the room to the limit in the moment's direction, capped at the largest lead."""
