@@ -54,10 +54,11 @@ class SegmentParams:
 
 # Adult range of motion (American Academy of Orthopaedic Surgeons, Greene and
 # Heckman, "The Clinical Measurement of Joint Motion", 1994), widened by 10 deg
-# for running; the knee may hyperextend by 5 deg.
+# for running; knee extension and ankle dorsiflexion by 10 and 20 deg so that
+# the F01 stance stays clear of them.
 _JOINT_LIMITS = tuple(
     (float(np.radians(lower)), float(np.radians(upper)))
-    for lower, upper in ((-40.0, 130.0), (-55.0, 40.0), (-55.0, 55.0), (-5.0, 145.0), (-60.0, 30.0))
+    for lower, upper in ((-40.0, 130.0), (-55.0, 40.0), (-55.0, 55.0), (-10.0, 145.0), (-60.0, 40.0))
 )
 
 
