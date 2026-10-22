@@ -12,13 +12,16 @@ touchdown, against the stride-to-stride spread of F01 in the same binning.
 Binning: a control step's force is its mean over the step, as the sim logs it.
 Touchdown is the first step whose mean vertical force exceeds
 :data:`~projects.supermimic.reference.CONTACT_THRESHOLD_N`; bin ``b`` is the
-``b``-th step after it. F01's 10 ms plate means use every sample offset of the
-step grid, so touchdown falls at all phases within its step, as in the sim. A
+``b``-th step after it. The bar is the stride-to-stride standard deviation of
+the subject's 10 ms plate means from the touchdown sample: the model is scored
+against the sim at the same touchdown phase, so the phase within a step is no
+error source. The spread of plate means on a fixed step grid, with touchdown at
+all phases, is reported next to it. A
 horizon ``H`` scores the force of a step predicted from a logged state ``H - 1``
 steps earlier.
 
 The verdict is *go* when, on every held-out buffer, the 8-step error of every
-bin is at most the measured standard deviation of that bin.
+bin is at most the touchdown-aligned standard deviation of that bin.
 
 From the repository root::
 
@@ -84,30 +87,34 @@ def steps_since_touchdown(force: torch.Tensor, reset: torch.Tensor) -> torch.Ten
     return since
 
 
-def touchdown_force(subject: Subject) -> np.ndarray:
+def touchdown_force(subject: Subject) -> tuple[np.ndarray, np.ndarray]:
     """Return a subject's step-mean vertical plate force in the :data:`BINS` steps after each touchdown.
 
     Returns:
-        Forces [N], shape ``[touchdowns, BINS]``, over the subject's trials and
-        every sample offset of the step grid.
+        Forces [N], shape ``[touchdowns, BINS]``, over the subject's trials,
+        with steps starting at the sample of touchdown (the first sample above
+        the threshold after a step without contact), and with steps on a fixed
+        grid at every sample offset, where touchdown falls at all phases within
+        its step.
     """
-    rows = []
+    aligned, phases = [], []
     for trial in subject.trials:
         export = load_visual3d_export(REPOSITORY / subject.data / trial)
         per_step = round(STEP_S * export.analog_rate_hz)
-        steps = len(export.force_n) // per_step - 1
+        force = export.force_n[:, 2]
+        contact = force > CONTACT_THRESHOLD_N
+        flight = np.convolve(contact, np.ones(per_step), "valid") == 0
+        for i in np.nonzero(contact[per_step:] & flight[:-1])[0] + per_step:
+            if i + BINS * per_step <= len(force):
+                aligned.append(force[i : i + BINS * per_step].reshape(BINS, per_step).mean(1))
+        steps = len(force) // per_step - 1
         mean = torch.as_tensor(
-            np.stack(
-                [
-                    export.force_n[offset : offset + steps * per_step, 2].reshape(steps, per_step).mean(1)
-                    for offset in range(per_step)
-                ]
-            )
+            np.stack([force[o : o + steps * per_step].reshape(steps, per_step).mean(1) for o in range(per_step)])
         )
         since = steps_since_touchdown(mean, torch.zeros(mean.shape, dtype=torch.bool))
         for offset, t in torch.nonzero(since[:, : steps - BINS + 1] == 0).tolist():
-            rows.append(mean[offset, t : t + BINS].numpy())
-    return np.stack(rows)
+            phases.append(mean[offset, t : t + BINS].numpy())
+    return np.stack(aligned), np.stack(phases)
 
 
 def load_model(folder: Path, device: str = "cuda") -> WorldModel:
@@ -229,11 +236,13 @@ def evaluate(model: WorldModel, buffer: ReplayBuffer, *, chunk: int = 8192) -> d
 
 
 def _table(report: dict) -> str:
-    sd = report["measured"]["sd_n"]
     lines = ["| model | buffer | horizon | " + " | ".join(f"{10 * b}-{10 * b + 10} ms" for b in range(BINS)) + " |"]
     lines.append("|" + " --- |" * (3 + BINS))
-    lines.append("| measured SD | | | " + " | ".join(f"{v:.0f}" for v in sd) + " |")
-    lines.append("| measured mean | | | " + " | ".join(f"{v:.0f}" for v in report["measured"]["mean_n"]) + " |")
+    for key, label in (("aligned", "touchdown-aligned"), ("all_phases", "all phases")):
+        measured = report["measured"][key]
+        for stat in ("sd", "mean"):
+            values = " | ".join(f"{v:.0f}" for v in measured[f"{stat}_n"])
+            lines.append(f"| measured {stat}, {label} (n={measured['touchdowns']}) | | | {values} |")
     for model, buffers in report["models"].items():
         for name, horizons in buffers.items():
             for horizon, bins in horizons.items():
@@ -292,13 +301,14 @@ def main(argv: list[str] | None = None) -> None:
         (args.out / "fit.json").write_text(json.dumps(record, indent=1) + "\n")
         return
 
-    forces = touchdown_force(load_subject(args.subject))
+    aligned, phases = touchdown_force(load_subject(args.subject))
     report = {
         "measured": {
             "subject": str(args.subject),
-            "touchdowns": len(forces),
-            "mean_n": forces.mean(0).tolist(),
-            "sd_n": forces.std(0).tolist(),
+            **{
+                key: {"touchdowns": len(forces), "mean_n": forces.mean(0).tolist(), "sd_n": forces.std(0).tolist()}
+                for key, forces in (("aligned", aligned), ("all_phases", phases))
+            },
         },
         "models": {},
     }
@@ -307,7 +317,7 @@ def main(argv: list[str] | None = None) -> None:
         buffer = ReplayBuffer.load(path)
         for folder in args.model:
             report["models"].setdefault(folder.name, {})[name] = evaluate(load_model(folder), buffer)
-    sd = report["measured"]["sd_n"]
+    sd = report["measured"]["aligned"]["sd_n"]
     report["go"] = {
         model: all(
             bins["rmse_n"] <= sd[b] for name in args.held_out for b, bins in enumerate(results[name][str(GO_HORIZON)])
@@ -316,7 +326,12 @@ def main(argv: list[str] | None = None) -> None:
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(report, indent=1) + "\n")
-    table = _table(report) + "\n\nGo (8-step error <= measured SD in every bin on " + ", ".join(args.held_out) + "): "
+    table = (
+        _table(report)
+        + "\n\nGo (8-step error <= touchdown-aligned SD in every bin on "
+        + ", ".join(args.held_out)
+        + "): "
+    )
     table += ", ".join(f"{m}: {'go' if g else 'no-go'}" for m, g in report["go"].items()) + "\n"
     args.out.with_suffix(".md").write_text(table)
     print(table)
