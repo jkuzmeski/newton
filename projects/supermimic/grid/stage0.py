@@ -5,13 +5,16 @@
 
 ``submit`` queues four arrays, each waiting for the previous one to succeed:
 
-1. ``stage0``: collect shards of the train split (distinct seeds) and one
-   shard of the eval split, which draws the held-out contexts around the Dev3
-   foam (:data:`~projects.supermimic.collect.HELD_OUT_SHOE`).
+1. ``stage0``: collect shards of the train split (distinct seeds), with
+   contexts in a ball around the fit of one shoe
+   (:data:`~projects.supermimic.collect.CENTER_SHOE` by default), and one
+   shard of the eval split, which runs that fit on the held-out reference
+   windows.
 2. ``stage0_merge``: :func:`merge` the train shards into ``train/`` and copies
-   the eval shard to ``dev3/``, each a ``buffer.npz`` and ``meta.json``.
+   the eval shard to ``held_out/``, each a ``buffer.npz`` and ``meta.json``.
 3. ``m3``: ``m3 fit`` with history 4 and 0, two seeds each.
-4. ``m3_evaluate``: ``m3 evaluate`` of the four models, with ``dev3`` held out.
+4. ``m3_evaluate``: ``m3 evaluate`` of the four models, with ``held_out``
+   deciding the verdict.
 
 The reference folder, the F01 plate data and a copy of the F01 subject spec
 pointing at the staged data are inputs; the shoes come from
@@ -33,7 +36,7 @@ from pathlib import Path
 import numpy as np
 
 from ..buffer import ReplayBuffer
-from ..collect import summarize
+from ..collect import CENTER_SHOE, summarize
 from ..reference import F01, REPOSITORY
 from .launch import REMOTE_ROOT, digest, submit
 
@@ -44,7 +47,7 @@ FIT_SEEDS = (0, 1)
 EVAL_SEED = 100
 """Seed of the eval shard, apart from the train seeds ``0 .. shards - 1``."""
 _PER_WORLD = ("shoe", "failures", "xi")
-_SHARED = ("dt_s", "split", "reference", "reference_frames_per_window", "xi_coordinates", "config")
+_SHARED = ("dt_s", "split", "center_shoe", "reference", "reference_frames_per_window", "xi_coordinates", "config")
 
 
 def merge(shards: list[Path], output: Path) -> dict:
@@ -90,6 +93,7 @@ def chain(
     commit: str,
     reference: Path,
     *,
+    shoe: str,
     shards: int,
     worlds: int,
     eval_worlds: int,
@@ -109,7 +113,8 @@ def chain(
         subject_name = f"subject_{subject['name']}_{digest(subject_folder)[:8]}"
         data = {reference_name: reference, plates_name: plates, subject_name: subject_folder}
 
-        collect = ["projects.supermimic.collect", "--reference", f"{{data}}/{reference_name}", "--steps", str(steps)]
+        collect = ["projects.supermimic.collect", "--reference", f"{{data}}/{reference_name}", "--shoe", shoe,
+                   "--steps", str(steps)]  # fmt: skip
         tasks = [
             {"name": f"train_{s}", "args": [*collect, "--split", "train", "--worlds", str(worlds), "--seed", str(s),
                                            "--output", "{out}/stage0"]}
@@ -124,8 +129,8 @@ def chain(
     train_shards = [f"{run}/train_{s}/stage0" for s in range(shards)]
     merge_task = {
         "name": "merge",
-        "args": ["projects.supermimic.grid.stage0", "merge", "--out", "{out}/train", *train_shards, "--dev3",
-                 f"{run}/eval/stage0"],
+        "args": ["projects.supermimic.grid.stage0", "merge", "--out", "{out}/train", *train_shards,
+                 "--held-out", f"{run}/eval/stage0"],
     }  # fmt: skip
     records.append(submit("stage0_merge", commit, [merge_task], {}, "00:30:00", after=records[-1]["job"]))
     buffers = records[-1]["run_dir"] + "/merge"
@@ -141,8 +146,8 @@ def chain(
     evaluate = {
         "name": "evaluate",
         "args": ["projects.supermimic.m3", "evaluate", "--model", *models, "--buffer",
-                 f"train={buffers}/train/buffer.npz", "--buffer", f"dev3={buffers}/dev3/buffer.npz", "--held-out",
-                 "dev3", "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
+                 f"train={buffers}/train/buffer.npz", "--buffer", f"held_out={buffers}/held_out/buffer.npz",
+                 "--held-out", "held_out", "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
     }  # fmt: skip
     records.append(submit("m3_evaluate", commit, [evaluate], {}, "00:30:00", after=records[-1]["job"]))
     return records
@@ -154,6 +159,7 @@ def main(argv: list[str] | None = None) -> None:
     sub = commands.add_parser("submit", help="queue the recollection and M3 chain")
     sub.add_argument("--commit", required=True)
     sub.add_argument("--reference", type=Path, required=True, help="folder written by projects.supermimic.reference")
+    sub.add_argument("--shoe", default=CENTER_SHOE, help="shoe whose fit centers the contexts and is held out")
     sub.add_argument("--shards", type=int, default=2, help="train shards, one H100 each")
     sub.add_argument("--worlds", type=int, default=256, help="worlds per train shard")
     sub.add_argument("--eval-worlds", type=int, default=128)
@@ -165,16 +171,17 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_argument("--out", type=Path, required=True, help="merged train folder")
     sub.add_argument("shards", type=Path, nargs="+")
     sub.add_argument(
-        "--dev3", type=Path, required=True, help="eval shard, merged alone into a dev3 folder next to --out"
+        "--held-out", type=Path, required=True, help="eval shard, merged alone into a held_out folder next to --out"
     )
     args = parser.parse_args(argv)
     if args.command == "merge":
         merge(args.shards, args.out)
-        merge([args.dev3], args.out.parent / "dev3")
+        merge([args.held_out], args.out.parent / "held_out")
         return
     records = chain(
         args.commit,
         args.reference,
+        shoe=args.shoe,
         shards=args.shards,
         worlds=args.worlds,
         eval_worlds=args.eval_worlds,

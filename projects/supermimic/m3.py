@@ -32,7 +32,7 @@ From the repository root::
     uv run --extra dev --extra torch-cu12 python -m projects.supermimic.m3 evaluate \
         --model outputs/supermimic/m3/h4 outputs/supermimic/m3/h0 \
         --buffer train=outputs/supermimic/stage0_train/buffer.npz \
-        --buffer dev3=outputs/supermimic/stage0_eval/buffer.npz --held-out dev3 \
+        --buffer held_out=outputs/supermimic/stage0_eval/buffer.npz --held-out held_out \
         --out outputs/supermimic/m3/report.json
 """
 

@@ -19,7 +19,9 @@ stiffness ``K`` sits at a per-episode log-uniform quantile between
 :func:`moment_stiffness_floor`, which bounds the posture lead ``M_ref / K``,
 and the upper limit; where the floor exceeds the upper limit, ``K`` is the
 upper limit and the torque falls short of ``M_ref``. Each world's shoe geometry, foam and friction
-come from its sim context ``xi`` of :mod:`.context`. Episodes start
+come from its sim context ``xi`` of :mod:`.context`: the train split draws them
+from a ball around one fitted shoe, on that shoe's geometry, and the eval split
+uses the fit itself on the held-out reference windows. Episodes start
 at reference flight frames and end on a fall or at the end of the reference
 window. A step whose outputs are not finite or whose joint speeds are not
 physical is a sim failure: the world is reset, and the failed step's state is
@@ -62,6 +64,7 @@ from .sim import RunnerSim, RunnerSimConfig, Shoe, load_shoes
 
 __all__ = [
     "AUX_DIM",
+    "CENTER_SHOE",
     "Stage0Config",
     "collect",
     "episode_starts",
@@ -76,8 +79,8 @@ __all__ = [
 ]
 
 AUX_DIM = 12 + 3 * JOINT_COUNT
-HELD_OUT_SHOE = "puma-deviate-nitro-elite-3"
-"""Shoe whose foam is the center of the held-out context ball."""
+CENTER_SHOE = "puma-fast-r-nitro-elite-3"
+"""Default shoe whose fit centers the training contexts and is the held-out context."""
 
 
 @dataclass(frozen=True)
@@ -184,6 +187,7 @@ def make_sim(
     split: str,
     rng: np.random.Generator,
     belt_speed_m_s: float,
+    shoe: str = CENTER_SHOE,
     device: str = "cuda",
 ) -> tuple[RunnerSim, np.ndarray]:
     """Build a :class:`RunnerSim` whose worlds wear shoes from sampled contexts.
@@ -191,22 +195,21 @@ def make_sim(
     Args:
         body: Runner body parameters.
         world_count: Simulated worlds.
-        split: ``"train"`` samples training contexts, ``"eval"`` held-out contexts
-            around the :data:`HELD_OUT_SHOE` foam.
+        split: ``"train"`` samples training contexts around the fit of
+            ``shoe``, ``"eval"`` takes that fit.
         rng: Generator of the context draws.
         belt_speed_m_s: Treadmill belt speed of the reference [m/s].
+        shoe: Shoe whose fit and geometry center the contexts, by :data:`GEOMETRY_NAMES` name.
         device: Simulation device.
 
     Returns:
         The simulator and the context ``xi`` [world_count, XI_DIM] of each world.
     """
     shoes = {s.name: s for s in load_shoes(SHOE_DATASET)}
-    # The friction entry of the held-out center is unused.
-    held_out = encode(
-        shoes[HELD_OUT_SHOE].left.material, RunnerSimConfig.friction_coefficient, GEOMETRY_NAMES.index(HELD_OUT_SHOE)
+    space = ShoeSpace(
+        center=encode(shoes[shoe].left.material, RunnerSimConfig.friction_coefficient, GEOMETRY_NAMES.index(shoe))
     )
-    space = ShoeSpace(held_out=held_out)
-    xi = space.sample_training(world_count, rng) if split == "train" else space.sample_held_out(world_count, rng)
+    xi = space.sample_training(world_count, rng) if split == "train" else space.sample_held_out(world_count)
     materials, friction, geometry = decode(xi)
     sim = RunnerSim(
         body,
@@ -231,6 +234,7 @@ def collect(
     steps: int,
     *,
     split: str = "train",
+    shoe: str = CENTER_SHOE,
     seed: int = 0,
     config: Stage0Config | None = None,
 ) -> tuple[ReplayBuffer, dict]:
@@ -241,7 +245,8 @@ def collect(
         world_count: Simulated worlds.
         steps: Control steps per world; also the buffer capacity.
         split: ``"train"`` draws training contexts and train windows,
-            ``"eval"`` held-out contexts and eval windows.
+            ``"eval"`` takes the held-out context and eval windows.
+        shoe: Shoe whose fit centers the contexts, by :data:`GEOMETRY_NAMES` name.
         seed: Seed of every random draw.
         config: Controller and episode settings.
     """
@@ -249,19 +254,19 @@ def collect(
     device = "cuda"
     rng = np.random.default_rng(seed)
     generator = torch.Generator(device).manual_seed(seed)
-    shoe = load_shoe(load_subject(reference / "subject.json").shoe)
+    worn = load_shoe(load_subject(reference / "subject.json").shoe)
     body = load_body_params(reference / "body_params.json")
     with np.load(reference / "reference.npz") as f:
         ref = {k: f[k] for k in f.files}
 
-    sim, xi = make_sim(body, world_count, split, rng, float(ref["belt_speed_m_s"]), device)
+    sim, xi = make_sim(body, world_count, split, rng, float(ref["belt_speed_m_s"]), shoe, device)
 
     sim_cfg = sim.config
     stride = round(sim_cfg.control_dt_s / float(ref["frame_dt"]))
     frames = ref["joint_q"].shape[1]
     ref_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     ref_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
-    ref_moment = torch.as_tensor(reference_moments(ref, body, shoe), dtype=torch.float32, device=device)
+    ref_moment = torch.as_tensor(reference_moments(ref, body, worn), dtype=torch.float32, device=device)
     ref_contact = torch.as_tensor(ref["contact"], device=device)
     # The left joints have the limits of the right ones.
     stiffness_limits = torch.tensor(STIFFNESS_LIMITS * 2, device=device)
@@ -336,6 +341,7 @@ def collect(
         "dt_s": sim_cfg.control_dt_s,
         "shoe": [GEOMETRY_NAMES[g] for g in decode(xi)[2]],
         "split": split,
+        "center_shoe": shoe,
         "seed": seed,
         "reference": str(reference),
         "reference_frames_per_window": frames,
@@ -353,18 +359,20 @@ def summarize(buffer: ReplayBuffer, meta: dict) -> dict:
     """Count rows, episodes, falls, touchdowns, short stiffness and sim failures of a collection.
 
     Failure rates are per simulated world-second, overall, per shoe geometry
-    and per quarter of each ``xi`` coordinate's range.
+    and per quartile of each ``xi`` coordinate over the worlds.
     """
     data = buffer.data
     seconds = buffer.size * meta["dt_s"]
     failures = np.asarray(meta["failures"])
     xi = np.asarray(meta["xi"])
     shoes = np.asarray(meta["shoe"])
-    quarter = np.clip(np.floor((xi[:, : len(meta["xi_coordinates"])] + 1.0) * 2.0), 0, 3).astype(int)
+    quartile = [
+        np.searchsorted(np.quantile(column, (0.25, 0.5, 0.75)), column, side="right")
+        for column in xi[:, : len(meta["xi_coordinates"])].T
+    ]
     by_xi = {
         name: [
-            float(failures[quarter[:, i] == b].sum() / max(seconds * (quarter[:, i] == b).sum(), 1e-9))
-            for b in range(4)
+            float(failures[quartile[i] == b].sum() / max(seconds * (quartile[i] == b).sum(), 1e-9)) for b in range(4)
         ]
         for i, name in enumerate(meta["xi_coordinates"])
     }
@@ -388,7 +396,7 @@ def summarize(buffer: ReplayBuffer, meta: dict) -> dict:
         "sim_failures": int(failures.sum()),
         "sim_failures_per_world_s": float(failures.sum() / (seconds * buffer.world_count)),
         "sim_failures_per_world_s_by_shoe": by_shoe,
-        "sim_failures_per_world_s_by_xi_quarter": by_xi,
+        "sim_failures_per_world_s_by_xi_quartile": by_xi,
     }
 
 
@@ -440,12 +448,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--worlds", type=int, default=1024)
     parser.add_argument("--steps", type=int, default=1000, help="control steps per world")
     parser.add_argument("--split", choices=("train", "eval"), default="train")
+    parser.add_argument(
+        "--shoe", choices=GEOMETRY_NAMES, default=CENTER_SHOE, help="shoe whose fit centers the contexts"
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     output = args.output or Path("outputs/supermimic") / f"stage0_{args.split}_{datetime.date.today()}"
     output.mkdir(parents=True, exist_ok=False)
-    buffer, meta = collect(args.reference, args.worlds, args.steps, split=args.split, seed=args.seed)
+    buffer, meta = collect(args.reference, args.worlds, args.steps, split=args.split, shoe=args.shoe, seed=args.seed)
     meta["summary"] = summarize(buffer, meta)
     buffer.save(output / "buffer.npz")
     (output / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")

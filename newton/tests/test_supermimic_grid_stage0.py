@@ -49,6 +49,7 @@ def _shard(folder: Path, worlds: int, seed: int) -> None:
         "dt_s": 0.01,
         "shoe": ["puma-fast-r-nitro-elite-3"] * worlds,
         "split": "train",
+        "center_shoe": "puma-fast-r-nitro-elite-3",
         "seed": seed,
         "reference": "reference",
         "reference_frames_per_window": 100,

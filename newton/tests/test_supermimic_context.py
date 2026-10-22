@@ -11,24 +11,24 @@ from projects.digital_shoe.material import hyperfoam_pressure_numpy
 from projects.digital_shoe.runtime import ShoeMaterial
 from projects.supermimic.context import GEOMETRY_COUNT, XI_DIM, ShoeSpace, decode, encode
 
-# Fitted foams of dataset_3d_column_bed_v2 (digital_shoe_1 artifacts).
+# Fitted foams of dataset_3d_column_bed_v3 (refit C).
 FR3 = ShoeMaterial(
-    instantaneous_shear_modulus_pa=571550.6629016441,
-    hyperfoam_exponent=23.14278679300506,
-    equilibrium_fraction=0.7749540943836701,
+    instantaneous_shear_modulus_pa=638128.2882609903,
+    hyperfoam_exponent=18.656078293186706,
+    equilibrium_fraction=0.8321094191331598,
     pasternak_n_per_m=0.0,
-    maxwell_relaxation_time_s=0.020887948695105442,
-    instantaneous_shear_modulus_2_pa=0.02072370272219707,
-    hyperfoam_exponent_2=-15.190542009243998,
+    maxwell_relaxation_time_s=0.023136749731871742,
+    instantaneous_shear_modulus_2_pa=7028.750144838635,
+    hyperfoam_exponent_2=-3.0640556924791653,
 )
 DEV3 = ShoeMaterial(
-    instantaneous_shear_modulus_pa=300032.4620302825,
-    hyperfoam_exponent=9.404489065909589,
-    equilibrium_fraction=0.8247197315825366,
+    instantaneous_shear_modulus_pa=312211.69995435723,
+    hyperfoam_exponent=7.608389725640643,
+    equilibrium_fraction=0.8433826667363614,
     pasternak_n_per_m=0.0,
-    maxwell_relaxation_time_s=0.03659245705535089,
-    instantaneous_shear_modulus_2_pa=0.7327244193363989,
-    hyperfoam_exponent_2=-19.99829416304294,
+    maxwell_relaxation_time_s=0.03615985968807929,
+    instantaneous_shear_modulus_2_pa=12.08748525186517,
+    hyperfoam_exponent_2=-14.237670395643558,
 )
 
 
@@ -52,7 +52,6 @@ class TestSupermimicContext(unittest.TestCase):
         strain = np.linspace(0.0, 0.85, 50)
         for geometry, material in enumerate((FR3, DEV3)):
             xi = encode(material, 0.8, geometry)
-            self.assertTrue(np.all(np.abs(xi[:-GEOMETRY_COUNT]) < 0.8))
             (decoded,), friction, (decoded_geometry,) = decode(xi[None])
             self.assertEqual(decoded_geometry, geometry)
             for field in dataclasses.fields(ShoeMaterial):
@@ -70,21 +69,21 @@ class TestSupermimicContext(unittest.TestCase):
         self.assertEqual(len(materials), len(corners))
         self.assertTrue(np.all((friction >= 0.4 - 1e-9) & (friction <= 1.2 + 1e-9)))
 
-    def test_training_excludes_held_out_ball(self):
-        """Sample training contexts in the box and outside the ball on both geometries, held-out ones inside it."""
-        space = ShoeSpace(held_out=encode(DEV3, 0.8, 1))
-        rng = np.random.default_rng(0)
-        train = space.sample_training(4096, rng)
-        held_out = space.sample_held_out(512, rng)
+    def test_training_contexts_lie_in_a_ball_around_the_fit(self):
+        """Sample valid training foams and frictions in the ball on the fit's geometry; hold out the fit itself."""
+        center = encode(FR3, 0.8, 0)
+        space = ShoeSpace(center=center)
+        train = space.sample_training(4096, np.random.default_rng(0))
         self.assertEqual(train.shape, (4096, XI_DIM))
         self.assertEqual(train.dtype, np.float32)
-        self.assertTrue(np.all(np.abs(train) <= 1.0))
-        self.assertTrue(np.all(np.abs(held_out) <= 1.0))
-        self.assertFalse(space.is_held_out(train).any())
-        self.assertTrue(space.is_held_out(held_out).all())
-        self.assertFalse(space.is_held_out(encode(FR3, 0.8, 0)[None]).any())
-        np.testing.assert_allclose(decode(train)[2].mean(), 0.5, atol=0.05)
-        self.assertTrue(np.all(decode(held_out)[2] == 1))
+        offset = np.linalg.norm(train[:, :-GEOMETRY_COUNT] - center[:-GEOMETRY_COUNT], axis=1)
+        self.assertLessEqual(offset.max(), space.radius + 1e-6)
+        self.assertGreater(offset.max(), 0.9 * space.radius)
+        materials, friction, geometry = decode(train)
+        self.assertTrue(all(0.0 < m.equilibrium_fraction < 1.0 and m.hyperfoam_exponent_2 < 0.0 for m in materials))
+        self.assertTrue(np.all(friction > 0.0))
+        self.assertTrue(np.all(geometry == 0))
+        np.testing.assert_array_equal(space.sample_held_out(3), np.repeat(center[None], 3, axis=0))
 
 
 if __name__ == "__main__":

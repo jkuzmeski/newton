@@ -17,6 +17,7 @@ try:
     from projects.supermimic.buffer import ReplayBuffer
     from projects.supermimic.collect import (
         AUX_DIM,
+        CENTER_SHOE,
         loaded_moment,
         make_sim,
         moment_stiffness_floor,
@@ -24,6 +25,7 @@ try:
         sim_aux,
         summarize,
     )
+    from projects.supermimic.context import GEOMETRY_NAMES, decode
 except ImportError:
     torch = None
 
@@ -72,15 +74,16 @@ class TestSupermimicCollect(unittest.TestCase):
         self.assertEqual(summary["completed_episode_steps_mean"], 3.0)
         self.assertAlmostEqual(summary["sim_failures_per_world_s"], 1.0 / 0.12)
         self.assertAlmostEqual(summary["sim_failures_per_world_s_by_shoe"]["a"], 1.0 / 0.06)
-        self.assertEqual(summary["sim_failures_per_world_s_by_xi_quarter"]["c"][3], 0.0)
+        self.assertEqual(summary["sim_failures_per_world_s_by_xi_quartile"]["c"][3], 0.0)
         self.assertEqual(summary["stiffness_short_fraction"]["knee"], 0.25)
 
     def test_make_sim_runs_the_belt_at_the_reference_speed(self):
-        """Run the treadmill at the belt speed passed from the reference."""
+        """Run the treadmill at the belt speed passed from the reference, on the center shoe's geometry."""
         sim, xi = make_sim(BodyParams(), 2, "train", np.random.default_rng(0), 3.1)
 
         self.assertEqual(sim.config.belt_speed_m_s, 3.1)
         self.assertEqual(xi.shape[0], 2)
+        np.testing.assert_array_equal(decode(xi)[2], GEOMETRY_NAMES.index(CENTER_SHOE))
 
     def test_loaded_moment_drops_stance_moment_of_unloaded_feet(self):
         """A reference-stance leg keeps its moment only with a loaded sim foot; swing legs keep theirs."""

@@ -26,13 +26,14 @@ The last :data:`GEOMETRY_COUNT` entries one-hot the column-bed geometry, in
 the order of :data:`GEOMETRY_NAMES`, the shoe order of the dataset manifest.
 
 ``g_n`` are the equilibrium term moduli, instantaneous moduli times the
-equilibrium fraction. The ranges span the fitted Puma Fast-R Nitro Elite 3
-(FR3) and Deviate Nitro Elite 3 (Dev3) foams by about a quarter of their
-difference on every side. Independent coordinates combine into corners softer
-than either shoe; wider ranges admit corners that bottom out under a runner's
-weight. :class:`ShoeSpace` samples training contexts uniformly in the box, on
-either geometry, minus a held-out ball of foams around one shoe, Dev3 in the
-plan; held-out contexts pair that ball with that shoe's geometry.
+equilibrium fraction. The ranges were set to span the v2 fits of the Puma
+Fast-R Nitro Elite 3 (FR3) and Deviate Nitro Elite 3 (Dev3) foams by about a
+quarter of their difference on every side, and now serve as the unit of each
+coordinate: the v3 refits lie outside them, FR3 at about 4 on
+``densification_exponent`` and Dev3 at about 1.8 on ``log_plateau``.
+:class:`ShoeSpace` samples training contexts in a ball around one fitted
+shoe's context, on that shoe's geometry; its held-out context is the fit
+itself.
 """
 
 from __future__ import annotations
@@ -74,8 +75,7 @@ GEOMETRY_NAMES = ("puma-fast-r-nitro-elite-3", "puma-deviate-nitro-elite-3")
 GEOMETRY_COUNT = len(GEOMETRY_NAMES)
 
 XI_DIM = len(XI_COORDINATES) + GEOMETRY_COUNT
-_FOAM = len(XI_COORDINATES) - 1
-_FRICTION = _FOAM
+_FRICTION = len(XI_COORDINATES) - 1
 _GEOMETRY = len(XI_COORDINATES)
 _LOG = np.array([c[3] for c in XI_COORDINATES])
 
@@ -143,44 +143,32 @@ def decode(xi: np.ndarray) -> tuple[list[ShoeMaterial], np.ndarray, np.ndarray]:
 
 @dataclass(frozen=True)
 class ShoeSpace:
-    """Training and held-out sampling of contexts.
+    """Training and held-out contexts around one fitted shoe.
 
-    Training contexts are uniform in the ``[-1, 1]`` box of the foam and
-    friction coordinates outside a ball of ``held_out_radius`` around
-    ``held_out`` in the foam coordinates, with a uniformly drawn geometry.
-    Held-out contexts are uniform in that ball with the geometry of
-    ``held_out``. Friction spans its whole range in both sets.
+    Training contexts are uniform in a ball of ``radius`` around ``center``
+    in the foam and friction coordinates, on the geometry of ``center``. The
+    held-out context is ``center``.
     """
 
-    held_out: np.ndarray
-    """Context at the center of the held-out ball and of the held-out geometry, shape ``[XI_DIM]``; its friction entry is unused."""
-    held_out_radius: float = 0.5
-    """Radius of the held-out ball in normalized foam coordinates [-]."""
+    center: np.ndarray
+    """Context of the fitted shoe, its nominal friction and its geometry, shape ``[XI_DIM]``."""
+    radius: float = 0.5
+    """Radius of the training ball in normalized foam and friction coordinates [-].
 
-    def is_held_out(self, xi: np.ndarray) -> np.ndarray:
-        """Return whether the foam of each context, shape ``[count, XI_DIM]``, lies in the held-out ball."""
-        offset = np.asarray(xi)[:, :_FOAM] - np.asarray(self.held_out)[:_FOAM]
-        return np.linalg.norm(offset, axis=1) < self.held_out_radius
+    The v3 FR3 fit starts within 10 % of the best loss spread up to 0.51 on
+    the modulus, plateau, equilibrium-fraction and relaxation-time
+    coordinates; the Instron sweep does not pin the densification pair.
+    """
 
     def sample_training(self, count: int, rng: np.random.Generator) -> np.ndarray:
         """Return ``count`` training contexts, shape ``[count, XI_DIM]``."""
-        xi = np.empty((0, XI_DIM), dtype=np.float32)
-        while len(xi) < count:
-            draw = np.zeros((count, XI_DIM), dtype=np.float32)
-            draw[:, :_GEOMETRY] = rng.uniform(-1.0, 1.0, (count, _GEOMETRY))
-            draw[np.arange(count), _GEOMETRY + rng.integers(GEOMETRY_COUNT, size=count)] = 1.0
-            xi = np.concatenate([xi, draw[~self.is_held_out(draw)]])
-        return xi[:count]
+        direction = rng.standard_normal((count, _GEOMETRY))
+        direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+        radius = self.radius * rng.uniform(0.0, 1.0, (count, 1)) ** (1.0 / _GEOMETRY)
+        xi = np.repeat(np.asarray(self.center, dtype=np.float32)[None], count, axis=0)
+        xi[:, :_GEOMETRY] += radius * direction
+        return xi
 
-    def sample_held_out(self, count: int, rng: np.random.Generator) -> np.ndarray:
-        """Return ``count`` contexts uniform in the part of the held-out ball inside the box, shape ``[count, XI_DIM]``."""
-        foam = np.empty((0, _FOAM))
-        while len(foam) < count:
-            direction = rng.standard_normal((count, _FOAM))
-            direction /= np.linalg.norm(direction, axis=1, keepdims=True)
-            radius = self.held_out_radius * rng.uniform(0.0, 1.0, (count, 1)) ** (1.0 / _FOAM)
-            draw = np.asarray(self.held_out)[:_FOAM] + radius * direction
-            foam = np.concatenate([foam, draw[np.all(np.abs(draw) <= 1.0, axis=1)]])
-        friction = rng.uniform(-1.0, 1.0, (count, 1))
-        geometry = np.broadcast_to(np.asarray(self.held_out)[_GEOMETRY:], (count, GEOMETRY_COUNT))
-        return np.concatenate([foam[:count], friction, geometry], axis=1).astype(np.float32)
+    def sample_held_out(self, count: int) -> np.ndarray:
+        """Return ``count`` copies of the held-out context, shape ``[count, XI_DIM]``."""
+        return np.repeat(np.asarray(self.center, dtype=np.float32)[None], count, axis=0)
