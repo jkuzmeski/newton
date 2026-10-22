@@ -19,6 +19,8 @@ if TORCH:
         TRACKING_ERROR_DIM,
         ADDiscriminator,
         LegKinematics,
+        joint_limit_violation,
+        step_reward,
         termination,
         termination_probability,
         tracking_errors,
@@ -104,6 +106,20 @@ class TestSupermimicTracking(unittest.TestCase):
         probability = termination_probability(state, reference)
         self.assertLess(probability[:2].max().item(), 0.1)
         self.assertGreater(probability[2:].min().item(), 0.9)
+
+    def test_joint_limit_penalty(self):
+        """Penalize only the angle beyond the limits, on both sides, inside the step reward."""
+        limits = BodyParams().joint_limits
+        q = torch.zeros(3, 10)
+        q[1, 3] = limits[3][1] + 0.1  # right knee past full flexion
+        q[2, 9] = limits[4][0] - 0.2  # left ankle past plantarflexion
+        violation = joint_limit_violation(q, limits)
+        torch.testing.assert_close(violation, torch.tensor([0.0, 0.1, 0.2]))
+        action = torch.zeros(3, 10, 3)
+        prev_action = action.clone()
+        prev_action[:, 0, 0] = 1.0
+        reward = step_reward(torch.full((3,), 5.5), action, prev_action, violation, 0.01)
+        torch.testing.assert_close(reward, 0.01 * (5.5 - 0.1 - 2.0 * torch.tensor([0.0, 0.1, 0.2])))
 
     def test_add_discriminator_learns_zero_error_as_best(self):
         """Train the ADD discriminator on toy errors so its reward peaks at zero and pulls errors toward it."""
