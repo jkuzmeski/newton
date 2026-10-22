@@ -29,6 +29,7 @@ import argparse
 import datetime
 import enum
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -62,7 +63,10 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 F01 = Path(__file__).resolve().parent / "subjects" / "F01.json"
 """Subject spec of F01."""
 
-SHOE_DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
+GRID_HOME = Path("Z:/") if sys.platform == "win32" else Path.home()
+"""LLSC grid home: the mapped ``Z:`` drive on Windows workstations and the home folder on the grid nodes."""
+
+SHOE_DATASET = GRID_HOME / "newton_grid/data/dataset_3d_column_bed_v2"
 """Column-bed dataset of the fitted shoes."""
 
 COORDINATE_NAMES = ("x", "y", "z", "qx", "qy", "qz", "qw", *JOINT_NAMES)
