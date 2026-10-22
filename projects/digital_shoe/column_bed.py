@@ -524,6 +524,10 @@ def _column_bed_step(
         comp = wp.max(top - bottom, 0.0)
         peq = _hyperfoam_pressure(comp / thickness, p)
         q = maxwell_step(bed.q_state[i], peq, bed.peq_prev[i], p.overstress, decay, ramp)
+        if comp == 0.0:
+            # An uncompressed column carries no stress, so none is left over
+            # for when it is compressed again.
+            q = 0.0
         bed.q_state[i] = q
         bed.peq_prev[i] = peq
         # Shear on each end, positive down, from the balanced neighbours.
