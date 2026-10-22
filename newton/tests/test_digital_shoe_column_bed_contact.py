@@ -10,6 +10,7 @@ import numpy as np
 import warp as wp
 
 from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE, ColumnBed
+from projects.digital_shoe.material import SOLID_MODULUS_PA
 from projects.digital_shoe.runtime import FoundationConfig, ShoeMaterial
 
 FR3 = ShoeMaterial(
@@ -350,6 +351,59 @@ class TestColumnBedWall(unittest.TestCase):
                 if name == "small":
                     self.assertGreater(strain.max(), stop - 0.01)
                     self.assertLess(abs(speed[0]), 0.05)
+
+    def test_carrier_let_go_past_the_stop_leaves_with_the_foam_energy(self):
+        """A carrier held past the stop and let go gains no more than the foam stores beyond the stop.
+
+        Pushing the carrier back to the stop in one step would launch it at the
+        overshoot over the step, far more than the foam between the two strains stores.
+        """
+        mass, dt = 1.0, 1.25e-4
+        rows = np.diag([1.0 / mass] * 3 + [1.0e-6] * 3)
+        spacing, thickness = 0.005, 0.03
+        anchors, neighbors = _flat_bed(3, 3, spacing)
+        n = len(anchors)
+        bed = ColumnBed(
+            anchors,
+            np.full(n, thickness),
+            spacing**2,
+            neighbors,
+            spacing,
+            np.full(n, TOP_BONDED, np.int32),
+            FR3_V3,
+            FoundationConfig(ground_height_m=0.0, mu=0.8),
+            np.arange(2),
+            wp.zeros(2, dtype=wp.vec3),
+            carrier_mobility=wp.array(np.tile(rows, (2, 1, 1)), dtype=wp.spatial_matrix),
+        )
+        bed.set_timesteps(dt)
+        below, past = bed.bed.max_strain - 0.01, bed.bed.max_strain + 0.02
+        height = -np.array([below, past]) * thickness
+        speed = np.zeros(2)
+        state = SimpleNamespace(body_f=wp.zeros(2, dtype=wp.spatial_vector))
+        # Hold both carriers still until the overstress has relaxed, then let go.
+        for step in range(round(0.4 / dt)):
+            q = np.zeros((2, 7), np.float32)
+            q[:, 2] = height
+            q[:, 6] = 1.0
+            qd = np.zeros((2, 6), np.float32)
+            qd[:, 2] = speed
+            state.body_q = wp.array(q, dtype=wp.transform)
+            state.body_qd = wp.array(qd, dtype=wp.spatial_vector)
+            bed.apply(state)
+            force = state.body_f.numpy()[:, 2]
+            if step == round(0.2 / dt) - 1:
+                held = force[0]
+            if step >= round(0.2 / dt):
+                speed += dt * force / mass
+                height += dt * speed
+        self.assertTrue((height > 0.0).all())
+        gained = 0.5 * mass * (speed[1] ** 2 - speed[0] ** 2)
+        # The foam between the two strains, with its tangent at most the solid modulus.
+        room = (past - below) * thickness
+        stored = room * (held + 0.5 * n * spacing**2 * SOLID_MODULUS_PA * room / thickness)
+        self.assertGreater(gained, 0.0)
+        self.assertLessEqual(gained, stored)
 
     def test_bed_does_no_work_over_a_closed_press_and_tilt(self):
         """A carrier driven around a closed loop of depth and pitch gets no work out of the bed, either way round."""
