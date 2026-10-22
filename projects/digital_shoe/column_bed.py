@@ -316,6 +316,7 @@ def _block_sum(value: float) -> float:
     return wp.tile_sum(wp.tile(value))[0]
 
 
+_Packed = wp.types.vector(length=27, dtype=wp.float32)
 _Mat66d = wp.types.matrix(shape=(6, 6), dtype=wp.float64)
 _Vec6d = wp.types.vector(length=6, dtype=wp.float64)
 
@@ -687,14 +688,24 @@ def _column_bed_step(
                     stiff_lane += s_t * (wp.outer(gx, gx) + wp.outer(gy, gy))
                 pending = bed.tangential_load[i]
                 load_lane += pending[0] * gx + pending[1] * gy
+            # One block reduction for the 21 stiffness entries and the 6 loads.
+            packed = _Packed()
+            n = int(0)
+            for row in range(6):
+                packed[21 + row] = load_lane[row]
+                for col in range(row, 6):
+                    packed[n] = stiff_lane[row, col]
+                    n += 1
+            total = wp.tile_sum(wp.tile(packed, preserve_type=True))[0]
             stiff = _Mat66d()
             load = free
+            n = int(0)
             for row in range(6):
-                load[row] += wp.float64(_block_sum(load_lane[row]))
+                load[row] += wp.float64(total[21 + row])
                 for col in range(row, 6):
-                    entry = wp.float64(_block_sum(stiff_lane[row, col]))
-                    stiff[row, col] = entry
-                    stiff[col, row] = entry
+                    stiff[row, col] = wp.float64(total[n])
+                    stiff[col, row] = wp.float64(total[n])
+                    n += 1
             u = _carrier_velocity(mass, u0, stiff, load, dt)
             dropped = float(0.0)
             for slot in range(lane, count, _BLOCK):
