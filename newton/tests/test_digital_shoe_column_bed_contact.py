@@ -94,7 +94,7 @@ class TestColumnBedPitchedSole(unittest.TestCase):
                     f"{np.sum(reaction <= 0.0)} of {deep.sum()} deep columns carry no ground reaction",
                 )
 
-    def _block_on_bed(self, mu: float, normal_damping: float = 0.0):
+    def _block_on_bed(self, mu: float, normal_damping: float = 0.0, dt: float = 1.25e-4):
         """Return a 20 kg block glued on a 12 x 6 bed with its implicit mobility array."""
         spacing, thickness, mass = 0.005, 0.03, 20.0
         anchors, neighbors = _flat_bed(12, 6, spacing)
@@ -114,13 +114,14 @@ class TestColumnBedPitchedSole(unittest.TestCase):
             wp.array([com], dtype=wp.vec3),
             carrier_mobility=mobility,
         )
-        bed.set_timesteps(1.25e-4)
+        bed.set_timesteps(dt)
         return bed, mobility, anchors, com, mass, mass * np.diag([0.002, 0.01, 0.01])
 
     @staticmethod
-    def _run(bed, mobility, anchors, com, mass, inertia, rotation, velocity, steps, push=lambda step: np.zeros(6)):
+    def _run(
+        bed, mobility, anchors, com, mass, inertia, rotation, velocity, steps, push=lambda step: np.zeros(6), dt=1.25e-4
+    ):
         """Integrate the block on the bed under gravity and a ``push(step)`` wrench; yield its velocity and the bed wrench."""
-        dt = 1.25e-4
         center = np.array([0.0, 0.0, -(anchors @ rotation.T)[:, 2].min()]) + rotation @ com
         omega = np.zeros(3)
         state = SimpleNamespace(
@@ -224,6 +225,24 @@ class TestColumnBedPitchedSole(unittest.TestCase):
         direction = -slip / np.linalg.norm(slip, axis=1, keepdims=True)
         np.testing.assert_allclose(np.sum(friction * direction, 1)[loaded], mu * reaction[loaded], rtol=1.0e-2)
         self.assertFalse(bed.bed.stuck.numpy().any())
+
+    def test_stuck_bottoms_hold_their_position(self):
+        """A block settled on the bed and pushed below mu W for 1 s stays put, at dt and dt / 2."""
+        mu, weight = 0.8, 20.0 * 9.81
+        for dt in (1.25e-4, 0.625e-4):
+            with self.subTest(dt=dt):
+                settle, hold = round(0.4 / dt), round(1.0 / dt)
+                bed, mobility, anchors, com, mass, _inertia = self._block_on_bed(mu, normal_damping=10.0, dt=dt)
+                wrench = np.array([0.5 * mu * weight, 0.0, 0.0, 0.0, 0.0, 0.0])
+                history = list(
+                    self._run(
+                        bed, mobility, anchors, com, mass, 1.0e6 * np.eye(3), np.eye(3), np.zeros(3), settle + hold,
+                        lambda step, wrench=wrench, settle=settle: wrench if step >= settle else np.zeros(6), dt,
+                    )
+                )  # fmt: skip
+                velocity = np.array([v for v, _w in history])
+                self.assertTrue(bed.bed.stuck.numpy().all())
+                self.assertLess(abs(velocity[settle:, 0].sum() * dt), 1.0e-5)
 
 
 def _rimmed_bed(worlds: int, mobility=None):

@@ -75,9 +75,9 @@ _FRICTION_TURN = wp.constant(0.1)
 _STICK_SPEED = wp.constant(1.0e-4)
 """Speed at which a sticking column's friction reaches its ground reaction [m/s].
 
-A sticking bottom resists sliding as a damper of ``R / _STICK_SPEED``, so it
-creeps at most ``mu * _STICK_SPEED`` before it slides. This is a solver
-constant, not a material property."""
+A sticking bottom resists sliding as a damper of ``R / _STICK_SPEED`` that
+pulls it back to its stick point, so it is held there to within ``dt *
+mu * _STICK_SPEED``. This is a solver constant, not a material property."""
 _STOP_MODULUS = wp.constant(1.0e13)
 """Modulus of a column at its compression stop [Pa].
 
@@ -219,6 +219,7 @@ class _Bed:
     q_state: wp.array[wp.float32]
     peq_prev: wp.array[wp.float32]
     stuck: wp.array[wp.int32]
+    stick_point: wp.array[wp.vec2]
     compression: wp.array[wp.float32]
     carried: wp.array[wp.float32]
     reaction: wp.array[wp.float32]
@@ -595,12 +596,16 @@ def _column_bed_step(
         tangential = wp.vec2(0.0)
         if bed.implicit != 0:
             # Friction is solved with the carrier below: a landed bottom starts
-            # out sticking, as a damper of R / _STICK_SPEED.
+            # out sticking, as a damper of R / _STICK_SPEED. A bottom that stuck
+            # last step is also pulled back to its stick point within this step.
             bed.lever[i] = point - com
             bed.tangential_stiffness[i] = 0.0
             bed.tangential_load[i] = wp.vec2(0.0)
             if reaction > 0.0 and p.mu > 0.0:
                 bed.tangential_stiffness[i] = reaction / _STICK_SPEED
+                if bed.stuck[i] != 0:
+                    back = bed.stick_point[i] - wp.vec2(point[0], point[1])
+                    bed.tangential_load[i] = bed.tangential_stiffness[i] * back / dt
         else:
             tangential, sticking = _coulomb(wp.vec2(velocity[0], velocity[1]), reaction, p.mu)
             bed.stuck[i] = sticking
@@ -727,13 +732,23 @@ def _column_bed_step(
                     bed.tangential_load[i] = friction
             if _block_sum(dropped) == 0.0:
                 break
-        # Friction at the end-of-step speed of each bottom.
+        # Friction at the end-of-step speed of each bottom, relative to the speed
+        # that returns a stuck bottom to its stick point. A bottom that starts
+        # sticking takes its end-of-step position as its stick point, and one
+        # that slides or lifts off loses it.
+        com = wp.transform_point(pose, com_local)
         tangential_force = wp.vec3(0.0)
         tangential_torque = wp.vec3(0.0)
         for slot in range(lane, count, _BLOCK):
             i = base + bed.order[slot]
             r = bed.lever[i]
-            traction, sticking = _coulomb(wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r)), bed.reaction[i], p.mu)
+            speed = wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r))
+            target = wp.vec2(0.0)
+            if bed.tangential_stiffness[i] > 0.0:
+                target = bed.tangential_load[i] / bed.tangential_stiffness[i]
+            traction, sticking = _coulomb(speed - target, bed.reaction[i], p.mu)
+            if sticking != 0 and bed.stuck[i] == 0:
+                bed.stick_point[i] = wp.vec2(com[0] + r[0], com[1] + r[1]) + dt * speed
             bed.tangential_load[i] = traction
             bed.stuck[i] = sticking
             f = wp.vec3(traction[0], traction[1], 0.0)
@@ -783,6 +798,7 @@ def _reset_worlds(
     bottom: wp.array[wp.float32],
     q_state: wp.array[wp.float32],
     peq_prev: wp.array[wp.float32],
+    stuck: wp.array[wp.int32],
 ):
     """Clear the columns of the masked worlds."""
     i = wp.tid()
@@ -791,6 +807,7 @@ def _reset_worlds(
         bottom[i] = 0.0
         q_state[i] = 0.0
         peq_prev[i] = 0.0
+        stuck[i] = 0
 
 
 def column_colors(neighbors: np.ndarray) -> np.ndarray:
@@ -937,6 +954,7 @@ class ColumnBed:
         bed.tangential_stiffness = wp.zeros(total, dtype=wp.float32, device=d)
         bed.tangential_load = wp.zeros(total, dtype=wp.vec2, device=d)
         bed.stuck = wp.zeros(total, dtype=wp.int32, device=d)
+        bed.stick_point = wp.zeros(total, dtype=wp.vec2, device=d)
         bed.support = wp.zeros(total, dtype=wp.int32, device=d)
         bed.normal_force = wp.zeros(self.world_count, dtype=wp.float32, device=d)
         bed.carried_force = wp.zeros(self.world_count, dtype=wp.float32, device=d)
@@ -980,14 +998,14 @@ class ColumnBed:
         """Return the worlds in ``mask``, or every world, to the unloaded rest shape with no history."""
         bed = self.bed
         if mask is None:
-            for array in (bed.top, bed.bottom, bed.q_state, bed.peq_prev):
+            for array in (bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.stuck):
                 array.zero_()
             return
         wp.launch(
             _reset_worlds,
             dim=self.world_count * self.column_count,
             inputs=[mask, self.column_count],
-            outputs=[bed.top, bed.bottom, bed.q_state, bed.peq_prev],
+            outputs=[bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.stuck],
             device=self.device,
         )
 
