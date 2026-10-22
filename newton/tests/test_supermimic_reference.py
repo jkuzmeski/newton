@@ -12,6 +12,7 @@ import numpy as np
 import newton
 from projects.supermimic.body import BODY_NAMES, BodyParams, add_body
 from projects.supermimic.reference import (
+    WEIGHED_SHOE_MASS_KG,
     DeLevaTable,
     _hinge_angle,
     _hip_angles,
@@ -91,7 +92,7 @@ class TestSupermimicReference(unittest.TestCase):
         male = f01_body_params(DeLevaTable.MALE)
         female = f01_body_params(DeLevaTable.FEMALE)
         for params in (male, female):
-            self.assertAlmostEqual(params.mass, 66.5, places=9)
+            self.assertAlmostEqual(params.mass + 2.0 * WEIGHED_SHOE_MASS_KG, 66.5, places=9)
             self.assertGreater(-params.knee_offset[2], 0.35)
             self.assertLess(-params.knee_offset[2], 0.42)
             self.assertLess(params.hip_offset[1], -0.07)

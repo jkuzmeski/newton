@@ -65,13 +65,31 @@ class Shoe:
 
     def anchors_in_foot(self, side: str, sole_pitch: float) -> np.ndarray:
         """Return the nominal column bottoms of ``side``'s shoe in the foot frame [m]."""
+        bed = (self.right if side == "right" else self.left).column_bed
+        return self._in_foot(bed.anchor_bottom_m, side, sole_pitch)
+
+    def mass_in_foot(self, side: str, sole_pitch: float) -> tuple[np.ndarray, np.ndarray]:
+        """Return the shoe mass of ``side`` as point masses in the foot frame.
+
+        The shoe mass is spread over the columns in proportion to their volume,
+        each at its column's mid-height.
+
+        Returns:
+            Point masses [kg], shape ``[column_count]``, and their positions [m], shape ``[column_count, 3]``.
+        """
         artifact = self.right if side == "right" else self.left
+        bed = artifact.column_bed
+        volume = bed.area_m2 * bed.rest_length_m
+        mid = bed.anchor_bottom_m + np.outer(0.5 * bed.rest_length_m, (0.0, 0.0, 1.0))
+        return artifact.mass_kg * volume / volume.sum(), self._in_foot(mid, side, sole_pitch)
+
+    def _in_foot(self, points: np.ndarray, side: str, sole_pitch: float) -> np.ndarray:
         mirror = _MIRROR if side == "right" else np.eye(3)
         mount = mirror @ np.asarray(self.mount_m)
         c, s = np.cos(sole_pitch), np.sin(sole_pitch)
         pitch = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
         foot_from_shoe = pitch @ (mirror @ self.rotation @ mirror).T
-        return (artifact.column_bed.anchor_bottom_m - mount) @ foot_from_shoe.T
+        return (points - mount) @ foot_from_shoe.T
 
 
 def load_shoes(dataset: str | Path) -> list[Shoe]:
@@ -340,6 +358,7 @@ class RunnerSim:
         self.solver = newton.solvers.SolverMuJoCo(
             self.model, integrator="euler", jacobian="dense", disable_contacts=True
         )
+        self._add_shoe_masses(shoes)
         self.beds = [
             _Bed(self, shoes[s], side, np.flatnonzero(self.shoe_of_world == s).astype(np.int32))
             for s in np.unique(self.shoe_of_world)
@@ -363,6 +382,35 @@ class RunnerSim:
         with wp.ScopedCapture(device=d) as capture:
             self._simulate()
         self._graph = capture.graph
+
+    def _add_shoe_masses(self, shoes: Sequence[Shoe]) -> None:
+        """Add each world's shoe mass to its feet; the columns stay massless."""
+        model = self.model
+        mass, com, inertia = (a.numpy() for a in (model.body_mass, model.body_com, model.body_inertia))
+        for s, shoe in enumerate(shoes):
+            for side, foot in zip(SIDES, FOOT_BODIES, strict=True):
+                points, positions = shoe.mass_in_foot(side, self.body.sole_pitch)
+                bodies = np.flatnonzero(self.shoe_of_world == s) * len(BODY_NAMES) + foot
+                if not len(bodies):
+                    continue
+                m0, c0, i0 = mass[bodies[0]], com[bodies[0]].astype(float), inertia[bodies[0]].astype(float)
+                total = m0 + points.sum()
+                center = (m0 * c0 + points @ positions) / total
+                r0 = c0 - center
+                r = positions - center
+                i0 = i0 + m0 * (r0 @ r0 * np.eye(3) - np.outer(r0, r0))
+                i0 = i0 + np.einsum(
+                    "n,nij->ij",
+                    points,
+                    np.einsum("nk,nk->n", r, r)[:, None, None] * np.eye(3) - r[:, :, None] * r[:, None, :],
+                )
+                mass[bodies], com[bodies], inertia[bodies] = total, center, i0
+        model.body_mass.assign(mass)
+        model.body_inv_mass.assign(1.0 / mass)
+        model.body_com.assign(com)
+        model.body_inertia.assign(inertia)
+        model.body_inv_inertia.assign(np.linalg.inv(inertia))
+        self.solver.notify_model_changed(newton.ModelFlags.BODY_INERTIAL_PROPERTIES)
 
     def set_world_materials(self, materials: Sequence[ShoeMaterial], friction: Sequence[float]) -> None:
         """Set the foam material and the outsole friction coefficient of both shoes per world."""

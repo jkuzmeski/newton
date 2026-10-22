@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import warp as wp
 
-from projects.supermimic.body import BodyParams
-from projects.supermimic.sim import RunnerSim, RunnerSimConfig, load_shoes
+from projects.supermimic.body import BODY_NAMES, BodyParams
+from projects.supermimic.sim import FOOT_BODIES, SIDES, RunnerSim, RunnerSimConfig, load_shoes
 
 DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
 CUDA = wp.is_cuda_available()
@@ -51,7 +52,44 @@ def _run(shoes, shoe_of_world, steps):
 class TestSupermimicSim(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.shoes = load_shoes(DATASET)
+        masses = (0.173, 0.204)
+        cls.shoes = [
+            replace(shoe, left=replace(shoe.left, mass_kg=m), right=replace(shoe.right, mass_kg=m))
+            for shoe, m in zip(load_shoes(DATASET), masses, strict=True)
+        ]
+
+    def test_shoe_mass_moves_to_feet(self):
+        """Add each world's shoes to its feet, conserving mass, first and second moments about the ankle."""
+        body = BodyParams()
+        sim = RunnerSim(body, self.shoes, [0, 1, 0])
+        model = sim.model
+        bodies = len(BODY_NAMES)
+        mass = model.body_mass.numpy().reshape(3, bodies)
+        com = model.body_com.numpy().reshape(3, bodies, 3)
+        inertia = model.body_inertia.numpy().reshape(3, bodies, 3, 3)
+
+        def second_moment(m, r):
+            r = np.atleast_2d(r)
+            return np.einsum(
+                "n,nij->ij", np.atleast_1d(m), (r * r).sum(1)[:, None, None] * np.eye(3) - r[:, :, None] * r[:, None, :]
+            )
+
+        for w, s in enumerate([0, 1, 0]):
+            shoe = self.shoes[s]
+            np.testing.assert_allclose(mass[w].sum(), body.mass + shoe.left.mass_kg + shoe.right.mass_kg, rtol=1e-6)
+            for side, foot in zip(SIDES, FOOT_BODIES, strict=True):
+                points, positions = shoe.mass_in_foot(side, body.sole_pitch)
+                f = body.foot
+                c = np.asarray(f.com) * (1.0, -1.0, 1.0) if side == "left" else np.asarray(f.com)
+                expected_com = (f.mass * c + points @ positions) / (f.mass + points.sum())
+                np.testing.assert_allclose(com[w, foot], expected_com, atol=1e-6)
+                about_ankle = np.diag(f.inertia) + second_moment(f.mass, c) + second_moment(points, positions)
+                np.testing.assert_allclose(
+                    inertia[w, foot] + second_moment(mass[w, foot], com[w, foot]), about_ankle, atol=1e-7
+                )
+        np.testing.assert_allclose(sim.solver.mjw_model.body_mass.numpy()[:, 1:], mass, rtol=1e-6)
+        np.testing.assert_array_equal(inertia[0], inertia[2])
+        self.assertGreater(np.abs(inertia[0, FOOT_BODIES[0]] - inertia[1, FOOT_BODIES[0]]).max(), 1e-5)
 
     def test_mixed_shoes_match_single_shoe_runs(self):
         """Give each world of a mixed batch the result of a batch wearing only its shoe."""

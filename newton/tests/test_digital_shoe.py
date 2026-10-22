@@ -21,7 +21,7 @@ from projects.digital_instron_v2.core import CALIBRATED_MATERIAL
 from projects.digital_instron_v2.registration import load_last, register_last
 from projects.digital_instron_v2.sweep_fit import DEFAULT_LAST, load_grid
 from projects.digital_shoe.acquisition import validate_acquisition_manifest
-from projects.digital_shoe.artifact import load_artifact, validate_artifact
+from projects.digital_shoe.artifact import DEFAULT_SHOE_MASS_KG, load_artifact, validate_artifact
 from projects.digital_shoe.report import render_html
 from projects.digital_shoe.showcase import Example
 
@@ -98,6 +98,17 @@ class TestDigitalShoeArtifact(unittest.TestCase):
                 os.chdir(previous)
         self.assertEqual(shoe.shoe_id, "tiny<&shoe")
         self.assertEqual(len(shoe.column_bed.rest_length_m), 2)
+
+    def test_reads_shoe_mass_or_defaults(self):
+        """Read the shoe mass from the artifact and fall back to the documented default."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "digital_shoe.json"
+            data = _tiny_artifact()
+            path.write_text(json.dumps(data))
+            self.assertEqual(load_artifact(path).mass_kg, DEFAULT_SHOE_MASS_KG)
+            data["shoe"]["mass_kg"] = 0.173
+            path.write_text(json.dumps(data))
+            self.assertEqual(load_artifact(path).mass_kg, 0.173)
 
     def test_rejects_unknown_schema_and_self_neighbor(self):
         """Reject unknown schema versions and invalid column topology."""

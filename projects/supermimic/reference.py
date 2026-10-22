@@ -131,6 +131,8 @@ _DE_LEVA = {
 }
 SHOULDER_WIDTH = 0.259
 """Biacromial width as a fraction of stature (Winter, Biomechanics and Motor Control of Human Movement, 2009, Fig. 4.1)."""
+WEIGHED_SHOE_MASS_KG = 0.173
+"""Mass of one FR3 shoe [kg] (RunRepeat lab scale, US men's 9), assumed worn when F01's model mass was weighed."""
 
 
 # Rotations ---------------------------------------------------------------
@@ -427,7 +429,9 @@ def f01_body_params(table: DeLevaTable) -> BodyParams:
     the same table, scaled from the table's mean stature to
     :data:`STATURE_M`, upright above the mid-hip point with the arms hanging
     at a shoulder width of :data:`SHOULDER_WIDTH` times stature, scaled in
-    mass so the body mass equals the Visual3D model mass. ``sole_pitch`` levels the FR3 shoe frame in the static pose.
+    mass so the body mass equals the Visual3D model mass less a pair of
+    :data:`WEIGHED_SHOE_MASS_KG` shoes, which the simulator adds to the feet.
+    ``sole_pitch`` levels the FR3 shoe frame in the static pose.
 
     Args:
         table: Sex-specific de Leva table; F01 is male.
@@ -490,12 +494,13 @@ def f01_body_params(table: DeLevaTable) -> BodyParams:
         vertical("hand", vertical("forearm", vertical("upper_arm", shoulder)))
     leg_mass = thigh.mass + shank.mass + foot.mass
     part_mass = sum(m for m, _, _ in parts)
-    factor = (body_mass - 2.0 * leg_mass) / part_mass
+    pelvis_mass = body_mass - 2.0 * (leg_mass + WEIGHED_SHOE_MASS_KG)
+    factor = pelvis_mass / part_mass
     com = sum(m * c for m, c, _ in parts) / part_mass
     inertia = sum(
         np.diag(i) + m * (np.dot(c - com, c - com) * np.eye(3) - np.outer(c - com, c - com)) for m, c, i in parts
     )
-    pelvis = SegmentParams(body_mass - 2.0 * leg_mass, _vector(com), _vector(factor * np.diag(inertia)))
+    pelvis = SegmentParams(pelvis_mass, _vector(com), _vector(factor * np.diag(inertia)))
     return BodyParams(
         pelvis=pelvis,
         thigh=thigh,

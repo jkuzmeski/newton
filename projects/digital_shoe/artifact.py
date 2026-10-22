@@ -16,6 +16,8 @@ from .runtime import ShoeMaterial
 
 SCHEMA_VERSION = "digital_shoe_1"
 MODEL_TYPE = "effective_hyperfoam_maxwell_pasternak_foundation"
+DEFAULT_SHOE_MASS_KG = 0.2
+"""Mass of one shoe [kg] for artifacts whose ``shoe`` record lacks ``mass_kg``; a typical running shoe."""
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,8 @@ class DigitalShoe:
     """Loaded runtime shoe, optional fixture mappings, and validation record."""
 
     shoe_id: str
+    mass_kg: float
+    """Mass of one shoe [kg], from ``shoe.mass_kg`` or :data:`DEFAULT_SHOE_MASS_KG`."""
     material: ShoeMaterial
     column_bed: ColumnBed
     visual_meshes: dict[str, VisualMesh]
@@ -226,6 +230,7 @@ def load_artifact(path: str | Path) -> DigitalShoe:
     validate_artifact(data)
     return DigitalShoe(
         shoe_id=data["shoe"]["id"],
+        mass_kg=float(data["shoe"].get("mass_kg", DEFAULT_SHOE_MASS_KG)),
         material=ShoeMaterial(**data["constitutive_model"]["parameters"]),
         column_bed=ColumnBed.from_json(data["column_bed"]),
         visual_meshes={
