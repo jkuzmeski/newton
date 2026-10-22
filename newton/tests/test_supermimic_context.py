@@ -9,7 +9,7 @@ import numpy as np
 
 from projects.digital_shoe.material import hyperfoam_pressure_numpy
 from projects.digital_shoe.runtime import ShoeMaterial
-from projects.supermimic.context import XI_DIM, ShoeSpace, decode, encode
+from projects.supermimic.context import GEOMETRY_COUNT, XI_DIM, ShoeSpace, decode, encode
 
 # Fitted foams of dataset_3d_column_bed_v2 (digital_shoe_1 artifacts).
 FR3 = ShoeMaterial(
@@ -48,12 +48,13 @@ def _pressure(material: ShoeMaterial, strain: np.ndarray) -> np.ndarray:
 
 class TestSupermimicContext(unittest.TestCase):
     def test_encode_decode_round_trip(self):
-        """Recover each fitted foam, its pressure curve and friction from its context."""
+        """Recover each fitted foam, its pressure curve, friction and geometry from its context."""
         strain = np.linspace(0.0, 0.85, 50)
-        for material in (FR3, DEV3):
-            xi = encode(material, 0.8)
-            self.assertTrue(np.all(np.abs(xi) < 1.0))
-            (decoded,), friction = decode(xi[None])
+        for geometry, material in enumerate((FR3, DEV3)):
+            xi = encode(material, 0.8, geometry)
+            self.assertTrue(np.all(np.abs(xi[:-GEOMETRY_COUNT]) < 0.8))
+            (decoded,), friction, (decoded_geometry,) = decode(xi[None])
+            self.assertEqual(decoded_geometry, geometry)
             for field in dataclasses.fields(ShoeMaterial):
                 np.testing.assert_allclose(
                     getattr(decoded, field.name), getattr(material, field.name), rtol=1e-5, err_msg=field.name
@@ -63,23 +64,27 @@ class TestSupermimicContext(unittest.TestCase):
 
     def test_box_corners_decode_to_valid_materials(self):
         """Decode every corner of the context box to a valid material."""
-        corners = np.array(list(itertools.product((-1.0, 1.0), repeat=XI_DIM)))
-        materials, friction = decode(corners)
+        corners = np.array(list(itertools.product((-1.0, 1.0), repeat=XI_DIM - GEOMETRY_COUNT)))
+        corners = np.concatenate([corners, np.ones((len(corners), 1)), np.zeros((len(corners), 1))], axis=1)
+        materials, friction, _geometry = decode(corners)
         self.assertEqual(len(materials), len(corners))
         self.assertTrue(np.all((friction >= 0.4 - 1e-9) & (friction <= 1.2 + 1e-9)))
 
     def test_training_excludes_held_out_ball(self):
-        """Sample training contexts in the box and outside the ball, held-out ones inside it."""
-        space = ShoeSpace(held_out=encode(DEV3, 0.8))
+        """Sample training contexts in the box and outside the ball on both geometries, held-out ones inside it."""
+        space = ShoeSpace(held_out=encode(DEV3, 0.8, 1))
         rng = np.random.default_rng(0)
         train = space.sample_training(4096, rng)
         held_out = space.sample_held_out(512, rng)
         self.assertEqual(train.shape, (4096, XI_DIM))
         self.assertEqual(train.dtype, np.float32)
         self.assertTrue(np.all(np.abs(train) <= 1.0))
+        self.assertTrue(np.all(np.abs(held_out) <= 1.0))
         self.assertFalse(space.is_held_out(train).any())
         self.assertTrue(space.is_held_out(held_out).all())
-        self.assertFalse(space.is_held_out(encode(FR3, 0.8)[None]).any())
+        self.assertFalse(space.is_held_out(encode(FR3, 0.8, 0)[None]).any())
+        np.testing.assert_allclose(decode(train)[2].mean(), 0.5, atol=0.05)
+        self.assertTrue(np.all(decode(held_out)[2] == 1))
 
 
 if __name__ == "__main__":
