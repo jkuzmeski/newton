@@ -4,9 +4,13 @@
 """Stage-0 transition collection for the SuperMimic world model.
 
 A simple controller runs batched :class:`~projects.supermimic.sim.RunnerSim`
-worlds: the equilibrium angles follow the F01 reference plus smooth noise, and
-the stiffness ``K`` and damping ``B`` of every joint are drawn per episode,
-log-uniformly over wide ranges. Each world's shoe geometry, foam and friction
+worlds. The stiffness ``K`` and damping ``B`` of every joint are drawn per
+episode, log-uniformly within human joint impedance
+(:data:`~projects.supermimic.policy.STIFFNESS_LIMITS`,
+:data:`~projects.supermimic.policy.DAMPING_LIMITS`). The equilibrium angles are ``q_ref + M_ref / K`` plus
+smooth noise, where ``q_ref`` is the F01 reference and ``M_ref`` its
+inverse-dynamics joint moment, so the reference posture carries the reference
+moment without a stiff joint. Each world's shoe geometry, foam and friction
 come from its sim context ``xi`` of :mod:`.context`. Episodes start
 at reference flight frames and end on a fall or at the end of the reference
 window. A step whose outputs are not finite or whose joint speeds are not
@@ -36,9 +40,11 @@ import numpy as np
 import torch
 import warp as wp
 
+from .analysis import inverse_dynamics
 from .body import JOINT_NAMES, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
+from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
 from .reference import DeLevaTable, f01_body_params
 from .sim import RunnerSim, load_shoes
 
@@ -51,6 +57,7 @@ __all__ = [
     "main",
     "make_sim",
     "read_episode",
+    "reference_moments",
     "sim_aux",
     "sim_state",
 ]
@@ -68,10 +75,6 @@ HELD_OUT_SHOE = "puma-deviate-nitro-elite-3"
 class Stage0Config:
     """Controller and episode settings of the stage-0 collection."""
 
-    stiffness_range: tuple[float, float] = (30.0, 1500.0)
-    """Per-episode log-uniform range of each joint stiffness [N m/rad]."""
-    damping_range: tuple[float, float] = (0.5, 40.0)
-    """Per-episode log-uniform range of each joint damping [N m s/rad]."""
     noise_std_rad: float = 0.1
     """Stationary standard deviation of the equilibrium-angle noise [rad]."""
     noise_time_constant_s: float = 0.1
@@ -97,9 +100,25 @@ def sim_aux(sim: RunnerSim) -> torch.Tensor:
     return torch.cat([wp.to_torch(a).reshape(w, -1) for a in parts], dim=1)
 
 
-def _log_uniform(low: float, high: float, shape, generator: torch.Generator, device) -> torch.Tensor:
-    u = torch.rand(shape, generator=generator, device=device)
-    return low * (high / low) ** u
+def _log_uniform(limits: torch.Tensor, count: int, generator: torch.Generator) -> torch.Tensor:
+    u = torch.rand((count, len(limits)), generator=generator, device=limits.device)
+    return limits[:, 0] * (limits[:, 1] / limits[:, 0]) ** u
+
+
+def reference_moments(ref: dict, body: BodyParams) -> np.ndarray:
+    """Return the inverse-dynamics joint moments of the reference windows [windows, frames, 10] [N m].
+
+    Args:
+        ref: Arrays of ``reference.npz``.
+        body: Body parameters of the reference.
+    """
+    dt = float(ref["frame_dt"])
+    return np.stack(
+        [
+            inverse_dynamics(q, dt, body, grf, np.nan_to_num(cop), np.zeros_like(grf))
+            for q, grf, cop in zip(ref["joint_q"], ref["grf"], ref["cop"], strict=True)
+        ]
+    )
 
 
 def make_sim(
@@ -171,6 +190,10 @@ def collect(
     frames = ref["joint_q"].shape[1]
     ref_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     ref_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
+    ref_moment = torch.as_tensor(reference_moments(ref, body), dtype=torch.float32, device=device)
+    # The left joints have the limits of the right ones.
+    stiffness_limits = torch.tensor(STIFFNESS_LIMITS * 2, device=device)
+    damping_limits = torch.tensor(DAMPING_LIMITS * 2, device=device)
     starts = episode_starts(ref, split, device)
 
     w = world_count
@@ -202,12 +225,13 @@ def collect(
                 sim.reset(
                     wp.from_torch(reset), wp.from_torch(ref_q[window, frame]), wp.from_torch(ref_qd[window, frame])
                 )
-                stiffness[reset] = _log_uniform(*config.stiffness_range, (n, JOINT_COUNT), generator, device)
-                damping[reset] = _log_uniform(*config.damping_range, (n, JOINT_COUNT), generator, device)
+                stiffness[reset] = _log_uniform(stiffness_limits, n, generator)
+                damping[reset] = _log_uniform(damping_limits, n, generator)
                 noise[reset] = config.noise_std_rad * torch.randn((n, JOINT_COUNT), generator=generator, device=device)
             state = sim_state(sim)
             done = state[:, 2] < config.fall_height_m
-            action = torch.stack((ref_q[window, frame, 7:] + noise, stiffness, damping), dim=2)
+            q_eq = ref_q[window, frame, 7:] + ref_moment[window, frame] / stiffness + noise
+            action = torch.stack((q_eq, stiffness, damping), dim=2)
             sim.step(wp.from_torch(action.contiguous()))
             aux, after = sim_aux(sim), sim_state(sim)
             failed = ~(
