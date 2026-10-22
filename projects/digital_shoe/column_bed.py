@@ -546,7 +546,8 @@ def _column_bed_step(
         slope = _modulus_slope_shared(column, 0.0, 0)
         bed.shear_modulus[i] = modulus
         squeeze = _layer_squeeze(bed, column, top, bottom, modulus, slope)
-        axial = wp.max(area * wp.max(peq + q, 0.0) + squeeze, 0.0)
+        # Clipped once, after the squeeze, as in the column balance.
+        axial = wp.max(area * (peq + q) + squeeze, 0.0)
         if held and landed:
             if comp > 0.0:
                 axial = wp.max(axial - p.normal_damping * velocity[2], 0.0)
