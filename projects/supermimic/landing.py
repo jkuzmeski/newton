@@ -10,7 +10,7 @@ substep by substep with an open joint torque law
 
 where ``q_eq`` and the feed-forward ``tau_ff`` follow 1 kHz tables. From the
 substep a foot's vertical ground reaction first exceeds
-:data:`TOUCHDOWN_FORCE_N`, the five joints of that leg use the touchdown gains
+:data:`~projects.supermimic.reference.CONTACT_THRESHOLD_N`, the five joints of that leg use the touchdown gains
 for :attr:`LandingSchedule.touchdown_hold_s`. The rig records every substep:
 ground reaction, the stiffness, damping and feed-forward torque terms, the
 joint-limit constraint torque, joint state, foot pose and velocity, the largest
@@ -28,12 +28,10 @@ import numpy as np
 import warp as wp
 
 from .body import BODY_NAMES, JOINT_NAMES
+from .reference import CONTACT_THRESHOLD_N
 from .sim import COORDS, DOFS, FOOT_BODIES, RunnerSim
 
-__all__ = ["TOUCHDOWN_FORCE_N", "LandingRig", "LandingSchedule", "impact_metrics", "touchdown_starts"]
-
-TOUCHDOWN_FORCE_N = 50.0
-"""Vertical ground reaction that marks a touchdown, as the reference contact threshold [N]."""
+__all__ = ["LandingRig", "LandingSchedule", "touchdown_starts"]
 
 _J = wp.constant(len(JOINT_NAMES))
 _COORDS = wp.constant(COORDS)
@@ -245,8 +243,8 @@ class LandingRig:
         logs = self._logs
         data = sim.solver.mjw_data
         dof_map = sim.solver.mjc_dof_to_newton_dof
+        s0, s1 = sim.state_0, sim.state_1
         for k in range(self.steps):
-            s0, s1 = sim.state_0, sim.state_1
             wp.launch(
                 _actuate,
                 dim=(sim.world_count, len(JOINT_NAMES)),
@@ -289,7 +287,7 @@ class LandingRig:
                         k,
                         dt,
                         bed.side,
-                        TOUCHDOWN_FORCE_N,
+                        CONTACT_THRESHOLD_N,
                         bed.world_index,
                         bed.feet,
                         s0.body_f,
@@ -314,7 +312,10 @@ class LandingRig:
                 outputs=[logs["limit_torque"]],
                 device=d,
             )
-            sim.state_0, sim.state_1 = s1, s0
+            s0, s1 = s1, s0
+        # RunnerSim.step replays a graph bound to its own state arrays.
+        if s0 is not sim.state_0:
+            sim.state_0.assign(s0)
         result = {name: log.numpy() for name, log in logs.items()}
         result["touchdown_s"] = self._touchdown.numpy()
         result["dt"] = dt
@@ -342,48 +343,3 @@ def touchdown_starts(contact: np.ndarray, flight_window: np.ndarray, flight_fram
             continue
         rows.append((w, f, int(np.argmax(later[landed[0]]))))
     return np.asarray(rows, dtype=np.int64).reshape(-1, 3)
-
-
-def impact_metrics(force: np.ndarray, dt: float, body_weight: float, settle_s: float = 0.005) -> dict[str, float]:
-    """Impact peak, rise time and vertical loading rate of one touchdown.
-
-    The impact peak is the first local maximum after the force first exceeds
-    :data:`TOUCHDOWN_FORCE_N` that no sample of the next ``settle_s`` exceeds.
-    The rise time spans 20 % to 80 % of the impact peak and the loading rate is
-    the mean slope over it (Milner et al. 2006, Med. Sci. Sports Exerc.
-    38:323-328).
-
-    Args:
-        force: Vertical ground reaction of one foot from before its touchdown [samples] [N].
-        dt: Sample interval [s].
-        body_weight: Body weight [N].
-        settle_s: Interval a peak must stay the largest value [s].
-
-    Returns:
-        ``impact_bw``, ``peak_bw`` (largest value of ``force``), ``rise_s``,
-        ``loading_rate_bw_s`` and ``impact_time_s`` after the threshold crossing.
-    """
-    force = np.asarray(force, dtype=float)
-    onset = int(np.argmax(force > TOUCHDOWN_FORCE_N))
-    settle = max(1, round(settle_s / dt))
-    impact = len(force) - 1
-    for i in range(onset + 1, len(force) - 1):
-        if force[i] >= force[i - 1] and force[i] >= force[i + 1 : i + 1 + settle].max():
-            impact = i
-            break
-    peak = force[impact]
-    rising = force[: impact + 1]
-
-    def crossing(fraction: float) -> float:
-        level = fraction * peak
-        j = int(np.argmax(rising >= level))
-        return j - 1 + (level - rising[j - 1]) / (rising[j] - rising[j - 1])
-
-    rise = (crossing(0.8) - crossing(0.2)) * dt
-    return {
-        "impact_bw": float(peak / body_weight),
-        "peak_bw": float(force.max() / body_weight),
-        "rise_s": float(rise),
-        "loading_rate_bw_s": float(0.6 * peak / body_weight / rise),
-        "impact_time_s": float((impact - onset) * dt),
-    }

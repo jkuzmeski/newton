@@ -9,6 +9,7 @@ import numpy as np
 import newton
 from projects.supermimic.analysis import (
     GRAVITY,
+    impact_metrics,
     inverse_dynamics,
     quasi_stiffness,
     stance_intervals,
@@ -104,6 +105,21 @@ class TestSupermimicAnalysis(unittest.TestCase):
         extension = 0.5 - 0.6 * t
         stiffness = quasi_stiffness(extension, 100.0 * (extension - 0.5) * np.sin(np.pi * t), stances)
         self.assertTrue(np.isnan(stiffness[0, 0]))
+
+    def test_impact_metrics_of_a_ramp(self):
+        """Measure the rise and slope of a linear ramp to a peak that a later ripple does not exceed."""
+        dt = 1e-3
+        force = np.concatenate((np.zeros(5), np.linspace(0.0, 1000.0, 21), [900.0, 950.0, 800.0], np.full(20, 700.0)))
+        m = impact_metrics(force, dt, body_weight=500.0)
+        self.assertAlmostEqual(m["impact_bw"], 2.0)
+        self.assertAlmostEqual(m["rise_s"], 0.012)
+        self.assertAlmostEqual(m["loading_rate_bw_s"], 100.0)
+
+    def test_impact_metrics_reject_a_force_already_in_contact(self):
+        """Refuse a record that starts in contact instead of wrapping around to its peak."""
+        force = np.concatenate((np.linspace(400.0, 1500.0, 12), np.full(10, 1200.0)))
+        with self.assertRaises(ValueError):
+            impact_metrics(force, 1e-3, body_weight=600.0)
 
     def test_stride_metrics_of_alternating_half_sines(self):
         """Measure contact, flight, cadence, peak and the 20-80 % loading rate of half-sine stances."""

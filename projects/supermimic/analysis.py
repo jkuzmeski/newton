@@ -45,6 +45,7 @@ from .sim import Shoe, shod_foot
 
 __all__ = [
     "GRAVITY",
+    "impact_metrics",
     "inverse_dynamics",
     "joint_summary",
     "main",
@@ -62,6 +63,9 @@ QUASI_STIFFNESS_MOMENT_FRACTION = 0.2
 
 LOADING_RATE_FRACTIONS = (0.2, 0.8)
 """Fractions of the impact peak between which the vertical loading rate is averaged (Milner et al. 2006)."""
+
+IMPACT_SETTLE_S = 0.005
+"""Interval after the impact peak that no larger force may follow, so substep ripple is not a peak [s]."""
 
 
 def _rotation(axis: np.ndarray, angle: np.ndarray) -> np.ndarray:
@@ -188,17 +192,61 @@ def quasi_stiffness(angle: np.ndarray, moment: np.ndarray, stances: np.ndarray) 
 
 def _crossing(values: np.ndarray, level: float) -> float:
     """Fractional index where rising ``values`` first reach ``level``."""
-    j = np.argmax(values >= level)
+    j = int(np.argmax(values >= level))
+    if j == 0:
+        raise ValueError(f"Force starts at {values[0]:.1f} N, above the level {level:.1f} N of the loading rate")
     return j - 1 + (level - values[j - 1]) / (values[j] - values[j - 1])
+
+
+def impact_metrics(force: np.ndarray, dt: float, body_weight: float) -> dict[str, float]:
+    """Impact peak, rise time and vertical loading rate of one touchdown.
+
+    The impact peak is the first local maximum after the force first exceeds
+    :data:`~projects.supermimic.reference.CONTACT_THRESHOLD_N` that no sample
+    of the next :data:`IMPACT_SETTLE_S` exceeds; when there is no impact
+    transient this is the active peak. The rise time spans
+    :data:`LOADING_RATE_FRACTIONS` of the impact peak and the loading rate is
+    the mean slope over it (Milner et al. 2006, Med. Sci. Sports Exerc.
+    38:323-328).
+
+    Args:
+        force: Vertical ground reaction of one foot, starting below the contact threshold [samples] [N].
+        dt: Sample interval [s].
+        body_weight: Body weight [N].
+
+    Returns:
+        ``impact_bw``, ``peak_bw`` (largest value of ``force``), ``rise_s``,
+        ``loading_rate_bw_s`` and ``impact_time_s`` after the threshold crossing.
+
+    Raises:
+        ValueError: If the force starts above the contact threshold or the lower loading-rate level.
+    """
+    force = np.asarray(force, dtype=float)
+    if force[0] > CONTACT_THRESHOLD_N:
+        raise ValueError(f"Force starts at {force[0]:.1f} N, above the contact threshold")
+    onset = int(np.argmax(force > CONTACT_THRESHOLD_N))
+    settle = max(1, round(IMPACT_SETTLE_S / dt))
+    impact = next(
+        i
+        for i in range(onset, len(force))
+        if force[i] >= force[i - 1] and not (force[i + 1 : i + 1 + settle] >= force[i]).any()
+    )
+    peak = force[impact]
+    low, high = (_crossing(force[: impact + 1], f * peak) for f in LOADING_RATE_FRACTIONS)
+    rise = (high - low) * dt
+    return {
+        "impact_bw": float(peak / body_weight),
+        "peak_bw": float(force.max() / body_weight),
+        "rise_s": float(rise),
+        "loading_rate_bw_s": float((LOADING_RATE_FRACTIONS[1] - LOADING_RATE_FRACTIONS[0]) * peak / body_weight / rise),
+        "impact_time_s": float((impact - onset) * dt),
+    }
 
 
 def stride_metrics(grf_z: np.ndarray, dt: float, body_weight: float) -> dict:
     """Contact time, flight time, cadence, peak vertical force and vertical loading rate.
 
-    The loading rate is the average slope of the vertical force between 20 %
-    and 80 % of the impact peak (Milner et al. 2006, Med. Sci. Sports Exerc.
-    38:323-328), the first local maximum of the vertical force in stance; when
-    there is no impact transient this is the active peak.
+    The loading rate is that of :func:`impact_metrics` for each stance.
 
     Args:
         grf_z: Vertical ground reaction force per foot (right, left) [frames, 2] [N].
@@ -210,14 +258,7 @@ def stride_metrics(grf_z: np.ndarray, dt: float, body_weight: float) -> dict:
         ``cadence_steps_per_min``, ``peak_grf_bw`` and ``loading_rate_bw_s``, and ``stances``.
     """
     stances = sorted((a, b, i) for i in range(2) for a, b in stance_intervals(grf_z[:, i]))
-    peaks, rates = [], []
-    for a, b, i in stances:
-        force = grf_z[a - 1 : b + 1, i] / body_weight
-        local = np.flatnonzero((force[1:-1] >= force[:-2]) & (force[1:-1] > force[2:])) + 1
-        impact = force[local[0]]
-        low, high = (_crossing(force[: local[0] + 1], f * impact) for f in LOADING_RATE_FRACTIONS)
-        rates.append((LOADING_RATE_FRACTIONS[1] - LOADING_RATE_FRACTIONS[0]) * impact / ((high - low) * dt))
-        peaks.append(force.max())
+    impacts = [impact_metrics(grf_z[a - 1 : b + 1, i], dt, body_weight) for a, b, i in stances]
     starts = np.array([a for a, _, _ in stances])
     ends = np.array([b for _, b, _ in stances])
     return {
@@ -225,8 +266,8 @@ def stride_metrics(grf_z: np.ndarray, dt: float, body_weight: float) -> dict:
         "contact_time_s": float(np.mean(ends - starts) * dt),
         "flight_time_s": float(np.mean(starts[1:] - ends[:-1]) * dt),
         "cadence_steps_per_min": float(60.0 / (np.mean(np.diff(starts)) * dt)),
-        "peak_grf_bw": float(np.mean(peaks)),
-        "loading_rate_bw_s": float(np.mean(rates)),
+        "peak_grf_bw": float(np.mean([m["peak_bw"] for m in impacts])),
+        "loading_rate_bw_s": float(np.mean([m["loading_rate_bw_s"] for m in impacts])),
     }
 
 

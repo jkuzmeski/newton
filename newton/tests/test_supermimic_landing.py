@@ -8,7 +8,7 @@ import numpy as np
 import warp as wp
 
 from projects.supermimic.body import BodyParams
-from projects.supermimic.landing import LandingRig, LandingSchedule, impact_metrics, touchdown_starts
+from projects.supermimic.landing import LandingRig, LandingSchedule, touchdown_starts
 from projects.supermimic.sim import RunnerSim, RunnerSimConfig, load_shoes
 
 DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
@@ -29,16 +29,7 @@ def _schedule(q_eq: np.ndarray, stiffness: float, damping: float) -> LandingSche
     )
 
 
-class TestSupermimicLandingMetrics(unittest.TestCase):
-    def test_impact_metrics_of_a_ramp(self):
-        """Measure the rise and slope of a linear ramp to a peak that a later ripple does not exceed."""
-        dt = 1e-3
-        force = np.concatenate((np.zeros(5), np.linspace(0.0, 1000.0, 21), [900.0, 950.0, 800.0], np.full(20, 700.0)))
-        m = impact_metrics(force, dt, body_weight=500.0)
-        self.assertAlmostEqual(m["impact_bw"], 2.0)
-        self.assertAlmostEqual(m["rise_s"], 0.012)
-        self.assertAlmostEqual(m["loading_rate_bw_s"], 100.0)
-
+class TestSupermimicLandingStarts(unittest.TestCase):
     def test_touchdown_starts_keep_the_last_flight_frame(self):
         """Start each touchdown at its last flight frame and name the landing foot."""
         contact = np.zeros((1, 12, 2), bool)
@@ -68,3 +59,19 @@ class TestSupermimicLandingRig(unittest.TestCase):
         self.assertLess(np.abs(log["limit_torque"][0, :, [0, 1, 2, 4]]).max(), 1e-3)
         np.testing.assert_array_equal(log["touchdown_s"], -1.0)
         self.assertEqual(log["loaded_columns"].max(), 0)
+
+    def test_sim_steps_from_its_reset_after_an_odd_landing(self):
+        """Let RunnerSim.step advance the reset state after a landing of an odd number of substeps."""
+        sim = RunnerSim(BodyParams(), load_shoes(DATASET), [0], config=RunnerSimConfig(belt_speed_m_s=0.0))
+        q = np.zeros((1, 17))
+        q[0, 2], q[0, 6] = 5.0, 1.0
+        rig = LandingRig(sim, 3 * sim.config.substep_dt_s)
+        rig.run(q, np.zeros((1, 16)), _schedule(np.zeros((1, 10)), 200.0, 5.0))
+        q[0, 2] = 3.0
+        mask = wp.ones(1, dtype=bool, device=sim.device)
+        sim.reset(mask, wp.array(q, dtype=float, device=sim.device), wp.zeros((1, 16), dtype=float, device=sim.device))
+        action = np.zeros((1, 10, 3), np.float32)
+        sim.step(wp.array(action, dtype=float, device=sim.device))
+        pelvis_z = sim.state_0.joint_q.numpy().reshape(-1)[2]
+        self.assertLess(pelvis_z, 3.0)
+        self.assertGreater(pelvis_z, 2.9)

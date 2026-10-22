@@ -50,7 +50,7 @@ from .body import JOINT_COUNT, JOINT_NAMES, STATE_DIM, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
-from .reference import SHOE_DATASET, load_body_params, load_shoe, load_subject
+from .reference import CONTACT_THRESHOLD_N, SHOE_DATASET, load_body_params, load_shoe, load_subject
 from .sim import RunnerSim, RunnerSimConfig, Shoe, load_shoes
 
 __all__ = [
@@ -86,7 +86,7 @@ class Stage0Config:
     """Largest lead of the equilibrium angle over the reference posture, ``M_ref / K`` [rad]."""
     failure_joint_speed_rad_s: float = 100.0
     """A step fails when a joint speed exceeds this; running stays below about 30 rad/s [rad/s]."""
-    touchdown_force_n: float = 50.0
+    touchdown_force_n: float = CONTACT_THRESHOLD_N
     """Vertical ground reaction that counts as foot contact [N]."""
 
 
