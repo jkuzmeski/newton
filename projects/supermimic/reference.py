@@ -534,7 +534,7 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
     """Fit one trial and split its plate signals by foot.
 
     Positions are in the treadmill frame, whose belt runs backward along -x,
-    with the origin on the plate surface below the mean mid-hip position. Foot index 0 is
+    with the origin on the belt surface below the mean mid-hip position. Foot index 0 is
     right and 1 is left. Off the plate a foot has zero force and free moment
     and a NaN COP.
 
@@ -615,9 +615,9 @@ def trial_reference(trial_root: Path, params: BodyParams) -> dict[str, np.ndarra
         contacts.append((a, b, int(np.argmin(distance)), distance))
         analog_foot[a:b] = contacts[-1][2]
 
-    # The reference stays in the treadmill frame, centered on the mean mid-hip position, with the
-    # plate surface at z = 0.
-    center = np.array((*joint_q[:, :2].mean(axis=0), plate_z))
+    # The reference stays in the treadmill frame, centered on the mean mid-hip position. The lab
+    # z = 0 is the belt surface; the plate surface lies below it.
+    center = np.array((*joint_q[:, :2].mean(axis=0), 0.0))
     joint_q[:, :3] -= center
     cop -= center
     midstance_speed = []
