@@ -27,6 +27,7 @@ pattern.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -102,6 +103,15 @@ def push_code(commit: str) -> str:
     return sha
 
 
+def digest(folder: Path) -> str:
+    """Return the SHA-256 of the relative paths and contents of the files in ``folder``."""
+    sha = hashlib.sha256()
+    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        sha.update(path.relative_to(folder).as_posix().encode())
+        sha.update(path.read_bytes())
+    return sha.hexdigest()
+
+
 def stage(name: str, source: Path) -> None:
     """Copy ``source`` once to ``data/<name>``; an existing input with the same name is kept as is."""
     target = LOCAL_ROOT / "data" / name
@@ -113,8 +123,13 @@ def stage(name: str, source: Path) -> None:
     partial.rename(target)
 
 
-def submit(name: str, commit: str, tasks: list[dict], data: dict[str, Path], time_limit: str) -> dict:
-    """Push the code and inputs, write the task list and queue the array; return the submission record."""
+def submit(
+    name: str, commit: str, tasks: list[dict], data: dict[str, Path], time_limit: str, after: str | None = None
+) -> dict:
+    """Push the code and inputs, write the task list and queue the array; return the submission record.
+
+    The array waits until every task of job ``after`` succeeded, if given.
+    """
     if not 0 < len(tasks) <= MAX_GPUS:
         raise SystemExit(f"{len(tasks)} tasks; at most {MAX_GPUS} GPUs without asking the user")
     sha = push_code(commit)
@@ -126,8 +141,10 @@ def submit(name: str, commit: str, tasks: list[dict], data: dict[str, Path], tim
     run_dir = f"{REMOTE_ROOT}/runs/{name}/{run}"
     log = f"{REMOTE_ROOT}/logs/{name}-%A_%a.out"
     exports = f"ALL,GRID_ROOT={REMOTE_ROOT},GRID_CODE_DIR={REMOTE_ROOT}/code/{sha[:12]},RUN_DIR={run_dir}"
+    dependency = f"--dependency=afterok:{after} --kill-on-invalid-dep=yes " if after else ""
     output = ssh(
         f"cd {REMOTE_ROOT} && sbatch --parsable --job-name=sm-{name} --array=0-{len(tasks) - 1} --time={time_limit} "
+        f"{dependency}"
         f"--output={log} --error={log} --export={exports} {REMOTE_ROOT}/code/{sha[:12]}/{TASK_SCRIPT}"
     )
     job = output.strip().split(";")[0]
@@ -140,6 +157,7 @@ def submit(name: str, commit: str, tasks: list[dict], data: dict[str, Path], tim
         "run_dir": run_dir,
         "log": log,
         "tasks": [t["name"] for t in tasks],
+        "after": after,
     }
     with (LOCAL_ROOT / "submissions.jsonl").open("a") as file:
         file.write(json.dumps(record) + "\n")
@@ -157,6 +175,7 @@ def main() -> None:
     sub.add_argument("--tasks", type=Path, required=True, help='JSON list of {"name": ..., "args": [...]}.')
     sub.add_argument("--data", action="append", default=[], help="NAME=FOLDER input staged to data/NAME.")
     sub.add_argument("--time", default="01:00:00")
+    sub.add_argument("--after", help="Job id whose tasks must all succeed first.")
     args = parser.parse_args()
     if args.command == "setup":
         setup()
@@ -165,7 +184,7 @@ def main() -> None:
     else:
         data = {key: Path(value) for key, value in (item.split("=", 1) for item in args.data)}
         tasks = json.loads(args.tasks.read_text())
-        print(json.dumps(submit(args.name, args.commit, tasks, data, args.time)))
+        print(json.dumps(submit(args.name, args.commit, tasks, data, args.time, args.after)))
 
 
 if __name__ == "__main__":

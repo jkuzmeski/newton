@@ -38,21 +38,13 @@ from projects.digital_instron_v2.sweep_fit import DEFAULT_LAST
 from projects.digital_instron_v2.sweep_split import process_sweep
 from projects.digital_shoe.artifact import load_artifact
 
-from .launch import LOCAL_ROOT, REMOTE_ROOT, submit
+from .launch import LOCAL_ROOT, REMOTE_ROOT, digest, submit
 
 DIGITAL_INSTRON = Path("DigitalInstron")
 SWEEPS = DIGITAL_INSTRON / "FoamSweep" / "processed"
 FITS = DIGITAL_INSTRON / "FoamSweep" / "fit"
 """Earlier ``material_fit.json`` files; every new fit starts from each of them."""
 FIT_ARGS = ("--substeps", "8", "--evaluations", "80", "--random-starts", "6")
-
-
-def _digest(folder: Path) -> str:
-    sha = hashlib.sha256()
-    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
-        sha.update(path.relative_to(folder).as_posix().encode())
-        sha.update(path.read_bytes())
-    return sha.hexdigest()
 
 
 def submit_fit(slug: str, tracking_csv: Path, label: str, commit: str, seeds: int, time_limit: str) -> dict:
@@ -67,7 +59,7 @@ def submit_fit(slug: str, tracking_csv: Path, label: str, commit: str, seeds: in
         for k, path in enumerate(starts):
             (inputs / "starts").mkdir(exist_ok=True)
             shutil.copy(path, inputs / "starts" / f"{k}_{path.parent.name}.json")
-        name = f"shoe_{slug}_{_digest(inputs)[:8]}"
+        name = f"shoe_{slug}_{digest(inputs)[:8]}"
         root = f"{{data}}/{name}"
         start_args = [
             a for p in sorted((inputs / "starts").glob("*.json")) for a in ("--start", f"{root}/starts/{p.name}")
