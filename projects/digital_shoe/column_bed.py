@@ -511,8 +511,6 @@ def _column_bed_step(
     carried_sum = float(0.0)
     moment_sum = wp.vec2(0.0)
     largest = float(0.0)
-    # Largest lever of a carried column, for the implicit carrier.
-    reach = float(0.0)
     # Load on the carrier from the columns outside its implicit rows.
     free_load = wp.spatial_vector()
     for slot in range(lane, count, _BLOCK):
@@ -633,8 +631,6 @@ def _column_bed_step(
         torque_sum += wp.cross(point - com, force)
         if bed.stiffness[i] == 0.0:
             free_load += _row(wp.vec3(0.0, 0.0, 1.0), point - com) * carried
-        if carried != 0.0:
-            reach = wp.max(reach, wp.length(wp.vec2(point[0] - com[0], point[1] - com[1])))
         normal_sum += reaction
         carried_sum += carried
         moment_sum += wp.vec2(point[0], point[1]) * reaction
@@ -645,7 +641,6 @@ def _column_bed_step(
     moment_total = wp.vec2(_block_sum(moment_sum[0]), _block_sum(moment_sum[1]))
     largest_total = wp.tile_max(wp.tile(largest))[0]
     if bed.implicit != 0:
-        reach_total = wp.tile_max(wp.tile(reach))[0]
         # Linearized backward Euler of the carrier on the bed: the column forces
         # are taken at the end-of-step twist u of the carrier with the effective
         # mass of its articulation. Every lane solves the same 6x6 system, so
@@ -755,38 +750,28 @@ def _column_bed_step(
                     bed.tangential_load[i] = friction
             if _block_sum(dropped) == 0.0:
                 break
-        # Friction at the end-of-step speed of each bottom.
-        tangential_force = wp.vec3(0.0)
-        tangential_torque = wp.vec3(0.0)
+        # Friction at the end-of-step speed of each bottom, for the stick flag and its report.
         for slot in range(lane, count, _BLOCK):
             i = base + bed.order[slot]
             r = bed.lever[i]
             traction, sticking = _coulomb(wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r)), bed.reaction[i], p.mu)
             bed.tangential_load[i] = traction
             bed.stuck[i] = sticking
-            f = wp.vec3(traction[0], traction[1], 0.0)
-            tangential_force += f
-            tangential_torque += wp.cross(r, f)
-        tangential_force = wp.vec3(_block_sum(tangential_force[0]), _block_sum(tangential_force[1]), 0.0)
-        tangential_torque = wp.vec3(
-            _block_sum(tangential_torque[0]), _block_sum(tangential_torque[1]), _block_sum(tangential_torque[2])
-        )
-        # The load is the carrier's momentum change M (u - u0) / dt, not the
-        # difference w - A u of two terms that are large on the wall.
+        # The wrench is the carrier's momentum change M (u - u0) / dt, not the
+        # difference w - A u of two terms that are large on the wall. Applying
+        # all six components keeps the work the carrier gets equal to what the
+        # solve took out of it: a force or torque rebuilt from the end-of-step
+        # friction no longer matches the friction the solve used and adds work.
         change = mass * (u - u0) / wp.float64(dt)
         lift = wp.max(wp.float32(change[2]), 0.0)
-        # Pushing columns cannot make a moment beyond their reach.
-        moment = wp.vec2(wp.float32(change[3]) - tangential_torque[0], wp.float32(change[4]) - tangential_torque[1])
-        if wp.length(moment) > lift * reach_total:
-            moment = moment * (lift * reach_total / wp.length(moment))
         # The ground reaction and its center follow the carried load.
         if carried_total > 0.0:
             ratio = lift / carried_total
             normal_total = normal_total * ratio
             moment_total = moment_total * ratio
         carried_total = lift
-        force_total = wp.vec3(tangential_force[0], tangential_force[1], lift)
-        torque_total = wp.vec3(moment[0], moment[1], 0.0) + tangential_torque
+        force_total = wp.vec3(wp.float32(change[0]), wp.float32(change[1]), lift)
+        torque_total = wp.vec3(wp.float32(change[3]), wp.float32(change[4]), wp.float32(change[5]))
     if lane == 0:
         body_f[body] = wp.spatial_vector(force_total, torque_total)
         bed.normal_force[w] = normal_total
