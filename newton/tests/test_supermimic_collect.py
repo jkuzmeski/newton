@@ -36,7 +36,7 @@ class TestSupermimicCollect(unittest.TestCase):
                 action,
                 torch.zeros((2, 9), device="cuda"),
                 aux,
-                torch.zeros(2, dtype=torch.int64, device="cuda"),
+                torch.full((2,), 800 + t, dtype=torch.int64, device="cuda"),
                 reset,
                 done,
             )
@@ -67,7 +67,9 @@ class TestSupermimicCollect(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
             self._buffer().save(folder / "buffer.npz")
-            (folder / "meta.json").write_text(json.dumps({"dt_s": 0.01, "shoe": ["a", "b"]}))
+            (folder / "meta.json").write_text(
+                json.dumps({"dt_s": 0.01, "shoe": ["a", "b"], "reference_frames_per_window": 400})
+            )
             episode = read_episode(folder, 0, 1)
         state = np.arange(STATE_DIM, dtype=np.float32)
         self.assertEqual(episode["joint_q"].shape, (3, 17))
@@ -78,6 +80,7 @@ class TestSupermimicCollect(unittest.TestCase):
         np.testing.assert_allclose(episode["joint_power"][0], (np.arange(22, 32) + np.arange(32, 42)) / 0.01)
         np.testing.assert_array_equal(episode["action"][0, :, 1], np.arange(1, 30, 3))
         self.assertEqual((episode["dt"], episode["shoe"]), (0.01, "a"))
+        self.assertEqual((episode["reference_window"], episode["reference_frame"]), (2, 3))
 
 
 if __name__ == "__main__":

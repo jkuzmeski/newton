@@ -73,12 +73,14 @@ class Stage0Config:
     """Vertical ground reaction that counts as foot contact [N]."""
 
 
-def _state(sim: RunnerSim) -> torch.Tensor:
+def sim_state(sim: RunnerSim) -> torch.Tensor:
+    """Return the state rows [W, :data:`STATE_DIM`] of ``sim`` after its last step or reset."""
     q, qd = wp.to_torch(sim.joint_q), wp.to_torch(sim.joint_qd)
     return torch.cat((q[:, :7], qd[:, :6], q[:, 7:], qd[:, 6:]), dim=1)
 
 
-def _aux(sim: RunnerSim) -> torch.Tensor:
+def sim_aux(sim: RunnerSim) -> torch.Tensor:
+    """Return the aux rows [W, :data:`AUX_DIM`] of ``sim``'s last step."""
     w = sim.world_count
     parts = (sim.grf, sim.cop, sim.joint_torque, sim.joint_work_pos, sim.joint_work_neg)
     return torch.cat([wp.to_torch(a).reshape(w, -1) for a in parts], dim=1)
@@ -169,11 +171,11 @@ def collect(
                 stiffness[reset] = _log_uniform(*config.stiffness_range, (n, JOINT_COUNT), generator, device)
                 damping[reset] = _log_uniform(*config.damping_range, (n, JOINT_COUNT), generator, device)
                 noise[reset] = config.noise_std_rad * torch.randn((n, JOINT_COUNT), generator=generator, device=device)
-            state = _state(sim)
+            state = sim_state(sim)
             done = state[:, 2] < config.fall_height_m
             action = torch.stack((ref_q[window, frame, 7:] + noise, stiffness, damping), dim=2)
             sim.step(wp.from_torch(action.contiguous()))
-            aux, after = _aux(sim), _state(sim)
+            aux, after = sim_aux(sim), sim_state(sim)
             failed = ~(
                 torch.isfinite(aux).all(1) & (after[:, -JOINT_COUNT:].abs().amax(1) < config.failure_joint_speed_rad_s)
             )
@@ -252,12 +254,13 @@ def read_episode(folder: str | Path, world: int, episode: int) -> dict:
     Returns:
         ``joint_q`` [T, 17], ``joint_qd`` [T, 16], ``grf`` and ``cop`` [T, 2, 3],
         ``joint_torque`` and step-mean ``joint_power`` [T, 10], ``action`` [T, 10, 3],
-        ``dt`` and ``shoe``.
+        ``dt``, ``shoe``, and the reference window and frame of the first row,
+        ``reference_window`` and ``reference_frame``.
     """
     folder = Path(folder)
     meta = json.loads((folder / "meta.json").read_text())
     with np.load(folder / "buffer.npz") as f:
-        state, action, aux, reset = (f[k][world] for k in ("state", "action", "aux", "reset"))
+        state, action, aux, reset, reference = (f[k][world] for k in ("state", "action", "aux", "reset", "reference"))
     bounds = [*np.flatnonzero(reset), len(reset)]
     rows = slice(bounds[episode], bounds[episode + 1])
     state, action, aux = state[rows], action[rows], aux[rows]
@@ -272,6 +275,8 @@ def read_episode(folder: str | Path, world: int, episode: int) -> dict:
         "action": action,
         "dt": meta["dt_s"],
         "shoe": meta["shoe"][world],
+        "reference_window": int(reference[rows.start]) // meta["reference_frames_per_window"],
+        "reference_frame": int(reference[rows.start]) % meta["reference_frames_per_window"],
     }
 
 
