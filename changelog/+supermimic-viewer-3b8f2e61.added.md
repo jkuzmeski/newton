@@ -1,0 +1,1 @@
+Add SuperMimic replay of F01 reference windows and collected rollouts in the Newton viewer with the shoe columns and ground reaction forces, GIF and MP4 recording, and plots of joint angles, ground reaction forces and stiffness and damping commands against the reference.
