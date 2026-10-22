@@ -109,7 +109,7 @@ class WorldModel(nn.Module):
         xi_dim: int,
         aux_dim: int,
         *,
-        history_length: int = 0,
+        history_length: int = 4,
         hidden: tuple[int, ...] = (2048, 2048, 2048),
     ):
         super().__init__()
