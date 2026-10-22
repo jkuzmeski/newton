@@ -3,12 +3,30 @@
 
 import importlib.util
 import unittest
+from pathlib import Path
 
 import numpy as np
+import warp as wp
+
+from projects.supermimic.body import BodyParams
+from projects.supermimic.sim import RunnerSim, RunnerSimConfig, load_shoes
 
 _HAS_TORCH = importlib.util.find_spec("torch") is not None
 if _HAS_TORCH:
-    from projects.supermimic.verify import first_flight_starts, stance_metrics
+    from projects.supermimic.verify import SubstepWork, first_flight_starts, mechanical_energy, stance_metrics
+
+# The grid mounts locally as Z:.
+DATASET = next(
+    (
+        p
+        for p in (
+            Path("Z:/newton_grid/data/dataset_3d_column_bed_v3"),
+            Path.home() / "newton_grid/data/dataset_3d_column_bed_v3",
+        )
+        if p.exists()
+    ),
+    None,
+)
 
 
 @unittest.skipUnless(_HAS_TORCH, "requires torch")
@@ -40,3 +58,38 @@ class TestSupermimicVerify(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+@unittest.skipUnless(
+    _HAS_TORCH and wp.is_cuda_available() and DATASET, "requires torch, CUDA and the column-bed dataset"
+)
+class TestSupermimicVerifyWork(unittest.TestCase):
+    def test_substep_work_balances_a_flight_into_a_joint_limit(self):
+        """Balance a flight's mechanical energy with the joint and joint-limit work while a knee hits its limit."""
+        sim = RunnerSim(BodyParams(), load_shoes(DATASET)[:1], [0], config=RunnerSimConfig(belt_speed_m_s=0.0))
+        work = SubstepWork(sim)
+        lower = sim.model.joint_limit_lower.numpy()[6:]
+        q = np.zeros((1, 17), np.float32)
+        q[0, 2] = 3.0
+        q[0, 6] = 1.0
+        q[0, 10] = lower[3] + 0.05
+        qd = np.zeros((1, 16), np.float32)
+        qd[0, 9] = -10.0
+        action = np.zeros((1, 10, 3), np.float32)
+        action[0, :, 0] = q[0, 7:]
+        action[0, :, 1] = 10.0
+        action[0, :, 2] = 1.0
+        sim.reset(wp.ones(1, dtype=bool), wp.array(q, dtype=float), wp.array(qd, dtype=float))
+        action = wp.array(action, dtype=float)
+
+        energy = [mechanical_energy(sim).item()]
+        joint_work, constraint_work = [], []
+        for _ in range(10):
+            sim.step(action)
+            energy.append(mechanical_energy(sim).item())
+            joint_work.append(work.joint_work.numpy()[0])
+            constraint_work.append(work.constraint_work.numpy()[0])
+
+        self.assertEqual(np.abs(sim.grf.numpy()).max(), 0.0)
+        self.assertGreater(np.abs(constraint_work).sum(), 1.0)
+        np.testing.assert_allclose(np.diff(energy), np.add(joint_work, constraint_work), atol=0.1)

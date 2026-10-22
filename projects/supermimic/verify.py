@@ -22,7 +22,8 @@ The report compares the rollouts with F01:
   from the unfiltered 1 kHz plate signals of every trial;
 - the commanded stiffness and damping against the human bounds of :mod:`.policy`;
 - the work of the ground on the body per stance, the change of mechanical energy
-  minus the joint work, which a passive bed keeps negative; its error is the
+  minus the joint work and the joint-limit work (:class:`SubstepWork`), which a
+  passive bed keeps negative; its error is the
   same balance over flight steps, where it should vanish;
 - positive and negative joint work as mean power, and stance peak moments and
   quasi-stiffness (:func:`~projects.supermimic.analysis.joint_summary`), against
@@ -65,6 +66,7 @@ from .world_model import WorldModel
 
 __all__ = [
     "Policy",
+    "SubstepWork",
     "actor_policy",
     "f01_summary",
     "first_flight_starts",
@@ -142,6 +144,70 @@ def mechanical_energy(sim: RunnerSim) -> torch.Tensor:
     return energy.reshape(sim.world_count, -1).sum(1)
 
 
+@wp.kernel
+def _add_substep_work(
+    dt: float,
+    dof_map: wp.array2d[wp.int32],
+    joint_f: wp.array[float],
+    qd_start: wp.array[float],
+    qd_end: wp.array[float],
+    constraint: wp.array2d[float],
+    joint_work: wp.array[float],
+    constraint_work: wp.array[float],
+):
+    w, d = wp.tid()
+    dof = dof_map[w, d]
+    qd = 0.5 * (qd_start[dof] + qd_end[dof])
+    wp.atomic_add(joint_work, w, joint_f[dof] * qd * dt)
+    wp.atomic_add(constraint_work, w, constraint[w, d] * qd * dt)
+
+
+class SubstepWork:
+    """Joint and MuJoCo constraint work of each world over one :meth:`RunnerSim.step`.
+
+    Both are summed over the substeps with the mid-substep joint velocity:
+    ``joint_work`` [J] from the applied joint torques and ``constraint_work`` [J]
+    from ``qfrc_constraint``, the joint-limit forces. The sim's own
+    ``joint_work_pos``/``joint_work_neg`` use the start-of-substep velocity, which
+    leaves an energy-balance error of about 1 J per step.
+
+    It adds a kernel after every solver substep and captures the sim's step graph
+    again, so it must be created once per sim.
+
+    Args:
+        sim: Sim to record.
+    """
+
+    def __init__(self, sim: RunnerSim):
+        solver, device = sim.solver, sim.device
+        self.joint_work = wp.zeros(sim.world_count, dtype=float, device=device)
+        self.constraint_work = wp.zeros(sim.world_count, dtype=float, device=device)
+        solver_step = solver.step
+
+        def step(state_in, state_out, control, contacts, dt):
+            solver_step(state_in, state_out, control, contacts, dt)
+            wp.launch(
+                _add_substep_work,
+                dim=solver.mjc_dof_to_newton_dof.shape,
+                inputs=[
+                    dt,
+                    solver.mjc_dof_to_newton_dof,
+                    control.joint_f,
+                    state_in.joint_qd,
+                    state_out.joint_qd,
+                    solver.mjw_data.qfrc_constraint,
+                ],
+                outputs=[self.joint_work, self.constraint_work],
+            )
+
+        solver.step = step
+        with wp.ScopedCapture(device=device) as capture:
+            self.joint_work.zero_()
+            self.constraint_work.zero_()
+            sim._simulate()
+        sim._graph = capture.graph
+
+
 def actor_policy(task: TrackerTask, weights: dict[str, torch.Tensor]) -> Policy:
     """Return the deterministic actor of a :mod:`.tracker` checkpoint's ``actor`` state dict.
 
@@ -199,6 +265,7 @@ def rollout(
     joint_qd: torch.Tensor,
     starts: torch.Tensor,
     policy: Policy,
+    work: SubstepWork,
 ) -> dict[str, np.ndarray]:
     """Run ``policy`` once from every start, one world per start, and return the steps.
 
@@ -209,12 +276,14 @@ def rollout(
         joint_qd: Reference velocities, shape [windows, frames, 16].
         starts: Episode starts as (window, frame) rows, shape [world_count, 2].
         policy: Controller.
+        work: Work recorder of ``sim``.
 
     Returns:
         Arrays over [world, step]: ``state`` after the step, ``k`` the flat reference
         frame of that state, ``action``, ``grf`` (step mean) and ``grf_fine``
         [W, T, fine, 2, 3], ``torque``, ``work_pos`` and ``work_neg`` [W, T, 10],
-        ``energy`` (:func:`mechanical_energy` after the step), and per world
+        ``energy`` (:func:`mechanical_energy` after the step), ``joint_work`` and
+        ``constraint_work`` (:class:`SubstepWork`) [W, T], and per world
         ``start_energy``, ``steps`` (recorded steps) and ``outcome`` (index into :data:`OUTCOMES`).
     """
     w, device = sim.world_count, joint_q.device
@@ -231,6 +300,8 @@ def rollout(
         "work_pos": torch.zeros((steps, w, JOINT_COUNT), device=device),
         "work_neg": torch.zeros((steps, w, JOINT_COUNT), device=device),
         "energy": torch.zeros((steps, w), device=device),
+        "joint_work": torch.zeros((steps, w), device=device),
+        "constraint_work": torch.zeros((steps, w), device=device),
     }
     count = torch.zeros(w, dtype=torch.int64, device=device)
     outcome = torch.full((w,), -1, dtype=torch.int64, device=device)
@@ -259,6 +330,8 @@ def rollout(
                 ("work_pos", wp.to_torch(sim.joint_work_pos)),
                 ("work_neg", wp.to_torch(sim.joint_work_neg)),
                 ("energy", mechanical_energy(sim)),
+                ("joint_work", wp.to_torch(work.joint_work)),
+                ("constraint_work", wp.to_torch(work.constraint_work)),
             ):
                 record[name][t] = value
             failed = ~(
@@ -405,7 +478,7 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
     q_error = np.degrees(state[:, 13 : 13 + JOINT_COUNT] - ref[:, 13 : 13 + JOINT_COUNT])
 
     records, stance_counts, joint_rows, joint_stances = [], [], [], ([], [])
-    bed_work, flight_work, step_max = [], [], []
+    bed_work, flight_work, step_max, constraint_work = [], [], [], []
     offset = 0
     for i in range(w):
         n = result["steps"][i]
@@ -417,9 +490,10 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
             )
         joint_rows.append((result["state"][i, :n, 13 : 13 + JOINT_COUNT], result["torque"][i, :n]))
         offset += n
-        # Work of the ground on the body per step: the energy change minus the joint work.
+        # Work of the ground on the body per step: the energy change minus the joint and joint-limit work.
         energy = np.concatenate(([result["start_energy"][i]], result["energy"][i, :n]))
-        ground = np.diff(energy) - (result["work_pos"][i, :n] + result["work_neg"][i, :n]).sum(-1)
+        ground = np.diff(energy) - result["joint_work"][i, :n] - result["constraint_work"][i, :n]
+        constraint_work.append(result["constraint_work"][i, :n].sum())
         flight_work.extend(ground[(result["grf"][i, :n, :, 2] == 0.0).all(-1)])
         step_max.append(ground.max(initial=0.0))
         for side in range(2):
@@ -475,6 +549,7 @@ def rollout_summary(result: dict, task: TrackerTask, dt: float, mass: float) -> 
             else None,
             "stances_adding_energy": int((np.asarray(bed_work) > BED_WORK_TOLERANCE_J).sum()),
             "step_max_j": float(np.max(step_max)),
+            "joint_limit_episode_percentiles_0_50_95_100_j": np.percentile(constraint_work, (0, 50, 95, 100)).tolist(),
             "flight_step_abs_percentiles_50_95_100_j": np.percentile(np.abs(flight_work), (50, 95, 100)).tolist()
             if flight_work
             else None,
@@ -509,6 +584,8 @@ def markdown(report: dict) -> str:
         f"of {sim['bed_work']['stance_j']['n']} |",
         f"| bed work per stance [J] | {_cell(sim['bed_work']['stance_j'], 1)} |",
         f"| largest ground work in one step [J] | {sim['bed_work']['step_max_j']:.1f} |",
+        f"| joint-limit work per episode p0/p50/p95/max [J] | "
+        f"{'/'.join(f'{e:.1f}' for e in sim['bed_work']['joint_limit_episode_percentiles_0_50_95_100_j'])} |",
         f"| flight-step energy error p50/p95/max [J] | "
         f"{'/'.join(f'{e:.2f}' for e in sim['bed_work']['flight_step_abs_percentiles_50_95_100_j'] or [])} |",
         "",
@@ -599,6 +676,7 @@ def main(argv: list[str] | None = None) -> None:
         starts = first_flight_starts(np.concatenate([episode_starts(ref, s, "cpu").numpy() for s in SPLITS[split]]))
         starts = torch.as_tensor(starts, device=device)
         sim, _ = fixed_shoe_sim(body, shoe, len(starts), float(ref["belt_speed_m_s"]))
+        work = SubstepWork(sim)
         stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
         runs = list(checkpoints.items()) + ([("stage0", None)] if args.stage0 else [])
         for name, checkpoint in runs:
@@ -607,7 +685,7 @@ def main(argv: list[str] | None = None) -> None:
                 world_model, reference, moment, stride, body, sim.config.control_dt_s, TrackerConfig(goal_frames)
             )
             policy = actor_policy(task, checkpoint["actor"]) if checkpoint else stage0_policy(task, contact)
-            result = rollout(sim, task, joint_q, joint_qd, starts, policy)
+            result = rollout(sim, task, joint_q, joint_qd, starts, policy, work)
             report = {
                 "policy": paths.get(name, "stage-0 law"),
                 "reference": str(args.reference),
