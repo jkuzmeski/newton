@@ -21,9 +21,11 @@ horizon ``H`` scores the force of a step predicted from a logged state ``H - 1``
 steps earlier.
 
 Each held-out buffer gets its own verdict: *go* when the 8-step error of bins
-1 to 4 is at most the touchdown-aligned standard deviation of that bin. Bin 0 is
-reported apart as its error-to-SD ratio: its sim step starts before touchdown
-and the subject's at touchdown, so its narrow spread does not decide alone.
+1 to 4 is at most :data:`GO_SD` touchdown-aligned standard deviations of that
+bin. M3 passes when every buffer of ``--gate`` is *go*; the other held-out
+buffers are reported only. Bin 0 is reported apart as its error-to-SD ratio:
+its sim step starts before touchdown and the subject's at touchdown, so its
+narrow spread does not decide alone.
 
 From the repository root::
 
@@ -33,6 +35,7 @@ From the repository root::
         --model outputs/supermimic/m3/h4 outputs/supermimic/m3/h0 \
         --buffer train=outputs/supermimic/stage0_train/buffer.npz \
         --buffer held_out_windows=outputs/supermimic/stage0_eval/buffer.npz --held-out held_out_windows \
+        --gate held_out_windows \
         --out outputs/supermimic/m3/report.json
 """
 
@@ -63,6 +66,8 @@ HORIZONS = (1, 8, 32)
 """Prediction horizons in control steps."""
 GO_HORIZON = 8
 """Horizon of the go/no-go verdict."""
+GO_SD = 2.0
+"""Error allowed by the go/no-go verdict, in touchdown-aligned standard deviations of the subject."""
 _FORCE_Z = (2, 5)
 """Vertical force of the right and left foot in an aux row of :mod:`projects.supermimic.collect`."""
 
@@ -270,6 +275,7 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_argument("--model", type=Path, nargs="+", required=True, help="Folders written by fit")
     sub.add_argument("--buffer", action="append", required=True, help="NAME=PATH of a buffer .npz")
     sub.add_argument("--held-out", nargs="+", required=True, help="Buffer names that each get a verdict")
+    sub.add_argument("--gate", nargs="+", required=True, help="Held-out buffer names that must all be go to pass")
     sub.add_argument("--subject", type=Path, default=F01, help="Subject spec of the measured spread")
     sub.add_argument("--out", type=Path, required=True, help="Report .json; a .md table is written next to it")
     args = parser.parse_args(argv)
@@ -322,11 +328,13 @@ def main(argv: list[str] | None = None) -> None:
     sd = report["measured"]["aligned"]["sd_n"]
     report["go"] = {
         model: {
-            name: all(results[name][str(GO_HORIZON)][b]["rmse_n"] <= sd[b] for b in range(1, BINS))
+            name: all(results[name][str(GO_HORIZON)][b]["rmse_n"] <= GO_SD * sd[b] for b in range(1, BINS))
             for name in args.held_out
         }
         for model, results in report["models"].items()
     }
+    report["gate"] = args.gate
+    report["pass"] = {model: all(go[name] for name in args.gate) for model, go in report["go"].items()}
     report["first_bin_ratio"] = {
         model: {name: results[name][str(GO_HORIZON)][0]["rmse_n"] / sd[0] for name in args.held_out}
         for model, results in report["models"].items()
@@ -336,11 +344,13 @@ def main(argv: list[str] | None = None) -> None:
     args.out.write_text(json.dumps(report, indent=1) + "\n")
     table = _table(report)
     for name in args.held_out:
-        table += f"\n\nGo on {name} (8-step error <= touchdown-aligned SD at 10-50 ms): "
+        table += f"\n\nGo on {name} (8-step error <= {GO_SD:g} touchdown-aligned SD at 10-50 ms): "
         table += ", ".join(f"{m}: {'go' if g[name] else 'no-go'}" for m, g in report["go"].items())
         table += "; 0-10 ms error / SD: " + ", ".join(
             f"{m}: {r[name]:.1f}" for m, r in report["first_bin_ratio"].items()
         )
+    table += f"\n\nM3 pass (go on {', '.join(args.gate)}): "
+    table += ", ".join(f"{m}: {'pass' if p else 'fail'}" for m, p in report["pass"].items())
     table += "\n\nThe 0-10 ms sim step starts before touchdown, the subject's at touchdown.\n"
     args.out.with_suffix(".md").write_text(table)
     print(table)

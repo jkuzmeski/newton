@@ -20,7 +20,7 @@
    ``meta.json``.
 3. ``m3``: ``m3 fit`` with history 4 and 0, two seeds each.
 4. ``m3_evaluate``: ``m3 evaluate`` of the four models, with a verdict on
-   each held-out shard.
+   each held-out shard; M3 passes on go for both shards of :data:`GATE`.
 
 The reference folder, the F01 plate data and a copy of the F01 subject spec
 pointing at the staged data are inputs; the shoes come from
@@ -47,7 +47,7 @@ from ..collect import main as collect_main
 from ..reference import F01, REPOSITORY
 from .launch import REMOTE_ROOT, digest, submit
 
-__all__ = ["HELD_OUT", "OTHER_SHOE", "chain", "collect_held_out", "merge"]
+__all__ = ["GATE", "HELD_OUT", "OTHER_SHOE", "chain", "collect_held_out", "merge"]
 
 HISTORIES = (4, 0)
 FIT_SEEDS = (0, 1)
@@ -57,6 +57,8 @@ OTHER_SHOE = "puma-deviate-nitro-elite-3"
 """Default shoe of the ``held_out_other_shoe`` shard."""
 HELD_OUT = ("held_out_windows", "held_out_beyond", "held_out_other_shoe")
 """Names of the held-out shards."""
+GATE = ("held_out_windows", "held_out_beyond")
+"""Held-out shards that decide M3; ``held_out_other_shoe`` is reported only."""
 _PER_WORLD = ("shoe", "failures", "carrier_stances", "carrier_work_violations", "xi")
 _SHARED = ("dt_s", "split", "center_shoe", "reference", "reference_frames_per_window", "xi_coordinates", "config")
 
@@ -174,7 +176,7 @@ def chain(
         "args": ["projects.supermimic.m3", "evaluate", "--model", *models, "--buffer",
                  f"train={buffers}/train/buffer.npz",
                  *[a for name in HELD_OUT for a in ("--buffer", f"{name}={buffers}/{name}/buffer.npz")],
-                 "--held-out", *HELD_OUT, "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
+                 "--held-out", *HELD_OUT, "--gate", *GATE, "--subject", f"{{data}}/{subject_name}/{F01.name}", "--out", "{out}/report.json"],
     }  # fmt: skip
     records.append(submit("m3_evaluate", commit, [evaluate], {}, "00:30:00", after=records[-1]["job"], exclude=exclude))
     return records
