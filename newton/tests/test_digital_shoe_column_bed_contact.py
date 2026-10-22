@@ -192,6 +192,39 @@ class TestColumnBedPitchedSole(unittest.TestCase):
                     np.testing.assert_allclose(friction, -mu * normal, rtol=1e-3)
                     self.assertGreater(velocity[-1, 0] - velocity[0, 0], 0.5 * 0.05 * (ratio - 1.0) * mu * 9.81)
 
+    def test_sliding_friction_opposes_the_slip_of_each_bottom(self):
+        """A settled block sliding and spinning over the bed gets friction mu R against the slip of every bottom."""
+        mu, dt = 0.8, 1.25e-4
+        bed, mobility, anchors, com, mass, inertia = self._block_on_bed(mu, normal_damping=10.0)
+        mobility.assign(np.diag([1.0 / mass] * 3 + list(1.0 / np.diag(inertia)))[None].astype(np.float32))
+        center = np.array([0.0, 0.0, com[2]])
+        state = SimpleNamespace(
+            body_q=wp.array([[*(center - com), 0.0, 0.0, 0.0, 1.0]], dtype=wp.transform),
+            body_qd=wp.zeros(1, dtype=wp.spatial_vector),
+            body_f=wp.zeros(1, dtype=wp.spatial_vector),
+        )
+        speed_z = 0.0
+        for _ in range(3200):
+            state.body_q.assign([[*(center - com), 0.0, 0.0, 0.0, 1.0]])
+            state.body_qd.assign([[0.0, 0.0, speed_z, 0.0, 0.0, 0.0]])
+            bed.apply(state)
+            speed_z += dt * (state.body_f.numpy()[0, 2] / mass - 9.81)
+            center[2] += dt * speed_z
+        state.body_q.assign([[*(center - com), 0.0, 0.0, 0.0, 1.0]])
+        slide, spin = np.array([0.3, 0.1]), 15.0
+        state.body_qd.assign([[*slide, speed_z, 0.0, 0.0, spin]])
+        bed.apply(state)
+        reaction = bed.bed.reaction.numpy()
+        friction = bed.bed.tangential_load.numpy()
+        lever = anchors[:, :2] - com[:2]
+        slip = slide + spin * np.stack((-lever[:, 1], lever[:, 0]), 1)
+        loaded = reaction > 0.0
+        self.assertGreater(loaded.sum(), 40)
+        self.assertGreater(np.linalg.norm(slip, axis=1)[loaded].min(), 0.05)
+        direction = -slip / np.linalg.norm(slip, axis=1, keepdims=True)
+        np.testing.assert_allclose(np.sum(friction * direction, 1)[loaded], mu * reaction[loaded], rtol=1.0e-2)
+        self.assertFalse(bed.bed.stuck.numpy().any())
+
 
 def _rimmed_bed(worlds: int, mobility=None):
     """Return a v3 FR3 bed of 40 x 16 columns, one per world, whose two thin outer rings have free tops."""

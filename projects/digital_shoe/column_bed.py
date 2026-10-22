@@ -70,6 +70,8 @@ __all__ = [
 ]
 
 _CARRIER_PASSES = wp.constant(4)
+_FRICTION_TURN = wp.constant(0.1)
+"""Change of a sliding bottom's friction, as a fraction of its capacity, that repeats the carrier solve."""
 _STICK_SPEED = wp.constant(1.0e-4)
 """Speed at which a sticking column's friction reaches its ground reaction [m/s].
 
@@ -680,28 +682,31 @@ def _column_bed_step(
                     bed.stiffness[i] = 0.0
                     dropped += 1.0
                 s_t = bed.tangential_stiffness[i]
+                slip = wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r))
+                capacity = wp.max(p.mu, 0.0) * bed.reaction[i]
                 if s_t > 0.0:
-                    trial = bed.tangential_load[i] - s_t * wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r))
-                    capacity = wp.max(p.mu, 0.0) * bed.reaction[i]
+                    trial = bed.tangential_load[i] - s_t * slip
                     if wp.length(trial) > capacity:
                         bed.tangential_stiffness[i] = 0.0
                         bed.tangential_load[i] = trial * (capacity / wp.length(trial))
                         dropped += 1.0
+                elif capacity > 0.0:
+                    # A sliding bottom follows the slip of this pass, and the
+                    # solve repeats while its friction still turns.
+                    friction, _sticking = _coulomb(slip, bed.reaction[i], p.mu)
+                    if wp.length(friction - bed.tangential_load[i]) > _FRICTION_TURN * capacity:
+                        dropped += 1.0
+                    bed.tangential_load[i] = friction
             if _block_sum(dropped) == 0.0:
                 break
-        # Friction at the end-of-step speed of each bottom; sliding bottoms keep
-        # the capacity force of the active set.
+        # Friction at the end-of-step speed of each bottom.
         tangential_force = wp.vec3(0.0)
         tangential_torque = wp.vec3(0.0)
         for slot in range(lane, count, _BLOCK):
             i = base + bed.order[slot]
             r = bed.lever[i]
-            traction = bed.tangential_load[i]
-            sticking = int(0)
-            if bed.tangential_stiffness[i] > 0.0:
-                traction, sticking = _coulomb(
-                    wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r)), bed.reaction[i], p.mu
-                )
+            traction, sticking = _coulomb(wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r)), bed.reaction[i], p.mu)
+            bed.tangential_load[i] = traction
             bed.stuck[i] = sticking
             f = wp.vec3(traction[0], traction[1], 0.0)
             tangential_force += f
