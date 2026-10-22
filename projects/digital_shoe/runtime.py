@@ -203,6 +203,17 @@ def material_shear_modulus(p: FoundationParams) -> wp.float32:
 
 
 @wp.func
+def shear_layer_modulus_between(below: wp.float32, at: wp.float32, rest: wp.float32, p: FoundationParams) -> wp.float32:
+    """Return :func:`shear_layer_modulus` from equilibrium pressures [Pa].
+
+    ``below`` and ``at`` are the pressures one strain step of 1e-3 below the
+    strain and at it, ``rest`` the pressure at that step from rest. Callers that
+    already hold these pressures skip evaluating the law again.
+    """
+    return material_shear_modulus(p) * (at - below) / rest
+
+
+@wp.func
 def shear_layer_modulus(strain: wp.float32, p: FoundationParams) -> wp.float32:
     """Return the shear modulus of a column's shear layer at a compressive strain [Pa].
 
@@ -213,9 +224,9 @@ def shear_layer_modulus(strain: wp.float32, p: FoundationParams) -> wp.float32:
     """
     h = wp.float32(1.0e-3)
     lo = wp.max(strain - h, 0.0)
-    rest = _hyperfoam_pressure(h, p) / h
-    tangent = (_hyperfoam_pressure(lo + h, p) - _hyperfoam_pressure(lo, p)) / h
-    return material_shear_modulus(p) * tangent / rest
+    return shear_layer_modulus_between(
+        _hyperfoam_pressure(lo, p), _hyperfoam_pressure(lo + h, p), _hyperfoam_pressure(h, p), p
+    )
 
 
 @wp.func

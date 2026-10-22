@@ -54,8 +54,10 @@ from .runtime import (
     FoundationConfig,
     FoundationParams,
     _hyperfoam_pressure,
+    material_shear_modulus,
     set_material_block,
     shear_layer_modulus,
+    shear_layer_modulus_between,
 )
 
 __all__ = [
@@ -243,12 +245,19 @@ _STRAIN_STEP = wp.constant(1.0e-3)
 
 
 @wp.func
-def _set_modulus(column: int, compression: float, thickness: float, p: FoundationParams):
-    """Store a column's shear-layer modulus and its slope over strain at ``compression``."""
+def _set_modulus(column: int, compression: float, thickness: float, rest: float, p: FoundationParams):
+    """Store a column's shear-layer modulus and its slope over strain at ``compression``.
+
+    ``rest`` is the equilibrium pressure one strain step from rest.
+    """
     strain = wp.max(compression, 0.0) / thickness
-    modulus = shear_layer_modulus(strain, p)
+    at = _hyperfoam_pressure(strain, p)
+    modulus = material_shear_modulus(p)
+    if strain >= _STRAIN_STEP:
+        modulus = shear_layer_modulus_between(_hyperfoam_pressure(strain - _STRAIN_STEP, p), at, rest, p)
+    ahead = shear_layer_modulus_between(at, _hyperfoam_pressure(strain + _STRAIN_STEP, p), rest, p)
     _modulus_shared(column, modulus, 1)
-    _modulus_slope_shared(column, (shear_layer_modulus(strain + _STRAIN_STEP, p) - modulus) / _STRAIN_STEP, 1)
+    _modulus_slope_shared(column, (ahead - modulus) / _STRAIN_STEP, 1)
 
 
 @wp.func
@@ -410,6 +419,7 @@ def _column_bed_step(
     dt = bed.dt[w]
     decay, ramp = maxwell_coefficients(dt, p.tau_s)
     gain = p.overstress * ramp
+    rest = _hyperfoam_pressure(_STRAIN_STEP, p)
     body = bed.carrier[w]
     pose = body_q[body]
     # The bed lives in shared memory; loop bounds stay runtime values so the
@@ -422,7 +432,7 @@ def _column_bed_step(
         _clearance_shared(column, wp.transform_point(pose, bed.anchor_local[column])[2] - bed.ground_height, 1)
         _overstress_shared(column, decay * bed.q_state[i] - gain * bed.peq_prev[i], 1)
         # The shear layers follow each column's compression, updated with it below.
-        _set_modulus(column, bed.top[i] - bed.bottom[i], bed.rest_len[column], p)
+        _set_modulus(column, bed.top[i] - bed.bottom[i], bed.rest_len[column], rest, p)
     _sync_threads()
     # Red-black Gauss-Seidel: lanes hold columns sorted by color and a color
     # reads only the other color, so each half sweep updates in place and then
@@ -451,10 +461,15 @@ def _column_bed_step(
             coupling_sum, top_pull, bottom_pull = _face_sums(bed, column, top, bottom)
             c = top - bottom
             # The layer squeeze enters as foam pressure, at c and one strain step ahead.
+            pressure = _hyperfoam_pressure(c / thickness, p)
+            pressure_ahead = _hyperfoam_pressure((c + _STRAIN_STEP * thickness) / thickness, p)
             modulus = _modulus_shared(column, 0.0, 0)
             slope = _modulus_slope_shared(column, 0.0, 0)
-            strain_ahead = wp.max(c, 0.0) / thickness + 2.0 * _STRAIN_STEP
-            slope_ahead = (shear_layer_modulus(strain_ahead, p) - modulus) / _STRAIN_STEP - slope
+            near = pressure_ahead
+            if c < 0.0:
+                near = rest
+            far = _hyperfoam_pressure(wp.max(c, 0.0) / thickness + 2.0 * _STRAIN_STEP, p)
+            slope_ahead = (shear_layer_modulus_between(near, far, rest, p) - modulus) / _STRAIN_STEP - slope
             per_pressure = 1.0 / (bed.area[column] * (1.0 + gain))
             squeeze = per_pressure * _layer_squeeze(bed, column, top, bottom, modulus, slope)
             squeeze_ahead = per_pressure * _layer_squeeze(
@@ -474,13 +489,13 @@ def _column_bed_step(
                 _overstress_shared(column, 0.0, 0),
                 gain,
                 bed.area[column],
-                _hyperfoam_pressure(c / thickness, p) + squeeze,
-                _hyperfoam_pressure((c + _STRAIN_STEP * thickness) / thickness, p) + squeeze_ahead,
+                pressure + squeeze,
+                pressure_ahead + squeeze_ahead,
                 bed.over_relaxation,
             )
             if wp.abs(t - top) > _SWEEP_TOLERANCE * thickness or wp.abs(b - bottom) > _SWEEP_TOLERANCE * thickness:
                 _changed_shared(sweep % 3, 1, 1)
-                _set_modulus(column, t - b, thickness, p)
+                _set_modulus(column, t - b, thickness, rest, p)
             _top_shared(column, t, 1)
             _bottom_shared(column, b, 1)
             _support_shared(column, state, 1)
