@@ -20,8 +20,8 @@ DATASET = next(
     (
         p
         for p in (
-            Path("Z:/newton_grid/data/dataset_3d_column_bed_v3"),
-            Path.home() / "newton_grid/data/dataset_3d_column_bed_v3",
+            Path("Z:/newton_grid/data/dataset_3d_column_bed_v3d3s"),
+            Path.home() / "newton_grid/data/dataset_3d_column_bed_v3d3s",
         )
         if p.exists()
     ),
