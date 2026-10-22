@@ -564,8 +564,9 @@ def _column_bed_step(
         bed.stop_gap[i] = 1.0e30
         bed.stop_stiffness[i] = 0.0
         if bed.implicit != 0 and held and landed:
-            # Room left to the stop, negative once the carrier has passed it.
-            bed.stop_gap[i] = bed.max_strain * thickness - comp
+            # Room left to the stop. A carrier already past it is held there, not
+            # pushed back: the foam pushes it out, so the stop adds no energy.
+            bed.stop_gap[i] = wp.max(bed.max_strain * thickness - comp, 0.0)
         if bed.implicit != 0 and held and comp > 0.0:
             # Axial tangent of the foam, by a backward difference so it never
             # steps onto the stretch floor.
@@ -881,7 +882,7 @@ class ColumnBed:
         max_strain: Hard compression stop as a fraction of rest thickness. A
             free top never closes past it, a bonded column's bottom is pushed
             down to keep it, and a landed column at the stop is rigid to the
-            implicit carrier, which it pushes back to the stop.
+            implicit carrier against further compression.
         sweeps: Red-black sweeps per step, warm started from the previous step.
         over_relaxation: Fraction of each column's constrained Newton step taken;
             above one is projected successive over-relaxation.
