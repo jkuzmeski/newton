@@ -20,7 +20,16 @@ import warp as wp
 
 import newton
 
-__all__ = ["BODY_NAMES", "JOINT_NAMES", "BodyParams", "SegmentParams", "add_body", "mirror_axis"]
+__all__ = [
+    "BODY_NAMES",
+    "JOINT_COUNT",
+    "JOINT_NAMES",
+    "STATE_DIM",
+    "BodyParams",
+    "SegmentParams",
+    "add_body",
+    "mirror_axis",
+]
 
 BODY_NAMES = ("pelvis", "thigh_r", "shank_r", "foot_r", "thigh_l", "shank_l", "foot_l")
 """Body labels in builder order."""
@@ -38,6 +47,13 @@ JOINT_NAMES = (
     "ankle_dorsiflexion_l",
 )
 """Actuated joint coordinates in generalized-coordinate order, after the free root."""
+
+JOINT_COUNT = len(JOINT_NAMES)
+"""Number of actuated joints."""
+
+STATE_DIM = 13 + 2 * JOINT_COUNT
+"""Width of a runner state row: root position (3), root quaternion xyzw (4), root linear and
+angular velocity (6), joint angles and joint speeds in :data:`JOINT_NAMES` order."""
 
 
 @dataclass(frozen=True)

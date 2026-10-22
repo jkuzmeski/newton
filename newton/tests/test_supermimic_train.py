@@ -15,6 +15,7 @@ if _HAS_TORCH:
         ImaginationHooks,
         Trainer,
         TrainerConfig,
+        cosine_lr_scale,
         imagined_return,
         lambda_returns,
         train,
@@ -209,6 +210,23 @@ class TestSupermimicTrain(unittest.TestCase):
         self.assertIsNone(model.weight.grad)
         self.assertTrue(any(not torch.equal(a, p) for a, p in zip(actor, trainer.actor.parameters(), strict=True)))
         self.assertTrue(any(not torch.equal(c, p) for c, p in zip(critic, trainer.critic.parameters(), strict=True)))
+
+    def test_learning_rates_decay_on_a_cosine_then_stay(self):
+        """Decay both learning rates to the final factor over the decay updates, then hold them."""
+        hooks = ImaginationHooks(_pendulum, _observe, _goal, _reward, _termination)
+        trainer = _trainer("cpu", horizon=4, lr_decay_iterations=2)
+        s0, xi, k0 = _starts(8, "cpu")
+        lrs = []
+        for _ in range(3):
+            trainer.update(hooks, s0, xi, k0)
+            lrs.append(
+                [group["lr"] for o in (trainer.actor_optimizer, trainer.critic_optimizer) for group in o.param_groups]
+            )
+
+        torch.testing.assert_close(torch.tensor(lrs[0]), torch.full((2,), 1e-3 * cosine_lr_scale(1, trainer.config)))
+        torch.testing.assert_close(torch.tensor(lrs[1]), torch.full((2,), 3e-5))
+        torch.testing.assert_close(torch.tensor(lrs[2]), torch.full((2,), 3e-5))
+        self.assertAlmostEqual(cosine_lr_scale(1, trainer.config), 0.515)
 
     def test_update_advances_reference_by_frame_stride(self):
         """Advance the reference frame of goal, reward and termination by the frame stride per step."""

@@ -46,7 +46,7 @@ import torch
 import warp as wp
 
 from .analysis import inverse_dynamics
-from .body import JOINT_NAMES, BodyParams
+from .body import JOINT_COUNT, JOINT_NAMES, STATE_DIM, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
@@ -55,7 +55,6 @@ from .sim import RunnerSim, RunnerSimConfig, Shoe, load_shoes
 
 __all__ = [
     "AUX_DIM",
-    "STATE_DIM",
     "Stage0Config",
     "collect",
     "episode_starts",
@@ -68,8 +67,6 @@ __all__ = [
     "sim_state",
 ]
 
-JOINT_COUNT = len(JOINT_NAMES)
-STATE_DIM = 13 + 2 * JOINT_COUNT
 AUX_DIM = 12 + 3 * JOINT_COUNT
 HELD_OUT_SHOE = "puma-deviate-nitro-elite-3"
 """Shoe whose foam is the center of the held-out context ball."""
@@ -94,7 +91,7 @@ class Stage0Config:
 
 
 def sim_state(sim: RunnerSim) -> torch.Tensor:
-    """Return the state rows [W, :data:`STATE_DIM`] of ``sim`` after its last step or reset."""
+    """Return the state rows [W, STATE_DIM] of ``sim`` after its last step or reset."""
     q, qd = wp.to_torch(sim.joint_q), wp.to_torch(sim.joint_qd)
     return torch.cat((q[:, :7], qd[:, :6], q[:, 7:], qd[:, 6:]), dim=1)
 

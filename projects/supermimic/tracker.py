@@ -29,11 +29,10 @@ import numpy as np
 import torch
 import warp as wp
 
-from .body import BodyParams
+from .body import JOINT_COUNT, STATE_DIM, BodyParams
 from .buffer import ReplayBuffer
 from .collect import (
     AUX_DIM,
-    JOINT_COUNT,
     Stage0Config,
     episode_starts,
     make_sim,
@@ -47,7 +46,6 @@ from .policy import Actor, Critic, impedance_action_bounds
 from .reference import load_body_params, load_shoe, load_subject
 from .sim import RunnerSim
 from .tracking import (
-    STATE_DIM,
     LegKinematics,
     joint_limit_violation,
     step_reward,
@@ -56,7 +54,7 @@ from .tracking import (
     tracking_errors,
     tracking_reward,
 )
-from .train import ImaginationHooks, Trainer, TrainerConfig, train
+from .train import ImaginationHooks, Trainer, TrainerConfig, cosine_lr_scale, train
 from .world_model import WorldModel
 
 __all__ = ["TrackerCollector", "TrackerConfig", "TrackerTask", "main", "reference_states", "world_model_fit"]
@@ -71,7 +69,7 @@ class TrackerConfig:
 
 
 def reference_states(joint_q: torch.Tensor, joint_qd: torch.Tensor) -> torch.Tensor:
-    """Return reference frames in the :data:`~projects.supermimic.tracking.STATE_DIM` layout.
+    """Return reference frames in the :data:`~projects.supermimic.body.STATE_DIM` layout.
 
     Args:
         joint_q: Generalized coordinates of the reference, shape [..., 17].
@@ -89,16 +87,18 @@ class TrackerTask:
     Args:
         world_model: Fitted world model; needs a history of at least one step.
         reference: Reference frames, shape [windows, frames, STATE_DIM].
+        moment: Reference inverse-dynamics joint moments, shape [windows, frames, joints] [N m].
         frame_stride: Reference frames per control step.
         body: Body parameters, for the foot kinematics and the joint limits.
         dt: Control period [s].
-        config: Action bounds and goal.
+        config: Goal.
     """
 
     def __init__(
         self,
         world_model: WorldModel,
         reference: torch.Tensor,
+        moment: torch.Tensor,
         frame_stride: int,
         body: BodyParams,
         dt: float,
@@ -109,6 +109,7 @@ class TrackerTask:
         self.world_model = world_model
         self.frames = reference.shape[1]
         self.reference = reference.reshape(-1, STATE_DIM)
+        self.moment = moment.reshape(-1, moment.shape[-1])
         self.frame_stride = frame_stride
         self.body = body
         self.dt = dt
@@ -122,20 +123,15 @@ class TrackerTask:
         self.observation_size = STATE_DIM - 2 + 3 * joints
         self.goal_size = (STATE_DIM - 2) * config.goal_frames
 
-    def start_action(self, q_ref: torch.Tensor, moment: torch.Tensor) -> torch.Tensor:
-        """Return the episode-start action that carries the reference moment like the stage-0 data.
+    def start_action(self, k: torch.Tensor) -> torch.Tensor:
+        """Return the previous action at an episode start at reference frame ``k``, shape [batch, joints, 3].
 
-        The stiffness is the stage-0 floor :func:`~projects.supermimic.collect.moment_stiffness_floor`
-        capped at its upper bound, ``q_eq = q_ref + moment / K`` within the joint limits, and the
-        damping is the geometric middle of its bounds.
-
-        Args:
-            q_ref: Reference joint angles [batch, joints] [rad].
-            moment: Reference joint moments [batch, joints] [N m].
-
-        Returns:
-            Actions of shape [batch, joints, 3].
+        It carries the reference moment like the stage-0 data: the stiffness is the stage-0 floor
+        :func:`~projects.supermimic.collect.moment_stiffness_floor` capped at its upper bound,
+        ``q_eq = q_ref + moment / K`` within the joint limits, and the damping is the geometric
+        middle of its bounds.
         """
+        q_ref, moment = self.reference[k, 13 : 13 + self.world_model.joint_count], self.moment[k]
         low, high = self.action_low, self.action_high
         stiffness = moment_stiffness_floor(
             q_ref,
@@ -224,6 +220,9 @@ class TrackerTask:
     def sample_starts(self, buffer: ReplayBuffer, batch_size: int, horizon: int) -> tuple[torch.Tensor, ...]:
         """Sample imagination starts from non-terminal buffer rows whose horizon fits in the reference window.
 
+        At an episode's first row the history holds only that row, so its previous action
+        is set to :meth:`start_action`, the one the actor sees in the sim.
+
         Returns:
             Model states, sim contexts and reference frame indices; at most ``batch_size`` rows.
         """
@@ -231,8 +230,12 @@ class TrackerTask:
         rows = buffer.sample(2 * batch_size, 0, history=h)
         keep = self.fits_horizon(rows["reference"][:, h], horizon) & ~rows["done"][:, h]
         index = torch.nonzero(keep).squeeze(1)[:batch_size]
-        model_state = self.world_model.start(rows["state"][index], rows["action"][index, :h])
-        return model_state, rows["xi"][index, h], rows["reference"][index, h]
+        k = rows["reference"][index, h]
+        action = rows["action"][index, :h]
+        first = rows["episode_step"][index, h] == 0
+        action[first, -1] = self.start_action(k[first])
+        model_state = self.world_model.start(rows["state"][index], action)
+        return model_state, rows["xi"][index, h], k
 
 
 class TrackerCollector:
@@ -249,7 +252,6 @@ class TrackerCollector:
         xi: Sim context per world, shape [worlds, XI_DIM].
         joint_q: Reference coordinates, shape [windows, frames, 17].
         joint_qd: Reference velocities, shape [windows, frames, 16].
-        moment: Reference joint moments, shape [windows, frames, joints] [N m].
         starts: Episode starts as (window, frame) rows, shape [starts, 2].
         buffer: Buffer with one row per sim world.
         noise_std: Standard deviation of the noise on the actor's logits.
@@ -263,15 +265,14 @@ class TrackerCollector:
         xi: torch.Tensor,
         joint_q: torch.Tensor,
         joint_qd: torch.Tensor,
-        moment: torch.Tensor,
         starts: torch.Tensor,
         buffer: ReplayBuffer,
         *,
         noise_std: float = 0.1,
-        failure_joint_speed: float = 100.0,
+        failure_joint_speed: float = Stage0Config.failure_joint_speed_rad_s,
     ):
         self.task, self.sim, self.xi, self.buffer = task, sim, xi, buffer
-        self.joint_q, self.joint_qd, self.moment, self.starts = joint_q, joint_qd, moment, starts
+        self.joint_q, self.joint_qd, self.starts = joint_q, joint_qd, starts
         self.noise_std = noise_std
         self.failure_joint_speed = failure_joint_speed
         w, device = sim.world_count, xi.device
@@ -294,15 +295,14 @@ class TrackerCollector:
                     self.window[reset], self.frame[reset] = pick[:, 0], pick[:, 1]
                     q, qd = self.joint_q[self.window, self.frame], self.joint_qd[self.window, self.frame]
                     sim.reset(wp.from_torch(reset), wp.from_torch(q), wp.from_torch(qd))
-                    moment = self.moment[self.window[reset], self.frame[reset]]
-                    self.previous[reset] = task.start_action(q[reset, 7:], moment)
+                    self.previous[reset] = task.start_action(self.window[reset] * task.frames + self.frame[reset])
                 state = sim_state(sim)
                 k = self.window * task.frames + self.frame
                 done = termination(state, task.reference[k])
                 logits = actor.logits(torch.cat((task.observation(state, self.previous), task.goal(k)), -1))
                 action = actor.squash(logits + self.noise_std * torch.randn_like(logits))
                 sim.step(wp.from_torch(action.contiguous()))
-                aux, after = sim_aux(sim), sim_state(sim)
+                aux, after = sim_aux(sim, state), sim_state(sim)
                 failed = ~(
                     torch.isfinite(aux).all(1)
                     & (after[:, -task.world_model.joint_count :].abs().amax(1) < self.failure_joint_speed)
@@ -326,19 +326,34 @@ class TrackerCollector:
 
 
 def world_model_fit(
-    world_model: WorldModel, buffer: ReplayBuffer, *, window: int = 8, batch_size: int = 2048, lr: float = 2e-4
+    world_model: WorldModel,
+    buffer: ReplayBuffer,
+    config: TrainerConfig,
+    *,
+    window: int = 8,
+    batches: int = 10,
+    batch_size: int = 2048,
+    lr: float = 2e-4,
 ) -> Callable[[], dict[str, float]]:
-    """Return a function that takes one Adam step of the world model's k-step loss on buffer windows."""
+    """Return a world-model update: ``batches`` Adam steps of the k-step loss on buffer windows (paper Table A.5).
+
+    The learning rate follows the trainer's cosine decay per update. The world model's
+    normalization is left as it is: it is fitted once on the stage-0 data, whose actions
+    span the action bounds, and refitting it would shift the inputs of the trained network.
+    """
     optimizer = torch.optim.Adam(world_model.parameters(), lr=lr)
+    schedule = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda update: cosine_lr_scale(update, config))
     h = world_model.history_length
 
     def fit() -> dict[str, float]:
-        rows = buffer.sample(batch_size, window, history=h)
-        loss = world_model.loss(rows["state"], rows["action"][:, :-1], rows["xi"][:, 0], rows["aux"][:, :-1])
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(world_model.parameters(), 1.0)
-        optimizer.step()
+        for _ in range(batches):
+            rows = buffer.sample(batch_size, window, history=h)
+            loss = world_model.loss(rows["state"], rows["action"][:, :-1], rows["xi"][:, 0], rows["aux"][:, :-1])
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(world_model.parameters(), 1.0)
+            optimizer.step()
+        schedule.step()
         return {"world_model_loss": loss.item()}
 
     return fit
@@ -351,8 +366,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--stage0", type=Path, required=True, help="stage-0 buffer.npz; its world count sets --worlds")
     parser.add_argument("--iterations", type=int, default=1000)
-    parser.add_argument("--pretrain", type=int, default=2000, help="world-model steps on stage-0 data before the loop")
-    parser.add_argument("--collect-steps", type=int, default=1, help="sim control steps per iteration")
+    parser.add_argument("--pretrain", type=int, default=200, help="world-model updates on stage-0 data before the loop")
+    parser.add_argument(
+        "--update-to-data", type=float, default=0.4, help="policy updates per sim control step of every world"
+    )
     parser.add_argument("--batch", type=int, default=4096, help="imagined rollouts per policy update")
     parser.add_argument("--model-hidden", type=int, nargs="+", default=[2048, 2048, 2048])
     parser.add_argument("--seed", type=int, default=0)
@@ -374,21 +391,28 @@ def main(argv: list[str] | None = None) -> None:
     )
     stride = round(sim.config.control_dt_s / float(ref["frame_dt"]))
 
+    config = TrainerConfig()
     world_model = WorldModel(JOINT_COUNT, XI_DIM, AUX_DIM, hidden=tuple(args.model_hidden)).to(device)
     h = world_model.history_length
     rows = buffer.sample(16384, 8, history=h)
     world_model.fit_normalization(rows["state"], rows["action"][:, :-1], rows["xi"][:, 0], rows["aux"][:, :-1])
-    fit_world_model = world_model_fit(world_model, buffer)
+    fit_world_model = world_model_fit(world_model, buffer, config)
     log = (output / "log.jsonl").open("w", encoding="utf-8")
     for step in range(args.pretrain):
         metrics = fit_world_model()
-        if step % 100 == 0:
+        if step % 10 == 0:
             print(json.dumps({"pretrain": step, **metrics}), file=log, flush=True)
 
+    moment = reference_moments(ref, body, load_shoe(load_subject(args.reference / "subject.json").shoe))
     task = TrackerTask(
-        world_model, reference_states(joint_q, joint_qd), stride, body, sim.config.control_dt_s, TrackerConfig()
+        world_model,
+        reference_states(joint_q, joint_qd),
+        torch.as_tensor(moment, dtype=torch.float32, device=device),
+        stride,
+        body,
+        sim.config.control_dt_s,
+        TrackerConfig(),
     )
-    config = TrainerConfig()
     critic = Critic(world_model.model_state_dim + task.goal_size + XI_DIM).to(device)
     trainer = Trainer(task.actor(), critic, config)
     collector = TrackerCollector(
@@ -397,14 +421,12 @@ def main(argv: list[str] | None = None) -> None:
         torch.as_tensor(xi, dtype=torch.float32, device=device),
         joint_q,
         joint_qd,
-        torch.as_tensor(
-            reference_moments(ref, body, load_shoe(load_subject(args.reference / "subject.json").shoe)),
-            dtype=torch.float32,
-            device=device,
-        ),
         episode_starts(ref, "train"),
         buffer,
     )
+
+    # Sim steps per iteration alternate (e.g. 2, 3, 2, 3) so that their mean is 1 / update_to_data.
+    collect_steps = iter(np.diff(np.floor(np.arange(args.iterations + 1) / args.update_to_data)).astype(int).tolist())
 
     def write(iteration: int, metrics: dict[str, float]) -> None:
         print(json.dumps({"iteration": iteration, **metrics}), file=log, flush=True)
@@ -413,7 +435,7 @@ def main(argv: list[str] | None = None) -> None:
         trainer,
         task.hooks,
         args.iterations,
-        collect=lambda t: collector(t, args.collect_steps),
+        collect=lambda t: collector(t, next(collect_steps)),
         fit_world_model=fit_world_model,
         sample_starts=lambda: task.sample_starts(buffer, args.batch, config.horizon),
         log=write,

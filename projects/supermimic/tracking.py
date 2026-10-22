@@ -3,7 +3,8 @@
 
 """Differentiable F01 tracking reward and termination for SuperMimic.
 
-States and reference frames share one layout per world (:data:`STATE_DIM`):
+States and reference frames share one layout per world
+(:data:`projects.supermimic.body.STATE_DIM`):
 root position [m], root quaternion (xyzw), root linear and angular velocity in
 the world frame [m/s, rad/s], the ten joint angles [rad] and joint velocities
 [rad/s] in the order of :data:`projects.supermimic.body.JOINT_NAMES`.
@@ -36,7 +37,6 @@ if TYPE_CHECKING:
 __all__ = [
     "ACTION_SMOOTHNESS_WEIGHT",
     "JOINT_LIMIT_WEIGHT",
-    "STATE_DIM",
     "TRACKING_ERROR_DIM",
     "TRACKING_ERROR_SLICES",
     "ADDiscriminator",
@@ -48,9 +48,6 @@ __all__ = [
     "tracking_errors",
     "tracking_reward",
 ]
-
-STATE_DIM = 33
-"""Root position (3), quaternion (4), linear velocity (3), angular velocity (3), joint angles (10) and velocities (10)."""
 
 TRACKING_ERROR_SLICES = {
     "joint_angle": slice(0, 10),
@@ -179,8 +176,8 @@ def tracking_errors(state: torch.Tensor, reference: torch.Tensor, kinematics: Le
     rotation from the state to the reference, which is smooth at zero error.
 
     Args:
-        state: States, shape [B, :data:`STATE_DIM`].
-        reference: Reference frames at the same time, shape [B, :data:`STATE_DIM`].
+        state: States, shape [B, :data:`~projects.supermimic.body.STATE_DIM`].
+        reference: Reference frames at the same time, shape [B, :data:`~projects.supermimic.body.STATE_DIM`].
         kinematics: Forward kinematics of the body.
     """
     relative = _quat_multiply(reference[:, 3:7], _quat_conjugate(state[:, 3:7]))

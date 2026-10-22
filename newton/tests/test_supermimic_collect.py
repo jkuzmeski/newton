@@ -11,11 +11,10 @@ import numpy as np
 try:
     import torch
 
-    from projects.supermimic.body import BodyParams
+    from projects.supermimic.body import STATE_DIM, BodyParams
     from projects.supermimic.buffer import ReplayBuffer
     from projects.supermimic.collect import (
         AUX_DIM,
-        STATE_DIM,
         make_sim,
         moment_stiffness_floor,
         read_episode,

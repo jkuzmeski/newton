@@ -13,6 +13,7 @@ Learning code only: no Newton import.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -21,7 +22,15 @@ from torch import nn
 
 from .policy import Actor, Critic
 
-__all__ = ["ImaginationHooks", "Trainer", "TrainerConfig", "imagined_return", "lambda_returns", "train"]
+__all__ = [
+    "ImaginationHooks",
+    "Trainer",
+    "TrainerConfig",
+    "cosine_lr_scale",
+    "imagined_return",
+    "lambda_returns",
+    "train",
+]
 
 Tensor = torch.Tensor
 
@@ -72,6 +81,16 @@ class TrainerConfig:
     """Critic passes over each imagined batch."""
     critic_minibatches: int = 4
     """Shuffled minibatches per critic pass."""
+    lr_decay_iterations: int = 250_000
+    """Updates over which the learning rates decay on a cosine to :attr:`lr_final_scale`, then stay."""
+    lr_final_scale: float = 0.03
+    """Learning-rate factor at the end of the decay."""
+
+
+def cosine_lr_scale(update: int, config: TrainerConfig) -> float:
+    """Return the learning-rate factor after ``update`` updates (cosine decay, then constant)."""
+    progress = min(update / config.lr_decay_iterations, 1.0)
+    return config.lr_final_scale + (1.0 - config.lr_final_scale) * 0.5 * (1.0 + math.cos(math.pi * progress))
 
 
 def imagined_return(rewards: Tensor, done: Tensor, value_last: Tensor, gamma: float) -> Tensor:
@@ -135,6 +154,10 @@ class Trainer:
         self.config = config
         self.actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_lr, betas=(0.9, 0.95))
         self.critic_optimizer = torch.optim.Adam(critic.parameters(), lr=config.critic_lr)
+        self.schedules = [
+            torch.optim.lr_scheduler.LambdaLR(optimizer, lambda update: cosine_lr_scale(update, config))
+            for optimizer in (self.actor_optimizer, self.critic_optimizer)
+        ]
 
     def act(self, hooks: ImaginationHooks, s: Tensor, xi: Tensor, k: Tensor) -> Tensor:
         """Return the actor's action in state ``s`` at reference frame ``k``."""
@@ -189,6 +212,8 @@ class Trainer:
         critic_loss = self._fit_critic(
             hooks, torch.stack(states, dim=1).detach(), xi, k0, rewards.detach(), done.detach()
         )
+        for schedule in self.schedules:
+            schedule.step()
         survival = torch.cumprod(1.0 - done.detach(), dim=1)[:, -1]
         return {
             "objective": objective.item(),

@@ -8,14 +8,13 @@ import unittest
 import numpy as np
 
 import newton
-from projects.supermimic.body import BODY_NAMES, BodyParams, add_body
+from projects.supermimic.body import BODY_NAMES, STATE_DIM, BodyParams, add_body
 
 TORCH = importlib.util.find_spec("torch") is not None
 if TORCH:
     import torch
 
     from projects.supermimic.tracking import (
-        STATE_DIM,
         TRACKING_ERROR_DIM,
         ADDiscriminator,
         LegKinematics,

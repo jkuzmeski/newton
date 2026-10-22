@@ -38,10 +38,17 @@ def _reference():
     return frames
 
 
+def _moment():
+    """No moment in window 0; a constant moment in window 1, beyond the ankle's stiffness cap."""
+    moment = torch.zeros(WINDOWS, FRAMES, 10)
+    moment[1] = torch.tensor([50.0, -20.0, 5.0, -150.0, 2000.0] * 2)
+    return moment
+
+
 def _task(history=2):
     torch.manual_seed(0)
     model = WorldModel(10, XI, AUX, history_length=history, hidden=(32,))
-    return TrackerTask(model, _reference(), STRIDE, BodyParams(), 0.01, TrackerConfig(goal_frames=3))
+    return TrackerTask(model, _reference(), _moment(), STRIDE, BodyParams(), 0.01, TrackerConfig(goal_frames=3))
 
 
 @unittest.skipUnless(_HAS_TORCH, "requires torch")
@@ -83,10 +90,10 @@ class TestSupermimicTracker(unittest.TestCase):
     def test_start_action_carries_the_reference_moment(self):
         """Carry the reference moment with a lead of at most 0.35 rad below the stiffness cap, and loose K without moment."""
         task = _task()
-        q_ref = task.reference[[3, FRAMES + 5], 13:23]
-        moment = torch.tensor([[0.0] * 10, [50.0, -20.0, 5.0, -150.0, 2000.0] * 2])
+        k = torch.tensor([3, FRAMES + 5])
+        q_ref, moment = task.reference[k, 13:23], task.moment[k]
 
-        action = task.start_action(q_ref, moment)
+        action = task.start_action(k)
         q_eq, stiffness = action[..., 0], action[..., 1]
 
         torch.testing.assert_close(q_eq[0], q_ref[0])
@@ -101,7 +108,7 @@ class TestSupermimicTracker(unittest.TestCase):
         self.assertTrue(bool((~carried).any()))
 
     def test_starts_leave_room_for_the_horizon(self):
-        """Sample only non-terminal starts whose horizon stays inside the reference window."""
+        """Sample non-terminal starts whose horizon fits the window, with the sim's previous action at episode starts."""
         task = _task()
         buffer = ReplayBuffer(4, 60, state_shape=33, action_shape=(10, 3), xi_shape=XI, aux_shape=AUX, device="cpu")
         for step in range(60):
@@ -122,6 +129,11 @@ class TestSupermimicTracker(unittest.TestCase):
         self.assertEqual(model_state.shape, (len(k), task.world_model.model_state_dim))
         self.assertTrue(bool((k % FRAMES + 8 * STRIDE < FRAMES).all()))
         torch.testing.assert_close(model_state[:, :33], task.reference[k])
+        previous = task.previous_action(model_state)
+        first = k % FRAMES == 0
+        self.assertTrue(bool(first.any() and (~first).any()))
+        torch.testing.assert_close(previous[first], task.start_action(k[first]))
+        torch.testing.assert_close(previous[~first], torch.ones_like(previous[~first]))
 
     def test_update_through_the_world_model_is_finite(self):
         """Run one actor-critic update through the world model with finite results."""
