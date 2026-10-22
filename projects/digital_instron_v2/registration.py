@@ -472,9 +472,12 @@ def register_last(
     # last x, y, yaw are refitted in each tilted frame until both settle.
     tilt = np.zeros(2)
     limit = np.deg2rad(MAX_SUPPORT_TILT_DEG)
-    for _ in range(6):
+    tolerance = np.deg2rad(0.05)
+    fitted = []  # (tilt, last pose fitted in that tilt, its QC)
+    for _ in range(10):
         platen = _Platen(uv, bottom, top, _tilt_rotation(*tilt))
         pose, fit_qc = _fit_pose(platen, last, grid.spacing_m / 2.0)
+        fitted.append((tilt, pose, fit_qc))
         center, step = np.zeros(2), np.deg2rad(1.0)
         for _ in range(3):
             offsets = step * np.arange(-10, 11)
@@ -484,10 +487,14 @@ def register_last(
             step /= 8.0
         if np.any(np.abs(center) >= limit - 1e-9):
             raise ValueError(f"midsole rest tilt reaches {MAX_SUPPORT_TILT_DEG} deg; the rocker pose is not bounded")
-        settled = np.all(np.abs(center - tilt) < np.deg2rad(0.05))
-        tilt = center
-        if settled:
+        if np.all(np.abs(center - tilt) < tolerance):
+            tilt = center
             break
+        if len(fitted) > 1 and np.all(np.abs(center - fitted[-2][0]) < tolerance):
+            # Tilt and pose alternate between two states; keep the one of least potential.
+            tilt, pose, fit_qc = min(fitted[-2:], key=lambda state: potential(state[0], state[1]))
+            break
+        tilt = center
     else:
         raise ValueError("rocker tilt and last pose did not settle")
 
@@ -668,7 +675,7 @@ def main(argv: list[str] | None = None) -> None:
         with np.load(shoe / args.side / "column_grid.npz") as data:
             grid = ColumnGrid(
                 *(data[k] for k in ("uv_m", "bottom_m", "top_m")),
-                float(data["area_m2"]),
+                np.asarray(data["area_m2"], dtype=float),
                 float(data["spacing_m"]),
                 int(data["thickness_axis"]),
             )

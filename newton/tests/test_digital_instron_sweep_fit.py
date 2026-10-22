@@ -27,7 +27,7 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
             bottom_m=np.array([0.0, 0.005, 0.0, 0.0, 0.005]),
             gap_m=np.zeros(5),
             rest_m=np.full(5, 0.02),
-            area_m2=h * h,
+            area_m2=np.full(5, h * h),
             spacing_m=h,
             tread=np.array([True, True, False, False, True]),
         )
@@ -66,7 +66,7 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
             bottom_m=np.where(tread, 0.0, 0.012),
             gap_m=np.zeros(len(uv)),
             rest_m=np.full(len(uv), 0.008),
-            area_m2=h * h,
+            area_m2=np.full(len(uv), h * h),
             spacing_m=h,
             tread=tread,
         )
@@ -91,7 +91,7 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
             bottom_m=np.zeros(2),
             gap_m=np.zeros(2),
             rest_m=np.full(2, 0.02),
-            area_m2=h * h,
+            area_m2=np.full(2, h * h),
             spacing_m=h,
             tread=np.ones(2, dtype=bool),
         )

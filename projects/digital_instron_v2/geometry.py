@@ -17,7 +17,7 @@ class ColumnGrid:
     uv_m: np.ndarray
     bottom_m: np.ndarray
     top_m: np.ndarray
-    area_m2: float
+    area_m2: np.ndarray  # midsole footprint area of each column [m^2]
     spacing_m: float
     thickness_axis: int
 
@@ -153,7 +153,8 @@ def build_column_grid(mesh: Any, spacing_m: float, min_thickness_m: float = 0.00
     uv = np.column_stack((uu.ravel(), vv.ravel()))
     bottom, top = raycast(mesh, uv, thickness_axis, normal_threshold=0.1)
     valid = np.isfinite(bottom) & (top - bottom >= min_thickness_m)
-    return ColumnGrid(uv[valid], bottom[valid], top[valid], spacing_m**2, spacing_m, thickness_axis)
+    count = int(valid.sum())
+    return ColumnGrid(uv[valid], bottom[valid], top[valid], np.full(count, spacing_m**2), spacing_m, thickness_axis)
 
 
 def neighbor_indices(uv: np.ndarray, grid_uv: np.ndarray, spacing: float) -> np.ndarray:

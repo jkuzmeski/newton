@@ -2,10 +2,12 @@
   "column_qc": {
     "build_column_grid_columns": 943,
     "columns": 944,
+    "covered_area_fraction": 0.989459091860222,
     "dropped_outside_or_thin": 8,
     "hole_gaps_filled": 1,
     "lattice_points": 1357,
     "odd_hit_count_columns": 0,
+    "partial_cells": 52,
     "rays_hitting_mesh": 952,
     "suspect_columns_replaced": 0,
     "through_holes": 0
@@ -25,7 +27,7 @@
         0.0,
         20.0
       ],
-      "value": 7.7435018692155
+      "value": 8.042282513813028
     },
     "footprint_length_mm": {
       "passed": true,
@@ -49,7 +51,7 @@
         5.0,
         70.0
       ],
-      "value": 49.68975207442204
+      "value": 46.3166831174202
     },
     "median_thickness_mm": {
       "passed": true,
@@ -57,13 +59,13 @@
         15.0,
         50.0
       ],
-      "value": 32.31259195388104
+      "value": 32.13417389493709
     }
   },
   "geometry_status": "ready",
-  "grid_sha256": "45568ef5c397113b0e97a98779bfa4c41db357b58d233c0db1a27056d379914e",
+  "grid_sha256": "774eb64896811f5fdef00c33c44d606fdd42973e2063e0b7a75283da80840099",
   "mirrored_from_source": false,
-  "provenance_sha256": "c783a5d9766837bcd7589da629a78312c02b06df5e4104243f8aef2993f951a9",
+  "provenance_sha256": "87d2316528cbac755024712b0fe06b9097643e26547b94f3b8cdbe17cbf3731d",
   "side": "right",
   "slug": "puma-deviate-nitro-elite-3",
   "source_side": "right",
@@ -95,11 +97,11 @@
   ],
   "stats": {
     "columns": 944,
-    "drop_mm": 7.7435018692155,
-    "forefoot_thickness_mm": 31.006451449405496,
-    "heel_thickness_mm": 38.749953318620996,
-    "max_thickness_mm": 49.68975207442204,
-    "median_thickness_mm": 32.31259195388104,
-    "min_thickness_mm": 5.1776035657627935
+    "drop_mm": 8.042282513813028,
+    "forefoot_thickness_mm": 30.722281496813743,
+    "heel_thickness_mm": 38.76456401062677,
+    "max_thickness_mm": 46.3166831174202,
+    "median_thickness_mm": 32.13417389493709,
+    "min_thickness_mm": 9.236810446540053
   }
 }

@@ -40,7 +40,7 @@ def load_grid(path: Path) -> ColumnGrid:
             data["uv_m"],
             data["bottom_m"],
             data["top_m"],
-            float(data["area_m2"]),
+            np.asarray(data["area_m2"], dtype=float),
             float(data["spacing_m"]),
             int(data["thickness_axis"]),
         )

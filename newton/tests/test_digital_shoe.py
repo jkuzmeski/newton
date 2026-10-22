@@ -251,6 +251,9 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertEqual(bed[:, 2].min(), 0.0)
         # The bench replays the shoe in the pose the fit stood it on the platen.
         np.testing.assert_array_equal(fixture["bed_bottom_above_platen_m"], registration.bottom_above_platen_m)
+        # The foot is bonded to the columns the bench last presses; the rim outside it hangs on shear.
+        np.testing.assert_array_equal(artifact["column_bed"]["top_bonded"], np.isfinite(registration.surface_m))
+        np.testing.assert_array_equal(artifact["column_bed"]["area_m2"], grid.area_m2)
         # The baked last bottoms out on the first-contact surface the fixture records.
         last = np.asarray(artifact["visual_meshes"]["fullfoot_last"]["vertices_m"])
         anchors = np.asarray(fixture["carrier_anchor_m"])
