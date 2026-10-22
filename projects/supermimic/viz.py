@@ -57,14 +57,15 @@ def inertia_box(segment: SegmentParams) -> np.ndarray:
     return 0.5 * np.sqrt(6.0 / segment.mass * (i.sum() - 2.0 * i))
 
 
-def reference_trajectory(reference_dir: str | Path, window: int) -> tuple[dict, BodyParams]:
-    """Return one window of a prepared F01 reference and its body parameters."""
+def reference_trajectory(reference_dir: str | Path, window: int, start_frame: int = 0) -> tuple[dict, BodyParams]:
+    """Return one window of a prepared F01 reference from ``start_frame`` on and its body parameters."""
     reference_dir = Path(reference_dir)
     data = np.load(reference_dir / "reference.npz")
+    frames = slice(start_frame, None)
     trajectory = {
-        "joint_q": data["joint_q"][window],
-        "grf": data["grf"][window],
-        "cop": data["cop"][window],
+        "joint_q": data["joint_q"][window, frames],
+        "grf": data["grf"][window, frames],
+        "cop": data["cop"][window, frames],
         "dt": float(data["frame_dt"]),
     }
     return trajectory, load_body_params(reference_dir / "body_params.json")
@@ -293,7 +294,7 @@ def plot_trajectory(trajectory: dict, reference: dict | None, path: str | Path) 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Replay a SuperMimic rollout or an F01 reference window.")
     parser.add_argument("--reference", type=Path, required=True, help="prepared F01 reference directory")
-    parser.add_argument("--window", type=int, default=0, help="reference window")
+    parser.add_argument("--window", type=int, default=0, help="reference window to replay without --rollout")
     parser.add_argument("--rollout", type=Path, help="collected dataset folder; replays the reference when omitted")
     parser.add_argument("--world", type=int, default=0)
     parser.add_argument("--episode", type=int, default=0)
@@ -306,14 +307,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--fps", type=float, default=25.0)
     args = parser.parse_args(argv)
 
-    reference, body = reference_trajectory(args.reference, args.window)
     if args.rollout:
         from .collect import read_episode  # noqa: PLC0415, needs torch
 
         trajectory = read_episode(args.rollout, args.world, args.episode)
+        reference, body = reference_trajectory(
+            args.reference, trajectory["reference_window"], trajectory["reference_frame"]
+        )
         shoe_name = trajectory["shoe"]
     else:
-        trajectory, reference, shoe_name = reference, None, args.shoe
+        trajectory, body = reference_trajectory(args.reference, args.window)
+        reference, shoe_name = None, args.shoe
     if args.plot:
         plot_trajectory(trajectory, reference, args.plot)
     shoe = next(s for s in load_shoes(args.shoes) if s.name == shoe_name) if args.shoes else None
