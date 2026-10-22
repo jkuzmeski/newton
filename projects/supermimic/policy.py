@@ -12,7 +12,18 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-__all__ = ["Actor", "Critic", "RunningNormalizer", "impedance_action_bounds"]
+__all__ = ["DAMPING_LIMITS", "STIFFNESS_LIMITS", "Actor", "Critic", "RunningNormalizer", "impedance_action_bounds"]
+
+
+# Short-time human joint impedance bounds (R3 of whitepapers/supermimic_neuromech_params.md):
+# K_max = 4.8 rad^-1 times the joint torque capacity, B_max = 0.0046 s times K_max. The source has
+# no hip adduction or rotation values; they take the hip flexion values. Lower bounds are the
+# stage-0 minimums.
+STIFFNESS_LIMITS = ((30.0, 1127.0), (30.0, 1127.0), (30.0, 1127.0), (30.0, 1141.0), (30.0, 665.0))
+"""Lower and upper joint stiffness of the five joints of one side in ``JOINT_NAMES`` order [N·m/rad]; the left side is equal."""
+
+DAMPING_LIMITS = ((0.5, 5.2), (0.5, 5.2), (0.5, 5.2), (0.5, 5.3), (0.5, 3.1))
+"""Lower and upper joint damping of the five joints of one side in ``JOINT_NAMES`` order [N·m·s/rad]; the left side is equal."""
 
 
 class RunningNormalizer(nn.Module):
@@ -57,30 +68,31 @@ def _mlp(inputs: int, hidden: tuple[int, ...], outputs: int) -> nn.Sequential:
 
 
 def impedance_action_bounds(
-    q_eq_low: torch.Tensor,
-    q_eq_high: torch.Tensor,
-    stiffness: tuple[float, float],
-    damping: tuple[float, float],
+    joint_limits: tuple[tuple[float, float], ...],
+    *,
+    stiffness_limits: tuple[tuple[float, float], ...] = STIFFNESS_LIMITS,
+    damping_limits: tuple[tuple[float, float], ...] = DAMPING_LIMITS,
+    device: torch.device | str | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Return the :class:`Actor` bounds of the impedance action ``(q_eq, K, B)`` per joint.
+    """Return the :class:`Actor` bounds of the impedance action ``(q_eq, K, B)`` per joint of both sides.
 
-    Stiffness and damping are bounded on a log scale, so they stay positive and
-    their resolution is relative.
+    Each limit table holds ``(lower, upper)`` for the joints of one side; the
+    other side is equal. Stiffness and damping are bounded on a log scale, so
+    they stay positive and their resolution is relative.
 
     Args:
-        q_eq_low: Lower equilibrium angle per joint [rad], shape [joint_count].
-        q_eq_high: Upper equilibrium angle per joint [rad], shape [joint_count].
-        stiffness: Stiffness range ``(min, max)`` for every joint [N·m/rad].
-        damping: Damping range ``(min, max)`` for every joint [N·m·s/rad].
+        joint_limits: Equilibrium angle limits [rad], e.g. ``BodyParams.joint_limits``.
+        stiffness_limits: Stiffness limits [N·m/rad].
+        damping_limits: Damping limits [N·m·s/rad].
+        device: Torch device of the bounds.
 
     Returns:
-        ``(low, high, log_scale)``, each of shape [joint_count, 3].
+        ``(low, high, log_scale)``, each of shape [2 * joints, 3].
     """
-    ones = torch.ones_like(q_eq_low)
-    low = torch.stack([q_eq_low, stiffness[0] * ones, damping[0] * ones], dim=-1)
-    high = torch.stack([q_eq_high, stiffness[1] * ones, damping[1] * ones], dim=-1)
-    log_scale = torch.tensor([False, True, True], device=q_eq_low.device).expand_as(low)
-    return low, high, log_scale
+    limits = torch.tensor((joint_limits, stiffness_limits, damping_limits), dtype=torch.float32, device=device)
+    limits = limits.repeat(1, 2, 1).permute(1, 0, 2)
+    log_scale = torch.tensor([False, True, True], device=device).expand(limits.shape[:2])
+    return limits[..., 0], limits[..., 1], log_scale
 
 
 class Actor(nn.Module):

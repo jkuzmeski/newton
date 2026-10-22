@@ -54,12 +54,8 @@ __all__ = ["TrackerCollector", "TrackerConfig", "TrackerTask", "main", "referenc
 
 @dataclass(frozen=True)
 class TrackerConfig:
-    """Action bounds and goal of the tracker."""
+    """Goal of the tracker."""
 
-    stiffness_range: tuple[float, float] = (30.0, 1500.0)
-    """Stiffness bounds of every joint [N m/rad]; the stage-0 data range."""
-    damping_range: tuple[float, float] = (0.5, 40.0)
-    """Damping bounds of every joint [N m s/rad]; the stage-0 data range."""
     goal_frames: int = 10
     """Future control steps of the reference the actor sees."""
 
@@ -109,9 +105,8 @@ class TrackerTask:
         self.config = config
         self.kinematics = LegKinematics(body, reference.device)
         joints = world_model.joint_count
-        lower, upper = torch.tensor(body.joint_limits * 2, device=reference.device).unbind(-1)
         self.action_low, self.action_high, self.action_log_scale = impedance_action_bounds(
-            lower, upper, config.stiffness_range, config.damping_range
+            body.joint_limits, device=reference.device
         )
         self.action_shape = (joints, 3)
         self.observation_size = STATE_DIM - 2 + 3 * joints
