@@ -38,9 +38,11 @@ from .reference import (
     TRIALS,
     DeLevaTable,
     f01_body_params,
+    f01_shoe,
     forward_kinematics,
     trial_reference,
 )
+from .sim import Shoe, shod_foot
 
 __all__ = [
     "GRAVITY",
@@ -83,6 +85,7 @@ def inverse_dynamics(
     grf: np.ndarray,
     cop: np.ndarray,
     free_moment: np.ndarray,
+    shoe: Shoe | None = None,
 ) -> np.ndarray:
     """Net joint moments by Newton-Euler recursion from each foot to the pelvis.
 
@@ -96,6 +99,7 @@ def inverse_dynamics(
         grf: Ground reaction force on each foot (right, left) [frames, 2, 3] [N], zero off the ground.
         cop: Point of application of ``grf`` [frames, 2, 3] [m], finite in every frame.
         free_moment: Moment on each foot about ``cop`` [frames, 2, 3] [N m].
+        shoe: Shoe pair on the feet, its mass added to them as in :func:`~projects.supermimic.sim.shod_foot`.
 
     Returns:
         Joint moments [frames, 10] [N m] in :data:`~projects.supermimic.body.JOINT_NAMES` order.
@@ -111,16 +115,21 @@ def inverse_dynamics(
             axes = [mirror_axis(a) for a in axes]
         force, point, moment = grf[:, i], cop[:, i], free_moment[:, i]
         proximal = {}
-        for name, segment in (("foot", params.foot), ("shank", params.shank), ("thigh", params.thigh)):
+        segments = [
+            (s.mass, mirror * np.asarray(s.com), np.diag(s.inertia)) for s in (params.foot, params.shank, params.thigh)
+        ]
+        if shoe is not None:
+            segments[0] = shod_foot(params, shoe, ("right", "left")[i])
+        for name, (mass, local_com, local_inertia) in zip(("foot", "shank", "thigh"), segments, strict=True):
             rotation, origin = frames[f"{name}_{side}"]
-            com = origin + rotation @ (mirror * np.asarray(segment.com))
+            com = origin + rotation @ local_com
             omega = _angular_velocity(rotation, dt)
-            inertia = rotation @ np.diag(segment.inertia) @ np.swapaxes(rotation, -1, -2)
+            inertia = rotation @ local_inertia @ np.swapaxes(rotation, -1, -2)
             momentum_rate = np.einsum("fij,fj->fi", inertia, np.gradient(omega, dt, axis=0)) + np.cross(
                 omega, np.einsum("fij,fj->fi", inertia, omega)
             )
             # Wrench applied by the parent at the segment origin (its proximal joint center).
-            joint_force = segment.mass * (np.gradient(np.gradient(com, dt, axis=0), dt, axis=0) - gravity) - force
+            joint_force = mass * (np.gradient(np.gradient(com, dt, axis=0), dt, axis=0) - gravity) - force
             joint_moment = momentum_rate - np.cross(point - com, force) - moment - np.cross(origin - com, joint_force)
             proximal[name] = (rotation, joint_moment)
             force, point, moment = -joint_force, origin, -joint_moment
@@ -261,7 +270,8 @@ def f01_summary(table: DeLevaTable) -> dict:
     same sign under both feet (median 13-24 N m in stance) and 23-31 Hz
     oscillation, unrelated to the plate forces, so it is not a physiological
     free moment. Stances with a rejected marker fit are dropped. Stride metrics
-    use the 1 kHz plate force.
+    use the 1 kHz plate force. The feet wear :func:`f01_shoe`, and body
+    weight includes it.
 
     Args:
         table: Sex-specific de Leva table of the body parameters.
@@ -269,21 +279,25 @@ def f01_summary(table: DeLevaTable) -> dict:
     Returns:
         Per trial, ``stride`` (:func:`stride_metrics`) and ``joints`` (:func:`joint_summary`).
     """
-    params = f01_body_params(table)
+    shoe = f01_shoe()
+    params = f01_body_params(table, shoe.pair_mass_kg)
+    mass = params.mass + shoe.pair_mass_kg
     summary = {}
     for trial in TRIALS:
         data = trial_reference(F01_ROOT / trial, params)
         dt = float(np.mean(np.diff(data["time_s"])))
         grf = data["grf"]
-        moments = inverse_dynamics(data["joint_q"], dt, params, grf, np.nan_to_num(data["cop"]), np.zeros_like(grf))
+        moments = inverse_dynamics(
+            data["joint_q"], dt, params, grf, np.nan_to_num(data["cop"]), np.zeros_like(grf), shoe
+        )
         stances = tuple(
             np.array([(a, b) for a, b in stance_intervals(grf[:, side, 2]) if data["valid"][a:b].all()])
             for side in range(2)
         )
         analog_dt = float(np.mean(np.diff(data["analog_time_s"])))
         summary[trial] = {
-            "stride": stride_metrics(data["analog_grf"][:, :, 2], analog_dt, params.mass * GRAVITY),
-            "joints": joint_summary(data["joint_q"][:, 7:], moments, stances, params.mass),
+            "stride": stride_metrics(data["analog_grf"][:, :, 2], analog_dt, mass * GRAVITY),
+            "joints": joint_summary(data["joint_q"][:, 7:], moments, stances, mass),
         }
     return summary
 

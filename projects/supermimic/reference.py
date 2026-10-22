@@ -39,13 +39,17 @@ from projects.gait_c3d.c3d_adapter import lab_to_newton_rotation
 from projects.impedance_instron.cartesian.visual3d import load_visual3d_export
 
 from .body import JOINT_NAMES, BodyParams, SegmentParams, mirror_axis
+from .sim import Shoe, load_shoes
 
 __all__ = [
     "COORDINATE_NAMES",
     "F01_ROOT",
+    "F01_SHOE",
+    "SHOE_DATASET",
     "TRIALS",
     "DeLevaTable",
     "f01_body_params",
+    "f01_shoe",
     "fit_coordinates",
     "forward_kinematics",
     "load_body_params",
@@ -59,6 +63,11 @@ F01_ROOT = Path(__file__).resolve().parents[2] / "data" / "F01"
 
 TRIALS = ("FR3_1", "FR3_2")
 """Running trials in the FR3 shoe; each has its own static calibration."""
+
+SHOE_DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
+"""Column-bed dataset of the fitted shoes."""
+F01_SHOE = "puma-fast-r-nitro-elite-3"
+"""The FR3 shoe F01 ran in, by its :data:`SHOE_DATASET` name."""
 
 COORDINATE_NAMES = ("x", "y", "z", "qx", "qy", "qz", "qw", *JOINT_NAMES)
 """Generalized coordinates: root position [m], root quaternion (xyzw), joint angles [rad]."""
@@ -131,8 +140,6 @@ _DE_LEVA = {
 }
 SHOULDER_WIDTH = 0.259
 """Biacromial width as a fraction of stature (Winter, Biomechanics and Motor Control of Human Movement, 2009, Fig. 4.1)."""
-WEIGHED_SHOE_MASS_KG = 0.173
-"""Mass of one FR3 shoe [kg] (RunRepeat lab scale, US men's 9), assumed worn when F01's model mass was weighed."""
 
 
 # Rotations ---------------------------------------------------------------
@@ -420,7 +427,12 @@ def _segment_inertia(mass: float, length: float, row, axes: tuple[int, int, int]
     return inertia
 
 
-def f01_body_params(table: DeLevaTable) -> BodyParams:
+def f01_shoe() -> Shoe:
+    """Load the :data:`F01_SHOE` pair from :data:`SHOE_DATASET`."""
+    return next(shoe for shoe in load_shoes(SHOE_DATASET) if shoe.name == F01_SHOE)
+
+
+def f01_body_params(table: DeLevaTable, shoe_pair_mass_kg: float) -> BodyParams:
     """Return F01 body parameters from the static trials of :data:`TRIALS`.
 
     Joint offsets are averaged over the trials and the two sides. Leg masses,
@@ -429,12 +441,15 @@ def f01_body_params(table: DeLevaTable) -> BodyParams:
     the same table, scaled from the table's mean stature to
     :data:`STATURE_M`, upright above the mid-hip point with the arms hanging
     at a shoulder width of :data:`SHOULDER_WIDTH` times stature, scaled in
-    mass so the body mass equals the Visual3D model mass less a pair of
-    :data:`WEIGHED_SHOE_MASS_KG` shoes, which the simulator adds to the feet.
-    ``sole_pitch`` levels the FR3 shoe frame in the static pose.
+    mass so the body mass equals the Visual3D model mass less the shoes,
+    which the simulator adds to the feet. F01 is assumed weighed in the
+    shoes of the trials. ``sole_pitch`` levels the FR3 shoe frame in the
+    static pose.
 
     Args:
         table: Sex-specific de Leva table; F01 is male.
+        shoe_pair_mass_kg: Mass of the shoes worn when F01 was weighed [kg],
+            for example ``f01_shoe().pair_mass_kg``.
 
     Returns:
         Body parameters of F01.
@@ -494,7 +509,7 @@ def f01_body_params(table: DeLevaTable) -> BodyParams:
         vertical("hand", vertical("forearm", vertical("upper_arm", shoulder)))
     leg_mass = thigh.mass + shank.mass + foot.mass
     part_mass = sum(m for m, _, _ in parts)
-    pelvis_mass = body_mass - 2.0 * (leg_mass + WEIGHED_SHOE_MASS_KG)
+    pelvis_mass = body_mass - 2.0 * leg_mass - shoe_pair_mass_kg
     factor = pelvis_mass / part_mass
     com = sum(m * c for m, c, _ in parts) / part_mass
     inertia = sum(
@@ -754,7 +769,7 @@ def prepare_reference(output: Path, table: DeLevaTable) -> dict:
     Returns:
         The checks written to ``report.json``.
     """
-    params = f01_body_params(table)
+    params = f01_body_params(table, f01_shoe().pair_mass_kg)
     output.mkdir(parents=True, exist_ok=False)
     arrays = {k: [] for k in ("joint_q", "joint_qd", "contact", "grf", "cop", "trial", "start_frame", "split")}
     report = {

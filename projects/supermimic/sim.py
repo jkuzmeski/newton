@@ -38,7 +38,7 @@ from projects.digital_shoe.runtime import FoundationConfig, ShoeMaterial
 
 from .body import BODY_NAMES, JOINT_NAMES, BodyParams, add_body
 
-__all__ = ["RunnerSim", "RunnerSimConfig", "Shoe", "load_shoes"]
+__all__ = ["RunnerSim", "RunnerSimConfig", "Shoe", "load_shoes", "shod_foot"]
 
 COORDS = 7 + len(JOINT_NAMES)
 DOFS = 6 + len(JOINT_NAMES)
@@ -62,6 +62,11 @@ class Shoe:
     """Ankle center in the left shoe frame [m]; the right shoe is its mirror."""
     rotation: np.ndarray
     """Registration rotation of the left shoe onto the measured shoe's frame; identity for the measured shoe."""
+
+    @property
+    def pair_mass_kg(self) -> float:
+        """Mass of both shoes [kg]."""
+        return self.left.mass_kg + self.right.mass_kg
 
     def anchors_in_foot(self, side: str, sole_pitch: float) -> np.ndarray:
         """Return the nominal column bottoms of ``side``'s shoe in the foot frame [m]."""
@@ -90,6 +95,25 @@ class Shoe:
         pitch = np.array([[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]])
         foot_from_shoe = pitch @ (mirror @ self.rotation @ mirror).T
         return (points - mount) @ foot_from_shoe.T
+
+
+def shod_foot(body: BodyParams, shoe: Shoe, side: str) -> tuple[float, np.ndarray, np.ndarray]:
+    """Return the inertia of ``side``'s foot wearing ``shoe``, whose columns are massless.
+
+    Returns:
+        Mass [kg], center of mass in the foot frame [m] and inertia about it in the foot axes [kg m^2].
+    """
+    foot = body.foot
+    com = np.asarray(foot.com) * ((1.0, -1.0, 1.0) if side == "left" else 1.0)
+    points, positions = shoe.mass_in_foot(side, body.sole_pitch)
+    mass = foot.mass + points.sum()
+    center = (foot.mass * com + points @ positions) / mass
+    r = np.vstack((com, positions)) - center
+    m = np.concatenate(([foot.mass], points))
+    inertia = np.diag(foot.inertia) + np.einsum(
+        "n,nij->ij", m, (r * r).sum(1)[:, None, None] * np.eye(3) - r[:, :, None] * r[:, None, :]
+    )
+    return mass, center, inertia
 
 
 def load_shoes(dataset: str | Path) -> list[Shoe]:
@@ -389,22 +413,8 @@ class RunnerSim:
         mass, com, inertia = (a.numpy() for a in (model.body_mass, model.body_com, model.body_inertia))
         for s, shoe in enumerate(shoes):
             for side, foot in zip(SIDES, FOOT_BODIES, strict=True):
-                points, positions = shoe.mass_in_foot(side, self.body.sole_pitch)
                 bodies = np.flatnonzero(self.shoe_of_world == s) * len(BODY_NAMES) + foot
-                if not len(bodies):
-                    continue
-                m0, c0, i0 = mass[bodies[0]], com[bodies[0]].astype(float), inertia[bodies[0]].astype(float)
-                total = m0 + points.sum()
-                center = (m0 * c0 + points @ positions) / total
-                r0 = c0 - center
-                r = positions - center
-                i0 = i0 + m0 * (r0 @ r0 * np.eye(3) - np.outer(r0, r0))
-                i0 = i0 + np.einsum(
-                    "n,nij->ij",
-                    points,
-                    np.einsum("nk,nk->n", r, r)[:, None, None] * np.eye(3) - r[:, :, None] * r[:, None, :],
-                )
-                mass[bodies], com[bodies], inertia[bodies] = total, center, i0
+                mass[bodies], com[bodies], inertia[bodies] = shod_foot(self.body, shoe, side)
         model.body_mass.assign(mass)
         model.body_inv_mass.assign(1.0 / mass)
         model.body_com.assign(com)

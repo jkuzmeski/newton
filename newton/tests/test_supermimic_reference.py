@@ -12,7 +12,6 @@ import numpy as np
 import newton
 from projects.supermimic.body import BODY_NAMES, BodyParams, add_body
 from projects.supermimic.reference import (
-    WEIGHED_SHOE_MASS_KG,
     DeLevaTable,
     _hinge_angle,
     _hip_angles,
@@ -25,6 +24,8 @@ from projects.supermimic.reference import (
     load_body_params,
 )
 
+SHOE_PAIR_MASS_KG = 0.35
+
 
 def _random_q(rng: np.random.Generator, count: int) -> np.ndarray:
     rotation = _rotvec_rotation(rng.uniform(-0.3, 0.3, (count, 3)))
@@ -35,7 +36,7 @@ def _random_q(rng: np.random.Generator, count: int) -> np.ndarray:
 class TestSupermimicReference(unittest.TestCase):
     def test_forward_kinematics_matches_newton(self):
         """Match Newton's body poses of the runner articulation with the reference forward kinematics."""
-        params = f01_body_params(DeLevaTable.MALE)
+        params = f01_body_params(DeLevaTable.MALE, SHOE_PAIR_MASS_KG)
         builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
         add_body(builder, params)
         model = builder.finalize(device="cpu")
@@ -89,10 +90,10 @@ class TestSupermimicReference(unittest.TestCase):
 
     def test_f01_body_params(self):
         """Build F01 parameters with the measured mass and leg lengths, per de Leva table."""
-        male = f01_body_params(DeLevaTable.MALE)
-        female = f01_body_params(DeLevaTable.FEMALE)
+        male = f01_body_params(DeLevaTable.MALE, SHOE_PAIR_MASS_KG)
+        female = f01_body_params(DeLevaTable.FEMALE, SHOE_PAIR_MASS_KG)
         for params in (male, female):
-            self.assertAlmostEqual(params.mass + 2.0 * WEIGHED_SHOE_MASS_KG, 66.5, places=9)
+            self.assertAlmostEqual(params.mass + SHOE_PAIR_MASS_KG, 66.5, places=9)
             self.assertGreater(-params.knee_offset[2], 0.35)
             self.assertLess(-params.knee_offset[2], 0.42)
             self.assertLess(params.hip_offset[1], -0.07)
@@ -102,7 +103,7 @@ class TestSupermimicReference(unittest.TestCase):
 
     def test_load_body_params(self):
         """Read back body parameters written as JSON."""
-        params = f01_body_params(DeLevaTable.MALE)
+        params = f01_body_params(DeLevaTable.MALE, SHOE_PAIR_MASS_KG)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "body_params.json"
             path.write_text(json.dumps(asdict(params)), encoding="utf-8")

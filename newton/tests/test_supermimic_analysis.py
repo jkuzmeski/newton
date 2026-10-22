@@ -15,6 +15,8 @@ from projects.supermimic.analysis import (
     stride_metrics,
 )
 from projects.supermimic.body import BodyParams, add_body
+from projects.supermimic.reference import F01_SHOE, SHOE_DATASET
+from projects.supermimic.sim import FOOT_BODIES, SIDES, load_shoes, shod_foot
 
 
 def _standing(frames: int = 5) -> np.ndarray:
@@ -44,11 +46,32 @@ class TestSupermimicAnalysis(unittest.TestCase):
 
     def test_recovers_simulated_joint_torques(self):
         """Recover the joint torques driving a free-flying runner from its simulated coordinates."""
+        self._recover_simulated_joint_torques(None)
+
+    @unittest.skipUnless(SHOE_DATASET.exists(), "needs the column-bed dataset")
+    def test_recovers_simulated_joint_torques_with_shoes(self):
+        """Recover the joint torques of a free-flying runner whose feet carry the shoe mass."""
+        shoe = next(s for s in load_shoes(SHOE_DATASET) if s.name == F01_SHOE)
+        shoe = dataclasses.replace(
+            shoe, left=dataclasses.replace(shoe.left, mass_kg=1.0), right=dataclasses.replace(shoe.right, mass_kg=1.0)
+        )
+        self._recover_simulated_joint_torques(shoe)
+
+    def _recover_simulated_joint_torques(self, shoe):
         # Free joints: the swinging segments must not reach the range-of-motion limits.
         params = dataclasses.replace(BodyParams(), joint_limits=((-1.0e6, 1.0e6),) * 5)
         builder = newton.ModelBuilder(up_axis=newton.Axis.Z)
         add_body(builder, params)
         model = builder.finalize(device="cpu")
+        if shoe is not None:
+            mass, com, inertia = (a.numpy() for a in (model.body_mass, model.body_com, model.body_inertia))
+            for side, foot in zip(SIDES, FOOT_BODIES, strict=True):
+                mass[foot], com[foot], inertia[foot] = shod_foot(params, shoe, side)
+            model.body_mass.assign(mass)
+            model.body_inv_mass.assign(1.0 / mass)
+            model.body_com.assign(com)
+            model.body_inertia.assign(inertia)
+            model.body_inv_inertia.assign(np.linalg.inv(inertia))
         solver = newton.solvers.SolverFeatherstone(model)
         state, next_state, control = model.state(), model.state(), model.control()
         joint_q = np.zeros(17, np.float32)
@@ -68,7 +91,7 @@ class TestSupermimicAnalysis(unittest.TestCase):
             state, next_state = next_state, state
         # Sample coarser than the step so float32 coordinates still give accelerations by differences.
         zero = np.zeros((steps // stride, 2, 3))
-        moments = inverse_dynamics(np.array(coordinates[::stride]), stride * dt, params, zero, zero, zero)
+        moments = inverse_dynamics(np.array(coordinates[::stride]), stride * dt, params, zero, zero, zero, shoe)
         error = (moments - np.array(torque[::stride]))[2:-2]
         np.testing.assert_array_less(np.abs(error).max(0), 0.02 * np.abs(amplitude))
 

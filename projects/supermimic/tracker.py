@@ -44,7 +44,7 @@ from .collect import (
 )
 from .context import XI_DIM
 from .policy import Actor, Critic, impedance_action_bounds
-from .reference import load_body_params
+from .reference import f01_shoe, load_body_params
 from .sim import RunnerSim
 from .tracking import (
     STATE_DIM,
@@ -393,7 +393,7 @@ def main(argv: list[str] | None = None) -> None:
         torch.as_tensor(xi, dtype=torch.float32, device=device),
         joint_q,
         joint_qd,
-        torch.as_tensor(reference_moments(ref, body), dtype=torch.float32, device=device),
+        torch.as_tensor(reference_moments(ref, body, f01_shoe()), dtype=torch.float32, device=device),
         episode_starts(ref, "train"),
         buffer,
     )

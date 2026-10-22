@@ -50,8 +50,8 @@ from .body import JOINT_NAMES, BodyParams
 from .buffer import ReplayBuffer
 from .context import GEOMETRY_NAMES, XI_COORDINATES, XI_DIM, ShoeSpace, decode, encode
 from .policy import DAMPING_LIMITS, STIFFNESS_LIMITS
-from .reference import DeLevaTable, f01_body_params
-from .sim import RunnerSim, load_shoes
+from .reference import SHOE_DATASET, DeLevaTable, f01_body_params, f01_shoe
+from .sim import RunnerSim, Shoe, load_shoes
 
 __all__ = [
     "AUX_DIM",
@@ -71,8 +71,6 @@ __all__ = [
 JOINT_COUNT = len(JOINT_NAMES)
 STATE_DIM = 13 + 2 * JOINT_COUNT
 AUX_DIM = 12 + 3 * JOINT_COUNT
-SHOE_DATASET = Path("Z:/newton_grid/data/dataset_3d_column_bed_v2")
-"""Column-bed shoe dataset of subject F01."""
 HELD_OUT_SHOE = "puma-deviate-nitro-elite-3"
 """Shoe whose foam is the center of the held-out context ball."""
 
@@ -144,17 +142,18 @@ def moment_stiffness_floor(
     return torch.maximum(stiffness_limits[:, 0], moment.abs() / room)
 
 
-def reference_moments(ref: dict, body: BodyParams) -> np.ndarray:
+def reference_moments(ref: dict, body: BodyParams, shoe: Shoe) -> np.ndarray:
     """Return the inverse-dynamics joint moments of the reference windows [windows, frames, 10] [N m].
 
     Args:
         ref: Arrays of ``reference.npz``.
         body: Body parameters of the reference.
+        shoe: Shoe pair of the reference, on the feet.
     """
     dt = float(ref["frame_dt"])
     return np.stack(
         [
-            inverse_dynamics(q, dt, body, grf, np.nan_to_num(cop), np.zeros_like(grf))
+            inverse_dynamics(q, dt, body, grf, np.nan_to_num(cop), np.zeros_like(grf), shoe)
             for q, grf, cop in zip(ref["joint_q"], ref["grf"], ref["cop"], strict=True)
         ]
     )
@@ -218,7 +217,8 @@ def collect(
     rng = np.random.default_rng(seed)
     generator = torch.Generator(device).manual_seed(seed)
     report = json.loads((reference / "report.json").read_text())
-    body = f01_body_params(DeLevaTable(report["body_table"]))
+    shoe = f01_shoe()
+    body = f01_body_params(DeLevaTable(report["body_table"]), shoe.pair_mass_kg)
     with np.load(reference / "reference.npz") as f:
         ref = {k: f[k] for k in f.files}
 
@@ -229,7 +229,7 @@ def collect(
     frames = ref["joint_q"].shape[1]
     ref_q = torch.as_tensor(ref["joint_q"], dtype=torch.float32, device=device)
     ref_qd = torch.as_tensor(ref["joint_qd"], dtype=torch.float32, device=device)
-    ref_moment = torch.as_tensor(reference_moments(ref, body), dtype=torch.float32, device=device)
+    ref_moment = torch.as_tensor(reference_moments(ref, body, shoe), dtype=torch.float32, device=device)
     # The left joints have the limits of the right ones.
     stiffness_limits = torch.tensor(STIFFNESS_LIMITS * 2, device=device)
     damping_limits = torch.tensor(DAMPING_LIMITS * 2, device=device)
