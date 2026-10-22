@@ -238,6 +238,7 @@ class _Bed:
     tangential_load: wp.array[wp.vec2]
     stop_gap: wp.array[wp.float32]
     stop_stiffness: wp.array[wp.float32]
+    stop_engage: wp.array[wp.float32]
 
 
 _STRAIN_STEP = wp.constant(1.0e-3)
@@ -558,9 +559,24 @@ def _column_bed_step(
         bed.stiffness[i] = 0.0
         bed.stop_gap[i] = 1.0e30
         bed.stop_stiffness[i] = 0.0
+        bed.stop_engage[i] = 0.0
         if bed.implicit != 0 and held and landed:
             # Room left to the stop, negative once the carrier has passed it.
             bed.stop_gap[i] = bed.max_strain * thickness - comp
+            bed.stop_engage[i] = dt * area * _STOP_MODULUS / thickness
+        if bed.implicit != 0 and held and not landed:
+            # Room left to the plane. A carrier that would close it within the
+            # step lands the bottom and compresses the column with its foam.
+            bed.stop_gap[i] = wp.max(_clearance_shared(column, 0.0, 0) - bottom, 0.0)
+            h = _STRAIN_STEP * thickness
+            c_land = wp.max(comp, h)
+            bed.stop_engage[i] = (
+                dt
+                * area
+                * (1.0 + gain)
+                * (_hyperfoam_pressure(c_land / thickness, p) - _hyperfoam_pressure((c_land - h) / thickness, p))
+                / h
+            )
         if bed.implicit != 0 and held and comp > 0.0:
             # Axial tangent of the foam, by a backward difference so it never
             # steps onto the stretch floor.
@@ -724,14 +740,15 @@ def _column_bed_step(
                 if s_col > 0.0 and s_col * _row_speed(u, ez, r) > bed.carried[i]:
                     bed.stiffness[i] = 0.0
                     dropped += 1.0
-                # A column pushes the carrier back to the stop once its end-of-step
-                # compression would pass it, and lets go as soon as it would pull.
+                # A column pushes the carrier back to the stop, or a hanging bottom
+                # lands, once the end-of-step motion would pass it; either lets go
+                # as soon as it would pull.
                 closing = -_row_speed(u, ez, r) * dt - bed.stop_gap[i]
                 if bed.stop_stiffness[i] > 0.0 and closing < 0.0:
                     bed.stop_stiffness[i] = 0.0
                     dropped += 1.0
                 elif bed.stop_stiffness[i] == 0.0 and closing > 0.0:
-                    bed.stop_stiffness[i] = dt * bed.area[column] * _STOP_MODULUS / bed.rest_len[column]
+                    bed.stop_stiffness[i] = bed.stop_engage[i]
                     dropped += 1.0
                 s_t = bed.tangential_stiffness[i]
                 slip = wp.vec2(_row_speed(u, ex, r), _row_speed(u, ey, r))
@@ -949,6 +966,7 @@ class ColumnBed:
             "stiffness",
             "stop_gap",
             "stop_stiffness",
+            "stop_engage",
         ):
             setattr(bed, name, wp.zeros(total, dtype=wp.float32, device=d))
         bed.lever = wp.zeros(total, dtype=wp.vec3, device=d)
