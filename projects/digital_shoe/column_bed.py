@@ -886,7 +886,7 @@ class ColumnBed:
     carrier_mobility: wp.array | None = None
     max_strain: float = 0.95
     sweeps: int = 16
-    over_relaxation: float = 1.8
+    over_relaxation: float = 1.0
     device: object = None
 
     def __post_init__(self) -> None:
