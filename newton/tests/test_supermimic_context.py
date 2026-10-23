@@ -30,6 +30,16 @@ DEV3 = ShoeMaterial(
     instantaneous_shear_modulus_2_pa=12.08748525186517,
     hyperfoam_exponent_2=-14.237670395643558,
 )
+# Soft-wall refit of the Deviate foam, whose second exponent is positive.
+DEV3_SOFT = ShoeMaterial(
+    instantaneous_shear_modulus_pa=342976.5338,
+    hyperfoam_exponent=8.1709,
+    equilibrium_fraction=0.8342,
+    pasternak_n_per_m=0.0,
+    maxwell_relaxation_time_s=0.0324,
+    instantaneous_shear_modulus_2_pa=7653.6083,
+    hyperfoam_exponent_2=0.7077,
+)
 
 
 def _pressure(material: ShoeMaterial, strain: np.ndarray) -> np.ndarray:
@@ -50,7 +60,7 @@ class TestSupermimicContext(unittest.TestCase):
     def test_encode_decode_round_trip(self):
         """Recover each fitted foam, its pressure curve, friction and geometry from its context."""
         strain = np.linspace(0.0, 0.85, 50)
-        for geometry, material in enumerate((FR3, DEV3)):
+        for material, geometry in ((FR3, 0), (DEV3, 1), (DEV3_SOFT, 1)):
             xi = encode(material, 0.8, geometry)
             (decoded,), friction, (decoded_geometry,) = decode(xi[None])
             self.assertEqual(decoded_geometry, geometry)

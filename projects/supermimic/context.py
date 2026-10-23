@@ -41,7 +41,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.optimize import brentq
 
+from projects.digital_shoe.material import hyperfoam_pressure_numpy
 from projects.digital_shoe.runtime import ShoeMaterial
 
 __all__ = [
@@ -57,6 +59,9 @@ __all__ = [
 
 DENSIFICATION_PRESSURE_PA = 1.0e6
 """Pressure that defines the densification strain [Pa]."""
+
+STRETCH_FLOOR = 0.05
+"""Stretch floor of the foam law, as in the runtime."""
 
 XI_COORDINATES = (
     ("log_modulus", 4.2e5, 1.05e6, True),
@@ -80,6 +85,32 @@ _GEOMETRY = len(XI_COORDINATES)
 _LOG = np.array([c[3] for c in XI_COORDINATES])
 
 
+def _pressure(strain: float, g1: float, a1: float, g2: float, a2: float) -> float:
+    """Equilibrium pressure of the two-term law at a compressive strain [Pa]."""
+    return float(hyperfoam_pressure_numpy(np.float64(strain), g1, a1, g2, a2, 0.0, 1.0, STRETCH_FLOOR))
+
+
+def _densification_strain(g1: float, a1: float, g2: float, a2: float) -> float:
+    """Strain at which the equilibrium pressure of the two-term law reaches :data:`DENSIFICATION_PRESSURE_PA`."""
+    return brentq(
+        lambda strain: _pressure(strain, g1, a1, g2, a2) - DENSIFICATION_PRESSURE_PA,
+        0.0,
+        1.0 - STRETCH_FLOOR,
+        xtol=1e-12,
+    )
+
+
+def _second_modulus(g1: float, a1: float, a2: float, strain: float) -> float:
+    """Return the equilibrium modulus of the second term that brings the pressure at ``strain`` to the densification pressure [Pa].
+
+    The pressure is linear in the term modulus. A first term that already exceeds the
+    densification pressure at ``strain`` leaves no second term.
+    """
+    first = _pressure(strain, g1, a1, 0.0, a2)
+    unit = _pressure(strain, 0.0, a1, 1.0, a2)
+    return max((DENSIFICATION_PRESSURE_PA - first) / unit, 0.0)
+
+
 def _scaled(physical: np.ndarray) -> np.ndarray:
     """Take the log of the log-scaled coordinates."""
     physical = np.array(physical, dtype=np.float64)
@@ -101,8 +132,8 @@ def encode(material: ShoeMaterial, friction: float, geometry: int) -> np.ndarray
     g2 = material.instantaneous_shear_modulus_2_pa * f
     a1 = material.hyperfoam_exponent
     a2 = material.hyperfoam_exponent_2
-    stretch = (DENSIFICATION_PRESSURE_PA * -a2 / (2.0 * g2)) ** (1.0 / (a2 - 1.0))
-    physical = _scaled([2.0 * g1, 2.0 * g1 / a1, 1.0 - stretch, a2, f, material.maxwell_relaxation_time_s, friction])
+    strain = _densification_strain(g1, a1, g2, a2)
+    physical = _scaled([2.0 * g1, 2.0 * g1 / a1, strain, a2, f, material.maxwell_relaxation_time_s, friction])
     xi = np.zeros(XI_DIM, dtype=np.float32)
     xi[:_GEOMETRY] = 2.0 * (physical - _LOW) / (_HIGH - _LOW) - 1.0
     xi[_GEOMETRY + geometry] = 1.0
@@ -126,7 +157,7 @@ def decode(xi: np.ndarray) -> tuple[list[ShoeMaterial], np.ndarray, np.ndarray]:
     physical[:, _LOG] = np.exp(physical[:, _LOG])
     materials = []
     for modulus, plateau, strain, a2, f, tau, _friction in physical:
-        g2 = 0.5 * DENSIFICATION_PRESSURE_PA * -a2 * (1.0 - strain) ** (1.0 - a2)
+        g2 = _second_modulus(0.5 * modulus, modulus / plateau, a2, strain)
         materials.append(
             ShoeMaterial(
                 instantaneous_shear_modulus_pa=0.5 * modulus / f,
