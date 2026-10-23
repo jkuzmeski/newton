@@ -443,6 +443,7 @@ def _column_bed_step(
     if lane < 3:
         _changed_shared(lane, 0, 1)
     _sync_threads()
+    converged = int(0)
     for half in range(2 * bed.sweeps):
         sweep = half / 2
         start = 0
@@ -501,7 +502,19 @@ def _column_bed_step(
             _support_shared(column, state, 1)
         _sync_threads()
         if half % 2 == 1 and _changed_shared(sweep % 3, 0, 0) == 0:
+            converged = int(1)
             break
+    if converged == 0:
+        # An iterate the sweeps left unbalanced is no state of the bed, and its
+        # layer forces can be decades off; keep the bed where it last stood.
+        for slot in range(lane, count, _BLOCK):
+            column = bed.order[slot]
+            i = base + column
+            _top_shared(column, bed.top[i], 1)
+            _bottom_shared(column, bed.bottom[i], 1)
+            _support_shared(column, bed.support[i], 1)
+            _set_modulus(column, bed.top[i] - bed.bottom[i], bed.rest_len[column], rest, p)
+        _sync_threads()
 
     twist = body_qd[body]
     com_local = bed.body_com[body]
