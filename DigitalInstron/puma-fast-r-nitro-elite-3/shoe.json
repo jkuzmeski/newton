@@ -1,12 +1,14 @@
 {
-  "code_sha256": "c34c40e26f659fb5582c843ca03a56449d3f0f2a50d3ca04950cd45d7cce94f5",
+  "code_sha256": "17946377dbb9f1dc6d1b396a112b63d8819a8ba3ab93b40be6706251424b59d4",
   "column_qc": {
     "build_column_grid_columns": 916,
     "columns": 917,
+    "covered_area_fraction": 0.9912355103194799,
     "dropped_outside_or_thin": 20,
     "hole_gaps_filled": 1,
     "lattice_points": 1440,
     "odd_hit_count_columns": 0,
+    "partial_cells": 52,
     "rays_hitting_mesh": 937,
     "repaired_uv_m": [
       [
@@ -50,7 +52,7 @@
         0.0,
         20.0
       ],
-      "value": 2.1322713890308194
+      "value": 1.6827182810920505
     },
     "footprint_length_mm": {
       "passed": true,
@@ -74,7 +76,7 @@
         5.0,
         70.0
       ],
-      "value": 44.0409768187696
+      "value": 44.033197497931106
     },
     "median_thickness_mm": {
       "passed": true,
@@ -82,19 +84,19 @@
         15.0,
         50.0
       ],
-      "value": 31.598117060901764
+      "value": 31.34607245447807
     }
   },
   "geometry_status": "ready",
   "left": {
     "columns": 917,
-    "drop_mm": 2.1322713890308194,
-    "forefoot_thickness_mm": 32.618642254218656,
-    "grid_sha256": "1be31f3d03e9d23d82ecadb36c55e17dcf09a83042e09f3559de36958849f4e4",
-    "heel_thickness_mm": 34.750913643249476,
-    "max_thickness_mm": 44.0409768187696,
-    "median_thickness_mm": 31.598117060901764,
-    "min_thickness_mm": 5.290598338048922,
+    "drop_mm": 1.6827182810920505,
+    "forefoot_thickness_mm": 32.55596426421127,
+    "grid_sha256": "7da2f26edd58d4b28d7f1206b6a146a8b6728cf60c0c246e5b2a7681d62d94d4",
+    "heel_thickness_mm": 34.23868254530332,
+    "max_thickness_mm": 44.033197497931106,
+    "median_thickness_mm": 31.34607245447807,
+    "min_thickness_mm": 6.894928736419427,
     "mirrored_from_source": true
   },
   "mesh_qc": {
@@ -134,16 +136,16 @@
     "spacing_m": 0.005
   },
   "product_name": "PUMA Fast-R NITRO Elite 3",
-  "provenance_sha256": "cacb0e64f6f2eecfdf58736ff8c525763cf813754f5e161f7d59f337e8ed9303",
+  "provenance_sha256": "0b18d0090cbdb27de1f6d45e7857580e86a9cd3125d44906bec20eef8bea8d48",
   "right": {
     "columns": 917,
-    "drop_mm": 2.1322713890308194,
-    "forefoot_thickness_mm": 32.618642254218656,
-    "grid_sha256": "1a4e23bd8ec086a48ad38ee1d7ea3df74a9060fd0ab0b71bb07cc2a15c2fe8d1",
-    "heel_thickness_mm": 34.750913643249476,
-    "max_thickness_mm": 44.0409768187696,
-    "median_thickness_mm": 31.598117060901764,
-    "min_thickness_mm": 5.290598338048922,
+    "drop_mm": 1.6827182810920505,
+    "forefoot_thickness_mm": 32.55596426421127,
+    "grid_sha256": "be7f7cf828d072eb86361fef7236e8997e7a681d2602400e02b7d748aea7e5d4",
+    "heel_thickness_mm": 34.23868254530332,
+    "max_thickness_mm": 44.033197497931106,
+    "median_thickness_mm": 31.34607245447807,
+    "min_thickness_mm": 6.894928736419427,
     "mirrored_from_source": false
   },
   "side_cues_m": {

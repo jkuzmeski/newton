@@ -283,6 +283,8 @@ class TestRunnerGpu(unittest.TestCase):
         bed["rest_length_m"].append(0.02)
         bed["area_m2"].append(0.0001)
         bed["neighbors"] = [[1, -1, -1, -1], [0, 2, -1, -1], [1, -1, -1, -1]]
+        bed["top_bonded"].append(False)
+        raw["instron_fixtures"]["fullfoot_last"]["bed_bottom_above_platen_m"].append(0.0)
         path = Path(self.directory.name) / "margin.json"
         path.write_text(json.dumps(raw))
         shoe = Shoe(path, [0, 0, 0.1], 0)

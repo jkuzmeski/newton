@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from projects.digital_instron_v2.shoe_prep import ShoePrepError, prepare_shoe
+from projects.digital_instron_v2.shoe_prep import CELL_RAYS, SPACING_M, ShoePrepError, prepare_shoe, sample_columns
 
 try:
     import trimesh
@@ -139,6 +139,27 @@ class TestDigitalInstronShoePrep(unittest.TestCase):
         extra.apply_translation([0.0, 0.0, 0.1])
         with self.assertRaisesRegex(ShoePrepError, "bodies"):
             self._prepare(_to_source(trimesh.util.concatenate([_midsole(), extra]), _RTINGS_POSE), "two_bodies")
+
+    def test_outline_cells_average_their_covered_area(self):
+        """An outline cell keeps the mean thickness and covered area of its cell, not its center ray."""
+        # Cross-section in (y, z): 20 mm thick, tapering to 6 mm over the outer 4 mm of each side.
+        section = np.array([[-21.0, 0.0], [21.0, 0.0], [21.0, 6.0], [17.0, 20.0], [-17.0, 20.0], [-21.0, 6.0]]) * 1e-3
+        fan = np.array([[0, i, i + 1] for i in range(1, len(section) - 1)])
+        prism = trimesh.creation.extrude_triangulation(section, fan, height=0.1)
+        prism.vertices = prism.vertices[:, [2, 0, 1]]
+        grid, qc = sample_columns(prism)
+
+        def thickness(y):
+            return np.clip(20.0 - 3.5 * (np.abs(y) * 1e3 - 17.0), None, 20.0) * 1e-3
+
+        offsets = ((np.arange(CELL_RAYS) + 0.5) / CELL_RAYS - 0.5) * SPACING_M
+        for y in (-0.001, 0.019):  # interior cell, and the outline cell centered 2 mm inside the edge
+            column = np.flatnonzero(np.all(np.isclose(grid.uv_m, [0.05, y]), axis=1))[0]
+            inside = y + offsets[y + offsets < 0.021]
+            np.testing.assert_allclose(grid.slack_m[column], thickness(inside).mean(), rtol=1e-6)
+            np.testing.assert_allclose(grid.area_m2[column], SPACING_M**2 * len(inside) / CELL_RAYS, rtol=1e-9)
+        self.assertGreater(grid.slack_m[column], thickness(0.019) + 5e-4)
+        self.assertGreater(qc["partial_cells"], 0)
 
 
 if __name__ == "__main__":

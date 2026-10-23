@@ -4,12 +4,14 @@
 """Tests for replaying Instron last traces through the two-surface column bed."""
 
 import unittest
+from dataclasses import replace
 
 import numpy as np
 import warp as wp
 
 from projects.digital_instron_v2.core import CALIBRATED_MATERIAL, Material
 from projects.digital_instron_v2.last_replay import LastBed, LastReplay, physical
+from projects.digital_instron_v2.sweep_fit import fit_material
 from projects.digital_shoe.column_bed import BOTTOM_LANDED, TOP_HELD
 
 
@@ -25,7 +27,7 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
             bottom_m=np.array([0.0, 0.005, 0.0, 0.0, 0.005]),
             gap_m=np.zeros(5),
             rest_m=np.full(5, 0.02),
-            area_m2=h * h,
+            area_m2=np.full(5, h * h),
             spacing_m=h,
             tread=np.array([True, True, False, False, True]),
         )
@@ -64,7 +66,7 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
             bottom_m=np.where(tread, 0.0, 0.012),
             gap_m=np.zeros(len(uv)),
             rest_m=np.full(len(uv), 0.008),
-            area_m2=h * h,
+            area_m2=np.full(len(uv), h * h),
             spacing_m=h,
             tread=tread,
         )
@@ -79,6 +81,33 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
         force = LastReplay(bed, np.full((40, 1), 0.003), 1.0e-3, 1, cycles=1).run([stiff])
 
         self.assertTrue(np.all(np.isfinite(force)))
+
+    @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
+    def test_fit_replays_in_substeps(self):
+        """The fit scores its start on the substepped replay, the runner's contact step."""
+        h = 0.005
+        bed = LastBed(
+            uv_m=np.array([[0.0, 0.0], [h, 0.0]]),
+            bottom_m=np.zeros(2),
+            gap_m=np.zeros(2),
+            rest_m=np.full(2, 0.02),
+            area_m2=np.full(2, h * h),
+            spacing_m=h,
+            tread=np.ones(2, dtype=bool),
+        )
+        frames = 11
+        depth = 0.010 * np.sin(np.linspace(0.0, np.pi, frames))[:, None]
+        displacement = depth[:, 0]
+        # A slow material lags the 1 ms frame most, so one step and eight steps differ.
+        material = replace(CALIBRATED_MATERIAL, maxwell_relaxation_time_s=6.0e-3)
+        substepped = LastReplay(bed, depth, 1.0e-3, 1, substeps=8).run([material])[0, 0]
+        single = LastReplay(bed, depth, 1.0e-3, 1).run([material])[0, 0]
+        self.assertGreater(np.max(np.abs(substepped - single)), 1.0e-3 * np.max(single))
+        trace = {"time_s": np.arange(frames) * 1.0e-3, "displacement_m": displacement, "force_n": substepped}
+
+        _, records = fit_material(bed, depth, 1.0e-3, [trace], [material], evaluations=1, substeps=8)
+
+        self.assertAlmostEqual(records[0]["history"][0]["loss"], 0.0, places=10)
 
     def test_physical_flags_balanced_divergence(self):
         """A diverged bed whose last and platen forces stay balanced is still flagged by its columns."""

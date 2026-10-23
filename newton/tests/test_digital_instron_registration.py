@@ -87,7 +87,9 @@ class TestDigitalInstronRegistration(unittest.TestCase):
         # Flat sole pitched by 3 deg with a rocker toe curling up over the last 40 %.
         bottom = pitch * uu + 0.030 * (np.maximum(heel - 0.6, 0.0) / 0.4) ** 2
         top = pitch * uu + 0.030 + _plantar(local[:, 0], local[:, 1])
-        grid = ColumnGrid(np.column_stack((uu, vv))[keep], bottom[keep], top[keep], 0.005**2, 0.005, 2)
+        grid = ColumnGrid(
+            np.column_stack((uu, vv))[keep], bottom[keep], top[keep], np.full(keep.sum(), 0.005**2), 0.005, 2
+        )
 
         reg = register_last(grid, last, modulus_pa=2.4e5)
         self.assertAlmostEqual(reg.qc["rest_pitch_deg"], 3.0, delta=0.1)

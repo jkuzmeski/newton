@@ -64,6 +64,7 @@ def _tiny_shoe(directory: str) -> Shoe:
             "area_m2": [0.0001, 0.0001],
             "neighbors": [[1, -1, -1, -1], [0, -1, -1, -1]],
             "spacing_m": 0.01,
+            "bed_bottom_above_platen_m": [0.0, 0.0],
         }
     }
     path = Path(directory) / "shoe.json"

@@ -20,7 +20,6 @@ class TestSharedContact(unittest.TestCase):
             "runtime.py",
             "material.py",
             "contact.py",
-            "friction_maxwell.py",
         ):
             with self.subTest(filename=filename):
 

@@ -45,7 +45,7 @@ class LastBed:
     bottom_m: np.ndarray  # rest bottom clearance over the platen h [column_count]
     gap_m: np.ndarray  # rest clearance from the top to the last surface g, zero off the tread [column_count]
     rest_m: np.ndarray  # rest thickness [column_count]
-    area_m2: float  # tributary area per column
+    area_m2: np.ndarray  # midsole footprint area [column_count]
     spacing_m: float  # grid spacing
     tread: np.ndarray  # bool, the last tread is over the column [column_count]
 
@@ -58,7 +58,7 @@ def last_bed(grid: ColumnGrid, registration: LastRegistration) -> LastBed:
         bottom_m=np.asarray(registration.bottom_above_platen_m, dtype=float),
         gap_m=np.where(tread, registration.gap_m, 0.0),
         rest_m=np.asarray(grid.slack_m, dtype=float),
-        area_m2=float(grid.area_m2),
+        area_m2=np.asarray(grid.area_m2, dtype=float),
         spacing_m=float(grid.spacing_m),
         tread=tread,
     )
@@ -183,11 +183,10 @@ class LastReplay:
         self.world_count = self.candidates * self.trace_count
         self.dt_s = float(dt_s) / self.substeps
         self.device = wp.get_device(device)
-        count = len(bed.rest_m)
         self.bed = ColumnBed(
             np.column_stack((bed.uv_m, bed.bottom_m)),
             bed.rest_m,
-            np.full(count, bed.area_m2),
+            bed.area_m2,
             neighbor_indices(bed.uv_m, bed.uv_m, bed.spacing_m),
             bed.spacing_m,
             np.where(bed.tread, TOP_PRESSED, TOP_FREE),

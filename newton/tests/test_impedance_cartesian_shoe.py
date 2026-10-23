@@ -34,6 +34,7 @@ def _tiny_shoe_file(directory: str) -> Path:
             "area_m2": [0.0001, 0.0001],
             "neighbors": [[1, -1, -1, -1], [0, -1, -1, -1]],
             "spacing_m": 0.01,
+            "bed_bottom_above_platen_m": [0.0, 0.0],
         }
     }
     path = Path(directory) / "shoe.json"
@@ -68,17 +69,12 @@ class TestCartesianShoe(unittest.TestCase):
         self.assertAlmostEqual(force[2], 0, places=6)
         self.assertAlmostEqual(strain, 0.001 / 0.02, places=5)
 
-    def test_elastic_coulomb_scales_with_column_geometry(self):
-        """Use area-scaled equilibrium shear stiffness."""
-        material = self.shoe.shoe.material
-        g_eq = material.equilibrium_shear_modulus_pa
-        area = np.asarray(self.shoe.shoe.column_bed.area_m2)
-        rest = np.asarray(self.shoe.shoe.column_bed.rest_length_m)
-        kt = g_eq * area / rest
-        dt, speed = 0.001, 0.01
-        expected = -np.sum(kt * dt * speed)
-        actual, _strain = self.shoe.apply([0, 0.099], [speed, 0], 0, 0, dt)
-        np.testing.assert_allclose(actual[0], expected, rtol=1e-5, atol=1e-7)
+    def test_moving_sole_slides_at_the_friction_limit(self):
+        """Slide every loaded column bottom of a moving sole at mu times its ground reaction."""
+        actual, _strain = self.shoe.apply([0, 0.099], [0.01, 0], 0, 0, 0.001)
+        normal = float(self.shoe.bed.bed.normal_force.numpy()[0])
+        self.assertGreater(normal, 0.0)
+        np.testing.assert_allclose(actual[0], -self.shoe.config.mu * normal, rtol=1e-4)
 
     def test_pitch_sign(self):
         """Map the Newton +Y torque into the mathematical planar angle convention."""
@@ -137,6 +133,8 @@ class TestCartesianShoe(unittest.TestCase):
         bed["rest_length_m"].append(0.02)
         bed["area_m2"].append(0.0001)
         bed["neighbors"] = [[1, -1, -1, -1], [0, 2, -1, -1], [1, -1, -1, -1]]
+        bed["top_bonded"].append(False)
+        raw["instron_fixtures"]["fullfoot_last"]["bed_bottom_above_platen_m"].append(0.0)
         path.write_text(json.dumps(raw))
         shoe = Shoe(path, [0, 0, 0.1], 0)
         np.testing.assert_array_equal(shoe.connection, [TOP_BONDED, TOP_BONDED, TOP_FREE])

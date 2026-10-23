@@ -16,22 +16,29 @@ from .runtime import ShoeMaterial
 
 SCHEMA_VERSION = "digital_shoe_1"
 MODEL_TYPE = "effective_hyperfoam_maxwell_pasternak_foundation"
+DEFAULT_SHOE_MASS_KG = 0.2
+"""Mass of one shoe [kg] for artifacts whose ``shoe`` record lacks ``mass_kg``; a typical running shoe."""
 
 
 @dataclass(frozen=True)
 class ColumnBed:
-    """Whole-shoe intrinsic column geometry in the declared shoe frame."""
+    """Whole-shoe intrinsic column geometry in the declared shoe frame.
+
+    ``top_bonded`` marks the columns under the bench last footprint, whose tops
+    are bonded to the foot; the rim columns outside it are held by shear only.
+    """
 
     anchor_bottom_m: np.ndarray
     rest_length_m: np.ndarray
     area_m2: np.ndarray
     neighbors: np.ndarray
     spacing_m: float
+    top_bonded: np.ndarray
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> ColumnBed:
         """Decode and validate the whole-shoe column bed."""
-        required = {"anchor_bottom_m", "rest_length_m", "area_m2", "neighbors", "spacing_m"}
+        required = {"anchor_bottom_m", "rest_length_m", "area_m2", "neighbors", "spacing_m", "top_bonded"}
         if missing := sorted(required - data.keys()):
             raise ValueError(f"column_bed is missing {missing}")
         bed = cls(
@@ -40,6 +47,7 @@ class ColumnBed:
             area_m2=np.asarray(data["area_m2"], dtype=np.float64),
             neighbors=np.asarray(data["neighbors"], dtype=np.int32),
             spacing_m=float(data["spacing_m"]),
+            top_bonded=np.asarray(data["top_bonded"], dtype=bool),
         )
         bed.validate()
         return bed
@@ -51,6 +59,7 @@ class ColumnBed:
             "anchor_bottom_m": (count, 3),
             "area_m2": (count,),
             "neighbors": (count, 4),
+            "top_bonded": (count,),
         }
         if count == 0:
             raise ValueError("column_bed has no columns")
@@ -111,6 +120,11 @@ class InstronFixture:
     When placing them on the intrinsic shoe bed, translate both the carrier
     anchor and free top by ``bed_bottom - foam_bottom_m``. This preserves the
     fixture gap and vertical shortening without flattening or stretching foam.
+
+    ``bed_bottom_above_platen_m`` is the shoe's pose on the bench: the rest
+    bottom height of every whole-shoe column over the platen at first contact,
+    in column-bed order. A rocker sole tilts on the platen, so these heights
+    are not the shoe-frame bottoms.
     """
 
     fixture: str
@@ -121,6 +135,7 @@ class InstronFixture:
     area_m2: np.ndarray
     neighbors: np.ndarray
     spacing_m: float
+    bed_bottom_above_platen_m: np.ndarray
 
     @classmethod
     def from_json(cls, fixture: str, data: dict[str, Any]) -> InstronFixture:
@@ -133,6 +148,7 @@ class InstronFixture:
             "area_m2",
             "neighbors",
             "spacing_m",
+            "bed_bottom_above_platen_m",
         }
         if missing := sorted(required - data.keys()):
             raise ValueError(f"fixture {fixture!r} is missing {missing}")
@@ -145,6 +161,7 @@ class InstronFixture:
             area_m2=np.asarray(data["area_m2"], dtype=np.float64),
             neighbors=np.asarray(data["neighbors"], dtype=np.int32),
             spacing_m=float(data["spacing_m"]),
+            bed_bottom_above_platen_m=np.asarray(data["bed_bottom_above_platen_m"], dtype=np.float64),
         )
         value.validate()
         return value
@@ -169,6 +186,9 @@ class InstronFixture:
             raise ValueError(f"fixture {self.fixture!r} has nonpositive geometry")
         if np.any(self.neighbors >= count) or np.any(self.neighbors < -2):
             raise ValueError(f"fixture {self.fixture!r} has invalid neighbor indices")
+        heights = self.bed_bottom_above_platen_m
+        if heights.ndim != 1 or not np.all(np.isfinite(heights)) or not np.all(heights >= 0.0):
+            raise ValueError(f"fixture {self.fixture!r} has invalid bed_bottom_above_platen_m")
 
 
 @dataclass(frozen=True)
@@ -176,6 +196,8 @@ class DigitalShoe:
     """Loaded runtime shoe, optional fixture mappings, and validation record."""
 
     shoe_id: str
+    mass_kg: float
+    """Mass of one shoe [kg], from ``shoe.mass_kg`` or :data:`DEFAULT_SHOE_MASS_KG`."""
     material: ShoeMaterial
     column_bed: ColumnBed
     visual_meshes: dict[str, VisualMesh]
@@ -210,11 +232,12 @@ def validate_artifact(data: dict[str, Any]) -> None:
     if model.get("type") != MODEL_TYPE:
         raise ValueError(f"unsupported constitutive model {model.get('type')!r}")
     ShoeMaterial(**model["parameters"])
-    ColumnBed.from_json(data["column_bed"])
+    bed = ColumnBed.from_json(data["column_bed"])
     for name, mesh_data in data.get("visual_meshes", {}).items():
         VisualMesh.from_json(name, mesh_data)
     for fixture, fixture_data in data.get("instron_fixtures", {}).items():
-        InstronFixture.from_json(fixture, fixture_data)
+        if len(InstronFixture.from_json(fixture, fixture_data).bed_bottom_above_platen_m) != len(bed.rest_length_m):
+            raise ValueError(f"fixture {fixture!r} needs one bed_bottom_above_platen_m per column_bed column")
     coordinate = data["coordinate_system"]
     if coordinate.get("length_unit") != "m" or coordinate.get("up_axis") != "+Z":
         raise ValueError("runtime currently requires metres and a +Z ground normal")
@@ -226,6 +249,7 @@ def load_artifact(path: str | Path) -> DigitalShoe:
     validate_artifact(data)
     return DigitalShoe(
         shoe_id=data["shoe"]["id"],
+        mass_kg=float(data["shoe"].get("mass_kg", DEFAULT_SHOE_MASS_KG)),
         material=ShoeMaterial(**data["constitutive_model"]["parameters"]),
         column_bed=ColumnBed.from_json(data["column_bed"]),
         visual_meshes={

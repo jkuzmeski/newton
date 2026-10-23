@@ -109,7 +109,6 @@ class TestProjectDependencyBoundaries(unittest.TestCase):
             "provenance",
             "friction_law",
             "friction_deflection",
-            "friction_maxwell",
             "friction_solver",
         )
         for module in runtime_modules:

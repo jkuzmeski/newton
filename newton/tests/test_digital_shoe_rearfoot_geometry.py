@@ -29,6 +29,7 @@ def _curved_artifact():
     full["foam_bottom_m"] = [0.006]
     full["foam_free_top_m"] = [0.026]
     full["carrier_anchor_m"] = [[-0.01, 0.0, 0.029]]
+    full["bed_bottom_above_platen_m"] = [0.0, 0.008]
     rear = copy.deepcopy(full)
     rear.update(
         foam_bottom_m=[0.0],
@@ -65,12 +66,13 @@ class TestRearfootShoeGeometry(unittest.TestCase):
         for fixture in ("fullfoot_last", "rearfoot_punch"):
             with self.subTest(fixture=fixture):
                 scene, (anchor, rest, area, neighbors, _, connection, top_gap) = self.scene(fixture)
-                np.testing.assert_array_equal(anchor, bed.anchor_bottom_m)
+                np.testing.assert_array_equal(anchor[:, :2], bed.anchor_bottom_m[:, :2])
+                np.testing.assert_array_equal(anchor[:, 2], [0.0, 0.008])
                 np.testing.assert_array_equal(rest, bed.rest_length_m)
                 np.testing.assert_array_equal(area, bed.area_m2)
                 np.testing.assert_array_equal(neighbors, bed.neighbors)
                 np.testing.assert_array_equal(connection, [TOP_PRESSED, TOP_FREE])
-                self.assertEqual(scene.foundation_config.ground_height_m, 0.006)
+                self.assertEqual(scene.foundation_config.ground_height_m, 0.0)
                 source = self.shoe.instron_fixture(fixture)
                 gap = source.carrier_anchor_m[:, 2] - source.foam_free_top_m
                 np.testing.assert_allclose(top_gap, [gap[0], 0.0], atol=1e-15)
@@ -103,10 +105,9 @@ class TestRearfootShoeGeometry(unittest.TestCase):
         example = Example(MagicMock(), SimpleNamespace(mode="instron", fixture="rearfoot_punch", artifact=self.path))
         example.render()
         bed = self.shoe.column_bed
-        np.testing.assert_allclose(example._bottoms.numpy(), bed.anchor_bottom_m, atol=1e-7)
-        np.testing.assert_allclose(
-            example._tops.numpy()[:, 2], bed.anchor_bottom_m[:, 2] + bed.rest_length_m, atol=1e-7
-        )
+        bench = np.column_stack((bed.anchor_bottom_m[:, :2], [0.0, 0.008]))
+        np.testing.assert_allclose(example._bottoms.numpy(), bench, atol=1e-7)
+        np.testing.assert_allclose(example._tops.numpy()[:, 2], bench[:, 2] + bed.rest_length_m, atol=1e-7)
 
 
 if __name__ == "__main__":

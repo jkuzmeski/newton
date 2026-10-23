@@ -13,9 +13,15 @@ from typing import Any
 import warp as wp
 
 
-def _pasternak_coupling(t_i: Any, t_j: Any, mu_eq: Any):
-    """Return symmetric material-pinned shear conductance [N/m]."""
-    return mu_eq * 0.5 * (t_i + t_j)
+def _pasternak_coupling(t_i: Any, t_j: Any, g_i: Any, g_j: Any):
+    """Return the symmetric shear conductance [N/m] between two columns.
+
+    Each column contributes its own Pasternak coefficient ``G * t`` from its
+    shear modulus ``g`` [Pa] and rest thickness ``t`` [m]. The two halves of the
+    layer act in series, so the softer column bounds the pair: a column on its
+    densification wall cannot drag a soft neighbour after it.
+    """
+    return 2.0 * (g_i * t_i) * (g_j * t_j) / (g_i * t_i + g_j * t_j)
 
 
 pasternak_coupling = wp.func(_pasternak_coupling)
@@ -201,8 +207,8 @@ def column_balance_pressures(
     clearance: float,
     compression_limit: float,
     coupling_sum: float,
-    top_sum: float,
-    bottom_sum: float,
+    top_pull: float,
+    bottom_pull: float,
     thickness: float,
     overstress_base: float,
     overstress_gain: float,
@@ -224,12 +230,15 @@ def column_balance_pressures(
     Constraints: ``b <= clearance`` (the plane), ``c >= 0``, and by connection
     ``t = top_bound`` (:data:`TOP_BONDED`), ``t >= top_bound``
     (:data:`TOP_PRESSED`), or ``c <= compression_limit`` (:data:`TOP_FREE`).
+    A :data:`TOP_BONDED` column keeps ``c <= compression_limit`` by pushing its
+    bottom down, unless the plane is in the way.
     The local quadratic model is minimized exactly over these constraints by
     enumerating its active sets.
 
     Args:
-        top_sum: ``sum_j k_ij t_j`` [N].
-        bottom_sum: ``sum_j k_ij b_j`` [N].
+        top_pull: ``sum_j k_ij (t - t_j)`` [N], summed as differences so that
+            stiff layers keep their precision.
+        bottom_pull: ``sum_j k_ij (b - b_j)`` [N].
         coupling_sum: ``sum_j k_ij`` [N/m].
         overstress_base: Maxwell overstress at zero equilibrium pressure [Pa].
         overstress_gain: Overstress per unit equilibrium pressure of this step.
@@ -247,7 +256,7 @@ def column_balance_pressures(
     ahead = area * wp.max(peq_ahead + overstress_base + overstress_gain * peq_ahead, 0.0)
     foam = wp.max((ahead - force) / step, 0.0)
     k = coupling_sum
-    grad = wp.vec2(force + k * top - top_sum, -force + k * bottom - bottom_sum)
+    grad = wp.vec2(force + top_pull, -force + bottom_pull)
     shear = k + 1.0e-9
     y0 = wp.vec2(top, bottom)
     tol = 1.0e-6 * thickness
@@ -256,7 +265,8 @@ def column_balance_pressures(
     if connection == TOP_BONDED:
         t = top_bound
         b = bottom - relaxation * (grad[1] - foam * (t - top)) / (foam + shear)
-        b = wp.min(b, wp.min(clearance, t))
+        # The compression stop pushes the bottom down, but the plane comes first.
+        b = wp.min(wp.max(b, t - compression_limit), wp.min(clearance, t))
     else:
         # Constraints n . (t, b) <= beta: the plane, c >= 0, and the top bound or the strain limit.
         n0 = wp.vec2(0.0, 1.0)

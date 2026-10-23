@@ -59,6 +59,13 @@
       "const": "digital_shoe_1"
     },
     "shoe": {
+      "properties": {
+        "mass_kg": {
+          "description": "Mass of one shoe [kg]; loaders default to 0.2 kg when absent.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+        }
+      },
       "required": [
         "id",
         "model_scope"

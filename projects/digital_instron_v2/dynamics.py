@@ -42,7 +42,7 @@ class FoundationGeometry:
 
     uv_m: np.ndarray  # footprint coordinates [column_count, 2]
     slack_m: np.ndarray  # rest thickness [column_count]
-    area_m2: float  # tributary area per column
+    area_m2: np.ndarray  # midsole footprint area [column_count]
     spacing_m: float  # grid spacing
     z_free_m: np.ndarray  # uncompressed foam-top height above ground [column_count]
     z_bottom_m: np.ndarray  # foam-bottom height above ground [column_count]
@@ -99,7 +99,7 @@ def build_foundation_geometry(manifest_path: str | Path) -> FoundationGeometry:
     return FoundationGeometry(
         uv_m=np.asarray(grid.uv_m, dtype=float),
         slack_m=np.asarray(grid.slack_m, dtype=float),
-        area_m2=float(grid.area_m2),
+        area_m2=np.asarray(grid.area_m2, dtype=float),
         spacing_m=grid.spacing_m,
         z_free_m=top - z_shift,
         z_bottom_m=bottom - z_shift,

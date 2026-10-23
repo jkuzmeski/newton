@@ -479,8 +479,9 @@ class Example:
         """Verify a dissipative, stiffening hysteresis loop.
 
         The peak is reported against the measured cycle, not gated: the default
-        material was identified under the earlier single-surface bench law, so
-        only a ``--fit`` material from ``sweep_fit`` is calibrated for this bed.
+        material was identified under the earlier single-surface bench law and
+        the manifest last pose is not the fitted registration, so only
+        ``--shoe`` replays a calibrated bed.
         """
         times = np.array([h["t"] for h in self.history])
         depth = np.array([h["depth"] for h in self.history])
@@ -493,11 +494,18 @@ class Example:
         # (displacement, force) plane clockwise, so the dissipated energy is the negated
         # shoelace area; a positive signed area would mean unphysical energy generation.
         dissipated = -_loop_area(loop_depth * 1000.0, loop_force)  # mm * N = mJ
-        assert dissipated > 300.0, f"hysteresis loop not dissipative: {dissipated:.1f} mJ"
+        loading = int(np.argmax(loop_depth)) + 1
+        work = float(np.trapezoid(loop_force[:loading], loop_depth[:loading] * 1000.0))
+        # The measured FR3 sweep loops lose 9-11% of the loading work; the energy is
+        # gated as that fraction because the default material sets no absolute scale.
+        assert dissipated > 0.05 * work, (
+            f"hysteresis loop not dissipative: {dissipated:.1f} mJ of {work:.1f} mJ loading work"
+        )
         assert forces.max() > 10.0 * forces[forces > 0].min(), "no nonlinear stiffening observed"
         print(
             f"[instron] peak {peak:.0f} N at {loop_depth.max() * 1000:.1f} mm "
-            f"(measured {self._measured_force.max():.0f} N); hysteresis {dissipated / 1000.0:.3f} J/cycle"
+            f"(measured {self._measured_force.max():.0f} N); hysteresis {dissipated / 1000.0:.3f} J/cycle, "
+            f"{dissipated / work:.1%} of the loading work"
         )
 
     def _test_settle(self, forces):

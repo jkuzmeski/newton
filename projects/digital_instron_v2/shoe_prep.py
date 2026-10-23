@@ -61,6 +61,8 @@ TOE_OFFSET_CHECK_M = 0.005
 MAX_DEBRIS_FACE_FRACTION = 0.001
 NEIGHBOR_TOLERANCE_M = 0.005
 MAX_REPAIRED_FRACTION = 0.02
+CELL_RAYS = 9
+"""Rays per cell side for the cell means; odd, so the center ray is one of them."""
 _CODE_FILES = ("shoe_prep.py", "geometry.py", "registration.py")
 _OWNED_OUTPUTS = (
     "shoe.json",
@@ -300,6 +302,26 @@ def foot_side(vertices: np.ndarray) -> tuple[str, dict[str, float]]:
     return ("right" if medial_sign > 0.0 else "left"), cues
 
 
+def _cell_means(mesh: Any, uv: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the mean bottom and top over the rays of each cell that cross material, and that ray fraction."""
+    offsets = ((np.arange(CELL_RAYS) + 0.5) / CELL_RAYS - 0.5) * SPACING_M
+    du, dv = (a.ravel() for a in np.meshgrid(offsets, offsets))
+    points = (uv[:, None, :] + np.column_stack((du, dv))[None]).reshape(-1, 2)
+    origins = np.column_stack((points, np.full(len(points), mesh.bounds[0, 2] - 0.01)))
+    directions = np.tile([0.0, 0.0, 1.0], (len(points), 1))
+    locations, rays, _ = mesh.ray.intersects_location(origins, directions, multiple_hits=True)
+    low = np.full(len(points), np.inf)
+    high = np.full(len(points), -np.inf)
+    np.minimum.at(low, rays, locations[:, 2])
+    np.maximum.at(high, rays, locations[:, 2])
+    low, high = low.reshape(len(uv), -1), high.reshape(len(uv), -1)
+    covered = high > low
+    count = covered.sum(axis=1)
+    bottom = np.where(covered, low, 0.0).sum(axis=1) / count
+    top = np.where(covered, high, 0.0).sum(axis=1) / count
+    return bottom, top, count / covered.shape[1]
+
+
 def sample_columns(mesh: Any) -> tuple[ColumnGrid, dict[str, Any]]:
     """Sample columns with :func:`geometry.build_column_grid` and repair isolated defects.
 
@@ -312,6 +334,12 @@ def sample_columns(mesh: Any) -> tuple[ColumnGrid, dict[str, Any]]:
     or thicker than all of them by more than ``NEIGHBOR_TOLERANCE_M``) is
     suspect. Both are linearly interpolated from the trusted columns. More than ``MAX_REPAIRED_FRACTION`` repairs rejects the
     shoe because the footprint coverage is compromised.
+
+    Each measured column is the mean over ``CELL_RAYS`` x ``CELL_RAYS`` rays
+    across its cell: bottom and top are averaged over the rays that cross
+    material, and the area is the cell area times that fraction. A cell on the
+    outline whose center ray grazes the sloped sidewall thus keeps its covered
+    area and mean thickness instead of the thin center value.
 
     Args:
         mesh: Canonical midsole mesh [m].
@@ -380,7 +408,12 @@ def sample_columns(mesh: Any) -> tuple[ColumnGrid, dict[str, Any]]:
     keep = (valid | gap) & np.isfinite(bottom) & (top - bottom >= MIN_THICKNESS_M)
     order = np.flatnonzero(keep.ravel())
     uv = np.column_stack((uu.ravel(), vv.ravel()))[order]
-    result = ColumnGrid(uv, bottom.ravel()[order], top.ravel()[order], SPACING_M**2, SPACING_M, 2)
+    bottom, top = bottom.ravel()[order], top.ravel()[order]
+    area = np.full(len(order), SPACING_M**2)
+    measured = ~repair.ravel()[order]
+    bottom[measured], top[measured], coverage = _cell_means(mesh, uv[measured])
+    area[measured] *= coverage
+    result = ColumnGrid(uv, bottom, top, area, SPACING_M, 2)
     odd = valid & (hits % 2 == 1)
     qc = {
         "lattice_points": int(hits.size),
@@ -392,6 +425,8 @@ def sample_columns(mesh: Any) -> tuple[ColumnGrid, dict[str, Any]]:
         "suspect_columns_replaced": int(outlier.sum()),
         "odd_hit_count_columns": int(odd.sum()),
         "repaired_uv_m": np.column_stack((uu[repair], vv[repair])).round(9).tolist(),
+        "partial_cells": int(np.count_nonzero(coverage < 1.0)),
+        "covered_area_fraction": float(area.sum() / (len(order) * SPACING_M**2)),
         "columns": int(len(order)),
     }
     return result, qc
@@ -401,7 +436,9 @@ def mirror_grid(grid: ColumnGrid) -> ColumnGrid:
     """Mirror a canonical grid across the x-z plane (left <-> right shoe)."""
     uv = grid.uv_m * np.array([1.0, -1.0])
     order = np.lexsort((uv[:, 0], uv[:, 1]))
-    return replace(grid, uv_m=uv[order], bottom_m=grid.bottom_m[order], top_m=grid.top_m[order])
+    return replace(
+        grid, uv_m=uv[order], bottom_m=grid.bottom_m[order], top_m=grid.top_m[order], area_m2=grid.area_m2[order]
+    )
 
 
 def _grid_stats(grid: ColumnGrid) -> dict[str, float]:
@@ -439,7 +476,7 @@ def _gates(stats: dict[str, float], vertices: np.ndarray) -> dict[str, dict[str,
 
 def _grid_sha256(grid: ColumnGrid) -> str:
     digest = hashlib.sha256()
-    for array in (grid.uv_m, grid.bottom_m, grid.top_m):
+    for array in (grid.uv_m, grid.bottom_m, grid.top_m, grid.area_m2):
         digest.update(np.ascontiguousarray(array, dtype="<f8").tobytes())
     return digest.hexdigest()
 
@@ -450,7 +487,7 @@ def _write_npz(path: Path, grid: ColumnGrid) -> None:
         "uv_m": grid.uv_m,
         "bottom_m": grid.bottom_m,
         "top_m": grid.top_m,
-        "area_m2": np.float64(grid.area_m2),
+        "area_m2": grid.area_m2,
         "spacing_m": np.float64(grid.spacing_m),
         "thickness_axis": np.int64(grid.thickness_axis),
     }

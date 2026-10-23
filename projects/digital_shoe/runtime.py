@@ -11,7 +11,7 @@ import numpy as np
 import warp as wp
 
 from .contact import pasternak_coupling
-from .material import HYPERFOAM_ALPHA_FLOOR
+from .material import HYPERFOAM_ALPHA_FLOOR, SOLID_MODULUS_PA, densification_onset
 from .material import ogden_hill_term as _hyperfoam_term
 
 
@@ -31,7 +31,8 @@ class ShoeMaterial:
     derives each column's own Pasternak coefficient from the equilibrium
     Ogden-Hill shear modulus and that column's rest thickness,
     ``k_i = mu_eq * t_i``, which is the shear-layer definition ``G * t`` and adds
-    no free parameter. Exporters write the bed-mean of that rule here.
+    no free parameter. Exporters write the bed-mean of that rule here. The
+    column bed uses ``mu_eq`` at every compression.
     """
 
     instantaneous_shear_modulus_pa: float
@@ -78,6 +79,9 @@ class ShoeMaterial:
         return (self.instantaneous_shear_modulus_pa + self.instantaneous_shear_modulus_2_pa) * self.equilibrium_fraction
 
 
+_SOLID_MODULUS = wp.constant(SOLID_MODULUS_PA)
+
+
 @wp.struct
 class FoundationParams:
     """Device-side constitutive and contact constants for the column bed."""
@@ -94,8 +98,11 @@ class FoundationParams:
     inv_h2: wp.float32  # 1 / spacing^2 [1/m^2]
     stretch_floor: wp.float32  # minimum stretch (foam densification limit)
     normal_damping: wp.float32  # per-column Kelvin-Voigt normal damping [N.s/m]
-    friction_release_dwell_s: wp.float32  # unloaded dwell before the stick point is discarded [s]
     mu: wp.float32  # Coulomb friction coefficient
+    onset_stretch: (
+        wp.float32
+    )  # stretch where the tangent cap starts; -inf if the tangent never reaches the solid modulus
+    onset_pressure: wp.float32  # equilibrium pressure at onset_stretch [Pa]
 
 
 @wp.func
@@ -124,9 +131,18 @@ def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
     volumetric factor is ``pow(x, 0)`` with ``x >= stretch_floor > 0``. That is
     exactly one on CPU and CUDA, and this forward entry point skips it bitwise;
     the stretch floor is what keeps it away from ``pow(0, 0)``.
+
+    Past ``onset_stretch`` the pressure grows with the solid modulus
+    :data:`~projects.digital_shoe.material.SOLID_MODULUS_PA` instead, so the
+    tangent, and the shear modulus that follows it, never exceeds that.
     """
     stretch = wp.max(1.0 - strain, p.stretch_floor)
-    return _hyperfoam_series_term(stretch, p.g_eq, p.alpha, p) + _hyperfoam_series_term(stretch, p.g_eq2, p.alpha2, p)
+    pressure = _hyperfoam_series_term(stretch, p.g_eq, p.alpha, p) + _hyperfoam_series_term(
+        stretch, p.g_eq2, p.alpha2, p
+    )
+    if 1.0 - strain < p.onset_stretch:
+        pressure = p.onset_pressure + _SOLID_MODULUS * (strain - (1.0 - p.onset_stretch))
+    return pressure
 
 
 def set_material_block(params: FoundationParams, material) -> None:
@@ -171,6 +187,10 @@ def set_hyperfoam_series(params: FoundationParams, material) -> None:
     params.g_eq2 = float(material.instantaneous_shear_modulus_2_pa) * fraction
     params.alpha2 = float(material.hyperfoam_exponent_2)
     params.shear_override = float(getattr(material, "equilibrium_shear_modulus_override_pa", 0.0))
+    poisson = float(getattr(material, "effective_poisson_ratio", 0.0))
+    params.onset_stretch, params.onset_pressure = densification_onset(
+        params.g_eq, params.alpha, params.g_eq2, params.alpha2, poisson / (1.0 - 2.0 * poisson), 1.0 - 2.0 * poisson
+    )
 
 
 @wp.func
@@ -183,9 +203,9 @@ def material_shear_modulus(p: FoundationParams) -> wp.float32:
 
 @wp.func
 def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -> wp.float32:
-    """Pasternak coefficient of the shear layer between two columns [N/m].
+    """Pasternak coefficient of the shear layer between two columns at rest [N/m].
 
-    A Pasternak layer coefficient is ``G * t``. The shear modulus is the foam's
+    A Pasternak layer coefficient is ``G * t``. The shear modulus at rest is the foam's
     own equilibrium Ogden-Hill modulus ``mu_eq``, which for a two-term series is
     the *sum* :attr:`FoundationParams.g_eq` + :attr:`FoundationParams.g_eq2`, and
     the layer thickness at the shared face is the mean of the two column rest
@@ -193,7 +213,8 @@ def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -
     flux summed over the bed is exactly zero and the layer can only move load,
     never create it.
     """
-    return pasternak_coupling(t_i, t_j, material_shear_modulus(p))
+    shear = material_shear_modulus(p)
+    return pasternak_coupling(t_i, t_j, shear, shear)
 
 
 @dataclass
@@ -201,18 +222,14 @@ class FoundationConfig:
     """Contact settings layered on the calibrated constitutive law.
 
     ``ground_height_m`` is the horizontal contact plane [m] the column bottoms
-    land on. ``mu`` bounds the elastic Coulomb traction at ``mu * R`` for the
-    unilateral ground reaction ``R``; each column's tangential stiffness is
-    ``G_eq * area / rest_length``, a geometry-scaled contact assumption that
-    normal compression does not identify. ``friction_release_dwell_s`` preserves
-    the stick point through short normal dropouts. ``normal_damping`` is a
-    per-column Kelvin-Voigt normal damping [N.s/m] and ``stretch_floor`` the
-    minimum stretch (foam densification limit).
+    land on. ``mu`` is the Coulomb coefficient: a landed bottom sticks to the
+    plane or slides at ``mu * R`` for the unilateral ground reaction ``R``.
+    ``normal_damping`` is a per-column Kelvin-Voigt normal damping [N.s/m] and
+    ``stretch_floor`` the minimum stretch (foam densification limit).
     """
 
     stretch_floor: float = 0.05
     normal_damping: float = 0.0
-    friction_release_dwell_s: float = 0.0005
     mu: float = 0.0
     ground_height_m: float | None = None
 
@@ -221,5 +238,3 @@ class FoundationConfig:
             not np.isfinite(self.ground_height_m) or abs(self.ground_height_m) > float(np.finfo(np.float32).max)
         ):
             raise ValueError("ground_height_m must be finite in float32 or None")
-        if self.friction_release_dwell_s < 0.0:
-            raise ValueError("friction release dwell must be nonnegative")

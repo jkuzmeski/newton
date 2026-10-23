@@ -21,7 +21,7 @@ from projects.digital_instron_v2.core import CALIBRATED_MATERIAL
 from projects.digital_instron_v2.registration import load_last, register_last
 from projects.digital_instron_v2.sweep_fit import DEFAULT_LAST, load_grid
 from projects.digital_shoe.acquisition import validate_acquisition_manifest
-from projects.digital_shoe.artifact import load_artifact, validate_artifact
+from projects.digital_shoe.artifact import DEFAULT_SHOE_MASS_KG, load_artifact, validate_artifact
 from projects.digital_shoe.report import render_html
 from projects.digital_shoe.showcase import Example
 
@@ -54,6 +54,7 @@ def _tiny_artifact() -> dict:
             "area_m2": [0.0001, 0.0001],
             "neighbors": [[1, -1, -1, -1], [0, -1, -1, -1]],
             "spacing_m": 0.01,
+            "top_bonded": [True, True],
         },
         "identification": {"passed_all_declared_gates": False},
         "validation": {
@@ -99,6 +100,17 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self.assertEqual(shoe.shoe_id, "tiny<&shoe")
         self.assertEqual(len(shoe.column_bed.rest_length_m), 2)
 
+    def test_reads_shoe_mass_or_defaults(self):
+        """Read the shoe mass from the artifact and fall back to the documented default."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "digital_shoe.json"
+            data = _tiny_artifact()
+            path.write_text(json.dumps(data))
+            self.assertEqual(load_artifact(path).mass_kg, DEFAULT_SHOE_MASS_KG)
+            data["shoe"]["mass_kg"] = 0.173
+            path.write_text(json.dumps(data))
+            self.assertEqual(load_artifact(path).mass_kg, 0.173)
+
     def test_rejects_unknown_schema_and_self_neighbor(self):
         """Reject unknown schema versions and invalid column topology."""
         unknown = _tiny_artifact()
@@ -109,6 +121,10 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         self_neighbor["column_bed"]["neighbors"][0][0] = 0
         with self.assertRaisesRegex(ValueError, "self-neighbor"):
             validate_artifact(self_neighbor)
+        short_bond = _tiny_artifact()
+        short_bond["column_bed"]["top_bonded"] = [True]
+        with self.assertRaisesRegex(ValueError, "top_bonded has shape"):
+            validate_artifact(short_bond)
 
     def test_renders_deterministic_visible_failure_report(self):
         """Render byte-stable escaped HTML that keeps failed gates visible."""
@@ -211,6 +227,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
             "material": asdict(CALIBRATED_MATERIAL),
             "registration": {"pose": registration.pose, "qc": {"preload": preload}},
             "conditions": {},
+            "substeps": 1,
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -227,13 +244,21 @@ class TestDigitalShoeArtifact(unittest.TestCase):
                 comments="",
             )
             with patch.object(export_digital_shoe, "register_last", return_value=registration):
-                artifact = export_digital_shoe.build_artifact(shoe, root / "material_fit.json", root)
+                artifact = export_digital_shoe.build_artifact(
+                    shoe, root / "material_fit.json", root, mass_kg=0.173, mass_source="test scale"
+                )
         validate_artifact(artifact)
+        self.assertEqual(artifact["shoe"]["mass_kg"], 0.173)
         bed = np.asarray(artifact["column_bed"]["anchor_bottom_m"])
         fixture = artifact["instron_fixtures"]["fullfoot_last"]
         self.assertEqual(len(bed), len(grid.slack_m))
         self.assertEqual(fixture["column_count"], int(np.isfinite(registration.surface_m).sum()))
         self.assertEqual(bed[:, 2].min(), 0.0)
+        # The bench replays the shoe in the pose the fit stood it on the platen.
+        np.testing.assert_array_equal(fixture["bed_bottom_above_platen_m"], registration.bottom_above_platen_m)
+        # The foot is bonded to the columns the bench last presses; the rim outside it hangs on shear.
+        np.testing.assert_array_equal(artifact["column_bed"]["top_bonded"], np.isfinite(registration.surface_m))
+        np.testing.assert_array_equal(artifact["column_bed"]["area_m2"], grid.area_m2)
         # The baked last bottoms out on the first-contact surface the fixture records.
         last = np.asarray(artifact["visual_meshes"]["fullfoot_last"]["vertices_m"])
         anchors = np.asarray(fixture["carrier_anchor_m"])
@@ -244,6 +269,21 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         encoded = json.dumps(artifact, sort_keys=True)
         self.assertNotIn(str(Path.cwd()), encoded)
         self.assertNotIn(directory, encoded)
+
+        right = export_digital_shoe.mirror_artifact(artifact, "0" * 64)
+        self.assertEqual(right["shoe"]["id"], "puma_fast_r_nitro_elite_3_right")
+        np.testing.assert_array_equal(np.asarray(right["column_bed"]["anchor_bottom_m"]), bed * [1.0, -1.0, 1.0])
+        np.testing.assert_array_equal(
+            np.asarray(right["column_bed"]["neighbors"]),
+            np.asarray(artifact["column_bed"]["neighbors"])[:, [0, 1, 3, 2]],
+        )
+        self.assertEqual(
+            right["instron_fixtures"]["fullfoot_last"]["bed_bottom_above_platen_m"],
+            fixture["bed_bottom_above_platen_m"],
+        )
+        left = export_digital_shoe.mirror_artifact(right, "0" * 64)
+        self.assertEqual(left["column_bed"], artifact["column_bed"])
+        self.assertEqual(left["instron_fixtures"], artifact["instron_fixtures"])
 
 
 class TestDigitalShoeRendering(unittest.TestCase):
