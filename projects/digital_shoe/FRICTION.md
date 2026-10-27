@@ -5,9 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Friction-only Digital Shoe mechanics
 
-> **Live shoe friction:** the column bed (`column_bed.ColumnBed`) has no tangential
-> column compliance: each column bottom sticks to the ground or slides at `mu R`,
-> solved in the carrier's implicit step when `carrier_mobility` is given. The solver modes below are a
+> **Live shoe friction:** the column bed (`column_bed.ColumnBed`) gives each landed
+> column bottom an explicit elastic-Coulomb bristle with deflection reset on
+> unload; see [`FRICTION_COLUMN.md`](FRICTION_COLUMN.md). The solver modes below are a
 > standalone research comparison run by the `friction` example; they do not
 > attach to the column bed.
 

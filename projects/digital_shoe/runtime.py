@@ -208,18 +208,32 @@ class FoundationConfig:
     """Contact settings layered on the calibrated constitutive law.
 
     ``ground_height_m`` is the horizontal contact plane [m] the column bottoms
-    land on. ``mu`` is the Coulomb coefficient: a landed bottom sticks to the
-    plane or slides at ``mu * R`` for the unilateral ground reaction ``R``.
+    land on. ``mu`` is the Coulomb coefficient: the friction of a landed bottom
+    never exceeds ``mu * R`` for its unilateral ground reaction ``R``.
     ``normal_damping`` is a per-column Kelvin-Voigt normal damping [N.s/m] and
     ``stretch_floor`` the minimum stretch (foam densification limit).
+
+    The grip of a landed bottom is an elastic-Coulomb bristle. Its stiffness is
+    ``bristle_shear_fraction`` times the shear stiffness ``G_eq A / L`` of the
+    column, with ``G_eq`` the material's rest shear modulus. Inside the Coulomb
+    disk a damper of ``bristle_damping_time_s`` [s] times that stiffness acts
+    with it. Neither value is fitted: the defaults take the full rest shear
+    modulus and 1 ms. The bed applies the damper explicitly, so keep
+    ``bristle_damping_time_s`` at least 4 times the substep: at 2 substeps it
+    does net work on the carrier at toe-off. Zero is passive at any substep but
+    lets the bristle ring.
     """
 
     stretch_floor: float = 0.05
     normal_damping: float = 0.0
     mu: float = 0.0
     ground_height_m: float | None = None
+    bristle_shear_fraction: float = 1.0
+    bristle_damping_time_s: float = 1.0e-3
 
     def __post_init__(self) -> None:
+        if not self.bristle_shear_fraction > 0.0 or not self.bristle_damping_time_s >= 0.0:
+            raise ValueError("bristle_shear_fraction must be positive and bristle_damping_time_s nonnegative")
         if self.ground_height_m is not None and (
             not np.isfinite(self.ground_height_m) or abs(self.ground_height_m) > float(np.finfo(np.float32).max)
         ):

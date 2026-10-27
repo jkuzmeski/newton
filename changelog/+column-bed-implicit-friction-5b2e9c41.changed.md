@@ -1,1 +1,0 @@
-Replace the column bed's elastic Coulomb bristle friction with Coulomb friction: a landed column bottom moves sideways with the carrier and sticks to the ground or slides at ``mu R``. Dynamic carriers must pass ``carrier_mobility`` so friction is solved in their implicit step.

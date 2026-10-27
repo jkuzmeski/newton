@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Check that a column bed pressed by a pitched rigid sole loads every penetrating column."""
+"""Check the explicit column bed: normal support, bristle friction and passivity under a free carrier."""
 
 import unittest
 from types import SimpleNamespace
@@ -95,13 +95,12 @@ class TestColumnBedPitchedSole(unittest.TestCase):
                     f"{np.sum(reaction <= 0.0)} of {deep.sum()} deep columns carry no ground reaction",
                 )
 
-    def _block_on_bed(self, mu: float, normal_damping: float = 0.0):
-        """Return a 20 kg block glued on a 12 x 6 bed with its implicit mobility array."""
-        spacing, thickness, mass = 0.005, 0.03, 20.0
+    def _block_on_bed(self, mu: float, normal_damping: float = 0.0, mass: float = 20.0):
+        """Return a block glued on a 12 x 6 bed, with its anchors, center of mass, mass and inertia."""
+        spacing, thickness = 0.005, 0.03
         anchors, neighbors = _flat_bed(12, 6, spacing)
         n = len(anchors)
         com = np.array([anchors[:, 0].mean(), 0.0, 0.03])
-        mobility = wp.zeros(1, dtype=wp.spatial_matrix)
         bed = ColumnBed(
             anchors,
             np.full(n, thickness),
@@ -113,18 +112,16 @@ class TestColumnBedPitchedSole(unittest.TestCase):
             FoundationConfig(ground_height_m=0.0, mu=mu, normal_damping=normal_damping),
             np.array([0]),
             wp.array([com], dtype=wp.vec3),
-            carrier_mobility=mobility,
         )
-        bed.set_timesteps(1.25e-4)
-        return bed, mobility, anchors, com, mass, mass * np.diag([0.002, 0.01, 0.01])
+        return bed, anchors, com, mass, mass * np.diag([0.002, 0.01, 0.01])
 
     @staticmethod
-    def _run(bed, mobility, anchors, com, mass, inertia, rotation, velocity, steps, push=lambda step: np.zeros(6)):
-        """Integrate the block on the bed under gravity and a ``push(step)`` wrench.
+    def _run(bed, anchors, com, mass, inertia, rotation, velocity, steps, push=lambda step: np.zeros(6), dt=1.25e-4):
+        """Integrate the block on the bed under gravity and a ``push(step)`` wrench by semi-implicit Euler.
 
         Yield its velocity, the bed wrench and its kinetic plus potential energy gain since the start [J].
         """
-        dt = 1.25e-4
+        bed.set_timesteps(dt)
         center = np.array([0.0, 0.0, -(anchors @ rotation.T)[:, 2].min()]) + rotation @ com
         omega = np.zeros(3)
 
@@ -143,10 +140,6 @@ class TestColumnBedPitchedSole(unittest.TestCase):
         )
         for step in range(steps):
             world_inertia = rotation @ inertia @ rotation.T
-            w = np.zeros((6, 6))
-            w[:3, :3] = np.eye(3) / mass
-            w[3:, 3:] = np.linalg.inv(world_inertia)
-            mobility.assign(w[None].astype(np.float32))
             quat = wp.quat_from_matrix(wp.mat33(*rotation.ravel()))
             state.body_q.assign([[*(center - rotation @ com), *quat]])
             state.body_qd.assign([[*velocity, *omega]])
@@ -163,130 +156,103 @@ class TestColumnBedPitchedSole(unittest.TestCase):
                 rotation = (np.eye(3) + np.sin(angle) * k + (1.0 - np.cos(angle)) * k @ k) @ rotation
             yield velocity, wrench, energy() - start
 
-    def test_implicit_carrier_gains_no_energy_on_the_wall(self):
-        """A heavy block sliding at 2 m/s and dropped at 4 m/s on its edge never has more kinetic plus potential energy than it started with."""
-        bed, mobility, anchors, com, mass, inertia = self._block_on_bed(0.0)
-        rotation = np.array(wp.quat_to_matrix(wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), 0.4))).reshape(3, 3)
-        start = np.array([2.0, 0.0, -4.0])
-        strain = 0.0
-        gain = -np.inf
-        for velocity, wrench, energy in self._run(bed, mobility, anchors, com, mass, inertia, rotation, start, 400):
-            strain = max(strain, float(bed.bed.held_strain.numpy()[0]))
-            self.assertTrue(np.isfinite(wrench).all())
-            gain = max(gain, energy)
-            end = velocity
-        # The bed holds elastic energy the sum leaves out, so it can only fall; 0.1 J is 0.05 % of the 200 J drop.
-        self.assertLessEqual(gain, 0.1)
-        # The stop is held to a fraction of one step of carrier travel (0.5 mm at 4 m/s): it is
-        # passed by 8 um, whatever the sweep count.
-        self.assertLessEqual(strain, bed.bed.max_strain + 1.0e-3)
-        self.assertLess(abs(end[2]), 4.0)
-        self.assertLess(np.linalg.norm(end), np.linalg.norm(start))
+    def _assert_inside_the_cone(self, bed, mu):
+        """Check that no column carries more friction than ``mu`` times its ground reaction."""
+        friction = np.linalg.norm(bed.bed.tangential_load.numpy(), axis=1)
+        reaction = bed.bed.reaction.numpy()
+        np.testing.assert_array_less(friction, mu * np.maximum(reaction, 0.0) * (1.0 + 1.0e-5) + 1.0e-6)
+
+    @staticmethod
+    def _bristle_stiffness(bed):
+        """Return the summed bristle stiffness of the bed's columns at the default shear fraction [N/m]."""
+        g_eq = FR3.equilibrium_fraction * (FR3.instantaneous_shear_modulus_pa + FR3.instantaneous_shear_modulus_2_pa)
+        return float(np.sum(g_eq * bed.bed.area.numpy() / bed.bed.rest_len.numpy()))
 
     def test_bottoms_stick_below_and_slide_at_the_friction_limit(self):
-        """A block settled on the bed stands still under a push below mu W and slides with friction mu W above it."""
-        mu, weight, settle = 0.8, 20.0 * 9.81, 3200
-        for ratio in (0.5, 1.5):
+        """A settled block stays on its bristles under a push below mu W and slides with friction mu W above it."""
+        mu, weight, settle, dt = 0.8, 20.0 * 9.81, 3200, 1.25e-4
+        for ratio in (0.3, 1.5):
             with self.subTest(ratio=ratio):
-                bed, mobility, anchors, com, mass, _inertia = self._block_on_bed(mu, normal_damping=10.0)
+                bed, anchors, com, mass, _inertia = self._block_on_bed(mu, normal_damping=10.0)
                 # A block that cannot turn, pushed along x: its center moves with its bottoms.
                 force = ratio * mu * weight
                 wrench = np.array([force, 0.0, 0.0, 0.0, 0.0, 0.0])
-                history = list(
+                travel, velocity, friction, normal, stuck = 0.0, [], [], [], []
+                for step, (v, w, _e) in enumerate(
                     self._run(
-                        bed, mobility, anchors, com, mass, 1.0e6 * np.eye(3), np.eye(3), np.zeros(3), settle + 800,
+                        bed, anchors, com, mass, 1.0e6 * np.eye(3), np.eye(3), np.zeros(3), settle + 800,
                         lambda step, wrench=wrench: wrench if step >= settle else np.zeros(6),
                     )
-                )  # fmt: skip
-                velocity = np.array([v for v, _w, _e in history[settle + 400 :]])
-                friction = np.array([w[0] for _v, w, _e in history[settle + 400 :]])
-                normal = np.array([w[2] for _v, w, _e in history[settle + 400 :]])
-                stuck = bed.bed.stuck.numpy()
+                ):  # fmt: skip
+                    if step < settle:
+                        continue
+                    self._assert_inside_the_cone(bed, mu)
+                    travel += dt * v[0]
+                    velocity.append(v[0])
+                    friction.append(w[0])
+                    normal.append(w[2])
+                    stuck.append(bed.bed.stuck.numpy().all())
+                friction, normal = np.array(friction), np.array(normal)
                 if ratio < 1.0:
-                    self.assertLess(np.abs(velocity[:, 0]).max(), 1.0e-3)
-                    self.assertTrue(stuck.all())
-                    np.testing.assert_allclose(friction, -force, rtol=1e-2)
+                    # A step load stretches the bristles to at most twice their static deflection.
+                    self.assertTrue(all(stuck))
+                    self.assertLess(abs(travel), 2.0 * force / self._bristle_stiffness(bed))
                 else:
-                    self.assertFalse(stuck.any())
-                    np.testing.assert_allclose(friction, -mu * normal, rtol=1e-3)
-                    self.assertGreater(velocity[-1, 0] - velocity[0, 0], 0.5 * 0.05 * (ratio - 1.0) * mu * 9.81)
+                    self.assertFalse(any(stuck[400:]))
+                    np.testing.assert_allclose(friction[400:], -mu * normal[400:], rtol=1e-3)
+                    self.assertGreater(velocity[-1] - velocity[400], 0.5 * 0.05 * (ratio - 1.0) * mu * 9.81)
 
-    def test_fast_yaw_friction_is_passive_and_inside_the_cone(self):
-        """Keep accepted friction passive when sliding directions reverse during the carrier solve."""
-        mu, dt = 0.8, 1.25e-4
-        points = np.array([[0.072627457, -0.031268477], [0.110701830, -0.014818128], [0.108819816, -0.020629266]])
-        reaction = np.array([102.593026, 3058.841645, 1643.615345])
-        anchors = np.column_stack((points, np.full(3, -0.006)))
-        mass = np.array([1.2, 1.2, 1.0e12, 1.0e12, 1.0e12, 0.005])
-        mobility = wp.array(np.diag(1.0 / mass)[None].astype(np.float32), dtype=wp.spatial_matrix)
-        bed = ColumnBed(
-            anchors,
-            np.full(3, 0.03),
-            reaction / 450000.0,
-            np.full((3, 4), -1, dtype=np.int32),
-            0.005,
-            np.full(3, TOP_BONDED, dtype=np.int32),
-            ShoeMaterial(1.0e6, 2.0, 1.0, 0.0),
-            FoundationConfig(ground_height_m=0.0, mu=mu),
-            np.array([0]),
-            wp.zeros(1, dtype=wp.vec3),
-            carrier_mobility=mobility,
-        )
-        bed.set_timesteps(dt)
-        initial = np.array([0.218608444, 0.735524126, 0.0, 0.0, 0.0, 3.740414055])
-        state = SimpleNamespace(
-            body_q=wp.array([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]], dtype=wp.transform),
-            body_qd=wp.array([initial], dtype=wp.spatial_vector),
-            body_f=wp.zeros(1, dtype=wp.spatial_vector),
-        )
-        bed.apply(state)
-        wrench = state.body_f.numpy()[0].astype(float)
-        accepted = initial + dt * wrench / mass
-        self.assertLessEqual(0.5 * np.sum(mass * (accepted**2 - initial**2)), 0.0)
-        traction = bed.bed.tangential_load.numpy()
-        loads = bed.bed.reaction.numpy()
-        lever = np.column_stack((points, np.zeros(3)))
-        slip = (accepted[:3] + np.cross(accepted[3:], lever))[:, :2]
-        self.assertTrue((np.sum(traction * slip, axis=1) <= 1.0e-4).all())
-        self.assertTrue((np.linalg.norm(traction, axis=1) <= mu * loads * (1.0 + 1.0e-6)).all())
-        np.testing.assert_allclose(traction.sum(axis=0), wrench[:2], rtol=2.0e-4, atol=1.0e-3)
-        self.assertEqual(int(bed.bed.friction_fallback_steps.numpy()[0]), 0)
+    def test_friction_is_continuous_when_a_sliding_block_is_caught(self):
+        """A settled block launched at 0.5 m/s slides at mu W, then its bristles catch it without a friction jump."""
+        mu, weight, settle = 0.8, 20.0 * 9.81, 3200
+        bed, anchors, com, mass, _inertia = self._block_on_bed(mu, normal_damping=10.0)
+        launch = 0.5 * mass / 1.25e-4
+        friction, stuck = [], []
+        for step, (_v, w, _e) in enumerate(
+            self._run(
+                bed, anchors, com, mass, 1.0e6 * np.eye(3), np.eye(3), np.zeros(3), settle + 1600,
+                lambda step: np.array([launch, 0.0, 0.0, 0.0, 0.0, 0.0]) if step == settle else np.zeros(6),
+            )
+        ):  # fmt: skip
+            if step > settle:
+                self._assert_inside_the_cone(bed, mu)
+                friction.append(w[0])
+                stuck.append(bed.bed.stuck.numpy().all())
+        friction = np.array(friction)
+        self.assertLess(friction.min(), -0.98 * mu * weight)
+        sliding = int(np.argmin(friction))
+        self.assertFalse(stuck[sliding])
+        self.assertTrue(any(stuck[sliding:]))
+        jump = np.abs(np.diff(friction)).max()
+        self.assertLess(jump, 0.05 * mu * weight, f"largest friction step {jump:.1f} N")
 
-    def test_sliding_friction_opposes_the_slip_of_each_bottom(self):
-        """A settled block sliding and spinning over the bed gets friction mu R against the slip of every bottom."""
-        mu, dt = 0.8, 1.25e-4
-        bed, mobility, anchors, com, mass, inertia = self._block_on_bed(mu, normal_damping=10.0)
-        mobility.assign(np.diag([1.0 / mass] * 3 + list(1.0 / np.diag(inertia)))[None].astype(np.float32))
-        center = np.array([0.0, 0.0, com[2]])
-        state = SimpleNamespace(
-            body_q=wp.array([[*(center - com), 0.0, 0.0, 0.0, 1.0]], dtype=wp.transform),
-            body_qd=wp.zeros(1, dtype=wp.spatial_vector),
-            body_f=wp.zeros(1, dtype=wp.spatial_vector),
-        )
-        speed_z = 0.0
-        for _ in range(3200):
-            state.body_q.assign([[*(center - com), 0.0, 0.0, 0.0, 1.0]])
-            state.body_qd.assign([[0.0, 0.0, speed_z, 0.0, 0.0, 0.0]])
-            bed.apply(state)
-            speed_z += dt * (state.body_f.numpy()[0, 2] / mass - 9.81)
-            center[2] += dt * speed_z
-        state.body_q.assign([[*(center - com), 0.0, 0.0, 0.0, 1.0]])
-        slide, spin = np.array([0.3, 0.1]), 15.0
-        state.body_qd.assign([[*slide, speed_z, 0.0, 0.0, spin]])
-        bed.apply(state)
-        reaction = bed.bed.reaction.numpy()
-        friction = bed.bed.tangential_load.numpy()
-        lever = anchors[:, :2] - com[:2]
-        slip = slide + spin * np.stack((-lever[:, 1], lever[:, 0]), 1)
-        loaded = reaction > 0.0
-        self.assertGreater(loaded.sum(), 40)
-        self.assertGreater(np.linalg.norm(slip, axis=1)[loaded].min(), 0.05)
-        direction = -slip / np.linalg.norm(slip, axis=1, keepdims=True)
-        np.testing.assert_allclose(np.sum(friction * direction, 1)[loaded], mu * reaction[loaded], rtol=1.0e-2)
-        self.assertFalse(bed.bed.stuck.numpy().any())
+    def test_heel_drop_gains_no_energy_and_holds_at_running_timesteps(self):
+        """A 3 kg block landing on its heel at 2 m/s while sliding at 0.5 m/s stays passive and smooth at 1e-4 and 5e-4 s."""
+        mu, duration = 0.8, 0.08
+        rotation = np.array(wp.quat_to_matrix(wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), -0.15))).reshape(3, 3)
+        start = np.array([0.5, 0.0, -2.0])
+        peaks = {}
+        for dt in (1.0e-4, 5.0e-4):
+            with self.subTest(dt=dt):
+                bed, anchors, com, mass, inertia = self._block_on_bed(mu, mass=3.0)
+                gain, normal, friction = -np.inf, [], []
+                for _v, wrench, energy in self._run(
+                    bed, anchors, com, mass, inertia, rotation, start, round(duration / dt), dt=dt
+                ):
+                    self.assertTrue(np.isfinite(wrench).all())
+                    self._assert_inside_the_cone(bed, mu)
+                    gain = max(gain, energy)
+                    normal.append(wrench[2])
+                    friction.append(wrench[0])
+                # The bed's stored energy is left out of the sum, so the sum can only fall.
+                self.assertLessEqual(gain, 1.0e-3 * 0.5 * mass * start @ start)
+                peaks[dt] = max(normal)
+                jump = np.abs(np.diff(friction)).max()
+                self.assertLess(jump, 0.1 * mu * peaks[dt], f"largest friction step {jump:.1f} N")
+        np.testing.assert_allclose(peaks[5.0e-4], peaks[1.0e-4], rtol=0.05)
 
 
-def _rimmed_bed(worlds: int, mobility=None):
+def _rimmed_bed(worlds: int):
     """Return a v3 FR3 bed of 40 x 16 columns, one per world, whose two thin outer rings have free tops."""
     spacing = 0.005
     anchors, neighbors = _flat_bed(40, 16, spacing)
@@ -304,7 +270,6 @@ def _rimmed_bed(worlds: int, mobility=None):
         FoundationConfig(ground_height_m=0.0, mu=0.8),
         np.arange(worlds),
         wp.zeros(worlds, dtype=wp.vec3),
-        carrier_mobility=mobility,
         max_strain=0.9,
     )
     bed.set_timesteps(1.25e-4)
@@ -339,58 +304,17 @@ def _press(bed, loads: np.ndarray, mass: float, steps: int):
 
 @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
 class TestColumnBedWall(unittest.TestCase):
-    """Shear layers that follow compression onto the densification wall must not create energy."""
+    """A light free carrier on the capped densification wall settles, and the bed never does work."""
 
     def test_light_carrier_settles_on_the_wall(self):
-        """A 1 kg rigid carrier pressed by stance loads onto a bed with free rim tops settles at the load."""
+        """A free 1 kg carrier pressed by stance loads onto a bed with free rim tops settles at the load."""
         loads = np.array([1500.0, 2000.0, 3000.0])
         mass = 1.0
-        rows = np.diag([1.0 / mass] * 3 + [1.0e-6] * 3)
-        mobility = wp.array(np.tile(rows, (len(loads), 1, 1)), dtype=wp.spatial_matrix)
-        bed, _anchors = _rimmed_bed(len(loads), mobility)
+        bed, _anchors = _rimmed_bed(len(loads))
         applied, strain, _speed = _press(bed, loads, mass, 3200)
         self.assertTrue(np.isfinite(applied).all())
         self.assertLess(np.max(strain), 0.92)
         np.testing.assert_allclose(applied[-800:].mean(0), loads + mass * 9.81, rtol=0.03)
-
-    def test_carrier_pressed_hard_never_passes_the_compression_stop(self):
-        """A 1 kg carrier pressed with 4 kN stays bounded and never closes a column past the stop.
-
-        The 3 x 3 bed cannot carry 4 kN below the stop, so its columns end up on it.
-        """
-        mass, load = 1.0, 4000.0
-        rows = np.diag([1.0 / mass] * 3 + [1.0e-6] * 3)
-        mobility = wp.array(rows[None], dtype=wp.spatial_matrix)
-        rimmed, _anchors = _rimmed_bed(1, mobility)
-        spacing, thickness = 0.005, 0.03
-        anchors, neighbors = _flat_bed(3, 3, spacing)
-        n = len(anchors)
-        small = ColumnBed(
-            anchors,
-            np.full(n, thickness),
-            spacing**2,
-            neighbors,
-            spacing,
-            np.full(n, TOP_BONDED, np.int32),
-            FR3_V3,
-            FoundationConfig(ground_height_m=0.0, mu=0.8),
-            np.array([0]),
-            wp.zeros(1, dtype=wp.vec3),
-            carrier_mobility=mobility,
-        )
-        small.set_timesteps(1.25e-4)
-        for name, bed in (("rimmed", rimmed), ("small", small)):
-            with self.subTest(bed=name):
-                applied, strain, speed = _press(bed, np.array([load]), mass, 3200)
-                stop = bed.bed.max_strain
-                self.assertTrue(np.isfinite(applied).all())
-                self.assertLess(np.abs(applied).max(), 1.0e6)
-                # The load acts after the carrier solve, so the stop is held to one step of its speed gain.
-                self.assertLessEqual(strain.max(), stop + 3.0e-3)
-                np.testing.assert_allclose(applied[-800:].mean(), load + mass * 9.81, rtol=0.03)
-                if name == "small":
-                    self.assertGreater(strain.max(), stop - 0.01)
-                    self.assertLess(abs(speed[0]), 0.05)
 
     def test_bed_does_no_work_over_a_closed_press_and_tilt(self):
         """A carrier driven around a closed loop of depth and pitch gets no work out of the bed, either way round."""
@@ -432,7 +356,7 @@ class TestColumnBedWorlds(unittest.TestCase):
     """Check what a world keeps or gets independently of its neighbors and of the ground."""
 
     @staticmethod
-    def _bed(worlds: int, mobility=None):
+    def _bed(worlds: int):
         spacing, thickness = 0.005, 0.03
         anchors, neighbors = _flat_bed(6, 4, spacing)
         n = len(anchors)
@@ -447,18 +371,19 @@ class TestColumnBedWorlds(unittest.TestCase):
             FoundationConfig(ground_height_m=0.0, mu=0.5),
             np.arange(worlds),
             wp.zeros(worlds, dtype=wp.vec3),
-            carrier_mobility=mobility,
         )
 
     @staticmethod
-    def _state(heights, wrench=0.0):
+    def _state(heights, wrench=0.0, slide=0.0):
         count = len(heights)
         q = np.zeros((count, 7), np.float32)
         q[:, 2] = heights
         q[:, 6] = 1.0
+        qd = np.zeros((count, 6), np.float32)
+        qd[:, 0] = slide
         return SimpleNamespace(
             body_q=wp.array(q, dtype=wp.transform),
-            body_qd=wp.zeros(count, dtype=wp.spatial_vector),
+            body_qd=wp.array(qd, dtype=wp.spatial_vector),
             body_f=wp.array(np.full((count, 6), wrench, np.float32), dtype=wp.spatial_vector),
         )
 
@@ -466,12 +391,12 @@ class TestColumnBedWorlds(unittest.TestCase):
         """Reset the masked world to the unloaded shape without disturbing the other world's history."""
         bed = self._bed(2)
         bed.set_timesteps(1.25e-4)
-        state = self._state([-0.003, -0.003])
+        state = self._state([-0.003, -0.003], slide=0.01)
         for _ in range(20):
             bed.apply(state)
-        names = ("top", "bottom", "q_state", "peq_prev")
+        names = ("top", "bottom", "q_state", "peq_prev", "deflection")
         before = {name: bed.column_state(name).copy() for name in names}
-        self.assertTrue(any(np.any(before[name][0] != 0.0) for name in names))
+        self.assertTrue(all(np.any(before[name][0] != 0.0) for name in names[2:]))
         bed.reset(wp.array([True, False], dtype=bool))
         for name in names:
             after = bed.column_state(name)
@@ -480,8 +405,7 @@ class TestColumnBedWorlds(unittest.TestCase):
 
     def test_carrier_without_carried_load_gets_no_wrench(self):
         """Overwrite the wrench with zero for a carrier held up off the ground, and load it once it presses in."""
-        mobility = wp.array(np.eye(6, dtype=np.float32)[None] / 20.0, dtype=wp.spatial_matrix)
-        bed = self._bed(1, mobility)
+        bed = self._bed(1)
         bed.set_timesteps(1.25e-4)
         floating = self._state([0.05], wrench=1.0)
         bed.apply(floating)
@@ -492,10 +416,25 @@ class TestColumnBedWorlds(unittest.TestCase):
             bed.apply(pressed)
         self.assertGreater(pressed.body_f.numpy()[0, 2], 0.0)
 
-    def test_bed_rejects_a_mobility_array_of_the_wrong_length(self):
-        """Refuse a ``carrier_mobility`` with no matrix for some world, which the kernel would read past."""
-        with self.assertRaisesRegex(ValueError, "carrier_mobility"):
-            self._bed(2, wp.zeros(1, dtype=wp.spatial_matrix))
+    def test_unloaded_bottom_loses_its_bristle_deflection(self):
+        """A bottom dragged inside the cone stores its slip, drops it when lifted off and lands again with no friction."""
+        dt, slide, steps = 1.25e-4, 0.01, 200
+        bed = self._bed(1)
+        bed.set_timesteps(dt)
+        pressed = self._state([-0.003], slide=slide)
+        for _ in range(steps):
+            bed.apply(pressed)
+        self.assertTrue(bed.column_state("stuck").all())
+        np.testing.assert_allclose(bed.column_state("deflection")[0, :, 0], slide * dt * steps, rtol=1.0e-3)
+        lifted = self._state([0.01], slide=slide)
+        bed.apply(lifted)
+        np.testing.assert_array_equal(bed.column_state("deflection"), 0.0)
+        np.testing.assert_array_equal(bed.column_state("tangential_load"), 0.0)
+        landed = self._state([-0.003])
+        bed.apply(landed)
+        self.assertGreater(bed.column_state("reaction").min(), 0.0)
+        np.testing.assert_array_equal(bed.column_state("tangential_load"), 0.0)
+        np.testing.assert_array_equal(landed.body_f.numpy()[0, :2], 0.0)
 
     def test_bed_rejects_a_max_strain_below_the_stretch_floor(self):
         """Refuse a compression limit that closes columns past the stretch floor, where the foam force is flat."""

@@ -137,6 +137,7 @@ class Example:
             np.array([self.carrier]),
             self.model.body_com,
             top_gap_m=top_gap,
+            sweeps=64 if self.mode == "instron" else 16,
             device=self.device,
         )
         self.bed.set_timesteps(self.sim_dt)

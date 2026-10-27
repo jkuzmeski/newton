@@ -1,1 +1,1 @@
-Cap the digital-shoe Hyperfoam equilibrium tangent modulus at 100 MPa from the strain where it first gets that stiff, continue the pressure linearly past it, and add a hard compression stop at 0.95 strain that column beds enforce on bonded columns and, with ``carrier_mobility``, in the implicit carrier solve.
+Cap the digital-shoe Hyperfoam equilibrium tangent modulus at 100 MPa from the strain where it first gets that stiff, continue the pressure linearly past it. Column beds clamp compression at ``max_strain`` (0.95) in their sweeps.

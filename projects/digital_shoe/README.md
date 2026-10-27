@@ -71,9 +71,9 @@ lengths, loading patches and uniform rearfoot shortening remain unchanged. This
 is not a new gap-aware contact solve against the flat punch visual.
 
 Both fixture replays check the warmed force waveform at the force-evaluation
-time, not the later display clock. The passive solve uses the `ColumnBed` default
-of 64 quasi-static sweeps per substep; an earlier 32/64-sweep check on the
-retained artifact changed the force curve by less than 0.1% of peak. This is a numerical replay check, not new experimental
+time, not the later display clock. The replay passes 64 quasi-static sweeps per
+substep to `ColumnBed` (whose running default is 16); an earlier 32/64-sweep
+check on the retained artifact changed the force curve by less than 0.1% of peak. This is a numerical replay check, not new experimental
 validation or a material refit.
 
 ```bash
@@ -99,7 +99,7 @@ stay local and ignored; the tools do not change the shoe or physics sources.
 [Compare tangential models](FRICTION.md) with five solver modes
 (explicit/implicit legacy bristle, regularized Coulomb, and explicit/implicit
 consistent deflection) under prescribed normal loading. These modes are a
-standalone comparison; the column bed uses plain Coulomb friction (see below).
+standalone comparison; the column bed uses its own per-column bristle (see below).
 
 The retired Cartesian-controller replay, search, and refit experiments are no
 longer supported. Read [FRICTION_ONSET.md](FRICTION_ONSET.md) for supplied-signal
@@ -122,10 +122,10 @@ column bed) and the two-surface column balance.
 lands on the ground plane and a top that is bonded to, pressed by, or free of the
 carrier surface. `runtime.py` holds the material block and `FoundationConfig`.
 
-The column bed uses Coulomb friction without tangential compliance: a landed
-column bottom sticks to the ground plane or slides at `mu R` for its normal
-reaction `R`; see [`FRICTION_COLUMN.md`](FRICTION_COLUMN.md) for the law and its
-limits.
+The column bed is explicit. Each landed column bottom grips the ground through
+an elastic-Coulomb bristle of stiffness `G_eq A / L`, held to `mu R` for its
+normal reaction `R` and reset when the column unloads; see
+[`FRICTION_COLUMN.md`](FRICTION_COLUMN.md) for the law and its limits.
 
 `rendering.py` draws each column from its solved bottom and top
 (`column_endpoints`). It does not interpret a pressure reference or a friction
