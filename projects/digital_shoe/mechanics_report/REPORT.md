@@ -249,7 +249,7 @@ The shared solver takes constrained, relaxed Newton/Jacobi steps. It estimates a
 
 With `carrier_bond=True`, the free compression is also bounded above by nonnegative nominal carrier penetration. This prevents passive support from remaining planted while the carried shoe lifts into flight. It is a **one-sided retention bound**, not a bilateral bond of every passive top to a rigid foot.
 
-The bench replay uses a quasi-static passive solve with 32 sweeps per substep. The current impedance rig instead uses four sweeps and a declared **2 ms outer-relaxation lag**. This extra lag is distinct from the **5.15 ms Maxwell material time**. The shared material functions are the same, but these boundary and numerical settings need not produce identical histories under the same nominal movement. Sweep, time-step, and lag sensitivity remain relevant. [S2, S3, S5, S13]
+The bench replay (`LastReplay`) uses a quasi-static passive solve with 64 sweeps per substep. The impedance rig uses the bed default of 16 sweeps per substep and integrates the foot explicitly. The shared material functions are the same, but these boundary and numerical settings need not produce identical histories under the same nominal movement. Sweep and time-step sensitivity remain relevant. [S2, S3, S5, S13]
 
 ## 8. Tangential contact: anchored Coulomb bristles
 
