@@ -121,7 +121,7 @@ class TestGroundAngleReconstruction(unittest.TestCase):
                 solver_pitch = thigh + knee + ankle + np.pi / 2
                 for x_shift in (0.0, 5.0):
                     with self.subTest(pitch=pitch, x_shift=x_shift):
-                        shoe.apply([x_shift, 0.9], [0.0, 0.0], solver_pitch, 0.0, 0.0000625, np.eye(3))
+                        shoe.apply([x_shift, 0.9], [0.0, 0.0], solver_pitch, 0.0, 0.0000625)
                         pose = shoe.state.body_q.numpy()[0]
                         carrier_pitch = -2 * np.arctan2(float(pose[4]), float(pose[6]))
                         np.testing.assert_allclose(carrier_pitch, pitch, atol=1e-6)

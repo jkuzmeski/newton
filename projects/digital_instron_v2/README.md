@@ -90,11 +90,9 @@ uv run -m projects.digital_instron_v2.example --mode stride
 uv run -m projects.digital_instron_v2.example --mode attached
 ```
 
-The `settle` and `attached` carriers are free rigid bodies. They give the column bed
-their inverse mass and inertia in world axes (`carrier_mobility`, refreshed from the
-carrier pose before every substep), so the bed's normal and friction forces enter the
-carrier's implicit step. The `instron` and `stride` carriers follow a prescribed pose
-and receive the bed's explicit forces.
+The `settle` and `attached` carriers are free rigid bodies; the `instron` and `stride`
+carriers follow a prescribed pose. In every mode the bed applies its explicit forces to
+the carrier. The `instron` mode runs the bed with 64 sweeps; the other modes use 16.
 
 Add `--fit PATH` to use the `"material"` block of a `material_fit.json`. Without
 it the scenes use `core.CALIBRATED_MATERIAL`, which was calibrated for the earlier

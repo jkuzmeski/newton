@@ -15,9 +15,6 @@ from newton.tests.test_digital_shoe import _tiny_artifact
 from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE
 from projects.impedance_instron.cartesian.shoe import Shoe
 
-_HEAVY_FOOT = np.diag([1.0e-3, 1.0e-3, 1.0e-1])
-"""Planar mobility of a foot that the bed's load barely moves within one step."""
-
 
 def _tiny_shoe_file(directory: str) -> Path:
     """Write a small standalone two-column shoe and fixture."""
@@ -64,46 +61,33 @@ class TestCartesianShoe(unittest.TestCase):
 
     def test_flight_and_compression(self):
         """Produce zero flight force and an upward response to compression."""
-        force, strain = self.shoe.apply([0, 0.2], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)
+        force, strain = self.shoe.apply([0, 0.2], [0, 0], 0, 0, 0.0001)
         np.testing.assert_array_equal(force, 0)
         self.assertEqual(strain, 0)
-        force, strain = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)
+        force, strain = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
         self.assertGreater(force[1], 0)
         self.assertAlmostEqual(force[2], 0, places=6)
         self.assertAlmostEqual(strain, 0.001 / 0.02, places=5)
 
-    def test_moving_sole_slides_at_the_friction_limit(self):
-        """Slide every loaded column bottom of a moving heavy foot at mu times its ground reaction."""
-        actual, _strain = self.shoe.apply([0, 0.099], [0.01, 0], 0, 0, 0.001, _HEAVY_FOOT)
+    def test_moving_sole_friction_opposes_motion_within_the_cone(self):
+        """Resist a sliding foot with a drag no larger than mu times the ground reaction."""
+        actual, _strain = self.shoe.apply([0, 0.099], [0.01, 0], 0, 0, 0.001)
         normal = float(self.shoe.bed.bed.normal_force.numpy()[0])
         self.assertGreater(normal, 0.0)
-        # The solve keeps the drag inside the friction cone by its float32 tolerance.
-        np.testing.assert_allclose(actual[0], -self.shoe.config.mu * normal, rtol=1e-3)
-
-    def test_friction_stops_a_light_foot_without_reversing_it(self):
-        """Solve friction with the foot's motion: a foot light along the ground stops instead of bouncing back."""
-        mobility = np.diag([1.0e3, 1.0e-3, 1.0e-1])
-        dt, speed = 0.001, 0.01
-        actual, _strain = self.shoe.apply([0, 0.099], [speed, 0], 0, 0, dt, mobility)
-        normal = float(self.shoe.bed.bed.normal_force.numpy()[0])
-        # The friction limit would reverse this foot within the step.
-        self.assertGreater(self.shoe.config.mu * normal * mobility[0, 0] * dt, 2.0 * speed)
-        end_speed = speed + dt * mobility[0, 0] * actual[0]
         self.assertLess(actual[0], 0.0)
-        self.assertGreaterEqual(end_speed, 0.0)
-        self.assertLess(end_speed, 0.01 * speed)
+        self.assertLessEqual(-actual[0], self.shoe.config.mu * normal * (1.0 + 1e-3))
 
     def test_pitch_sign(self):
         """Map the Newton +Y torque into the mathematical planar angle convention."""
-        force, _ = self.shoe.apply([0, 0.1], [0.2, -0.1], 0.1, 0.3, 0.0001, _HEAVY_FOOT)
+        force, _ = self.shoe.apply([0, 0.1], [0.2, -0.1], 0.1, 0.3, 0.0001)
         self.assertNotEqual(force[2], 0)
         self.assertAlmostEqual(force[2], -float(self.shoe.state.body_f.numpy()[0, 4]))
 
     def test_translation_invariance(self):
         """Preserve normal loading under a stationary-ground horizontal translation."""
-        a, _ = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)
+        a, _ = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
         self.shoe.reset()
-        b, _ = self.shoe.apply([3, 0.099], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)
+        b, _ = self.shoe.apply([3, 0.099], [0, 0], 0, 0, 0.0001)
         np.testing.assert_allclose(a, b, atol=1e-5)
 
     def test_reject_ambiguous_footprint(self):
@@ -127,11 +111,11 @@ class TestCartesianShoe(unittest.TestCase):
 
     def test_distributed_pressure_and_moment(self):
         """Recover the ankle wrench from the carried column forces rather than a point load."""
-        self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)
+        self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)
         self.assertTrue(np.all(self.shoe.bed.column_state("reaction") > 0))
         self.shoe.reset()
         pitch = 0.05
-        wrench, _ = self.shoe.apply([0, 0.099], [0, 0], pitch, 0, 0.0001, _HEAVY_FOOT)
+        wrench, _ = self.shoe.apply([0, 0.099], [0, 0], pitch, 0, 0.0001)
         carried = self.shoe.bed.column_state("carried")[0].astype(float)
         self.assertNotAlmostEqual(carried[0], carried[1])
         anchors = self.shoe.anchor_local_m
@@ -156,7 +140,7 @@ class TestCartesianShoe(unittest.TestCase):
         shoe = Shoe(path, [0, 0, 0.1], 0)
         np.testing.assert_array_equal(shoe.connection, [TOP_BONDED, TOP_BONDED, TOP_FREE])
         self.assertEqual((shoe.metadata["bonded_columns"], shoe.metadata["free_columns"]), (2, 1))
-        _, strain = shoe.apply([0, 0.098], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)
+        _, strain = shoe.apply([0, 0.098], [0, 0], 0, 0, 0.0001)
         compression = shoe.bed.column_state("compression")[0]
         self.assertEqual(compression.shape, (3,))
         self.assertGreater(compression[2], 0)
@@ -178,8 +162,8 @@ class TestCartesianShoe(unittest.TestCase):
         nominal_top = shoe.anchor_local_m.copy()
         nominal_top[:, 2] += shoe.shoe.column_bed.rest_length_m
         np.testing.assert_allclose(shoe.attachment_local_m - nominal_top, [[0, 0, 0.005]] * 2, atol=1e-12)
-        expected = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)[0]
-        actual = shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001, _HEAVY_FOOT)[0]
+        expected = self.shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)[0]
+        actual = shoe.apply([0, 0.099], [0, 0], 0, 0, 0.0001)[0]
         np.testing.assert_array_equal(actual, expected)
 
 

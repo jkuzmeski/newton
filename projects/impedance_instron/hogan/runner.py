@@ -478,15 +478,10 @@ def simulate(
             ankle, jacobian, _ = chain.point(state.q, 3, np.zeros(2))
             foot = np.vstack((jacobian, foot_angular))
             mass, bias = chain.dynamics(state.q, state.v, cfg.gravity_m_s2)
-            try:
-                # The bed solves contact with the foot's motion: its end-of-step
-                # velocity without contact and its mobility at the ankle.
-                free = foot @ (state.v + dt * np.linalg.solve(mass, load - bias))
-                mobility = foot @ np.linalg.solve(mass, foot.T)
-            except np.linalg.LinAlgError:
-                failure = "Singular mass matrix"
-                break
-            wrench, compression = shoe.apply(ankle, free[:2], chain.angle(state.q, 3), float(free[2]), dt, mobility)
+            foot_velocity = foot @ state.v
+            wrench, compression = shoe.apply(
+                ankle, foot_velocity[:2], chain.angle(state.q, 3), float(foot_velocity[2]), dt
+            )
             wrench = np.asarray(wrench, dtype=float)
             if not np.isfinite(wrench).all() or not np.isfinite(compression):
                 failure = "Nonfinite actuator/contact output"
@@ -497,7 +492,11 @@ def simulate(
             if compression > cfg.compression_limit + 1e-6:
                 failure = "Held shoe compression screen exceeded"
                 break
-            acceleration = np.linalg.solve(mass, load + foot.T @ wrench - bias)
+            try:
+                acceleration = np.linalg.solve(mass, load + foot.T @ wrench - bias)
+            except np.linalg.LinAlgError:
+                failure = "Singular mass matrix"
+                break
             velocity = state.v + dt * acceleration
             position = state.q + dt * velocity
             if not np.isfinite(position).all() or not np.isfinite(velocity).all():

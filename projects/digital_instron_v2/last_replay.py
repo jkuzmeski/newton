@@ -195,6 +195,7 @@ class LastReplay:
             np.arange(self.world_count),
             wp.zeros(self.world_count, dtype=wp.vec3, device=self.device),
             top_gap_m=bed.gap_m,
+            sweeps=64,
             device=self.device,
         )
         self.bed.set_timesteps(self.dt_s)

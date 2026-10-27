@@ -9,7 +9,6 @@ import math
 
 import warp as wp
 
-from ..cartesian.shoe import OUT_OF_PLANE_MOBILITY
 from .mechanics import Chain
 
 wp.set_module_options({"enable_backward": False, "fuse_fp": False})
@@ -18,7 +17,6 @@ Vec6 = wp.types.vector(6, wp.float64)
 Mat6 = wp.types.matrix((6, 6), wp.float64)
 _PI = wp.constant(wp.float64(math.pi))
 _HALF_PI = wp.constant(wp.float64(0.5 * math.pi))
-_OUT_OF_PLANE = wp.constant(wp.float64(OUT_OF_PLANE_MOBILITY))
 
 
 @wp.struct
@@ -219,20 +217,6 @@ def _finite6(x: Vec6):
     for i in range(6):
         ok = ok and wp.isfinite(x[i])
     return ok
-
-
-@wp.func
-def _spatial_mobility(planar: wp.mat33d):
-    """Mirror :func:`~projects.impedance_instron.cartesian.shoe.spatial_mobility` in float32."""
-    sign = wp.vec3d(wp.float64(1.0), wp.float64(1.0), wp.float64(-1.0))
-    result = wp.spatial_matrix()
-    for i in range(3):
-        for j in range(3):
-            result[2 * i, 2 * j] = wp.float32(sign[i] * sign[j] * planar[i, j])
-    result[1, 1] = wp.float32(_OUT_OF_PLANE * wp.float64(0.5) * (planar[0, 0] + planar[1, 1]))
-    result[3, 3] = wp.float32(_OUT_OF_PLANE * planar[2, 2])
-    result[5, 5] = result[3, 3]
-    return result
 
 
 @wp.func

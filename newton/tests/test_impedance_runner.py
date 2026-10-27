@@ -53,7 +53,7 @@ class _Shoe:
     def reset(self):
         self.resets += 1
 
-    def apply(self, ankle_m, velocity_m_s, pitch_rad, angular_velocity_rad_s, dt, mobility):
+    def apply(self, ankle_m, velocity_m_s, pitch_rad, angular_velocity_rad_s, dt):
         return self.force.copy(), 0.0
 
 
