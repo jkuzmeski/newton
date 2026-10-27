@@ -99,12 +99,12 @@ stay local and ignored; the tools do not change the shoe or physics sources.
 [Compare tangential models](FRICTION.md) with five solver modes
 (explicit/implicit legacy bristle, regularized Coulomb, and explicit/implicit
 consistent deflection) under prescribed normal loading. These modes are a
-standalone comparison; the column bed always uses elastic Coulomb friction.
+standalone comparison; the column bed uses plain Coulomb friction (see below).
 
 The retired Cartesian-controller replay, search, and refit experiments are no
 longer supported. Read [FRICTION_ONSET.md](FRICTION_ONSET.md) for supplied-signal
 observation helpers and [FRICTION_CONTINUITY.md](FRICTION_CONTINUITY.md) for
-constitutive continuity and internal shear relaxation.
+constitutive contact-force continuity.
 
 ```bash
 # Compare tangential formulations headlessly
@@ -121,9 +121,9 @@ neighbor coupling, the bristle laws and the two-surface column balance.
 lands on the ground plane and a top that is bonded to, pressed by, or free of the
 carrier surface. `runtime.py` holds the material block and `FoundationConfig`.
 
-The column bed uses elastic Coulomb friction: each column uses `G_eq A / L`
-stiffness with a Coulomb cap and no tangential damping; see
-[`FRICTION_COLUMN.md`](FRICTION_COLUMN.md) for its equations and calibration
+The column bed uses Coulomb friction without tangential compliance: a landed
+column bottom sticks to the ground plane or slides at `mu R` for its normal
+reaction `R`; see [`FRICTION_COLUMN.md`](FRICTION_COLUMN.md) for the law and its
 limits.
 
 `rendering.py` draws each column from its solved bottom and top

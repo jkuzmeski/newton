@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 
 from projects.digital_shoe.artifact import MODEL_TYPE, SCHEMA_VERSION, validate_artifact
+from projects.digital_shoe.column_bed import SHEAR_LAYER_FRACTION
 from projects.digital_shoe.report import write_report
 from projects.digital_shoe.runtime import ShoeMaterial
 
@@ -180,14 +181,16 @@ def build_artifact(
     count = len(rest)
     neighbors = neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m)
     shear = material.equilibrium_shear_modulus_pa
+    layer_shear = SHEAR_LAYER_FRACTION * shear
     faces = np.argwhere(neighbors > np.arange(count)[:, None])
-    face_coupling = shear * 0.5 * (rest[faces[:, 0]] + rest[neighbors[faces[:, 0], faces[:, 1]]])
+    t_i, t_j = rest[faces[:, 0]], rest[neighbors[faces[:, 0], faces[:, 1]]]
+    face_coupling = layer_shear * 2.0 * t_i * t_j / (t_i + t_j)
     parameters = ShoeMaterial(
         material.instantaneous_shear_modulus_pa,
         material.hyperfoam_exponent,
         material.equilibrium_fraction,
-        # Reported, not fitted: the face rule at the bed-mean rest thickness.
-        float(shear * rest.mean()),
+        # Reported, not fitted: the shear layer coefficient at the bed-mean rest thickness.
+        float(layer_shear * rest.mean()),
         EFFECTIVE_POISSON_RATIO,
         material.maxwell_relaxation_time_s,
         material.instantaneous_shear_modulus_2_pa,
@@ -230,7 +233,11 @@ def build_artifact(
             "parameters": asdict(parameters),
             "derived_quantities": {
                 "hyperfoam_term_count": 2,
-                "pasternak_rule": "k_ij = equilibrium_shear_modulus_pa * (rest_length_m[i] + rest_length_m[j]) / 2",
+                "pasternak_rule": (
+                    f"k_ij = {float(SHEAR_LAYER_FRACTION)} * equilibrium_shear_modulus_pa"
+                    " * 2 * rest_length_m[i] * rest_length_m[j] / (rest_length_m[i] + rest_length_m[j])"
+                ),
+                "shear_layer_fraction": float(SHEAR_LAYER_FRACTION),
                 "pasternak_n_per_m_is_fitted": False,
                 "equilibrium_shear_modulus_pa": float(shear),
                 "equilibrium_shear_modulus_term_1_pa": float(
@@ -283,8 +290,6 @@ def build_artifact(
             "passed_all_declared_gates": all(curve["metrics"]["passed"] for curve in curves),
             "scenario_parameters_not_fitted": [
                 "normal_damping",
-                "tangential_bristle_stiffness",
-                "tangential_damping",
                 "friction_coefficient",
                 "stretch_floor",
             ],

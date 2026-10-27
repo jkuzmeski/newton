@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 import warp as wp
 
-from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE, ColumnBed
+from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE, TOP_PRESSED, ColumnBed
 from projects.digital_shoe.runtime import FoundationConfig, ShoeMaterial
 
 FR3 = ShoeMaterial(
@@ -428,6 +428,96 @@ class TestColumnBedWall(unittest.TestCase):
             previous = (pose, load)
         self.assertTrue(np.isfinite(work).all())
         self.assertLessEqual(work.max(), 0.0)
+
+
+class TestColumnBedWorlds(unittest.TestCase):
+    """Check what a world keeps or gets independently of its neighbors and of the ground."""
+
+    @staticmethod
+    def _bed(worlds: int, mobility=None):
+        spacing, thickness = 0.005, 0.03
+        anchors, neighbors = _flat_bed(6, 4, spacing)
+        n = len(anchors)
+        return ColumnBed(
+            anchors,
+            np.full(n, thickness),
+            spacing**2,
+            neighbors,
+            spacing,
+            np.full(n, TOP_BONDED, np.int32),
+            FR3,
+            FoundationConfig(ground_height_m=0.0, mu=0.5),
+            np.arange(worlds),
+            wp.zeros(worlds, dtype=wp.vec3),
+            carrier_mobility=mobility,
+        )
+
+    @staticmethod
+    def _state(heights, wrench=0.0):
+        count = len(heights)
+        q = np.zeros((count, 7), np.float32)
+        q[:, 2] = heights
+        q[:, 6] = 1.0
+        return SimpleNamespace(
+            body_q=wp.array(q, dtype=wp.transform),
+            body_qd=wp.zeros(count, dtype=wp.spatial_vector),
+            body_f=wp.array(np.full((count, 6), wrench, np.float32), dtype=wp.spatial_vector),
+        )
+
+    def test_masked_reset_returns_only_the_selected_worlds_to_rest(self):
+        """Reset the masked world to the unloaded shape without disturbing the other world's history."""
+        bed = self._bed(2)
+        bed.set_timesteps(1.25e-4)
+        state = self._state([-0.003, -0.003])
+        for _ in range(20):
+            bed.apply(state)
+        names = ("top", "bottom", "q_state", "peq_prev")
+        before = {name: bed.column_state(name).copy() for name in names}
+        self.assertTrue(any(np.any(before[name][0] != 0.0) for name in names))
+        bed.reset(wp.array([True, False], dtype=bool))
+        for name in names:
+            after = bed.column_state(name)
+            np.testing.assert_array_equal(after[0], 0.0)
+            np.testing.assert_array_equal(after[1], before[name][1])
+
+    def test_carrier_without_carried_load_gets_no_wrench(self):
+        """Overwrite the wrench with zero for a carrier held up off the ground, and load it once it presses in."""
+        mobility = wp.array(np.eye(6, dtype=np.float32)[None] / 20.0, dtype=wp.spatial_matrix)
+        bed = self._bed(1, mobility)
+        bed.set_timesteps(1.25e-4)
+        floating = self._state([0.05], wrench=1.0)
+        bed.apply(floating)
+        np.testing.assert_array_equal(floating.body_f.numpy(), 0.0)
+        np.testing.assert_array_equal(bed.bed.carried_force.numpy(), 0.0)
+        pressed = self._state([-0.003], wrench=1.0)
+        for _ in range(5):
+            bed.apply(pressed)
+        self.assertGreater(pressed.body_f.numpy()[0, 2], 0.0)
+
+    def test_pressed_tops_stay_finite_when_the_carrier_passes_the_rest_thickness(self):
+        """Keep pressed-top columns finite when an explicit carrier is driven deeper than one thickness into the plane."""
+        spacing, thickness = 0.005, 0.03
+        anchors, neighbors = _flat_bed(6, 4, spacing)
+        n = len(anchors)
+        bed = ColumnBed(
+            anchors,
+            np.full(n, thickness),
+            spacing**2,
+            neighbors,
+            spacing,
+            np.full(n, TOP_PRESSED, np.int32),
+            FR3,
+            FoundationConfig(ground_height_m=0.0),
+            np.array([0]),
+            wp.zeros(1, dtype=wp.vec3),
+        )
+        bed.set_timesteps(1.25e-4)
+        state = self._state([-1.5 * thickness])
+        for _ in range(10):
+            bed.apply(state)
+        for name in ("top", "bottom", "compression", "reaction"):
+            self.assertTrue(np.isfinite(bed.column_state(name)).all(), name)
+        self.assertTrue(np.isfinite(state.body_f.numpy()).all())
 
 
 if __name__ == "__main__":

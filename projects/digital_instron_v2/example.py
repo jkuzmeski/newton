@@ -97,6 +97,25 @@ def _push(body: wp.int32, force: wp.vec3, body_f: wp.array[wp.spatial_vector]):
     body_f[body] = body_f[body] + wp.spatial_vector(force, wp.vec3(0.0))
 
 
+@wp.kernel
+def _carrier_mobility(
+    body: wp.int32,
+    inverse_mass: wp.array[wp.float32],
+    inverse_inertia: wp.array[wp.mat33],
+    body_q: wp.array[wp.transform],
+    mobility: wp.array[wp.spatial_matrix],
+):
+    """Write a free body's inverse effective mass in world axes, linear block first."""
+    rotation = wp.quat_to_matrix(wp.transform_get_rotation(body_q[body]))
+    angular = rotation * inverse_inertia[body] * wp.transpose(rotation)
+    result = wp.spatial_matrix()
+    for i in range(3):
+        result[i, i] = inverse_mass[body]
+        for j in range(3):
+            result[3 + i, 3 + j] = angular[i, j]
+    mobility[0] = result
+
+
 class Example:
     """Fully dynamic viscoelastic midsole driven as a digital Instron, a settling load, or a stride."""
 
@@ -137,6 +156,9 @@ class Example:
             self.state_1.body_q.assign(q0.reshape(1, 7))
             self._coupling_force = wp.zeros(1, dtype=wp.float32, device=self.device)
 
+        # A free carrier takes the bed's normal and friction forces in its implicit step, which stays
+        # stable under the stiff whole-midsole bed; a driven carrier is kinematic and sees explicit forces.
+        self._mobility = None if self._driven else wp.zeros(1, dtype=wp.spatial_matrix, device=self.device)
         self.bed = ColumnBed(
             anchor_local,
             self.geo.slack_m,
@@ -149,6 +171,7 @@ class Example:
             np.array([self.carrier]),
             self.model.body_com,
             top_gap_m=top_gap,
+            carrier_mobility=self._mobility,
             device=self.device,
         )
         self.bed.set_timesteps(self.sim_dt)
@@ -344,11 +367,28 @@ class Example:
         self._target_vel_traj = wp.array(np.ascontiguousarray(vels), dtype=wp.spatial_vector, device=self.device)
         self._substep_counter = wp.zeros(1, dtype=wp.int32, device=self.device)
 
+    def _apply_bed(self):
+        """Set the carrier wrench from the bed, first updating a free carrier's mobility to its current pose."""
+        if self._mobility is not None:
+            wp.launch(
+                _carrier_mobility,
+                dim=1,
+                inputs=[
+                    self.carrier,
+                    self.model.body_inv_mass,
+                    self.model.body_inv_inertia,
+                    self.state_0.body_q,
+                    self._mobility,
+                ],
+                device=self.device,
+            )
+        self.bed.apply(self.state_0)
+
     def _attached_substeps(self):
         """Advance the attached dynamic shoe by one frame using only device-side work."""
         for _ in range(self.sim_substeps):
             # The bed sets the carrier wrench, so the upper is added after it.
-            self.bed.apply(self.state_0)
+            self._apply_bed()
             wp.launch(
                 attach_coupling,
                 dim=1,
@@ -396,7 +436,7 @@ class Example:
                 self.state_0.body_qd.zero_()
                 self.bed.apply(self.state_0)
             else:
-                self.bed.apply(self.state_0)
+                self._apply_bed()
                 if self._pushing():
                     wp.launch(
                         _push,
@@ -679,7 +719,11 @@ class ShoeInstron:
         trace = load_trace(sweep / condition["validate_path"])
         depth = np.maximum(trace["displacement_m"], 0.0) + registration.qc["preload"]["indentation_m"]
         replay = LastReplay(
-            last_bed(grid, registration), depth[:, None], float(np.mean(np.diff(trace["time_s"]))), candidates=1
+            last_bed(grid, registration),
+            depth[:, None],
+            float(np.mean(np.diff(trace["time_s"]))),
+            candidates=1,
+            substeps=fit["substeps"],
         )
         force = replay.run([Material(**fit["material"])])[0, 0]
         if np.isnan(force).any():

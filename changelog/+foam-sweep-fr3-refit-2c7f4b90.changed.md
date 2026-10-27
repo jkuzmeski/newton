@@ -1,0 +1,1 @@
+Regenerate the FR3 and Dev3 column grids with area-weighted outline columns and bonded-top flags, and refit the FR3 foam material on the final column bed. The Dev3 fit is not refit; see ``DigitalInstron/FoamSweep/README.md``.

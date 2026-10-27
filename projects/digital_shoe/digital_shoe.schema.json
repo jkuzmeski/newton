@@ -8,7 +8,8 @@
         "rest_length_m",
         "area_m2",
         "neighbors",
-        "spacing_m"
+        "spacing_m",
+        "top_bonded"
       ],
       "type": "object"
     },
@@ -50,18 +51,32 @@
       "type": "object"
     },
     "instron_fixtures": {
+      "additionalProperties": {
+        "description": "One Virtual Instron fixture mapping. bed_bottom_above_platen_m holds the rest bottom height of every column_bed column over the platen at first contact, in column_bed order.",
+        "required": [
+          "carrier_anchor_m",
+          "foam_free_top_m",
+          "foam_bottom_m",
+          "rest_length_m",
+          "area_m2",
+          "neighbors",
+          "spacing_m",
+          "bed_bottom_above_platen_m"
+        ],
+        "type": "object"
+      },
       "type": "object"
     },
     "provenance": {
       "type": "object"
     },
     "schema_version": {
-      "const": "digital_shoe_1"
+      "const": "digital_shoe_2"
     },
     "shoe": {
       "properties": {
         "mass_kg": {
-          "description": "Mass of one shoe [kg]; loaders default to 0.2 kg when absent.",
+          "description": "Mass of one shoe [kg]. Optional; the loader uses 0.2 kg (DEFAULT_SHOE_MASS_KG) when absent and rejects a value that is not finite and positive.",
           "exclusiveMinimum": 0,
           "type": "number"
         }

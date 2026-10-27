@@ -42,10 +42,9 @@ def _forward_pressure(strain: wp.array[wp.float32], p: runtime.FoundationParams,
 
 
 @wp.kernel
-def _shear_and_pasternak(p: runtime.FoundationParams, out: wp.array[wp.float32]):
-    """Expose the effective shear modulus and a Pasternak coefficient for tests."""
+def _shear_modulus(p: runtime.FoundationParams, out: wp.array[wp.float32]):
+    """Expose the effective shear modulus for tests."""
     out[0] = runtime.material_shear_modulus(p)
-    out[1] = runtime._pasternak_coupling(0.02, 0.02, p)
 
 
 def _host_values(params):
@@ -177,9 +176,9 @@ class TestDigitalShoeMaterial(unittest.TestCase):
         strain = np.array([0.0, 0.1, 0.5], dtype=np.float32)
         out = []
         for params in (legacy_params, override_params):
-            values = wp.zeros(2, dtype=wp.float32, device="cpu")
+            values = wp.zeros(1, dtype=wp.float32, device="cpu")
             pressure = wp.zeros(len(strain), dtype=wp.float32, device="cpu")
-            wp.launch(_shear_and_pasternak, dim=1, inputs=[params, values], device="cpu")
+            wp.launch(_shear_modulus, dim=1, inputs=[params, values], device="cpu")
             wp.launch(
                 _forward_pressure,
                 dim=len(strain),
@@ -187,9 +186,8 @@ class TestDigitalShoeMaterial(unittest.TestCase):
                 device="cpu",
             )
             out.append((values.numpy(), pressure.numpy()))
-        np.testing.assert_array_equal(out[0][0], [72000.0, out[0][0][0] * 0.02])
+        self.assertEqual(out[0][0][0], 72000.0)
         self.assertEqual(out[1][0][0], 117160.0)
-        self.assertNotEqual(out[0][0][1], out[1][0][1])
         np.testing.assert_array_equal(out[0][1], out[1][1])
         self.assertEqual(legacy.equilibrium_shear_modulus_pa, out[0][0][0])
         self.assertEqual(overridden.equilibrium_shear_modulus_pa, 117160.0)

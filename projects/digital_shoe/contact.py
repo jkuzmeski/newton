@@ -8,23 +8,18 @@ the lateral shear coupling, the bristle friction law, contact kinematics, and
 the two-surface column balance.
 """
 
-from typing import Any
-
 import warp as wp
 
 
-def _pasternak_coupling(t_i: Any, t_j: Any, g_i: Any, g_j: Any):
+@wp.func
+def pasternak_coupling(t_i: wp.float32, t_j: wp.float32, shear: wp.float32) -> wp.float32:
     """Return the symmetric shear conductance [N/m] between two columns.
 
-    Each column contributes its own Pasternak coefficient ``G * t`` from its
-    shear modulus ``g`` [Pa] and rest thickness ``t`` [m]. The two halves of the
-    layer act in series, so the softer column bounds the pair: a column on its
-    densification wall cannot drag a soft neighbour after it.
+    Each column contributes its own Pasternak coefficient ``shear * t`` from the
+    shear modulus ``shear`` [Pa] of the layers and its rest thickness ``t`` [m].
+    The two halves of the layer act in series, so the thinner column bounds the pair.
     """
-    return 2.0 * (g_i * t_i) * (g_j * t_j) / (g_i * t_i + g_j * t_j)
-
-
-pasternak_coupling = wp.func(_pasternak_coupling)
+    return 2.0 * shear * t_i * t_j / (t_i + t_j)
 
 
 @wp.func
@@ -349,7 +344,7 @@ def column_balance_pressures(
             t = top_bound
     # Close at most half the remaining thickness per update, so a far-off step
     # cannot jump into the foam's lock-up; a converged state is unaffected.
-    room = 0.5 * (thickness - (top - bottom))
+    room = wp.max(0.5 * (thickness - (top - bottom)), 0.0)
     if (t - b) - (top - bottom) > room:
         if connection == TOP_BONDED:
             b = t - (top - bottom) - room

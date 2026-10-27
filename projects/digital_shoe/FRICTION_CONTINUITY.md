@@ -7,8 +7,8 @@ SPDX-License-Identifier: Apache-2.0
 
 The old fixed-leg/controller continuity comparison has been retired. The shared
 friction laws and their constitutive continuity tests remain available; no
-simulation-output filter is part of these laws. The column bed uses
-area-scaled elastic Coulomb friction; see
+simulation-output filter is part of these laws. The column bed does not use
+them; it uses plain Coulomb friction, described in
 [FRICTION_COLUMN.md](FRICTION_COLUMN.md).
 
 ## What the discontinuity tests show

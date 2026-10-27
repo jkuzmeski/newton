@@ -10,7 +10,6 @@ from dataclasses import dataclass
 import numpy as np
 import warp as wp
 
-from .contact import pasternak_coupling
 from .material import HYPERFOAM_ALPHA_FLOOR, SOLID_MODULUS_PA, densification_onset
 from .material import ogden_hill_term as _hyperfoam_term
 
@@ -199,22 +198,6 @@ def material_shear_modulus(p: FoundationParams) -> wp.float32:
     if p.shear_override > 0.0:
         return p.shear_override
     return p.g_eq + p.g_eq2
-
-
-@wp.func
-def _pasternak_coupling(t_i: wp.float32, t_j: wp.float32, p: FoundationParams) -> wp.float32:
-    """Pasternak coefficient of the shear layer between two columns at rest [N/m].
-
-    A Pasternak layer coefficient is ``G * t``. The shear modulus at rest is the foam's
-    own equilibrium Ogden-Hill modulus ``mu_eq``, which for a two-term series is
-    the *sum* :attr:`FoundationParams.g_eq` + :attr:`FoundationParams.g_eq2`, and
-    the layer thickness at the shared face is the mean of the two column rest
-    thicknesses. Averaging keeps the pair conductance symmetric, so the lateral
-    flux summed over the bed is exactly zero and the layer can only move load,
-    never create it.
-    """
-    shear = material_shear_modulus(p)
-    return pasternak_coupling(t_i, t_j, shear, shear)
 
 
 @dataclass

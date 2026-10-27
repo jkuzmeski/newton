@@ -14,7 +14,7 @@ import numpy as np
 
 from .runtime import ShoeMaterial
 
-SCHEMA_VERSION = "digital_shoe_1"
+SCHEMA_VERSION = "digital_shoe_2"
 MODEL_TYPE = "effective_hyperfoam_maxwell_pasternak_foundation"
 DEFAULT_SHOE_MASS_KG = 0.2
 """Mass of one shoe [kg] for artifacts whose ``shoe`` record lacks ``mass_kg``; a typical running shoe."""
@@ -232,6 +232,9 @@ def validate_artifact(data: dict[str, Any]) -> None:
     if model.get("type") != MODEL_TYPE:
         raise ValueError(f"unsupported constitutive model {model.get('type')!r}")
     ShoeMaterial(**model["parameters"])
+    mass_kg = data["shoe"].get("mass_kg", DEFAULT_SHOE_MASS_KG)
+    if not np.isfinite(mass_kg) or not mass_kg > 0.0:
+        raise ValueError(f"shoe mass_kg must be finite and positive, got {mass_kg!r}")
     bed = ColumnBed.from_json(data["column_bed"])
     for name, mesh_data in data.get("visual_meshes", {}).items():
         VisualMesh.from_json(name, mesh_data)

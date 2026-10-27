@@ -28,7 +28,7 @@ from projects.digital_shoe.showcase import Example
 
 def _tiny_artifact() -> dict:
     return {
-        "schema_version": "digital_shoe_1",
+        "schema_version": "digital_shoe_2",
         "shoe": {"id": "tiny<&shoe", "model_scope": "synthetic test"},
         "coordinate_system": {
             "handedness": "right",
@@ -110,6 +110,9 @@ class TestDigitalShoeArtifact(unittest.TestCase):
             data["shoe"]["mass_kg"] = 0.173
             path.write_text(json.dumps(data))
             self.assertEqual(load_artifact(path).mass_kg, 0.173)
+            data["shoe"]["mass_kg"] = 0.0
+            with self.assertRaisesRegex(ValueError, "mass_kg"):
+                validate_artifact(data)
 
     def test_rejects_unknown_schema_and_self_neighbor(self):
         """Reject unknown schema versions and invalid column topology."""

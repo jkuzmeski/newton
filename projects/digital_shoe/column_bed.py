@@ -225,7 +225,7 @@ _STRAIN_STEP = wp.constant(1.0e-3)
 @wp.func
 def _face_coupling(bed: _Bed, column: int, j: int, shear: float) -> float:
     """Return the shear conductance between two columns of one world, whose layers have modulus ``shear`` [N/m]."""
-    return pasternak_coupling(bed.rest_len[column], bed.rest_len[j], shear, shear)
+    return pasternak_coupling(bed.rest_len[column], bed.rest_len[j], shear)
 
 
 @wp.func
@@ -773,15 +773,20 @@ class ColumnBed:
             :class:`warp.spatial_matrix` per world, kept current by the caller.
             With it, each carrier takes the bed's normal and friction forces at
             its end-of-step twist (linearized backward Euler), which stays
-            stable on the foam's densification wall. Without, carriers see the
-            explicit forces, as kinematically driven fixtures do.
-        max_strain: Hard compression stop as a fraction of rest thickness. A
-            free top never closes past it, a bonded column's bottom is pushed
-            down to keep it, and a landed column at the stop is rigid to the
-            implicit carrier, which it pushes back to the stop.
-        sweeps: Red-black sweeps per step, warm started from the previous step.
-        over_relaxation: Fraction of each column's constrained Newton step taken;
-            above one is projected successive over-relaxation.
+            stable on the foam's densification wall. Without it (explicit mode),
+            the carriers see the explicit forces; use it only for kinematically
+            driven carriers, which no bed force can push through the plane.
+        max_strain: Compression limit as a fraction of rest thickness, 0.95 by
+            default. The sweeps keep a free top from closing past it and push a
+            bonded column's bottom down to keep it; a pressed top is not limited.
+            The stop that holds a landed, held column rigid and pushes the
+            carrier back to it is enforced only with ``carrier_mobility``. In
+            explicit mode a carrier pressed deeper meets only the foam's 100 MPa
+            tangent cap.
+        sweeps: Red-black sweeps per step, warm started from the previous step;
+            64 by default.
+        over_relaxation: Fraction of each column's constrained Newton step taken,
+            1.0 by default; above one is projected successive over-relaxation.
         device: CUDA device.
     """
 

@@ -36,7 +36,7 @@ uv run --no-sync -m projects.digital_instron_v2 fit --help
 | Module | Owns |
 |---|---|
 | `digital_shoe.material` | Ogden–Hill pressure and Maxwell recurrence, one expression source for NumPy and Warp |
-| `digital_shoe.contact` | Symmetric neighbor coupling, bristle laws and the two-surface column balance |
+| `digital_shoe.contact` | Symmetric neighbor coupling, the two-surface column balance and the bristle law (used by the friction example, not by the column bed) |
 | `digital_shoe.column_bed` | The batched GPU column bed |
 | `digital_shoe.runtime` | The material block and `FoundationConfig` |
 | `digital_shoe.rendering` | Column drawing from solved bottom and top endpoints |
@@ -63,6 +63,10 @@ uv run --extra dev -m projects.digital_instron_v2 fit \
 ```
 
 The fit writes `material_fit.json`; its `"material"` block is the fitted material.
+Every trace is replayed in `substeps` contact steps (default 8, the runner's
+1.25e-4 s step) and the file records the value. `example.py --shoe` and
+`sweep_report.py` replay with the recorded `substeps`, so they show the force curve
+the fit was scored on.
 
 ## Dynamic midsole example (`example.py`)
 
@@ -74,7 +78,7 @@ Four scenes run the column bed in live Newton rigid-body physics:
 uv run -m projects.digital_instron_v2.example --mode instron
 
 # Free, massive midsole resting on the ground; a sub-cone lateral load is held
-# by the elastic Coulomb friction.
+# by Coulomb friction between the columns' bottoms and the ground.
 uv run -m projects.digital_instron_v2.example --mode settle
 
 # Prescribed carrier pose carries the bonded bed over the ground; record the
@@ -85,6 +89,12 @@ uv run -m projects.digital_instron_v2.example --mode stride
 # attachment; record the stance/flight ground reaction.
 uv run -m projects.digital_instron_v2.example --mode attached
 ```
+
+The `settle` and `attached` carriers are free rigid bodies. They give the column bed
+their inverse mass and inertia in world axes (`carrier_mobility`, refreshed from the
+carrier pose before every substep), so the bed's normal and friction forces enter the
+carrier's implicit step. The `instron` and `stride` carriers follow a prescribed pose
+and receive the bed's explicit forces.
 
 Add `--fit PATH` to use the `"material"` block of a `material_fit.json`. Without
 it the scenes use `core.CALIBRATED_MATERIAL`, which was calibrated for the earlier
