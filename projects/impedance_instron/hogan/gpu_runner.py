@@ -42,6 +42,8 @@ from .gpu_mechanics import (
     _ankle,
     _carrier,
     _chain_params,
+    _cholesky,
+    _cholesky_apply,
     _cholesky_solve,
     _dynamics,
     _finite6,
@@ -166,7 +168,10 @@ def _actuate(
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
 ):
-    """Screen, command joint torque, and stage the shoe carrier for one step."""
+    """Screen, command joint torque, and stage the shoe carrier for one step.
+
+    The carrier gets the foot's end-of-step twist without contact.
+    """
     w = wp.tid()
     if data.status[w] != 0:
         return
@@ -253,7 +258,13 @@ def _actuate(
         out.damping_nms_rad = damping
         out.torque_saturated = saturated
         data.outputs[k, w] = out
-    transform, twist = _carrier(q, v, p, cfg.pitch)
+    mass, bias = _dynamics(q, v, p, cfg.gravity)
+    lower, ok = _cholesky(mass)
+    if not ok:
+        data.status[w] = 7
+        return
+    free = v + dt * _cholesky_apply(lower, load - bias)
+    transform, twist = _carrier(q, free, p, cfg.pitch)
     body_q[w] = transform
     body_qd[w] = twist
 

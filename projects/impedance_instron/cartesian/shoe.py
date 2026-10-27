@@ -35,7 +35,7 @@ class Shoe:
     """Evaluate contact at an ankle-centered foot pose supplied by the limb solver.
 
     The bed computes its normal and friction forces explicitly from the foot's
-    pose and velocity at the start of the step.
+    pose and its end-of-step velocity without contact.
     The fullfoot last carries the bed: column tops on the fixture footprint are
     bonded to it and the outer region's tops are free. Fixed attachment offsets
     retain the calibrated assembly; no second mesh-collision force or upper
@@ -139,9 +139,9 @@ class Shoe:
 
         Args:
             ankle_m: Ankle position [m], shape [2].
-            velocity_m_s: Ankle velocity [m/s], shape [2].
+            velocity_m_s: Ankle velocity at the end of the step without contact [m/s], shape [2].
             pitch_rad: Foot angle [rad].
-            angular_velocity_rad_s: Foot angular velocity [rad/s].
+            angular_velocity_rad_s: Foot angular velocity at the end of the step without contact [rad/s].
             dt: Contact timestep [s].
 
         The held strain is the largest compression over rest thickness of the

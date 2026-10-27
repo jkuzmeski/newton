@@ -478,10 +478,12 @@ def simulate(
             ankle, jacobian, _ = chain.point(state.q, 3, np.zeros(2))
             foot = np.vstack((jacobian, foot_angular))
             mass, bias = chain.dynamics(state.q, state.v, cfg.gravity_m_s2)
-            foot_velocity = foot @ state.v
-            wrench, compression = shoe.apply(
-                ankle, foot_velocity[:2], chain.angle(state.q, 3), float(foot_velocity[2]), dt
-            )
+            try:
+                free = foot @ (state.v + dt * np.linalg.solve(mass, load - bias))
+            except np.linalg.LinAlgError:
+                failure = "Singular mass matrix"
+                break
+            wrench, compression = shoe.apply(ankle, free[:2], chain.angle(state.q, 3), float(free[2]), dt)
             wrench = np.asarray(wrench, dtype=float)
             if not np.isfinite(wrench).all() or not np.isfinite(compression):
                 failure = "Nonfinite actuator/contact output"
