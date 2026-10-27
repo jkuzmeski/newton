@@ -387,7 +387,11 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--profile", type=Path, help="Leg profile; defaults to the prepared FR3_2 bundle")
-    parser.add_argument("--shoe", type=Path, help="Shoe artifact; defaults to the prepared FR3_2 bundle")
+    parser.add_argument(
+        "--shoe",
+        type=Path,
+        help="Shoe artifact; defaults to the prepared FR3_2 bundle, which must hold a column-bed shoe",
+    )
     parser.add_argument("--shoe-static-pitch-rad", type=float)
     parser.add_argument(
         "--virtual-foot-reference",

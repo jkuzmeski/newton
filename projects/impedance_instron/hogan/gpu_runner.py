@@ -42,9 +42,12 @@ from .gpu_mechanics import (
     _ankle,
     _carrier,
     _chain_params,
+    _cholesky,
+    _cholesky_apply,
     _cholesky_solve,
     _dynamics,
     _finite6,
+    _spatial_mobility,
 )
 from .mechanics import Chain
 from .runner import FEATURE_NAMES, RolloutConfig, Runner, State, Task, _summary
@@ -165,8 +168,13 @@ def _actuate(
     data: _Buffers,
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
+    mobility: wp.array[wp.spatial_matrix],
 ):
-    """Screen, command joint torque, and stage the shoe carrier for one step."""
+    """Screen, command joint torque, and stage the shoe carrier for one step.
+
+    The carrier gets the foot's end-of-step twist without contact and its
+    mobility, so the bed solves contact together with the foot's motion.
+    """
     w = wp.tid()
     if data.status[w] != 0:
         return
@@ -189,7 +197,7 @@ def _actuate(
     m = models[c]
     dt = dts[s]
     sense = data.sensory[w]
-    ankle, _jx, _jz, _angle = _ankle(q, p)
+    ankle, jx, jz, _angle = _ankle(q, p)
     phase = sense[0]
     load_bw = wp.clamp(sense[1], wp.float64(0.0), wp.float64(4.0))
     features = _Features(
@@ -253,9 +261,31 @@ def _actuate(
         out.damping_nms_rad = damping
         out.torque_saturated = saturated
         data.outputs[k, w] = out
-    transform, twist = _carrier(q, v, p, cfg.pitch)
+    mass, bias = _dynamics(q, v, p, cfg.gravity)
+    lower, ok = _cholesky(mass)
+    if not ok:
+        data.status[w] = 7
+        return
+    foot = _angular(3)
+    to_x = _cholesky_apply(lower, jx)
+    to_z = _cholesky_apply(lower, jz)
+    to_angle = _cholesky_apply(lower, foot)
+    planar = wp.mat33d(
+        wp.dot(jx, to_x),
+        wp.dot(jx, to_z),
+        wp.dot(jx, to_angle),
+        wp.dot(jz, to_x),
+        wp.dot(jz, to_z),
+        wp.dot(jz, to_angle),
+        wp.dot(foot, to_x),
+        wp.dot(foot, to_z),
+        wp.dot(foot, to_angle),
+    )
+    free = v + dt * _cholesky_apply(lower, load - bias)
+    transform, twist = _carrier(q, free, p, cfg.pitch)
     body_q[w] = transform
     body_qd[w] = twist
+    mobility[w] = _spatial_mobility(planar)
 
 
 @wp.kernel
@@ -411,6 +441,13 @@ class _Group:
         )
         shoe = shoes[indices[0]]
         bed = shoe.shoe.column_bed
+        self.carriers = SimpleNamespace(
+            body_q=wp.zeros(w, dtype=wp.transform, device=d),
+            body_qd=wp.zeros(w, dtype=wp.spatial_vector, device=d),
+            body_f=wp.zeros(w, dtype=wp.spatial_vector, device=d),
+            # Padding candidates never stage a carrier; keep their mobility valid for the bed.
+            mobility=wp.array(np.tile(np.eye(6), (w, 1, 1)), dtype=wp.spatial_matrix, device=d),
+        )
         self.bed = ColumnBed(
             shoe.anchor_local_m,
             bed.rest_length_m,
@@ -422,15 +459,11 @@ class _Group:
             shoe.config,
             np.arange(w),
             wp.zeros(w, dtype=wp.vec3, device=d),
+            carrier_mobility=self.carriers.mobility,
             device=d,
         )
         # World w = candidate * trials + trial advances with its trial's exact step.
         self.bed.set_timesteps(np.tile(self.dts, self.candidates))
-        self.carriers = SimpleNamespace(
-            body_q=wp.zeros(w, dtype=wp.transform, device=d),
-            body_qd=wp.zeros(w, dtype=wp.spatial_vector, device=d),
-            body_f=wp.zeros(w, dtype=wp.spatial_vector, device=d),
-        )
         cfg = self.config
         settings = Settings()
         settings.gravity = cfg.gravity_m_s2
@@ -488,6 +521,7 @@ class _Group:
                 data,
                 self.carriers.body_q,
                 self.carriers.body_qd,
+                self.carriers.mobility,
             ],
             device=d,
         )

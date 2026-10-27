@@ -7,7 +7,7 @@ import unittest
 
 import numpy as np
 
-from projects.digital_shoe.artifact import validate_artifact
+from projects.digital_shoe.artifact import SCHEMA_VERSION, validate_artifact
 from projects.impedance_instron.hogan.materials_geometry import geometry_variant
 
 
@@ -36,7 +36,7 @@ class MaterialsGeometryTests(unittest.TestCase):
             }
 
         self.source = {
-            "schema_version": "digital_shoe_1",
+            "schema_version": SCHEMA_VERSION,
             "shoe": {"id": "synthetic", "model_scope": "test"},
             "coordinate_system": {"length_unit": "m", "up_axis": "+Z"},
             "constitutive_model": {

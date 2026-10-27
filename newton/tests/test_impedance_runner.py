@@ -53,7 +53,7 @@ class _Shoe:
     def reset(self):
         self.resets += 1
 
-    def apply(self, ankle_m, velocity_m_s, pitch_rad, angular_velocity_rad_s, dt):
+    def apply(self, ankle_m, velocity_m_s, pitch_rad, angular_velocity_rad_s, dt, mobility):
         return self.force.copy(), 0.0
 
 
@@ -518,8 +518,18 @@ class TestRunnerIdentification(unittest.TestCase):
             changed = load_trials(root)
             np.testing.assert_array_equal(changed[0].initial.q, initial.q)
             np.testing.assert_array_equal(changed[0].initial.v, initial.v)
+            # A newly exported shoe replaces the dataset's shoe, which is then never read.
+            exported = root / "exported.json"
+            exported.write_bytes((root / "shoe.json").read_bytes())
+            stale = json.loads((root / "shoe.json").read_text())
+            stale["schema_version"] = "digital_shoe_1"
+            (root / "shoe.json").write_text(json.dumps(stale))
+            with self.assertRaisesRegex(ValueError, "schema_version"):
+                load_trials(root)
+            replaced = load_trials(root, shoe_artifact=exported)
+            self.assertEqual(replaced[0].provenance["shoe_artifact"], str(exported.resolve()))
             output = root / "inspection"
-            main(["inspect", "--dataset", str(root), "--output", str(output)])
+            main(["inspect", "--dataset", str(root), "--shoe", str(exported), "--output", str(output)])
             self.assertTrue((output / "summary.json").is_file())
             model_path = root / "seed.json"
             Runner.seed().save(model_path)
@@ -529,6 +539,8 @@ class TestRunnerIdentification(unittest.TestCase):
                     "evaluate",
                     "--dataset",
                     str(root),
+                    "--shoe",
+                    str(exported),
                     "--model",
                     str(model_path),
                     "--output",

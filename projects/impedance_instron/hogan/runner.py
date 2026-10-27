@@ -472,12 +472,23 @@ def simulate(
                 failure = "Numerical speed screen exceeded"
                 break
             load, info = runner.actuate(state, chain, task, dt)
+            if not np.isfinite(load).all():
+                failure = "Nonfinite actuator/contact output"
+                break
             ankle, jacobian, _ = chain.point(state.q, 3, np.zeros(2))
-            wrench, compression = shoe.apply(
-                ankle, jacobian @ state.v, chain.angle(state.q, 3), float(foot_angular @ state.v), dt
-            )
+            foot = np.vstack((jacobian, foot_angular))
+            mass, bias = chain.dynamics(state.q, state.v, cfg.gravity_m_s2)
+            try:
+                # The bed solves contact with the foot's motion: its end-of-step
+                # velocity without contact and its mobility at the ankle.
+                free = foot @ (state.v + dt * np.linalg.solve(mass, load - bias))
+                mobility = foot @ np.linalg.solve(mass, foot.T)
+            except np.linalg.LinAlgError:
+                failure = "Singular mass matrix"
+                break
+            wrench, compression = shoe.apply(ankle, free[:2], chain.angle(state.q, 3), float(free[2]), dt, mobility)
             wrench = np.asarray(wrench, dtype=float)
-            if not np.isfinite(wrench).all() or not np.isfinite(compression) or not np.isfinite(load).all():
+            if not np.isfinite(wrench).all() or not np.isfinite(compression):
                 failure = "Nonfinite actuator/contact output"
                 break
             if wrench[1] < -1e-6 or np.linalg.norm(wrench[:2]) > cfg.maximum_force_n:
@@ -486,13 +497,7 @@ def simulate(
             if compression > cfg.compression_limit + 1e-6:
                 failure = "Held shoe compression screen exceeded"
                 break
-            mass, bias = chain.dynamics(state.q, state.v, cfg.gravity_m_s2)
-            force = load + jacobian.T @ wrench[:2] + foot_angular * wrench[2]
-            try:
-                acceleration = np.linalg.solve(mass, force - bias)
-            except np.linalg.LinAlgError:
-                failure = "Singular mass matrix"
-                break
+            acceleration = np.linalg.solve(mass, load + foot.T @ wrench - bias)
             velocity = state.v + dt * acceleration
             position = state.q + dt * velocity
             if not np.isfinite(position).all() or not np.isfinite(velocity).all():

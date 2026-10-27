@@ -306,12 +306,15 @@ def load_trials(
     height_offset_m: float = 0.0,
     limit_per_split: int | None = None,
     force_observation: ForceObservation | None = None,
+    shoe_artifact: str | Path | None = None,
 ) -> list[Trial]:
     """Load existing or multi-condition datasets without cached tracking plans.
 
     A member may specify ``profile``, ``shoe_artifact``, ``mount_m``, ``pitch_rad``,
     ``speed_m_s`` and ``height_offset_m``. Paths are dataset-relative; profile/shoe
-    may instead come from existing ``shared_assets``. All trials describe one
+    may instead come from existing ``shared_assets``. ``shoe_artifact`` replaces
+    every member's shoe, so a dataset built with an older shoe file runs on a
+    newly exported shoe. All trials describe one
     runner; optional ``subject_id`` values must agree. Speed is explicit task
     metadata, never inferred from future movement. Existing source files are
     fingerprinted in the output; declared shared-asset hashes are checked.
@@ -344,7 +347,11 @@ def load_trials(
         reference_path = root / member["reference"]
         reference = reference_data.load(reference_path)
         profile_path = root / (member.get("profile") or assets.get("profile.json", {}).get("file", ""))
-        shoe_path = root / (member.get("shoe_artifact") or assets.get("digital_shoe.json", {}).get("file", ""))
+        shoe_path = (
+            Path(shoe_artifact).resolve()
+            if shoe_artifact is not None
+            else root / (member.get("shoe_artifact") or assets.get("digital_shoe.json", {}).get("file", ""))
+        )
         if not profile_path.is_file() or not shoe_path.is_file():
             raise ValueError("Each member needs a profile and shoe artifact, directly or via shared_assets")
         mount = member.get("mount_m", mount_m)
@@ -640,6 +647,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", type=Path, help="Frozen model for evaluate, or initialization for fit")
     parser.add_argument("--mount", type=float, nargs=3)
+    parser.add_argument("--shoe", type=Path, help="Shoe artifact used for every member instead of the dataset's")
     parser.add_argument("--pitch", type=float)
     parser.add_argument("--speed", type=float, help="Known task speed [m/s]; members may override")
     parser.add_argument("--height-offset", type=float, default=0.0)
@@ -713,6 +721,7 @@ def main(argv: list[str] | None = None) -> None:
         height_offset_m=args.height_offset,
         limit_per_split=args.limit_per_split,
         force_observation=force_observation(vars(args)),
+        shoe_artifact=args.shoe,
     )
     if not trials:
         raise ValueError("Dataset is empty")

@@ -93,9 +93,10 @@ uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_i
 Choose a new output directory. CUDA is the default; `--device cpu` selects the
 reference backend, which integrates the body on the host and steps the CUDA
 column bed once per step. Use `--limit-per-split 1 --iterations 1` for a small
-fit. The saved baseline fits ran with the earlier single-unknown shoe law; the
-shoe is now the two-surface column bed, so their traces and costs are not
-reproduced exactly. `--chunk` (default 128) sets candidates integrated
+fit. The saved baseline fits ran with earlier shoe laws; the shoe is now the
+two-surface column bed, so their traces and costs are not reproduced exactly.
+The bed solves its normal and friction forces together with the leg's motion,
+from the whole leg's inverse effective mass at the ankle. `--chunk` (default 128) sets candidates integrated
 concurrently; 128 candidates over 98 stances need about 2.5 GB of GPU memory,
 so lower it on smaller GPUs. It changes speed, not results.
 
@@ -112,7 +113,11 @@ uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_i
 That dataset repeats the 2026-10-08 recipe on the new exports:
 
 - `prepare --data-root data/F01 --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894`.
-- The shoe is `fr3_2_hogan_reference_sole/digital_shoe.json`.
+- The shoe was `fr3_2_hogan_reference_sole/digital_shoe.json`. That file
+  predates the column bed and no longer loads. Run these datasets with a newly
+  exported shoe: pass `--shoe` with the FR3 `digital_shoe.json` written by
+  `python -m projects.digital_instron_v2.export_digital_shoe` to `fit`,
+  `inspect`, or `evaluate`. It replaces every member's shoe.
 - The leg profile is mass-scaled to 66.5 kg.
 - The three stances whose relaxed shoe starts below ground are dropped;
   `inspect` reports them.

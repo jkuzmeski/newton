@@ -16,6 +16,35 @@ from projects.digital_shoe.artifact import load_artifact
 from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE, ColumnBed
 from projects.digital_shoe.runtime import FoundationConfig
 
+OUT_OF_PLANE_MOBILITY = 1.0e-9
+"""Mobility of the foot out of its plane, as a fraction of its in-plane mobility.
+
+The planar foot cannot leave the x-z plane, but the column bed solves contact
+with a positive-definite 6x6 carrier mobility. This fraction makes the
+out-of-plane directions rigid to the bed."""
+
+
+def spatial_mobility(planar) -> np.ndarray:
+    """Return the carrier mobility of a planar foot in Newton ``(v, w)`` axes.
+
+    Args:
+        planar: Inverse effective mass of the foot at the ankle in the planar
+            ``(x, z, angle)`` coordinates, shape [3, 3].
+
+    Returns:
+        The 6x6 mobility at the ankle in world axes. Newton +Y rotation is the
+        negative planar angle; the out-of-plane directions get
+        :data:`OUT_OF_PLANE_MOBILITY` of the in-plane mobility.
+    """
+    planar = np.asarray(planar, dtype=float)
+    sign = np.array([1.0, 1.0, -1.0])
+    axes = [0, 2, 4]
+    result = np.zeros((6, 6))
+    result[np.ix_(axes, axes)] = sign[:, None] * planar * sign
+    result[1, 1] = OUT_OF_PLANE_MOBILITY * 0.5 * (planar[0, 0] + planar[1, 1])
+    result[3, 3] = result[5, 5] = OUT_OF_PLANE_MOBILITY * planar[2, 2]
+    return result
+
 
 def _hull(points: np.ndarray) -> np.ndarray:
     ordered = sorted(set(map(tuple, points)))
@@ -34,6 +63,9 @@ def _hull(points: np.ndarray) -> np.ndarray:
 class Shoe:
     """Evaluate contact at an ankle-centered foot pose supplied by the limb solver.
 
+    The bed solves its normal and friction forces together with the foot's
+    motion (``ColumnBed`` ``carrier_mobility``): the limb solver supplies the
+    foot's end-of-step velocity without contact and its planar mobility.
     The fullfoot last carries the bed: column tops on the fixture footprint are
     bonded to it and the outer region's tops are free. Fixed attachment offsets
     retain the calibrated assembly; no second mesh-collision force or upper
@@ -93,6 +125,7 @@ class Shoe:
         self.connection[supported] = TOP_BONDED
         self.material = self.shoe.material
         self.config = FoundationConfig(ground_height_m=0.0, normal_damping=0.0, mu=0.8)
+        self.mobility = wp.zeros(1, dtype=wp.spatial_matrix, device=self.device)
         self.bed = ColumnBed(
             self.anchor_local_m,
             bed.rest_length_m,
@@ -104,6 +137,7 @@ class Shoe:
             self.config,
             np.zeros(1),
             self.model.body_com,
+            carrier_mobility=self.mobility,
             device=self.device,
         )
         bonded = int(np.count_nonzero(self.connection == TOP_BONDED))
@@ -132,9 +166,19 @@ class Shoe:
         """Return the bed to its unloaded rest shape with no history."""
         self.bed.reset()
 
-    def apply(self, ankle_m, velocity_m_s, pitch_rad: float, angular_velocity_rad_s: float, dt: float):
+    def apply(self, ankle_m, velocity_m_s, pitch_rad: float, angular_velocity_rad_s: float, dt: float, mobility):
         """Advance contact once and return the ankle wrench [N, N, N m] and held strain.
 
+        Args:
+            ankle_m: Ankle position [m], shape [2].
+            velocity_m_s: Ankle velocity at the end of the step without contact [m/s], shape [2].
+            pitch_rad: Foot angle [rad].
+            angular_velocity_rad_s: Foot angular velocity at the end of the step without contact [rad/s].
+            dt: Contact timestep [s].
+            mobility: Inverse effective mass of the foot at the ankle in the planar
+                ``(x, z, angle)`` coordinates, shape [3, 3].
+
+        The wrench is the contact's momentum change of the foot over the step.
         The held strain is the largest compression over rest thickness of the
         columns whose tops the last holds.
         """
@@ -147,6 +191,7 @@ class Shoe:
             raise ValueError("Foot pose and velocity must be finite")
         self.state.body_q.assign(position.astype(np.float32))
         self.state.body_qd.assign(velocity.astype(np.float32))
+        self.mobility.assign(spatial_mobility(mobility).astype(np.float32)[None])
         self.bed.set_timesteps(dt)
         self.bed.apply(self.state)
         wrench = self.state.body_f.numpy()[0].astype(float)
