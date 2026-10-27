@@ -71,9 +71,9 @@ lengths, loading patches and uniform rearfoot shortening remain unchanged. This
 is not a new gap-aware contact solve against the flat punch visual.
 
 Both fixture replays check the warmed force waveform at the force-evaluation
-time, not the later display clock. The passive solve uses 32 quasi-static sweeps
-per substep; a 32/64-sweep check on the retained artifact changed the force curve
-by less than 0.1% of peak. This is a numerical replay check, not new experimental
+time, not the later display clock. The passive solve uses the `ColumnBed` default
+of 64 quasi-static sweeps per substep; an earlier 32/64-sweep check on the
+retained artifact changed the force curve by less than 0.1% of peak. This is a numerical replay check, not new experimental
 validation or a material refit.
 
 ```bash
@@ -116,7 +116,8 @@ uv run --no-sync -m projects.digital_shoe friction --mode implicit_deflection --
 This package owns the mechanics used by Digital Instron and the impedance rigs.
 `material.py` defines one set of Ogden–Hill/Maxwell expressions for both vectorized
 NumPy evaluation and compiled Warp simulation. `contact.py` defines the symmetric
-neighbor coupling, the bristle laws and the two-surface column balance.
+neighbor coupling, the bristle laws (used by the friction example, not by the
+column bed) and the two-surface column balance.
 `column_bed.py` steps the whole bed on the GPU: each column has a bottom that
 lands on the ground plane and a top that is bonded to, pressed by, or free of the
 carrier surface. `runtime.py` holds the material block and `FoundationConfig`.

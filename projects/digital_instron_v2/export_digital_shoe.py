@@ -160,7 +160,7 @@ def build_artifact(
 
     Args:
         shoe: Prepared shoe folder ``DigitalInstron/<slug>``.
-        fit_path: The shoe's ``material_fit.json`` from :mod:`sweep_fit`.
+        fit_path: The shoe's ``material_fit.json`` from :mod:`sweep_fit`; it must record ``substeps``, which older fits do not.
         sweep: Processed sweep folder holding ``conditions.json``.
         last_path: Instron last STL with its merged attachment.
         mass_kg: Mass of one shoe [kg]; without it loaders use
@@ -170,6 +170,8 @@ def build_artifact(
     fit = json.loads(fit_path.read_text())
     if fit["shoe"] != shoe.name:
         raise ValueError(f"{fit_path} fits {fit['shoe']!r}, not {shoe.name!r}")
+    if "substeps" not in fit:
+        raise ValueError(f"{fit_path} has no 'substeps': refit the shoe with the current sweep_fit.py")
     grid_path = shoe / fit["side"] / "column_grid.npz"
     grid = load_grid(grid_path)
     last = load_last(last_path)

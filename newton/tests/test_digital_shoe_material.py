@@ -126,6 +126,27 @@ class TestDigitalShoeMaterial(unittest.TestCase):
                 np.testing.assert_allclose(slope, material.SOLID_MODULUS_PA, rtol=1.0e-3)
                 np.testing.assert_allclose(pressure, host, rtol=1.0e-4)
 
+    def test_pressure_stays_continuous_when_the_onset_lies_below_the_stretch_floor(self):
+        """Start the solid-modulus branch at the stretch floor when the densification onset is below it."""
+        foam = runtime.ShoeMaterial(100000.0, 2.0, 0.6, 0.0, instantaneous_shear_modulus_2_pa=20000.0)
+        p = runtime.FoundationParams()
+        runtime.set_material_block(p, foam)
+        p.stretch_floor = 0.5
+        self.assertLess(p.onset_stretch, p.stretch_floor)
+        eps = 1.0e-3
+        edges = [1.0 - p.stretch_floor, 1.0 - p.onset_stretch]
+        strain = np.array([edge + s * eps for edge in edges for s in (-1.0, 1.0)], dtype=np.float32)
+        for device in get_test_devices():
+            with self.subTest(device=str(device)):
+                out = wp.zeros(len(strain), dtype=wp.float32, device=device)
+                wp.launch(
+                    _forward_pressure, dim=len(strain), inputs=[wp.array(strain, device=device), p, out], device=device
+                )
+                pressure = out.numpy()
+                # No jump: each pair rises by at most the solid modulus over its 2 mm.
+                self.assertLessEqual(pressure[1] - pressure[0], 1.01 * material.SOLID_MODULUS_PA * 2.0 * eps)
+                self.assertLessEqual(pressure[3] - pressure[2], 1.01 * material.SOLID_MODULUS_PA * 2.0 * eps)
+
     def test_numpy_preserves_float64_vectorization(self):
         """Retain tiny host strains that a float32 device adapter would round away."""
         strain = np.array([0.0, 1.0e-10, 2.0e-10, 0.2, 0.8], dtype=np.float64)

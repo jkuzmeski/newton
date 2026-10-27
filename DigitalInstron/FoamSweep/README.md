@@ -56,8 +56,9 @@ shape parameters of an effective bed response, not as foam constants.
 compression stop, the solver sweeps and the friction law changed afterwards. The
 scores in its `material_fit.json` (8 of 24 held-out gates, mean peak error 2.5 %)
 come from that earlier bed and cannot be reproduced with the committed code. The
-registration of the fit still matches the committed grid. Replay it once on the
-final bed before relying on it.
+registration of the fit was not re-checked against the committed Dev3 column
+grid, which was regenerated with area-weighted outline columns afterwards.
+Replay it once on the final bed and grid before relying on it.
 
 **`fit/report.html` and the `registration.png` files are stale.** They were
 built from the previous (pre-refit) fits and show their material table, scores

@@ -216,6 +216,15 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overlap"):
             validate_acquisition_manifest(leaked)
 
+    def test_export_names_the_missing_substeps_of_an_old_fit(self):
+        """Refuse a fit written before ``substeps`` was recorded, with a message that names it."""
+        shoe = Path("DigitalInstron/puma-fast-r-nitro-elite-3")
+        with tempfile.TemporaryDirectory() as directory:
+            fit_path = Path(directory) / "material_fit.json"
+            fit_path.write_text(json.dumps({"shoe": shoe.name, "side": "left"}))
+            with self.assertRaisesRegex(ValueError, "substeps"):
+                export_digital_shoe.build_artifact(shoe, fit_path, Path(directory))
+
     @unittest.skipUnless(wp.is_cuda_available(), "the validation replay needs CUDA")
     def test_exports_fitted_shoe_without_absolute_paths(self):
         """Export the shoe grid, fitted material, registered last and held-out replay as a portable artifact."""

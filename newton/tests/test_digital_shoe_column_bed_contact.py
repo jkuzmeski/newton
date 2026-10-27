@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import numpy as np
 import warp as wp
 
-from projects.digital_shoe.column_bed import TOP_BONDED, TOP_FREE, TOP_PRESSED, ColumnBed
+from projects.digital_shoe.column_bed import SHEAR_LAYER_FRACTION, TOP_BONDED, TOP_FREE, TOP_PRESSED, ColumnBed
+from projects.digital_shoe.material import hyperfoam_pressure_numpy
 from projects.digital_shoe.runtime import FoundationConfig, ShoeMaterial
 
 FR3 = ShoeMaterial(
@@ -119,10 +120,22 @@ class TestColumnBedPitchedSole(unittest.TestCase):
 
     @staticmethod
     def _run(bed, mobility, anchors, com, mass, inertia, rotation, velocity, steps, push=lambda step: np.zeros(6)):
-        """Integrate the block on the bed under gravity and a ``push(step)`` wrench; yield its velocity and the bed wrench."""
+        """Integrate the block on the bed under gravity and a ``push(step)`` wrench.
+
+        Yield its velocity, the bed wrench and its kinetic plus potential energy gain since the start [J].
+        """
         dt = 1.25e-4
         center = np.array([0.0, 0.0, -(anchors @ rotation.T)[:, 2].min()]) + rotation @ com
         omega = np.zeros(3)
+
+        def energy():
+            return (
+                0.5 * mass * velocity @ velocity
+                + 0.5 * omega @ (rotation @ inertia @ rotation.T @ omega)
+                + 9.81 * mass * center[2]
+            )
+
+        start = energy()
         state = SimpleNamespace(
             body_q=wp.zeros(1, dtype=wp.transform),
             body_qd=wp.zeros(1, dtype=wp.spatial_vector),
@@ -148,18 +161,22 @@ class TestColumnBedPitchedSole(unittest.TestCase):
                 axis = omega / np.linalg.norm(omega)
                 k = np.array([[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]])
                 rotation = (np.eye(3) + np.sin(angle) * k + (1.0 - np.cos(angle)) * k @ k) @ rotation
-            yield velocity, wrench
+            yield velocity, wrench, energy() - start
 
     def test_implicit_carrier_gains_no_energy_on_the_wall(self):
-        """A heavy block sliding at 2 m/s and dropped at 4 m/s on its edge gains no energy on the wall."""
+        """A heavy block sliding at 2 m/s and dropped at 4 m/s on its edge never has more kinetic plus potential energy than it started with."""
         bed, mobility, anchors, com, mass, inertia = self._block_on_bed(0.0)
         rotation = np.array(wp.quat_to_matrix(wp.quat_from_axis_angle(wp.vec3(0.0, 1.0, 0.0), 0.4))).reshape(3, 3)
         start = np.array([2.0, 0.0, -4.0])
         strain = 0.0
-        for velocity, wrench in self._run(bed, mobility, anchors, com, mass, inertia, rotation, start, 400):
+        gain = -np.inf
+        for velocity, wrench, energy in self._run(bed, mobility, anchors, com, mass, inertia, rotation, start, 400):
             strain = max(strain, float(bed.bed.held_strain.numpy()[0]))
             self.assertTrue(np.isfinite(wrench).all())
+            gain = max(gain, energy)
             end = velocity
+        # The bed holds elastic energy the sum leaves out, so it can only fall; 0.1 J is 0.05 % of the 200 J drop.
+        self.assertLessEqual(gain, 0.1)
         # The stop is held to a fraction of one step of carrier travel (0.5 mm at 4 m/s): it is
         # passed by 8 um, whatever the sweep count.
         self.assertLessEqual(strain, bed.bed.max_strain + 1.0e-3)
@@ -181,9 +198,9 @@ class TestColumnBedPitchedSole(unittest.TestCase):
                         lambda step, wrench=wrench: wrench if step >= settle else np.zeros(6),
                     )
                 )  # fmt: skip
-                velocity = np.array([v for v, _w in history[settle + 400 :]])
-                friction = np.array([w[0] for _v, w in history[settle + 400 :]])
-                normal = np.array([w[2] for _v, w in history[settle + 400 :]])
+                velocity = np.array([v for v, _w, _e in history[settle + 400 :]])
+                friction = np.array([w[0] for _v, w, _e in history[settle + 400 :]])
+                normal = np.array([w[2] for _v, w, _e in history[settle + 400 :]])
                 stuck = bed.bed.stuck.numpy()
                 if ratio < 1.0:
                     self.assertLess(np.abs(velocity[:, 0]).max(), 1.0e-3)
@@ -327,30 +344,11 @@ class TestColumnBedWall(unittest.TestCase):
     def test_light_carrier_settles_on_the_wall(self):
         """A 1 kg rigid carrier pressed by stance loads onto a bed with free rim tops settles at the load."""
         loads = np.array([1500.0, 2000.0, 3000.0])
-        mass, dt = 1.0, 1.25e-4
+        mass = 1.0
         rows = np.diag([1.0 / mass] * 3 + [1.0e-6] * 3)
         mobility = wp.array(np.tile(rows, (len(loads), 1, 1)), dtype=wp.spatial_matrix)
         bed, _anchors = _rimmed_bed(len(loads), mobility)
-        thickness = bed.bed.rest_len.numpy()
-        state = SimpleNamespace(body_f=wp.zeros(len(loads), dtype=wp.spatial_vector))
-        height = np.zeros(len(loads))
-        speed = np.zeros(len(loads))
-        applied, strain = [], []
-        for _ in range(3200):
-            q = np.zeros((len(loads), 7), np.float32)
-            q[:, 2] = height
-            q[:, 6] = 1.0
-            qd = np.zeros((len(loads), 6), np.float32)
-            qd[:, 2] = speed
-            state.body_q = wp.array(q, dtype=wp.transform)
-            state.body_qd = wp.array(qd, dtype=wp.spatial_vector)
-            bed.apply(state)
-            force = state.body_f.numpy()[:, 2]
-            speed += dt * (force - loads) / mass - dt * 9.81
-            height += dt * speed
-            applied.append(force)
-            strain.append((bed.column_state("compression") / thickness).max())
-        applied = np.array(applied)
+        applied, strain, _speed = _press(bed, loads, mass, 3200)
         self.assertTrue(np.isfinite(applied).all())
         self.assertLess(np.max(strain), 0.92)
         np.testing.assert_allclose(applied[-800:].mean(0), loads + mass * 9.81, rtol=0.03)
@@ -493,6 +491,60 @@ class TestColumnBedWorlds(unittest.TestCase):
         for _ in range(5):
             bed.apply(pressed)
         self.assertGreater(pressed.body_f.numpy()[0, 2], 0.0)
+
+    def test_bed_rejects_a_mobility_array_of_the_wrong_length(self):
+        """Refuse a ``carrier_mobility`` with no matrix for some world, which the kernel would read past."""
+        with self.assertRaisesRegex(ValueError, "carrier_mobility"):
+            self._bed(2, wp.zeros(1, dtype=wp.spatial_matrix))
+
+    def test_bed_rejects_a_max_strain_below_the_stretch_floor(self):
+        """Refuse a compression limit that closes columns past the stretch floor, where the foam force is flat."""
+        spacing = 0.005
+        anchors, neighbors = _flat_bed(2, 2, spacing)
+        config = FoundationConfig(ground_height_m=0.0, stretch_floor=0.1)
+        args = (anchors, np.full(4, 0.03), spacing**2, neighbors, spacing, np.full(4, TOP_BONDED, np.int32))
+        with self.assertRaisesRegex(ValueError, "stretch_floor"):
+            ColumnBed(*args, FR3, config, np.array([0]), wp.zeros(1, dtype=wp.vec3), max_strain=0.95)
+        ColumnBed(*args, FR3, config, np.array([0]), wp.zeros(1, dtype=wp.vec3), max_strain=0.9)
+
+    def test_shear_layer_joins_a_loaded_and_a_free_column_at_a_fraction_of_the_foam_shear_modulus(self):
+        """A free column beside a pressed one is held down by the series layer of modulus ``SHEAR_LAYER_FRACTION * G_eq``."""
+        self.assertAlmostEqual(SHEAR_LAYER_FRACTION, 0.1)
+        spacing, depth = 0.005, 0.012
+        thickness = np.array([0.03, 0.02])
+        anchors, neighbors = _flat_bed(2, 1, spacing)
+        bed = ColumnBed(
+            anchors,
+            thickness,
+            spacing**2,
+            neighbors,
+            spacing,
+            np.array([TOP_BONDED, TOP_FREE], np.int32),
+            FR3,
+            FoundationConfig(ground_height_m=0.0),
+            np.array([0]),
+            wp.zeros(1, dtype=wp.vec3),
+        )
+        bed.set_timesteps(1.25e-4)
+        state = self._state([-depth])
+        for _ in range(2400):
+            bed.apply(state)
+        top, compression, reaction = (bed.column_state(name)[0] for name in ("top", "compression", "reaction"))
+        g_eq = FR3.equilibrium_fraction * (FR3.instantaneous_shear_modulus_pa + FR3.instantaneous_shear_modulus_2_pa)
+        coupling = 2.0 * (SHEAR_LAYER_FRACTION * g_eq) * np.prod(thickness) / thickness.sum()
+        foam = spacing**2 * hyperfoam_pressure_numpy(
+            compression[1] / thickness[1],
+            FR3.equilibrium_fraction * FR3.instantaneous_shear_modulus_pa,
+            FR3.hyperfoam_exponent,
+            FR3.equilibrium_fraction * FR3.instantaneous_shear_modulus_2_pa,
+            FR3.hyperfoam_exponent_2,
+            0.0,
+            1.0,
+            0.05,
+        )
+        self.assertGreater(compression[1], 1.0e-3)
+        np.testing.assert_allclose(reaction[1], coupling * (top[0] - top[1]), rtol=1.0e-2)
+        np.testing.assert_allclose(foam, reaction[1], rtol=2.0e-2)
 
     def test_pressed_tops_stay_finite_when_the_carrier_passes_the_rest_thickness(self):
         """Keep pressed-top columns finite when an explicit carrier is driven deeper than one thickness into the plane."""

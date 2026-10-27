@@ -26,12 +26,12 @@ class ShoeMaterial:
     = 0`` disables it exactly and recovers the historical single-term artifact.
 
     ``pasternak_n_per_m`` is a *reported* quantity, kept so the artifact schema
-    stays readable and backward compatible. Nothing consumes it: the runtime
-    derives each column's own Pasternak coefficient from the equilibrium
-    Ogden-Hill shear modulus and that column's rest thickness,
-    ``k_i = mu_eq * t_i``, which is the shear-layer definition ``G * t`` and adds
-    no free parameter. Exporters write the bed-mean of that rule here. The
-    column bed uses ``mu_eq`` at every compression.
+    stays readable and backward compatible. Nothing consumes it: the column bed
+    derives the coupling of two columns from the equilibrium Ogden-Hill shear
+    modulus ``mu_eq`` and their rest thicknesses, as the series layer
+    ``2 G t_i t_j / (t_i + t_j)`` with ``G = 0.1 mu_eq`` at every compression
+    (:data:`~projects.digital_shoe.column_bed.SHEAR_LAYER_FRACTION`), which adds
+    no free parameter. Exporters write the bed-mean of that coupling here.
     """
 
     instantaneous_shear_modulus_pa: float
@@ -133,13 +133,16 @@ def _hyperfoam_pressure(strain: wp.float32, p: FoundationParams) -> wp.float32:
 
     Past ``onset_stretch`` the pressure grows with the solid modulus
     :data:`~projects.digital_shoe.material.SOLID_MODULUS_PA` instead, so the
-    tangent, and the shear modulus that follows it, never exceeds that.
+    tangent never exceeds that. An onset below ``stretch_floor`` is moved up to
+    the floor, where the foam pressure is flat, so the pressure stays continuous.
     """
     stretch = wp.max(1.0 - strain, p.stretch_floor)
     pressure = _hyperfoam_series_term(stretch, p.g_eq, p.alpha, p) + _hyperfoam_series_term(
         stretch, p.g_eq2, p.alpha2, p
     )
-    if 1.0 - strain < p.onset_stretch:
+    if p.onset_stretch > 0.0 and p.onset_stretch < p.stretch_floor:
+        pressure += _SOLID_MODULUS * wp.max(strain - (1.0 - p.stretch_floor), 0.0)
+    elif 1.0 - strain < p.onset_stretch:
         pressure = p.onset_pressure + _SOLID_MODULUS * (strain - (1.0 - p.onset_stretch))
     return pressure
 

@@ -60,6 +60,7 @@ from .runtime import (
 __all__ = [
     "BOTTOM_LANDED",
     "MAX_COLUMNS",
+    "SHEAR_LAYER_FRACTION",
     "TOP_BONDED",
     "TOP_FREE",
     "TOP_HELD",
@@ -673,11 +674,16 @@ def _column_bed_step(
             bed.stuck[i] = int(drag > 0.0 and drag == bed.reaction[i] / _STICK_SPEED)
         # The wrench is the carrier's momentum change M (u - u0) / dt, not the
         # difference w - A u of two terms that are large on the wall. Applying
-        # all six components keeps the work the carrier gets equal to what the
-        # solve took out of it: a force or torque rebuilt from the end-of-step
-        # friction no longer matches the friction the solve used and adds work.
+        # the six components of the solve keeps the work the carrier gets equal
+        # to what the solve took out of it: a force or torque rebuilt from the
+        # end-of-step friction no longer matches the friction the solve used and
+        # adds work. Two cases apply less than the solve assumed: the lift is
+        # clipped at zero, because the bed never pulls its carrier down and the
+        # mass couples the vertical force to the other axes, so the clip is not
+        # redundant; and a carrier that no held column carries gets no wrench,
+        # not the round-off of the solve, although landed columns that are not
+        # held can have given the solve friction stiffness.
         change = mass * (u - u0) / wp.float64(dt)
-        # A carrier that no column carries gets no wrench, not the round-off of the solve.
         if carried_total > 0.0:
             lift = wp.max(wp.float32(change[2]), 0.0)
             # The ground reaction and its center follow the carried load.
@@ -763,7 +769,10 @@ class ColumnBed:
         materials: One material for every world, or one per world.
         config: Contact settings: the plane ``ground_height_m``, ``mu``,
             ``normal_damping`` and ``stretch_floor``. Friction is Coulomb:
-            a landed bottom sticks to the plane or slides at ``mu R``.
+            a landed bottom sticks to the plane or slides at ``mu R``. With
+            ``carrier_mobility``, ``R`` is the column reaction before the
+            carrier solve, so it lags the normal force the carrier is given
+            on impact and stop steps.
         carrier: Carrier body index per world.
         body_com: Center of mass per body in its frame [m].
         top_gap_m: Rest clearance between the carrier surface and each top [m];
@@ -771,13 +780,17 @@ class ColumnBed:
         carrier_mobility: Inverse effective mass of each world's carrier in
             ``(v, w)`` at its center of mass, in world axes, one
             :class:`warp.spatial_matrix` per world, kept current by the caller.
-            With it, each carrier takes the bed's normal and friction forces at
-            its end-of-step twist (linearized backward Euler), which stays
-            stable on the foam's densification wall. Without it (explicit mode),
-            the carriers see the explicit forces; use it only for kinematically
+            Each matrix must be symmetric positive definite: a locked or
+            kinematic carrier has zero inverse mass along some axis, which makes
+            the solve return NaN; use explicit mode for it. With it, each
+            carrier takes the bed's normal and friction forces at its
+            end-of-step twist (linearized backward Euler), which stays stable on
+            the foam's densification wall. Without it (explicit mode), the
+            carriers see the explicit forces; use it only for kinematically
             driven carriers, which no bed force can push through the plane.
         max_strain: Compression limit as a fraction of rest thickness, 0.95 by
-            default. The sweeps keep a free top from closing past it and push a
+            default; ``1 - max_strain`` must not be below ``config.stretch_floor``.
+            The sweeps keep a free top from closing past it and push a
             bonded column's bottom down to keep it; a pressed top is not limited.
             The stop that holds a landed, held column rigid and pushes the
             carrier back to it is enforced only with ``carrier_mobility``. In
@@ -788,6 +801,10 @@ class ColumnBed:
         over_relaxation: Fraction of each column's constrained Newton step taken,
             1.0 by default; above one is projected successive over-relaxation.
         device: CUDA device.
+
+    The per-world counters ``bed.carrier_contact_steps``, ``carrier_iterations``,
+    ``carrier_nonconverged_steps`` and ``friction_fallback_steps`` count steps
+    since construction; :meth:`reset` does not clear them.
     """
 
     anchor_local: np.ndarray
@@ -827,8 +844,17 @@ class ColumnBed:
             raise ValueError(
                 "max_strain and over_relaxation must lie inside (0, 1) and (0, 2), sweeps must be positive"
             )
+        if 1.0 - self.max_strain < self.config.stretch_floor - 1.0e-9:
+            raise ValueError(
+                f"max_strain {self.max_strain} leaves a stretch below config.stretch_floor {self.config.stretch_floor}"
+            )
         carrier = np.atleast_1d(np.asarray(self.carrier, np.int32))
         self.world_count = len(carrier)
+        if self.carrier_mobility is not None and self.carrier_mobility.shape != (self.world_count,):
+            raise ValueError(
+                f"carrier_mobility needs one matrix per world, shape ({self.world_count},), "
+                f"got {self.carrier_mobility.shape}"
+            )
         self.column_count = n
         d = self.device
         total = self.world_count * n

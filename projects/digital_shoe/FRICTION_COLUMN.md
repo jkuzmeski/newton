@@ -10,6 +10,14 @@ or release dwell. With `carrier_mobility`, the carrier takes the friction at its
 end-of-step twist in the same implicit solve as the normal force; without it,
 the friction is applied explicitly.
 
+With `carrier_mobility` the cap `mu R` uses the column reaction `R` from the
+column balance before the carrier solve. After the solve the normal force is
+rescaled to the lift the carrier actually gets, which differs from the balance
+on impact and on steps where the compression stop acts. The cap is therefore
+lagged against the applied normal force, and the Coulomb cone holds exactly only
+when the lift equals the carried load, as in steady stance or sliding. The step
+count of the excess is not recorded.
+
 The shear layer between columns is separate from friction. It is a linear
 Pasternak layer with `G = 0.1 G_eq`, where `G_eq` is the shoe material's rest
 shear modulus. The coupling between two columns joins their layers in series, so
