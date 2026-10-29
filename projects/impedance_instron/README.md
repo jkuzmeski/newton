@@ -56,9 +56,9 @@ dispatches catalog rebuilding to this repository generator. Existing report URLs
 ## Preserved full-run baseline
 
 The current controller is the
-[column-bed score runner](hogan/baselines/generative_runner_score_20261029.json), with
-[saved fit provenance](hogan/baselines/generative_runner_score_20261029.provenance.json).
-It was fitted on the FR3 column-bed shoe from the unfitted `Runner.seed`
+[slider-shoe score runner](hogan/baselines/generative_runner_score_slider_20261029.json), with
+[saved fit provenance](hogan/baselines/generative_runner_score_slider_20261029.provenance.json).
+It was fitted on the committed slider-law FR3 shoe from the unfitted `Runner.seed`
 engineering weights for all 50 LM iterations, on 98 training and 9 held-out
 stances of `outputs/hogan_reset/fit_dataset_f01_20hz`:
 
@@ -66,16 +66,32 @@ stances of `outputs/hogan_reset/fit_dataset_f01_20hz`:
 uv run --no-sync -m projects.impedance_instron fit --dataset outputs/hogan_reset/fit_dataset_f01_20hz --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --dt 0.000125 --compression-limit 0.99 --force-filter-hz 20 --force-gate-n 1 --force-vibration-weight 1 --iterations 50 --lm-step 0.01 --lm-damping 0.01 --lm-bound 3 --lm-regularization 0.001 --lm-tolerance 0 --chunk 128 --immediate-damping --lm-objective score --output outputs/impedance_instron/hogan_score
 ```
 
-Its common score is **10.562578694392826 train** and **10.54930489875738
-held-out**, with zero rollout failures. Held-out results did not select the
-controller. The paired sample-objective fit scores 12.195 train and 11.873
-held-out and misses peak vertical force by about 120 N. Horizontal hip error
-stays near 45-50 mm for every fit. `test_impedance_pipeline` replays all 107
-saved traces of this run exactly when the run is at
-`outputs/hogan_reset/fit_score_20261029` and CUDA is available.
+Its common score is **10.5377 train** and **10.4277 held-out**, with zero
+rollout failures. Held-out results did not select the controller. Check it
+without refitting:
 
-The earlier controllers remain as records. They were fitted under shoe laws
-that predate the column bed, and their saved datasets no longer load:
+```console
+uv run --no-sync -m projects.impedance_instron evaluate --dataset outputs/hogan_reset/fit_dataset_f01_20hz --model projects/impedance_instron/hogan/baselines/generative_runner_score_slider_20261029.json --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --dt 0.000125 --compression-limit 0.99 --force-filter-hz 20 --force-gate-n 1 --force-vibration-weight 1 --immediate-damping --output outputs/impedance_instron/hogan_score_slider_eval
+```
+
+The paired sample-objective fit scores 11.894 train and 11.447 held-out. The
+largest filtered vertical force is within about 22 N on held-out stances, but
+the whole-stance GRF error stays near 93 N (Fx) and 118 N (Fz) RMSE: the first
+vertical peak overshoots by about 359 N raw and contact starts about 22 ms
+early. Horizontal hip error stays near 45 mm.
+
+The earlier controllers remain as records:
+
+- [2026-10-29 column-bed score runner](hogan/baselines/generative_runner_score_20261029.json)
+  ([provenance](hogan/baselines/generative_runner_score_20261029.provenance.json)):
+  10.563 train and 10.549 held-out on the earlier column-bed FR3 export
+  (sha256 `a9bf61dd...`), which is not committed. Frozen on the slider shoe it
+  scores 12.066 and 12.758. `test_impedance_pipeline` replays all 107 saved
+  traces of its run exactly when the run is at
+  `outputs/hogan_reset/fit_score_20261029` and CUDA is available.
+
+The two below were fitted under shoe laws that predate the column bed, and
+their saved datasets no longer load:
 
 - [2026-10-10 score runner](hogan/baselines/generative_runner_score_20261010.json)
   ([provenance](hogan/baselines/generative_runner_score_20261010.provenance.json)):
@@ -135,10 +151,8 @@ That dataset repeats the 2026-10-08 recipe on the new exports:
   shoe.
 - The leg profile is mass-scaled to 66.5 kg; the 66.5 kg profile is a
   reconstruction committed at `projects/impedance_instron/hogan/profiles/f01_66_5kg.json`.
-- The committed shoe is the slider-law FR3 export. The 2026-10-29 score
-  baseline was fit on the earlier column-bed FR3 export (sha256 `a9bf61dd...`),
-  so a dataset prepared with the committed shoe gives a new baseline, not the
-  saved numbers.
+- The committed shoe is the slider-law FR3 export that the current baseline
+  was fitted on.
 - The seeded split selects 110 stances. `--exclude` leaves out the three whose
   relaxed shoe starts below ground, leaving 98 training and 9 held-out stances;
   the other IDs keep their numbering. Without it, `inspect` reports the

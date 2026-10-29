@@ -6,7 +6,7 @@ Status: COMPLETE (stage 1 and stage 2). Started 2026-10-29.
 
 - User decision: the paper-foam comparison (ff_leap / ff_turbo_plus) is dropped from reporting.
 - Shoe: slider FR3 export, sha256 `81ac31ba...` (embedded in `data/f01_20hz_slider_v1`); original geometry for every variant.
-- Controllers held fixed (no refit): Phase 2 score fit `/home/gridsan/JO31399/newton_grid/hogan/runs/phase2_slider/20261029-115158_2a5463b1/fit_score/run/runner.json` and sample fit `/home/gridsan/JO31399/newton_grid/hogan/runs/phase2_slider/20261029-115158_2a5463b1/fit_sample/run/runner.json`.
+- Controllers held fixed (no refit): Phase 2 score fit `/home/gridsan/JO31399/newton_grid/hogan/runs/phase2_slider/20261029-115158_2a5463b1/fit_score/run/runner.json` (committed as `../baselines/generative_runner_score_slider_20261029.json`) and sample fit `/home/gridsan/JO31399/newton_grid/hogan/runs/phase2_slider/20261029-115158_2a5463b1/fit_sample/run/runner.json`.
 - Dataset: `/home/gridsan/JO31399/newton_grid/hogan/data/f01_20hz_slider_v1/fit_dataset_slider` (107 trials; held-out = 9 eval windows, primary).
 - Code: branch `agents/instron-spreading-fit` in the hogan-reset worktree:
   - `32f7bcf4` Test the shoe material sensitivity variants (test-only; fails without the feature: `ModuleNotFoundError`)

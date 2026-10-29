@@ -1,0 +1,108 @@
+{
+  "schema": "hogan-preserved-fit-v1",
+  "model": "generative_runner_score_slider_20261029.json",
+  "model_sha256": "79aa875632ef494f9c16c35a468c7c77d4452f87a6de075958556050cdfc59de",
+  "run_id": "hogan_reset_phase2_slider_fit_score_20261029",
+  "initialization": "Independent unfitted Runner.seed engineering feature weights: initial frequency 1.5 Hz, response 0.025 s, immediate damping. No learned checkpoint loaded.",
+  "search": {
+    "iterations": 50,
+    "step": 0.01,
+    "central": false,
+    "damping": 0.01,
+    "ladder": [
+      0.01,
+      0.1,
+      1.0,
+      10.0,
+      100.0
+    ],
+    "bound": 3.0,
+    "regularization": 0.001,
+    "objective": "score",
+    "tolerance": 0.0,
+    "chunk": 128
+  },
+  "rollout": {
+    "dt_s": 0.000125,
+    "gravity_m_s2": 9.81,
+    "maximum_force_n": 6000.0,
+    "minimum_hip_height_m": 0.2,
+    "maximum_speed": 100.0,
+    "compression_limit": 0.99,
+    "contact_threshold_n": 50.0
+  },
+  "force_observation": {
+    "cutoff_hz": 20.0,
+    "gate_n": 1.0,
+    "vibration_weight": 1.0
+  },
+  "parameters": 119,
+  "iterations_completed": 50,
+  "accepted_updates": 20,
+  "train": {
+    "count": 98,
+    "mean_loss": 10.5377,
+    "failed": 0
+  },
+  "eval": {
+    "count": 9,
+    "mean_loss": 10.4277,
+    "failed": 0
+  },
+  "selection_rule": "Lowest finite common training loss with zero training failures among unfitted engineering baseline and final fitted models. Eval never selects. Each LM accepts only improving objective steps.",
+  "held_out_used_for_selection": false,
+  "source_revision": "2a5463b1f108401644145bfbc0c1704988f3740a",
+  "source_sha256": {
+    "impedance_instron/hogan/identify.py": "7cdcd1ad8d6c083e200de389cf70242967176b116cf076f51b2e234097b98af8",
+    "impedance_instron/hogan/runner.py": "2b84acfbb3ba045bd3a704b884fa4d38feebf42b3e0d899d734018295b672ef4",
+    "impedance_instron/hogan/generate.py": "c78d94fc5c2a27a0557874dc4e2925f0b58215c16cf9bb4e5aed2aff2bbd475c",
+    "impedance_instron/hogan/mechanics.py": "892842fbdf5f5b1f0634be677050e0fb6cca8f03c369e881622678d53601e9f6",
+    "impedance_instron/hogan/gpu_runner.py": "eac19603ca18ef5d6acc7654e86f40e2ae038fd196689c9d04f74c5b8a99218c",
+    "impedance_instron/hogan/gpu_residuals.py": "ba9f67edceab1cb5786bb318e2fbffd4e465fdf15ec38b58fbe22639a7f21dbf",
+    "impedance_instron/hogan/gpu_mechanics.py": "cb98ac2c0390618eac1723def720e94318c93fc72c03bca6ad068a48f49ccee4",
+    "impedance_instron/hogan/least_squares.py": "5cd51fc979ff4f4dfe3fe0049990c8eb7c6fb863801960b91c05f7f82cc47136",
+    "impedance_instron/cartesian/shoe.py": "91e0b6d5d08aa88eadd1694c52e32dfa7fcbfaa632afe6922ca29025e8b913cb",
+    "impedance_instron/cartesian/data.py": "969b2b5bca3ec4af3aee69b066f283ab9df31268e928cff1416479986cb9a4e6",
+    "impedance_instron/cartesian/profile.py": "0c4f238d34f26ac3f919dfc5ea4c2994e0158d6f86d0a2949eed223298a49db8",
+    "digital_shoe/friction_report.py": "12f722fd9379ef83a780dc653ddafad5fb45a076a0ea0d88442cbf251dd19baf",
+    "digital_shoe/friction_example.py": "36528f08ad75ba71573e3cde6fac40ba86812a720336a850a92f764fc0ea3538",
+    "digital_shoe/friction_law.py": "a999b5bc2d7834f38f27ef7def8be3796ce509e0be549e702ee919a4ee1efcc9",
+    "digital_shoe/showcase.py": "a8c2fe0d4241b2920cfd544da94b2dec0ec062571d837e75ea14b00739a430d4",
+    "digital_shoe/record_gifs.py": "13439f6d1955efc58fe168e231fe1582fece6914761e9648bb7d7994b3946b57",
+    "digital_shoe/artifact.py": "8d4ffe5b740dc1f2ad606bdad32dc13c07fdcba230f15bbd3a52ec10a2139845",
+    "digital_shoe/column_bed.py": "3c3a8fcd02a12341410b1466d0f349281652985ffcdad05ca1a486987162aeb0",
+    "digital_shoe/rendering.py": "40b87ae13ea0107635ebeaf2b10cd5cc89ac1394228f7a5fc40ed5f62f41f217",
+    "digital_shoe/friction_observation.py": "fea84c994692673bce411bffbdb0f0f227fcc0d47c42bb7be91bd63cb3d628da",
+    "digital_shoe/contact.py": "937a389a6aa935db6e8e6f67661bf58435cd0121fa863a927c78e67745b9dcf5",
+    "digital_shoe/runtime.py": "c81313fb6af0bb9501133cd25cf3d9c7415680c4d1d0198c4c08e3ba6737fedb",
+    "digital_shoe/report.py": "4925294893b9f459dbc9efd702aa87e28f7f55da1c298272187e9c61783c6dcb",
+    "digital_shoe/material.py": "fc6b6f621dcc25cdbe8206cbd7397af8abe0040552fe570c5ba13a613f21f371",
+    "digital_shoe/friction_solver.py": "1138f20840bbeb570e017a3e6092a3c58ec2a0304f86cdb0de58dafe593d569a",
+    "digital_shoe/friction_deflection.py": "6e728395a4f34d311f07ae05820f323804ee337e81ff46b42b286d73187c6a3b",
+    "digital_shoe/provenance.py": "981b629f9b34949260a9c7f483e227e51552cd67580ac25ff862c97b37f0b8fe",
+    "digital_shoe/__main__.py": "85eb408d4b5941c6911244f46ac52e75da32bc5e72422f1e625f150112ab2911",
+    "digital_shoe/__init__.py": "27966ece9258ca80913de094f185f11b56bac3abd98a9747dc079b0630ffc64b",
+    "digital_shoe/acquisition.py": "f6932e8a0513bea22db80914dfa2b4440a1b204ae31ee265662761bf6ff7c46d"
+  },
+  "dataset_manifest_sha256": "9a7cbe12185f0194064b1172ba8e3321044e589f94bd56906995c981aba1da41",
+  "shoe": {
+    "artifact": "FR3 slider-law digital_shoe_2 export (puma_fast_r_nitro_elite_3_left, 917 columns)",
+    "sha256": "81ac31ba7b14e53c83fff026fd816ee92ecff6bbd7188552ef8e4123f7956be5",
+    "committed_equivalent": "DigitalInstron/digital_shoe_showcase/digital_shoe.json (sha256 2fc95dae...): same column bed and material; only provenance hashes, Instron fixture round-off and validation curves differ"
+  },
+  "compute": {
+    "device": "one NVIDIA H100 NVL (LLSC grid)",
+    "wall_s": 814.604712408036,
+    "grid_job": "16845844"
+  },
+  "reproduction": {
+    "dataset": "outputs/hogan_reset/fit_dataset_f01_20hz, prepared from the committed shoe and profile with the README prepare command",
+    "check": "evaluate on an RTX A4000 Laptop GPU reproduced every per-stance loss of the grid run to 6e-13"
+  },
+  "limitations": [
+    "Single subject and speed, fixed FR3 slider-law column-bed shoe and a 66.5 kg profile rescaled from the 66 kg profile.",
+    "The LM damping reached 1e12; the cost was 10.539 after 16 iterations and 10.538 after 50. No global optimum or physiological validity claim.",
+    "Whole-stance GRF error stays near 93 N (Fx) and 118 N (Fz) RMSE on held-out stances. The first vertical peak overshoots by about +359 N raw (+259 N after the 20 Hz filter) and contact starts about 22 ms early.",
+    "Horizontal hip error stays near 45 mm."
+  ]
+}
