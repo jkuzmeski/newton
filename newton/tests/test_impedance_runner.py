@@ -15,7 +15,7 @@ import numpy as np
 import warp as wp
 
 from newton.tests.test_impedance_hogan import _chain, _reference, _tiny_shoe
-from projects.impedance_instron.cartesian.prepare_dataset import _flight_velocity
+from projects.impedance_instron.cartesian.prepare_dataset import _flight_velocity, _share_bundle_assets
 from projects.impedance_instron.cartesian.profile import validate
 from projects.impedance_instron.hogan import least_squares
 from projects.impedance_instron.hogan.generate import main as generate_main
@@ -366,6 +366,21 @@ class TestRunnerIdentification(unittest.TestCase):
         expected_z = np.interp(marker_time[origin], fine, velocity_z)
         np.testing.assert_allclose(estimate, [belt + drift, expected_z], atol=5e-3)
         self.assertIsNone(_flight_velocity(trial, hip, int(np.searchsorted(marker_time, step)), mass, belt))
+
+    def test_shared_asset_paths_are_portable(self):
+        """Write shared asset paths with forward slashes so Windows-prepared datasets load on Linux."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            records = []
+            for sample in ("a", "b"):
+                member = root / "train" / sample
+                member.mkdir(parents=True)
+                (member / "profile.json").write_text("{}")
+                (member / "digital_shoe.json").write_text("{}")
+                records.append({"reference": f"train/{sample}/reference.npz"})
+            shared = _share_bundle_assets(root, records)
+        self.assertEqual(shared["profile.json"]["file"], "assets/profile.json")
+        self.assertEqual(shared["digital_shoe.json"]["file"], "assets/digital_shoe.json")
 
     def test_coordinate_conversion_ignores_grf_and_exported_velocity(self):
         """Retain measured geometry rather than adapting it to measured force."""
