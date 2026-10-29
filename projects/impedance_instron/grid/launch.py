@@ -10,7 +10,8 @@ with ``git archive`` to ``code/<sha12>`` once, copies each input folder to
 writes the task list to the run folder and queues one SLURM array task per
 entry. A task runs ``python -u -m <args>`` in the code folder with the grid uv
 environment; ``{data}`` and ``{out}`` in its arguments become the data root and
-the task's own output folder.
+the task's own output folder, which exists before the task starts; commands
+that refuse an existing output folder should write to ``{out}/<subfolder>``.
 
 From the repository root::
 
@@ -40,8 +41,8 @@ from pathlib import Path
 HOST = "txg-login.llgrid.ll.mit.edu"
 REMOTE_ROOT = "/home/gridsan/JO31399/newton_grid/hogan"
 LOCAL_ROOT = Path("Z:/newton_grid/hogan")
-SNAPSHOT_PATHS = ("newton", "projects", "pyproject.toml", ":(exclude)newton/examples")
-"""Snapshot contents; ``newton/tests`` is kept so the impedance regression tests run on the grid."""
+SNAPSHOT_PATHS = ("newton", "projects", "pyproject.toml")
+"""Snapshot contents; the impedance tests import ``newton.examples`` through the Digital Shoe showcase."""
 TASK_SCRIPT = "projects/impedance_instron/grid/task.sbatch"
 PACKAGES = ("warp-lang", "mujoco", "mujoco-warp", "numpy", "scipy", "trimesh", "rtree", "matplotlib")
 """Grid environment packages, pinned to the versions of the local environment."""
