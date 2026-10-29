@@ -22,12 +22,12 @@ from newton.tests.unittest_utils import patch_sys_module
 from projects.impedance_instron import __main__ as pipeline
 from projects.impedance_instron.hogan import __main__ as hogan_pipeline
 from projects.impedance_instron.hogan.fit_report import write_report
-from projects.impedance_instron.hogan.identify import load_trials, predict_many, score
+from projects.impedance_instron.hogan.identify import force_observation, load_trials, predict_many, score
 from projects.impedance_instron.hogan.runner import RolloutConfig, Runner
 
 ROOT = Path(__file__).resolve().parents[2]
-RUN = ROOT / "outputs" / "impedance_instron" / "generative_fit_lm_flightcom_20261008"
-MODEL = ROOT / "projects" / "impedance_instron" / "hogan" / "baselines" / "generative_runner_f01_20261008.json"
+RUN = ROOT / "outputs" / "hogan_reset" / "fit_score_20261029"
+MODEL = ROOT / "projects" / "impedance_instron" / "hogan" / "baselines" / "generative_runner_score_20261029.json"
 
 
 class TestHoganCommands(unittest.TestCase):
@@ -82,6 +82,8 @@ class TestHoganFullRun(unittest.TestCase):
             speed_m_s=command["speed"],
             height_offset_m=command["height_offset"],
             limit_per_split=command["limit_per_split"],
+            force_observation=force_observation(command),
+            shoe_artifact=command.get("shoe"),
         )
         model = Runner.load(MODEL)
         self.assertEqual(model.to_dict(), Runner.load(RUN / "runner.json").to_dict())
@@ -101,8 +103,8 @@ class TestHoganFullRun(unittest.TestCase):
                 )
                 self.assertEqual(result, expected)
                 losses[trial.split].append(result["loss"])
-        self.assertEqual(float(np.mean(losses["train"])), 16.079667862151016)
-        self.assertEqual(float(np.mean(losses["eval"])), 14.796461691170371)
+        self.assertEqual(float(np.mean(losses["train"])), 10.562578694392826)
+        self.assertEqual(float(np.mean(losses["eval"])), 10.54930489875738)
         with tempfile.TemporaryDirectory() as directory:
             copy = Path(directory)
             shutil.copy2(RUN / "summary.json", copy)
@@ -113,8 +115,8 @@ class TestHoganFullRun(unittest.TestCase):
             self.assertEqual(
                 re.findall(r"<svg.*?</svg>", report, re.DOTALL), re.findall(r"<svg.*?</svg>", original, re.DOTALL)
             )
-            self.assertIn("16.08", report)
-            self.assertIn("14.80", report)
+            self.assertIn("10.56", report)
+            self.assertIn("10.55", report)
         self.assertEqual(before, {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in before})
 
 
