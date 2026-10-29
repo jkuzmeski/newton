@@ -689,7 +689,7 @@ class ShoeInstron:
             candidates=1,
             substeps=fit["substeps"],
         )
-        force = replay.run([Material(**fit["material"])])[0, 0]
+        force = replay.run([Material(**fit["material"])], offsets_m=[fit.get("start_offset_m", 0.0)])[0, 0]
         if np.isnan(force).any():
             raise ValueError(f"{shoe.name}: the replayed validate cycle is not physical")
         return fit, registration, replay, trace, force

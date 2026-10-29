@@ -13,6 +13,10 @@ import warp as wp
 from .material import HYPERFOAM_ALPHA_FLOOR, SOLID_MODULUS_PA, densification_onset
 from .material import ogden_hill_term as _hyperfoam_term
 
+SHEAR_LAYER_FRACTION = 0.1
+"""Default shear-layer modulus over the foam's rest shear modulus; user choice 2026-10-22, softened so the
+sole conforms instead of bridging. A material with ``shear_layer_fraction`` sets its own."""
+
 
 @dataclass(frozen=True)
 class ShoeMaterial:
@@ -29,9 +33,10 @@ class ShoeMaterial:
     stays readable and backward compatible. Nothing consumes it: the column bed
     derives the coupling of two columns from the equilibrium Ogden-Hill shear
     modulus ``mu_eq`` and their rest thicknesses, as the series layer
-    ``2 G t_i t_j / (t_i + t_j)`` with ``G = 0.1 mu_eq`` at every compression
-    (:data:`~projects.digital_shoe.column_bed.SHEAR_LAYER_FRACTION`), which adds
-    no free parameter. Exporters write the bed-mean of that coupling here.
+    ``2 G t_i t_j / (t_i + t_j)`` with ``G = shear_layer_fraction * mu_eq`` at
+    every compression. ``shear_layer_fraction`` is fitted on the bench sweep;
+    artifacts without it keep :data:`SHEAR_LAYER_FRACTION`. Exporters write the
+    bed-mean of that coupling here.
     """
 
     instantaneous_shear_modulus_pa: float
@@ -43,6 +48,7 @@ class ShoeMaterial:
     instantaneous_shear_modulus_2_pa: float = 0.0
     hyperfoam_exponent_2: float = 1.0
     equilibrium_shear_modulus_override_pa: float = 0.0
+    shear_layer_fraction: float = SHEAR_LAYER_FRACTION
 
     def __post_init__(self) -> None:
         values = tuple(self.__dict__.values())
@@ -58,6 +64,8 @@ class ShoeMaterial:
             raise ValueError("equilibrium fraction must be in (0, 1]")
         if self.pasternak_n_per_m < 0.0:
             raise ValueError("Pasternak coupling must be nonnegative")
+        if self.shear_layer_fraction <= 0.0:
+            raise ValueError("shear layer fraction must be positive")
         if not -1.0 < self.effective_poisson_ratio < 0.5:
             raise ValueError("effective Poisson ratio must be in (-1, 0.5)")
         if self.maxwell_relaxation_time_s <= 0.0:
@@ -98,6 +106,7 @@ class FoundationParams:
     stretch_floor: wp.float32  # minimum stretch (foam densification limit)
     normal_damping: wp.float32  # per-column Kelvin-Voigt normal damping [N.s/m]
     mu: wp.float32  # Coulomb friction coefficient
+    shear_fraction: wp.float32  # shear-layer modulus over the equilibrium shear modulus
     onset_stretch: (
         wp.float32
     )  # stretch where the tangent cap starts; -inf if the tangent never reaches the solid modulus
@@ -158,8 +167,9 @@ def set_material_block(params: FoundationParams, material) -> None:
             fields are left untouched; they belong to
             :class:`FoundationConfig`, not to the material.
         material: Any material carrying the Ogden-Hill series,
-            ``equilibrium_fraction``, ``effective_poisson_ratio`` and
-            ``maxwell_relaxation_time_s``.
+            ``equilibrium_fraction``, ``effective_poisson_ratio``,
+            ``maxwell_relaxation_time_s`` and optionally ``shear_layer_fraction``
+            (default :data:`SHEAR_LAYER_FRACTION`).
     """
     set_hyperfoam_series(params, material)
     poisson = float(getattr(material, "effective_poisson_ratio", 0.0))
@@ -167,6 +177,7 @@ def set_material_block(params: FoundationParams, material) -> None:
     params.one_minus_two_poisson = 1.0 - 2.0 * poisson
     params.tau_s = float(getattr(material, "maxwell_relaxation_time_s", 0.08))
     params.overstress = (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction
+    params.shear_fraction = float(getattr(material, "shear_layer_fraction", SHEAR_LAYER_FRACTION))
 
 
 def set_hyperfoam_series(params: FoundationParams, material) -> None:

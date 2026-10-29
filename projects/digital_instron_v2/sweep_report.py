@@ -142,7 +142,9 @@ def replay(slug: str, fit: dict) -> dict:
     dt = float(np.mean(np.diff(traces[0]["time_s"])))
     peaks = np.argmax(depth, axis=0)
     model = LastReplay(bed, depth, dt, candidates=1, substeps=fit["substeps"])
-    force, columns = model.run([Material(**fit["material"])], snapshot_frames=peaks)
+    force, columns = model.run(
+        [Material(**fit["material"])], offsets_m=[fit.get("start_offset_m", 0.0)], snapshot_frames=peaks
+    )
     reaction = model.reaction.numpy().T.reshape(force.shape)
     return {
         "index": index,

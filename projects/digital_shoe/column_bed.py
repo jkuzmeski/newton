@@ -16,7 +16,8 @@ connected to the carrier per column:
 The bed minimises the Hyperfoam/Maxwell foam energy of every column plus two
 Pasternak shear layers, ``1/2 sum k_ij (dt^2 + db^2)`` over faces, one at the
 tops and one at the bottoms (:func:`~projects.digital_shoe.contact.column_balance_pressures`).
-Both layers have the constant modulus ``SHEAR_LAYER_FRACTION`` times the foam's rest shear modulus
+Both layers have the constant modulus ``shear_layer_fraction`` of the material (default
+:data:`~projects.digital_shoe.runtime.SHEAR_LAYER_FRACTION`) times the foam's rest shear modulus
 :func:`~projects.digital_shoe.runtime.material_shear_modulus` at every compression, so the layers are
 linear in the displacements and conserve energy.
 Held tops load the carrier with ``T``, landed bottoms load the plane with
@@ -55,6 +56,7 @@ from .contact import (
 )
 from .material import maxwell_coefficients, maxwell_step
 from .runtime import (
+    SHEAR_LAYER_FRACTION,
     FoundationConfig,
     FoundationParams,
     _hyperfoam_pressure,
@@ -199,8 +201,6 @@ class _Bed:
     held_strain: wp.array[wp.float32]
 
 
-SHEAR_LAYER_FRACTION = wp.constant(0.1)
-"""Fraction of the foam's rest shear modulus that the shear layers have; user choice 2026-10-22, softened so the sole conforms instead of bridging."""
 _STRAIN_STEP = wp.constant(1.0e-3)
 """Strain step of the finite differences of the foam law."""
 
@@ -275,7 +275,7 @@ def _column_bed_step(
     dt = bed.dt[w]
     decay, ramp = maxwell_coefficients(dt, p.tau_s)
     gain = p.overstress * ramp
-    shear = SHEAR_LAYER_FRACTION * material_shear_modulus(p)
+    shear = p.shear_fraction * material_shear_modulus(p)
     body = bed.carrier[w]
     pose = body_q[body]
     # The bed lives in shared memory; loop bounds stay runtime values so the

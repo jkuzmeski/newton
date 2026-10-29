@@ -19,6 +19,7 @@ One replayed cycle is a captured CUDA graph.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -70,13 +71,14 @@ def _drive(
     trace_count: int,
     depth: wp.array2d[float],
     rate: wp.array2d[float],
+    offset: wp.array[float],
     body_q: wp.array[wp.transform],
     body_qd: wp.array[wp.spatial_vector],
 ):
-    """Pose each world's last at its trace's stroke for one substep."""
+    """Pose each world's last at its trace's stroke plus its start offset for one substep."""
     w = wp.tid()
     trace = w % trace_count
-    body_q[w] = wp.transform(wp.vec3(0.0, 0.0, -depth[step, trace]), wp.quat_identity())
+    body_q[w] = wp.transform(wp.vec3(0.0, 0.0, -(depth[step, trace] + offset[w])), wp.quat_identity())
     body_qd[w] = wp.spatial_vector(wp.vec3(0.0, 0.0, -rate[step, trace]), wp.vec3(0.0))
 
 
@@ -210,6 +212,7 @@ class LastReplay:
         rate = np.gradient(depth, self.dt_s, axis=0)
         self.depth = wp.array(depth, dtype=float, device=self.device)
         self.rate = wp.array(rate, dtype=float, device=self.device)
+        self.offset = wp.zeros(self.world_count, dtype=float, device=self.device)
         self.force = wp.zeros((self.frames, self.world_count), dtype=float, device=self.device)
         self.reaction = wp.zeros((self.frames, self.world_count), dtype=float, device=self.device)
         self.strain = wp.zeros(self.world_count, dtype=float, device=self.device)
@@ -217,8 +220,17 @@ class LastReplay:
         self.launches = 0
         self._cycle = None
 
-    def run(self, materials: list[Material], *, snapshot_frames: np.ndarray | None = None):
+    def run(
+        self,
+        materials: list[Material],
+        *,
+        offsets_m: Sequence[float] | None = None,
+        snapshot_frames: np.ndarray | None = None,
+    ):
         """Return the last's force [N], shape ``[candidates, trace_count, frames]``.
+
+        ``offsets_m`` deepens every stroke of a candidate by its start offset [m]
+        (default zero).
 
         A world whose reported cycle fails :func:`physical` returns NaN forces.
 
@@ -233,6 +245,8 @@ class LastReplay:
             raise ValueError("run needs one material per candidate")
         self.launches += 1
         self.bed.set_world_materials([m for m in materials for _ in range(self.trace_count)])
+        offsets = np.zeros(self.candidates) if offsets_m is None else np.asarray(offsets_m, dtype=float)
+        self.offset.assign(np.repeat(offsets, self.trace_count))
         self.bed.reset()
         if self._cycle is None:
             with wp.ScopedCapture(device=self.device) as capture:
@@ -269,7 +283,7 @@ class LastReplay:
                 wp.launch(
                     _drive,
                     dim=worlds,
-                    inputs=[frame * self.substeps + sub, self.trace_count, self.depth, self.rate],
+                    inputs=[frame * self.substeps + sub, self.trace_count, self.depth, self.rate, self.offset],
                     outputs=[self.carriers.body_q, self.carriers.body_qd],
                     device=self.device,
                 )

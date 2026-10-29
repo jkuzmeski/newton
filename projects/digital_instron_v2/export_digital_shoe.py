@@ -30,7 +30,6 @@ from typing import Any
 import numpy as np
 
 from projects.digital_shoe.artifact import MODEL_TYPE, SCHEMA_VERSION, validate_artifact
-from projects.digital_shoe.column_bed import SHEAR_LAYER_FRACTION
 from projects.digital_shoe.report import write_report
 from projects.digital_shoe.runtime import ShoeMaterial
 
@@ -114,11 +113,17 @@ def _mesh_json(vertices: np.ndarray, triangles: np.ndarray) -> dict[str, Any]:
 
 
 def _validation_curves(
-    sweep: Path, grid: ColumnGrid, registration: LastRegistration, material: Material, substeps: int
+    sweep: Path,
+    grid: ColumnGrid,
+    registration: LastRegistration,
+    material: Material,
+    substeps: int,
+    start_offset_m: float,
 ) -> list[dict[str, Any]]:
     """Replay the held-out trace of every sweep condition with the fitted material.
 
-    The stroke, preload indentation, frame interval and contact substeps follow :func:`sweep_fit.run`.
+    The stroke, preload indentation plus the fitted start offset, frame interval
+    and contact substeps follow :func:`sweep_fit.run`.
     """
     index = json.loads((sweep / "conditions.json").read_text())
     conditions = [c for c in index["conditions"] if c["role"] == "condition"]
@@ -126,7 +131,9 @@ def _validation_curves(
     indentation = registration.qc["preload"]["indentation_m"]
     depth = np.stack([np.maximum(t["displacement_m"], 0.0) + indentation for t in traces], axis=1)
     dt = float(np.mean(np.diff(traces[0]["time_s"])))
-    force = LastReplay(last_bed(grid, registration), depth, dt, candidates=1, substeps=substeps).run([material])[0]
+    force = LastReplay(last_bed(grid, registration), depth, dt, candidates=1, substeps=substeps).run(
+        [material], offsets_m=[start_offset_m]
+    )[0]
     return [
         {
             "name": f"{c['stance_ms']}ms_{c['target_n']}N",
@@ -183,7 +190,7 @@ def build_artifact(
     count = len(rest)
     neighbors = neighbor_indices(grid.uv_m, grid.uv_m, grid.spacing_m)
     shear = material.equilibrium_shear_modulus_pa
-    layer_shear = SHEAR_LAYER_FRACTION * shear
+    layer_shear = material.shear_layer_fraction * shear
     faces = np.argwhere(neighbors > np.arange(count)[:, None])
     t_i, t_j = rest[faces[:, 0]], rest[neighbors[faces[:, 0], faces[:, 1]]]
     face_coupling = layer_shear * 2.0 * t_i * t_j / (t_i + t_j)
@@ -197,12 +204,13 @@ def build_artifact(
         material.maxwell_relaxation_time_s,
         material.instantaneous_shear_modulus_2_pa,
         material.hyperfoam_exponent_2,
+        shear_layer_fraction=material.shear_layer_fraction,
     )
 
     tread = np.isfinite(registration.surface_m)
     tread_uv = grid.uv_m[tread]
     last_vertices, last_triangles = _last_mesh(last_path, last, grid, registration)
-    curves = _validation_curves(sweep, grid, registration, material, fit["substeps"])
+    curves = _validation_curves(sweep, grid, registration, material, fit["substeps"], fit.get("start_offset_m", 0.0))
     index = json.loads((sweep / "conditions.json").read_text())
     sources = [
         ("material_fit", fit_path),
@@ -236,10 +244,10 @@ def build_artifact(
             "derived_quantities": {
                 "hyperfoam_term_count": 2,
                 "pasternak_rule": (
-                    f"k_ij = {float(SHEAR_LAYER_FRACTION)} * equilibrium_shear_modulus_pa"
+                    f"k_ij = {material.shear_layer_fraction:g} * equilibrium_shear_modulus_pa"
                     " * 2 * rest_length_m[i] * rest_length_m[j] / (rest_length_m[i] + rest_length_m[j])"
                 ),
-                "shear_layer_fraction": float(SHEAR_LAYER_FRACTION),
+                "shear_layer_fraction": float(material.shear_layer_fraction),
                 "pasternak_n_per_m_is_fitted": False,
                 "equilibrium_shear_modulus_pa": float(shear),
                 "equilibrium_shear_modulus_term_1_pa": float(

@@ -12,6 +12,7 @@ from projects.digital_shoe.material import (
     densification_onset,
     hyperfoam_pressure_from_stretch_numpy,
 )
+from projects.digital_shoe.runtime import SHEAR_LAYER_FRACTION
 
 # Confined and unconfined compression of racing-shoe midsole foam agree within
 # scatter, so the effective Poisson ratio is zero (McCulloch, Delp and Kuhl,
@@ -37,17 +38,15 @@ class Material:
     directions. Setting ``instantaneous_shear_modulus_2_pa = 0`` reproduces the
     single-term law exactly, so the comparison against the previous fit is exact.
 
-    The lateral shear layer is no longer a free parameter. A Pasternak layer
-    coefficient is the shear modulus of the layer times its thickness, so every
-    column gets ``k_i = mu_eq * t_i``, where ``mu_eq`` is this material's own
-    equilibrium Ogden-Hill shear modulus and ``t_i`` is that column's rest
-    thickness. That adds no parameter and removes
-    the flat direction the single fitted coefficient ran along.
+    The two Pasternak shear layers of the column bed have the modulus
+    ``shear_layer_fraction * mu_eq``, with ``mu_eq`` this material's own
+    equilibrium Ogden-Hill shear modulus. The fraction sets how far a loaded
+    column carries its neighbours: on the full-foot last it decides whether the
+    load spreads from the midsole rims into the dished footbed early or the
+    footbed engages column by column, which the loading curve of the sweep
+    resolves. It is fitted with the foam; the default is the runner's
+    :data:`~projects.digital_shoe.runtime.SHEAR_LAYER_FRACTION`.
 
-    Nothing replaces it. The fitted vector is one shared material with no
-    fixture-specific freedom of any kind, so the rearfoot punch and the full-foot
-    last are described by the same four numbers and any disagreement between them
-    stays visible in the residual instead of being absorbed by a knob.
     """
 
     instantaneous_shear_modulus_pa: float
@@ -56,6 +55,7 @@ class Material:
     maxwell_relaxation_time_s: float = MAXWELL_RELAXATION_TIME_S
     instantaneous_shear_modulus_2_pa: float = 0.0
     hyperfoam_exponent_2: float = 1.0
+    shear_layer_fraction: float = SHEAR_LAYER_FRACTION
 
     def __post_init__(self) -> None:
         if not np.all(np.isfinite(tuple(self.__dict__.values()))):
@@ -70,6 +70,8 @@ class Material:
             raise ValueError("equilibrium fraction must be in (0, 1]")
         if self.maxwell_relaxation_time_s <= 0.0:
             raise ValueError("Maxwell relaxation time must be positive")
+        if self.shear_layer_fraction <= 0.0:
+            raise ValueError("shear layer fraction must be positive")
 
     @property
     def equilibrium_shear_modulus_pa(self) -> float:
@@ -151,7 +153,8 @@ def force_residual(measured_n: np.ndarray, displacement_m: np.ndarray, predicted
 
 # Order matches the :class:`Material` field order: first-term shear modulus,
 # first-term exponent, equilibrium fraction, relaxation time, second-term shear
-# modulus, second-term exponent. There is no fixture-specific parameter to bound.
+# modulus, second-term exponent, shear-layer fraction. There is no
+# fixture-specific parameter to bound.
 #
 # The second modulus may reach zero, which turns the series back into the
 # single-term law exactly. The second exponent may be negative: an Ogden-Hill
@@ -159,9 +162,11 @@ def force_residual(measured_n: np.ndarray, displacement_m: np.ndarray, predicted
 # plateau and a negative one produces densification, and the published two-term
 # fits of this foam family use one of each. Zero is inside the interval and is
 # handled by the removable limit of the Ogden-Hill term. The first exponent
-# reaches 40 because the FR3 sweep drives it onto a bound of 20.
-FIT_LOWER_BOUNDS = (1.0e3, 0.1, 0.01, 5.0e-3, 0.0, -20.0)
-FIT_UPPER_BOUNDS = (1.0e8, 40.0, 1.0, 2.0, 1.0e8, 20.0)
+# reaches 40 because the FR3 sweep drives it onto a bound of 20. The shear-layer
+# fraction spans a hundredth of the foam modulus to a layer stiffened 30-fold by
+# a plate.
+FIT_LOWER_BOUNDS = (1.0e3, 0.1, 0.01, 5.0e-3, 0.0, -20.0, 0.01)
+FIT_UPPER_BOUNDS = (1.0e8, 40.0, 1.0, 2.0, 1.0e8, 20.0, 30.0)
 
 
 def metrics(measured: np.ndarray, predicted: np.ndarray, displacement: np.ndarray) -> dict[str, float | bool]:

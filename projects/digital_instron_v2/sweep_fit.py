@@ -95,7 +95,10 @@ class _Batcher:
                 self.condition.notify_all()
 
 
-_LOG_PARAMETERS = np.array([True, False, False, True, True, False])
+MAX_START_OFFSET_M = 0.005
+"""Deepest start below the registered preload indentation the fit may choose [m]."""
+
+_LOG_PARAMETERS = np.array([True, False, False, True, True, False, True])
 """Material fields searched in log space: the moduli and the relaxation time."""
 
 
@@ -137,21 +140,25 @@ def fit_material(
     starts: list[Material],
     evaluations: int,
     substeps: int,
-) -> tuple[Material, list[dict]]:
+    offset_bounds_m: tuple[float, float],
+) -> tuple[Material, float, list[dict]]:
     """Fit the replayed traces from every start at once and keep the lowest loss.
 
     Each start is a bounded least-squares solve on :func:`core.force_residual`
     with up to ``evaluations`` residual evaluations. A Jacobian is a forward
     difference; the materials every start asks for in a round, Jacobian columns
     included, run as candidate worlds of one launch. Each trace frame is
-    replayed in ``substeps`` contact steps.
+    replayed in ``substeps`` contact steps. A start offset within
+    ``offset_bounds_m`` deepens every stroke so the model's start force can meet
+    the measured preload; it is fitted with the material.
 
     Returns:
-        The best material by training loss and one record per start.
+        The best material and start offset [m] by training loss, and one record per start.
     """
     from scipy.optimize import least_squares
 
-    lower, upper = np.asarray(FIT_LOWER_BOUNDS), np.asarray(FIT_UPPER_BOUNDS)
+    lower = np.array([*FIT_LOWER_BOUNDS, offset_bounds_m[0]])
+    upper = np.array([*FIT_UPPER_BOUNDS, offset_bounds_m[1]])
     width = len(lower) + 1
     replays: dict[int, LastReplay] = {}
 
@@ -160,8 +167,10 @@ def fit_material(
         size = width * -(-len(points) // width)
         if size not in replays:
             replays[size] = LastReplay(bed, depth_m, dt_s, candidates=size, substeps=substeps)
-        materials = [Material(*p) for p in points]
-        force = replays[size].run(materials + [materials[0]] * (size - len(materials)))
+        pad = size - len(points)
+        materials = [Material(*p[:-1]) for p in points]
+        offsets = [float(p[-1]) for p in points]
+        force = replays[size].run(materials + [materials[0]] * pad, offsets_m=offsets + [offsets[0]] * pad)
         return [
             np.concatenate(
                 [force_residual(t["force_n"], t["displacement_m"], f) for t, f in zip(traces, force[c], strict=True)]
@@ -181,7 +190,13 @@ def fit_material(
             missing = [p for p in points if p.tobytes() not in cache]
             for point, row in zip(missing, batcher.request(missing) if missing else [], strict=True):
                 cache[point.tobytes()] = row
-                history.append({"loss": float(np.mean(row**2)), **asdict(Material(*point))})
+                history.append(
+                    {
+                        "loss": float(np.mean(row**2)),
+                        **asdict(Material(*point[:-1])),
+                        "start_offset_m": float(point[-1]),
+                    }
+                )
                 nonphysical[0] += int(not np.all(np.isfinite(row)))
             return [cache[p.tobytes()] for p in points]
 
@@ -198,7 +213,7 @@ def fit_material(
             return np.column_stack([(rows[j + 1] - rows[0]) / step[j] for j in range(len(x))])
 
         try:
-            x0 = np.clip(np.array(list(asdict(starts[index]).values()), dtype=float), lower, upper)
+            x0 = np.clip(np.array([*asdict(starts[index]).values(), 0.0], dtype=float), lower, upper)
             try:
                 result = least_squares(
                     lambda x: residuals([x])[0],
@@ -219,13 +234,14 @@ def fit_material(
                 return
             records[index] = {
                 "start": asdict(starts[index]),
-                "material": asdict(Material(*result.x)),
+                "material": asdict(Material(*result.x[:-1])),
+                "start_offset_m": float(result.x[-1]),
                 "loss": float(np.mean(result.fun**2)),
                 "residual_evaluations": int(result.nfev),
                 "jacobians": int(result.njev),
                 "status": int(result.status),
                 "message": str(result.message),
-                "near_bounds": near_bounds(asdict(Material(*result.x))),
+                "near_bounds": near_bounds(asdict(Material(*result.x[:-1]))),
                 "nonphysical_evaluations": nonphysical[0],
                 "history": history,
             }
@@ -241,7 +257,7 @@ def fit_material(
     if not all(records):
         raise RuntimeError("A multi-start solve failed; see the raised thread exception above")
     best = min(records, key=lambda record: record["loss"])
-    return Material(**best["material"]), records
+    return Material(**best["material"]), best["start_offset_m"], records
 
 
 def identifiability(records: list[dict], tolerance: float = 0.1) -> dict:
@@ -338,14 +354,23 @@ def run(
     starts = [initial, *(Material(**json.loads(path.read_text())["material"]) for path in start_fits)]
     starts += latin_hypercube_starts(random_starts, seed)
     start = time.perf_counter()
-    material, records = fit_material(
-        bed, depth[:, train], dt, [traces[k] for k in train], starts, evaluations, substeps
+    # The start may move from first contact (the whole indentation undone) to
+    # MAX_START_OFFSET_M deeper than the registered preload indentation.
+    material, offset, records = fit_material(
+        bed,
+        depth[:, train],
+        dt,
+        [traces[k] for k in train],
+        starts,
+        evaluations,
+        substeps,
+        (-indentation, MAX_START_OFFSET_M),
     )
     fit_seconds = time.perf_counter() - start
 
     peaks = np.argmax(depth, axis=0)
     force, columns = LastReplay(bed, depth, dt, candidates=2, substeps=substeps).run(
-        [initial, material], snapshot_frames=peaks
+        [initial, material], offsets_m=[0.0, offset], snapshot_frames=peaks
     )
     broken = [
         f"{key} {name} {split}"
@@ -375,6 +400,7 @@ def run(
         "registration": {"pose": registration.pose, "qc": registration.qc},
         "initial_material": asdict(initial),
         "material": asdict(material),
+        "start_offset_m": offset,
         "optimization": {
             "seconds": fit_seconds,
             "best_start": int(np.argmin([record["loss"] for record in records])),
