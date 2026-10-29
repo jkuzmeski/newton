@@ -357,7 +357,7 @@ class TestColumnBedWorlds(unittest.TestCase):
     """Check what a world keeps or gets independently of its neighbors and of the ground."""
 
     @staticmethod
-    def _bed(worlds: int):
+    def _bed(worlds: int, material=FR3):
         spacing, thickness = 0.005, 0.03
         anchors, neighbors = _flat_bed(6, 4, spacing)
         n = len(anchors)
@@ -368,7 +368,7 @@ class TestColumnBedWorlds(unittest.TestCase):
             neighbors,
             spacing,
             np.full(n, TOP_BONDED, np.int32),
-            FR3,
+            material,
             FoundationConfig(ground_height_m=0.0, mu=0.5),
             np.arange(worlds),
             wp.zeros(worlds, dtype=wp.vec3),
@@ -390,12 +390,12 @@ class TestColumnBedWorlds(unittest.TestCase):
 
     def test_masked_reset_returns_only_the_selected_worlds_to_rest(self):
         """Reset the masked world to the unloaded shape without disturbing the other world's history."""
-        bed = self._bed(2)
+        bed = self._bed(2, replace(FR3, slider_modulus_pa=5.0e7, slider_yield_pa=2.0e4))
         bed.set_timesteps(1.25e-4)
         state = self._state([-0.003, -0.003], slide=0.01)
         for _ in range(20):
             bed.apply(state)
-        names = ("top", "bottom", "q_state", "peq_prev", "deflection")
+        names = ("top", "bottom", "q_state", "peq_prev", "slider_state", "strain_prev", "deflection")
         before = {name: bed.column_state(name).copy() for name in names}
         self.assertTrue(all(np.any(before[name][0] != 0.0) for name in names[2:]))
         bed.reset(wp.array([True, False], dtype=bool))

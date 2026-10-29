@@ -106,6 +106,54 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
         self.assertGreater(deeper[0], 1.5 * plain[0])
 
     @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
+    def test_slider_dissipates_beyond_the_branch_off_case(self):
+        """A cyclic replay with a slider material dissipates about 2*sigma_y*area*stroke beyond the branch-off law."""
+        h = 0.005
+        bed = LastBed(
+            uv_m=np.array([[0.0, 0.0], [h, 0.0]]),
+            bottom_m=np.zeros(2),
+            gap_m=np.zeros(2),
+            rest_m=np.full(2, 0.02),
+            area_m2=np.full(2, h * h),
+            spacing_m=h,
+            tread=np.ones(2, dtype=bool),
+        )
+        stroke = 0.012
+        depth = stroke * np.sin(np.linspace(0.0, np.pi, 81))[:, None]
+        # The slider modulus is far above the yield over the stroke, so each leg rides
+        # at the yield stress after a tiny clip transient and the slider adds exactly
+        # the rate-independent Jenkin dissipation 2*sigma_y*area*stroke.
+        branch_off = replace(CALIBRATED_MATERIAL, slider_modulus_pa=0.0, slider_yield_pa=0.0)
+        slider = replace(CALIBRATED_MATERIAL, slider_modulus_pa=5.0e7, slider_yield_pa=1.0e4)
+        loop = [
+            abs(np.trapezoid(LastReplay(bed, depth, 1.0e-3, 1).run([material])[0, 0], depth[:, 0]))
+            for material in (branch_off, slider)
+        ]
+
+        self.assertGreater(loop[0], 0.0)
+        expected = 2.0 * slider.slider_yield_pa * bed.area_m2.sum() * stroke
+        self.assertAlmostEqual(loop[1] - loop[0], expected, delta=0.2 * expected)
+
+    @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
+    def test_disabled_slider_reproduces_the_branch_off_force(self):
+        """A material with explicit zero slider fields replays the branch-off force exactly."""
+        h = 0.005
+        bed = LastBed(
+            uv_m=np.array([[0.0, 0.0], [h, 0.0]]),
+            bottom_m=np.zeros(2),
+            gap_m=np.zeros(2),
+            rest_m=np.full(2, 0.02),
+            area_m2=np.full(2, h * h),
+            spacing_m=h,
+            tread=np.ones(2, dtype=bool),
+        )
+        depth = 0.006 * np.sin(np.linspace(0.0, np.pi, 21))[:, None]
+        zeroed = replace(CALIBRATED_MATERIAL, slider_modulus_pa=0.0, slider_yield_pa=0.0)
+        force = LastReplay(bed, depth, 1.0e-3, 2).run([CALIBRATED_MATERIAL, zeroed])[:, 0]
+
+        np.testing.assert_array_equal(force[0], force[1])
+
+    @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
     def test_fit_replays_in_substeps(self):
         """The fit scores its start on the substepped replay, the runner's contact step."""
         h = 0.005
