@@ -139,17 +139,31 @@ Source identities used by the impedance checkpoint include the column bed
 From the repository root:
 
 ```bash
-uv run --extra examples -m projects.digital_instron_v2.export_digital_shoe \
-  --manifest DigitalInstron/manifest_v2.json \
+uv run --extra dev -m projects.digital_instron_v2 fit \
+  --shoe DigitalInstron/puma-fast-r-nitro-elite-3 \
+  --sweep DigitalInstron/FoamSweep/processed/FR3 \
+  --out DigitalInstron/FoamSweep/fit/puma-fast-r-nitro-elite-3
+uv run --extra dev -m projects.digital_instron_v2 export \
+  --shoe DigitalInstron/puma-fast-r-nitro-elite-3 \
+  --fit DigitalInstron/FoamSweep/fit/puma-fast-r-nitro-elite-3/material_fit.json \
+  --sweep DigitalInstron/FoamSweep/processed/FR3 \
   --output DigitalInstron/digital_shoe_showcase
 ```
 
-This command fits cycles 90–98, evaluates held-out cycles 99–100, and writes:
+The fit trains on cycles 90–98 of every sweep condition and writes
+`material_fit.json`. The export fits nothing: it replays the held-out cycles
+99–100 with the fitted material and writes:
 
 ```text
 DigitalInstron/digital_shoe_showcase/digital_shoe.json
+DigitalInstron/digital_shoe_showcase/digital_shoe_right.json
 DigitalInstron/digital_shoe_showcase/validation_report.html
 ```
+
+`digital_shoe_right.json` is the geometric mirror of the fitted left shoe. Each
+validation curve records `indenter_depth_m`, the last's descent from first
+contact that the replay drove (stroke plus the registration preload and the
+fitted start offset).
 
 The report is organized as methods, results, examples, and reproducibility. Its
 methods section derives the column kinematics, Hyperfoam equilibrium pressure,
@@ -181,6 +195,7 @@ All three scenes consume only `digital_shoe.json`.
 
 ```bash
 # Displacement-controlled validation against held-out Instron curves.
+# Add --curve 160ms_1600N to drive another sweep condition than the first.
 uv run --extra examples -m projects.digital_shoe.showcase \
   --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json \
   --mode instron --viewer gl

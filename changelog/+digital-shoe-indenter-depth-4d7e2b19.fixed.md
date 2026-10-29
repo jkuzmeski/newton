@@ -1,0 +1,1 @@
+Fix the Digital Shoe Virtual Instron under-loading fitted shoes: validation curves record ``indenter_depth_m``, the replayed descent including preload and start offset, and the showcase drives it. Add ``--curve`` to pick a sweep condition and correct the documented export command.

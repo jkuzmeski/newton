@@ -123,17 +123,17 @@ def _validation_curves(
     """Replay the held-out trace of every sweep condition with the fitted material.
 
     The stroke, preload indentation plus the fitted start offset, frame interval
-    and contact substeps follow :func:`sweep_fit.run`.
+    and contact substeps follow :func:`sweep_fit.run`. Each curve records the
+    last's descent from first contact it was replayed with as ``indenter_depth_m``,
+    so a consumer can drive the same stroke.
     """
     index = json.loads((sweep / "conditions.json").read_text())
     conditions = [c for c in index["conditions"] if c["role"] == "condition"]
     traces = [load_trace(sweep / c["validate_path"]) for c in conditions]
     indentation = registration.qc["preload"]["indentation_m"]
-    depth = np.stack([np.maximum(t["displacement_m"], 0.0) + indentation for t in traces], axis=1)
+    depth = np.stack([np.maximum(t["displacement_m"], 0.0) + indentation + start_offset_m for t in traces], axis=1)
     dt = float(np.mean(np.diff(traces[0]["time_s"])))
-    force = LastReplay(last_bed(grid, registration), depth, dt, candidates=1, substeps=substeps).run(
-        [material], offsets_m=[start_offset_m]
-    )[0]
+    force = LastReplay(last_bed(grid, registration), depth, dt, candidates=1, substeps=substeps).run([material])[0]
     return [
         {
             "name": f"{c['stance_ms']}ms_{c['target_n']}N",
@@ -142,6 +142,7 @@ def _validation_curves(
             "cycles": list(VALIDATION_CYCLES),
             "time_s": (t["time_s"] - t["time_s"][0]).tolist(),
             "displacement_m": t["displacement_m"].tolist(),
+            "indenter_depth_m": d.tolist(),
             "measured_force_n": t["force_n"].tolist(),
             "predicted_force_n": predicted.tolist(),
             "metrics": {
@@ -150,7 +151,7 @@ def _validation_curves(
                 "measured_peak_force_n": float(np.max(t["force_n"])),
             },
         }
-        for c, t, predicted in zip(conditions, traces, force, strict=True)
+        for c, t, d, predicted in zip(conditions, traces, depth.T, force, strict=True)
     ]
 
 

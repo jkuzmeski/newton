@@ -1065,11 +1065,15 @@ See the [shoe-project organization and command map](projects/README.md) for
 Digital Instron, Digital Shoe, and the generative Hogan runner pipeline.
 
 This fork includes a standalone shoe calibrated from Digital Instron measurements.
-Export the fitted artifact and HTML report, then launch the Virtual Instron:
+Export the shoe's fitted material (`material_fit.json` from
+`projects.digital_instron_v2 fit`) as the artifact and HTML report, then launch
+the Virtual Instron:
 
 ```bash
-uv run --extra examples -m projects.digital_instron_v2.export_digital_shoe \
-  --manifest DigitalInstron/manifest_v2.json \
+uv run --extra dev -m projects.digital_instron_v2 export \
+  --shoe DigitalInstron/puma-fast-r-nitro-elite-3 \
+  --fit DigitalInstron/FoamSweep/fit/puma-fast-r-nitro-elite-3/material_fit.json \
+  --sweep DigitalInstron/FoamSweep/processed/FR3 \
   --output DigitalInstron/digital_shoe_showcase
 uv run --extra examples -m projects.digital_shoe.showcase \
   --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json \

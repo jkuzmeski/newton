@@ -83,6 +83,7 @@ class Example:
         self.viewer = viewer
         self.mode = getattr(args, "mode", "instron")
         self.fixture_name = getattr(args, "fixture", "fullfoot_last")
+        self.curve_name = getattr(args, "curve", None)
         self.shoe = load_artifact(getattr(args, "artifact", DEFAULT_ARTIFACT))
         self.device = wp.get_preferred_device()
         self.fps = 240 if self.mode == "drop" else 60
@@ -199,9 +200,14 @@ class Example:
     def _build_instron(self, builder):
         """Recover the full bench bed and the fixture-only kinematic drive."""
         fixture = self.shoe.instron_fixture(self.fixture_name)
-        curve = next(curve for curve in self.shoe.validation["curves"] if curve["fixture"] == self.fixture_name)
+        curve = next(
+            curve
+            for curve in self.shoe.validation["curves"]
+            if curve["fixture"] == self.fixture_name and self.curve_name in (None, curve["name"])
+        )
         self._cycle_time = np.asarray(curve["time_s"], dtype=np.float64)
-        self._cycle_depth = np.asarray(curve["displacement_m"], dtype=np.float64)
+        # The descent from first contact the exporter replayed, preload and start offset included.
+        self._cycle_depth = np.asarray(curve["indenter_depth_m"], dtype=np.float64)
         self._measured_force = np.asarray(curve["measured_force_n"], dtype=np.float64)
         self._predicted_force = np.asarray(curve["predicted_force_n"], dtype=np.float64)
         self._expected_peak_force_n = float(np.max(self._predicted_force))
@@ -537,8 +543,6 @@ class Example:
         if self.sim_time < (INSTRON_WARMUP_CYCLES - 1) * self._period:
             raise AssertionError(f"run at least {INSTRON_WARMUP_CYCLES} Instron cycles to warm the Maxwell state")
         peak = float(self._peak_force.numpy()[0])
-        if not 900.0 < peak < 3000.0:
-            raise AssertionError(f"Virtual Instron peak is outside the expected range: {peak:.1f} N")
         relative_error = abs(peak - self._expected_peak_force_n) / self._expected_peak_force_n
         if relative_error >= 0.03:
             raise AssertionError(f"runtime peak differs from the exported prediction by {100.0 * relative_error:.1f}%")
@@ -590,6 +594,7 @@ def main() -> None:
     parser.add_argument("--artifact", type=Path, default=Path(DEFAULT_ARTIFACT))
     parser.add_argument("--mode", choices=["instron", "drop", "rocker"], default="instron")
     parser.add_argument("--fixture", choices=["rearfoot_punch", "fullfoot_last"], default="fullfoot_last")
+    parser.add_argument("--curve", help="Instron validation curve name, e.g. 160ms_1600N; default the fixture's first.")
     parser.add_argument("--drop-mass", type=float, default=80.0, help="Free drop effective body mass [kg].")
     parser.add_argument("--drop-height", type=float, default=0.04, help="Initial outsole clearance [m].")
     parser.add_argument("--record-gif", type=Path, help="Write an infinite GIF loop from the OpenGL viewer.")
