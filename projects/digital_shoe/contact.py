@@ -235,7 +235,8 @@ def column_balance_pressures(
             stiff layers keep their precision.
         bottom_pull: ``sum_j k_ij (b - b_j)`` [N].
         coupling_sum: ``sum_j k_ij`` [N/m].
-        overstress_base: Maxwell overstress at zero equilibrium pressure [Pa].
+        overstress_base: Maxwell overstress plus the held slider stress of the
+            Jenkin branch, at zero equilibrium pressure [Pa].
         overstress_gain: Overstress per unit equilibrium pressure of this step.
         peq: Equilibrium pressure at ``c`` [Pa].
         peq_ahead: Equilibrium pressure at ``c + 1e-3 * thickness`` [Pa].

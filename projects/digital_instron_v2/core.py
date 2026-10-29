@@ -47,6 +47,16 @@ class Material:
     resolves. It is fitted with the foam; the default is the runner's
     :data:`~projects.digital_shoe.runtime.SHEAR_LAYER_FRACTION`.
 
+    The optional rate-independent hysteresis branch is a Jenkin (spring-slider)
+    unit per column in parallel with the equilibrium series and the Maxwell
+    branch: a slider stress clipped at ``slider_yield_pa`` and advanced by
+    ``slider_modulus_pa`` per unit strain. The measured FR3 loops lose a larger
+    share of their loop energy at low load than the Maxwell branch can spread
+    over one relaxation time, and the fit used to pay for that by pinning foam
+    parameters on bounds; the slider adds that loss without a rate. Both fields
+    default to zero, which keeps the slider stress at zero and the
+    viscoelastic law exact, so earlier fits and artifacts start where they were.
+
     """
 
     instantaneous_shear_modulus_pa: float
@@ -56,6 +66,8 @@ class Material:
     instantaneous_shear_modulus_2_pa: float = 0.0
     hyperfoam_exponent_2: float = 1.0
     shear_layer_fraction: float = SHEAR_LAYER_FRACTION
+    slider_modulus_pa: float = 0.0
+    slider_yield_pa: float = 0.0
 
     def __post_init__(self) -> None:
         if not np.all(np.isfinite(tuple(self.__dict__.values()))):
@@ -72,6 +84,8 @@ class Material:
             raise ValueError("Maxwell relaxation time must be positive")
         if self.shear_layer_fraction <= 0.0:
             raise ValueError("shear layer fraction must be positive")
+        if self.slider_modulus_pa < 0.0 or self.slider_yield_pa < 0.0:
+            raise ValueError("slider modulus and yield stress must be nonnegative")
 
     @property
     def equilibrium_shear_modulus_pa(self) -> float:
@@ -153,8 +167,8 @@ def force_residual(measured_n: np.ndarray, displacement_m: np.ndarray, predicted
 
 # Order matches the :class:`Material` field order: first-term shear modulus,
 # first-term exponent, equilibrium fraction, relaxation time, second-term shear
-# modulus, second-term exponent, shear-layer fraction. There is no
-# fixture-specific parameter to bound.
+# modulus, second-term exponent, shear-layer fraction, slider modulus, slider
+# yield stress. There is no fixture-specific parameter to bound.
 #
 # The second modulus may reach zero, which turns the series back into the
 # single-term law exactly. The second exponent may be negative: an Ogden-Hill
@@ -164,9 +178,12 @@ def force_residual(measured_n: np.ndarray, displacement_m: np.ndarray, predicted
 # handled by the removable limit of the Ogden-Hill term. The first exponent
 # reaches 40 because the FR3 sweep drives it onto a bound of 20. The shear-layer
 # fraction spans a hundredth of the foam modulus to a layer stiffened 30-fold by
-# a plate.
-FIT_LOWER_BOUNDS = (1.0e3, 0.1, 0.01, 5.0e-3, 0.0, -20.0, 0.01)
-FIT_UPPER_BOUNDS = (1.0e8, 40.0, 1.0, 2.0, 1.0e8, 20.0, 30.0)
+# a plate. The slider bounds reach zero like the second modulus's: a material
+# with the branch off must stay off when a start clips into them, so the fit's
+# first evaluation still reproduces that material's replay exactly, and the
+# search space keeps the branch identifiable above the noise floor.
+FIT_LOWER_BOUNDS = (1.0e3, 0.1, 0.01, 5.0e-3, 0.0, -20.0, 0.01, 0.0, 0.0)
+FIT_UPPER_BOUNDS = (1.0e8, 40.0, 1.0, 2.0, 1.0e8, 20.0, 30.0, 1.0e8, 1.0e6)
 
 
 def metrics(measured: np.ndarray, predicted: np.ndarray, displacement: np.ndarray) -> dict[str, float | bool]:

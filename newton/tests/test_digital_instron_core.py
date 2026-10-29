@@ -34,9 +34,10 @@ class TestDigitalInstronCore(unittest.TestCase):
 
         The Pasternak coefficient is pinned to the material and nothing replaced
         it, so a rearfoot punch and a full-foot last are described by the same
-        six numbers -- two Ogden-Hill terms plus the Maxwell branch -- and any
-        disagreement between them stays in the residual. The second term widens
-        the shared law, not the per-fixture freedom.
+        numbers -- two Ogden-Hill terms plus the Maxwell branch, the shear-layer
+        fraction and the Jenkin slider -- and any disagreement between them
+        stays in the residual. The second term, the shear layer and the slider
+        widen the shared law, not the per-fixture freedom.
         """
 
         self.assertEqual(
@@ -48,6 +49,9 @@ class TestDigitalInstronCore(unittest.TestCase):
                 "maxwell_relaxation_time_s",
                 "instantaneous_shear_modulus_2_pa",
                 "hyperfoam_exponent_2",
+                "shear_layer_fraction",
+                "slider_modulus_pa",
+                "slider_yield_pa",
             ),
         )
 
@@ -58,6 +62,10 @@ class TestDigitalInstronCore(unittest.TestCase):
             Material(1.0, 1.0, -0.1)
         with self.assertRaises(ValueError):
             Material(1.0, 1.0, 0.5, 0.08, -1.0)  # negative second-term modulus
+        with self.assertRaises(ValueError):
+            Material(1.0, 1.0, 0.5, 0.08, slider_modulus_pa=-1.0)  # negative slider modulus
+        with self.assertRaises(ValueError):
+            Material(1.0, 1.0, 0.5, 0.08, slider_yield_pa=-1.0)  # negative slider yield stress
 
     def test_disabled_second_term_reproduces_the_single_term_law(self):
         """Return the first-order pressure exactly when the second modulus is zero.

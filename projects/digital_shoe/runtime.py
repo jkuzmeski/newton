@@ -37,6 +37,16 @@ class ShoeMaterial:
     every compression. ``shear_layer_fraction`` is fitted on the bench sweep;
     artifacts without it keep :data:`SHEAR_LAYER_FRACTION`. Exporters write the
     bed-mean of that coupling here.
+
+    The optional rate-independent hysteresis branch is a Jenkin (spring-slider)
+    unit in parallel with the equilibrium Hyperfoam and the Maxwell overstress.
+    Each column carries a slider stress ``s`` clipped at plus or minus
+    ``slider_yield_pa`` and advanced by ``slider_modulus_pa`` per unit
+    compression strain, so the column's axial stress is
+    ``Hyperfoam(strain) + q + s`` and one loading cycle dissipates
+    ``2 * slider_yield_pa * area * stroke``. The default zero keeps ``s`` at
+    zero and reproduces the viscoelastic law exactly, so artifacts written
+    before the branch stay valid.
     """
 
     instantaneous_shear_modulus_pa: float
@@ -49,6 +59,8 @@ class ShoeMaterial:
     hyperfoam_exponent_2: float = 1.0
     equilibrium_shear_modulus_override_pa: float = 0.0
     shear_layer_fraction: float = SHEAR_LAYER_FRACTION
+    slider_modulus_pa: float = 0.0
+    slider_yield_pa: float = 0.0
 
     def __post_init__(self) -> None:
         values = tuple(self.__dict__.values())
@@ -66,6 +78,8 @@ class ShoeMaterial:
             raise ValueError("Pasternak coupling must be nonnegative")
         if self.shear_layer_fraction <= 0.0:
             raise ValueError("shear layer fraction must be positive")
+        if self.slider_modulus_pa < 0.0 or self.slider_yield_pa < 0.0:
+            raise ValueError("slider modulus and yield stress must be nonnegative")
         if not -1.0 < self.effective_poisson_ratio < 0.5:
             raise ValueError("effective Poisson ratio must be in (-1, 0.5)")
         if self.maxwell_relaxation_time_s <= 0.0:
@@ -107,6 +121,8 @@ class FoundationParams:
     normal_damping: wp.float32  # per-column Kelvin-Voigt normal damping [N.s/m]
     mu: wp.float32  # Coulomb friction coefficient
     shear_fraction: wp.float32  # shear-layer modulus over the equilibrium shear modulus
+    slider_modulus: wp.float32  # slider stress gained per unit strain [Pa]; zero disables the branch
+    slider_yield: wp.float32  # slider stress clip [Pa]; zero disables the branch
     onset_stretch: (
         wp.float32
     )  # stretch where the tangent cap starts; -inf if the tangent never reaches the solid modulus
@@ -169,7 +185,8 @@ def set_material_block(params: FoundationParams, material) -> None:
         material: Any material carrying the Ogden-Hill series,
             ``equilibrium_fraction``, ``effective_poisson_ratio``,
             ``maxwell_relaxation_time_s`` and optionally ``shear_layer_fraction``
-            (default :data:`SHEAR_LAYER_FRACTION`).
+            (default :data:`SHEAR_LAYER_FRACTION`), ``slider_modulus_pa`` and
+            ``slider_yield_pa`` (default zero, the disabled Jenkin branch).
     """
     set_hyperfoam_series(params, material)
     poisson = float(getattr(material, "effective_poisson_ratio", 0.0))
@@ -178,6 +195,8 @@ def set_material_block(params: FoundationParams, material) -> None:
     params.tau_s = float(getattr(material, "maxwell_relaxation_time_s", 0.08))
     params.overstress = (1.0 - material.equilibrium_fraction) / material.equilibrium_fraction
     params.shear_fraction = float(getattr(material, "shear_layer_fraction", SHEAR_LAYER_FRACTION))
+    params.slider_modulus = float(getattr(material, "slider_modulus_pa", 0.0))
+    params.slider_yield = float(getattr(material, "slider_yield_pa", 0.0))
 
 
 def set_hyperfoam_series(params: FoundationParams, material) -> None:

@@ -16,7 +16,8 @@ import argparse
 import json
 import threading
 import time
-from dataclasses import asdict
+from collections.abc import Iterable, Mapping
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import numpy as np
@@ -98,8 +99,8 @@ class _Batcher:
 MAX_START_OFFSET_M = 0.005
 """Deepest start below the registered preload indentation the fit may choose [m]."""
 
-_LOG_PARAMETERS = np.array([True, False, False, True, True, False, True])
-"""Material fields searched in log space: the moduli and the relaxation time."""
+_LOG_PARAMETERS = np.array([True, False, False, True, True, False, True, True, True])
+"""Material fields searched in log space: the moduli, the relaxation time, and the slider yield."""
 
 
 def _search_space() -> tuple[np.ndarray, np.ndarray]:
@@ -132,6 +133,22 @@ def latin_hypercube_starts(count: int, seed: int) -> list[Material]:
     return [Material(*np.where(log, 10.0**p, p)) for p in points]
 
 
+def parse_fixed(pairs: Iterable[str]) -> dict[str, float]:
+    """Return the ``material-field=value`` pins of the hidden ``--fix`` option.
+
+    A pinned field is held at its value in every start and dropped from the
+    searched vector, so an identification question (``--fix shear_layer_fraction=0.1``)
+    is a clean comparison instead of a bound-pinned optimum.
+    """
+    fixed: dict[str, float] = {}
+    for pair in pairs:
+        name, _, value = pair.partition("=")
+        if name not in Material.__dataclass_fields__ or not value:
+            raise ValueError(f"--fix needs material-field=value, got {pair!r}")
+        fixed[name] = float(value)
+    return fixed
+
+
 def fit_material(
     bed: LastBed,
     depth_m: np.ndarray,
@@ -141,6 +158,7 @@ def fit_material(
     evaluations: int,
     substeps: int,
     offset_bounds_m: tuple[float, float],
+    fixed: Mapping[str, float] = {},
 ) -> tuple[Material, float, list[dict]]:
     """Fit the replayed traces from every start at once and keep the lowest loss.
 
@@ -150,17 +168,24 @@ def fit_material(
     included, run as candidate worlds of one launch. Each trace frame is
     replayed in ``substeps`` contact steps. A start offset within
     ``offset_bounds_m`` deepens every stroke so the model's start force can meet
-    the measured preload; it is fitted with the material.
+    the measured preload; it is fitted with the material. Every ``fixed``
+    material field is held at its value over the whole solve instead of searched.
 
     Returns:
         The best material and start offset [m] by training loss, and one record per start.
     """
     from scipy.optimize import least_squares
 
-    lower = np.array([*FIT_LOWER_BOUNDS, offset_bounds_m[0]])
-    upper = np.array([*FIT_UPPER_BOUNDS, offset_bounds_m[1]])
+    fields = tuple(Material.__dataclass_fields__)
+    free = [name for name in fields if name not in fixed]
+    lower = np.array([FIT_LOWER_BOUNDS[fields.index(name)] for name in free] + [offset_bounds_m[0]])
+    upper = np.array([FIT_UPPER_BOUNDS[fields.index(name)] for name in free] + [offset_bounds_m[1]])
     width = len(lower) + 1
     replays: dict[int, LastReplay] = {}
+
+    def material_of(point: np.ndarray) -> Material:
+        """Return the material of one search point with the fixed fields applied."""
+        return Material(**fixed, **dict(zip(free, point[:-1], strict=True)))
 
     def evaluate(points: list[np.ndarray]) -> list[np.ndarray]:
         # Launch sizes are rounded up to whole Jacobians so few replays are built.
@@ -168,7 +193,7 @@ def fit_material(
         if size not in replays:
             replays[size] = LastReplay(bed, depth_m, dt_s, candidates=size, substeps=substeps)
         pad = size - len(points)
-        materials = [Material(*p[:-1]) for p in points]
+        materials = [material_of(p) for p in points]
         offsets = [float(p[-1]) for p in points]
         force = replays[size].run(materials + [materials[0]] * pad, offsets_m=offsets + [offsets[0]] * pad)
         return [
@@ -193,7 +218,7 @@ def fit_material(
                 history.append(
                     {
                         "loss": float(np.mean(row**2)),
-                        **asdict(Material(*point[:-1])),
+                        **asdict(material_of(point)),
                         "start_offset_m": float(point[-1]),
                     }
                 )
@@ -213,7 +238,10 @@ def fit_material(
             return np.column_stack([(rows[j + 1] - rows[0]) / step[j] for j in range(len(x))])
 
         try:
-            x0 = np.clip(np.array([*asdict(starts[index]).values(), 0.0], dtype=float), lower, upper)
+            # The pinned fields override their start, and the free ones clip into bounds
+            # so a start without the newer fields still starts inside them.
+            start = replace(starts[index], **fixed)
+            x0 = np.clip(np.array([*(asdict(start)[name] for name in free), 0.0], dtype=float), lower, upper)
             try:
                 result = least_squares(
                     lambda x: residuals([x])[0],
@@ -233,15 +261,15 @@ def fit_material(
                 }
                 return
             records[index] = {
-                "start": asdict(starts[index]),
-                "material": asdict(Material(*result.x[:-1])),
+                "start": asdict(start),
+                "material": asdict(material_of(result.x)),
                 "start_offset_m": float(result.x[-1]),
                 "loss": float(np.mean(result.fun**2)),
                 "residual_evaluations": int(result.nfev),
                 "jacobians": int(result.njev),
                 "status": int(result.status),
                 "message": str(result.message),
-                "near_bounds": near_bounds(asdict(Material(*result.x[:-1]))),
+                "near_bounds": near_bounds(asdict(material_of(result.x))),
                 "nonphysical_evaluations": nonphysical[0],
                 "history": history,
             }
@@ -315,6 +343,7 @@ def run(
     seed: int,
     substeps: int,
     start_fits: tuple[Path, ...] = (),
+    fixed: Mapping[str, float] = {},
 ) -> dict:
     """Register the last, fit the material to the train traces from many starts, and score every trace.
 
@@ -322,7 +351,8 @@ def run(
 
     The starts are :data:`CALIBRATED_MATERIAL`, the materials of ``start_fits``
     (earlier ``material_fit.json`` files), and ``random_starts`` Latin-hypercube
-    materials drawn with ``seed``.
+    materials drawn with ``seed``. ``fixed`` holds named material fields at a
+    given value over the search.
     """
     grid = load_grid(shoe / side / "column_grid.npz")
     index = json.loads((sweep / "conditions.json").read_text())
@@ -365,6 +395,7 @@ def run(
         evaluations,
         substeps,
         (-indentation, MAX_START_OFFSET_M),
+        fixed,
     )
     fit_seconds = time.perf_counter() - start
 
@@ -406,6 +437,7 @@ def run(
             "best_start": int(np.argmin([record["loss"] for record in records])),
             "identifiability": identifiability(records),
             "starts": records,
+            "fixed": dict(fixed),
         },
         "conditions": scores,
     }
@@ -433,6 +465,9 @@ def main() -> None:
     parser.add_argument(
         "--start", type=Path, action="append", default=[], help="Earlier material_fit.json to start from; repeatable."
     )
+    # A field=value pin held over the whole search, for identification questions
+    # a bounded solve would answer with a bound-pinned optimum.
+    parser.add_argument("--fix", action="append", default=[], metavar="FIELD=VALUE", help=argparse.SUPPRESS)
     args = parser.parse_args()
     report = run(
         args.shoe,
@@ -445,6 +480,7 @@ def main() -> None:
         seed=args.seed,
         substeps=args.substeps,
         start_fits=tuple(args.start),
+        fixed=parse_fixed(args.fix),
     )
     print(json.dumps({k: report[k] for k in ("shoe", "material", "registration")}, indent=2, default=float))
 

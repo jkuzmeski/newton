@@ -103,6 +103,9 @@ def _material_rows(shoe: DigitalShoe) -> str:
         "pasternak_n_per_m": ("Pasternak coupling (derived bed mean of mu_eq x t)", "N/m"),
         "effective_poisson_ratio": ("Effective Poisson ratio (fixed)", "1"),
         "maxwell_relaxation_time_s": ("Maxwell relaxation time (fitted)", "s"),
+        "shear_layer_fraction": ("Shear-layer fraction (fitted)", "1"),
+        "slider_modulus_pa": ("Slider modulus, Jenkin branch (fitted)", "Pa"),
+        "slider_yield_pa": ("Slider yield stress, Jenkin branch (fitted)", "Pa"),
     }
     values = shoe.raw["constitutive_model"]["parameters"]
     # A single-term artifact predates the second Ogden-Hill term and simply omits

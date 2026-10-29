@@ -205,6 +205,8 @@ def build_artifact(
         material.instantaneous_shear_modulus_2_pa,
         material.hyperfoam_exponent_2,
         shear_layer_fraction=material.shear_layer_fraction,
+        slider_modulus_pa=material.slider_modulus_pa,
+        slider_yield_pa=material.slider_yield_pa,
     )
 
     tread = np.isfinite(registration.surface_m)
@@ -259,6 +261,8 @@ def build_artifact(
                 "pasternak_n_per_m_min": float(face_coupling.min()),
                 "pasternak_n_per_m_max": float(face_coupling.max()),
                 "small_strain_compressive_modulus_pa": float(2.0 * shear),
+                "slider_modulus_pa": float(material.slider_modulus_pa),
+                "slider_yield_pa": float(material.slider_yield_pa),
             },
         },
         "column_bed": {

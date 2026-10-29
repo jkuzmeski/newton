@@ -20,6 +20,12 @@ Both layers have the constant modulus ``shear_layer_fraction`` of the material (
 :data:`~projects.digital_shoe.runtime.SHEAR_LAYER_FRACTION`) times the foam's rest shear modulus
 :func:`~projects.digital_shoe.runtime.material_shear_modulus` at every compression, so the layers are
 linear in the displacements and conserve energy.
+
+A column whose material sets ``slider_modulus_pa`` also carries a rate-independent
+Jenkin branch: a slider stress held fixed over the solve, then advanced by the
+modulus per unit strain change and clipped at ``±slider_yield_pa``, so its axial
+stress is ``Hyperfoam(strain) + q + s`` and a cycle dissipates loop energy without
+a rate. Zero (the default) keeps the branch off.
 Held tops load the carrier with ``T``, landed bottoms load the plane with
 ``R``. Columns are one-dimensional: a column bottom moves sideways with the
 carrier, so friction acts between the carrier and the plane. Each landed bottom
@@ -188,6 +194,8 @@ class _Bed:
     bottom: wp.array[wp.float32]
     q_state: wp.array[wp.float32]
     peq_prev: wp.array[wp.float32]
+    slider_state: wp.array[wp.float32]
+    strain_prev: wp.array[wp.float32]
     stuck: wp.array[wp.int32]
     deflection: wp.array[wp.vec2]
     tangential_load: wp.array[wp.vec2]
@@ -286,7 +294,9 @@ def _column_bed_step(
         _top_shared(column, bed.top[i], 1)
         _bottom_shared(column, bed.bottom[i], 1)
         _clearance_shared(column, wp.transform_point(pose, bed.anchor_local[column])[2] - bed.ground_height, 1)
-        _overstress_shared(column, decay * bed.q_state[i] - gain * bed.peq_prev[i], 1)
+        # The slider stress joins the fixed part of the overstress, so the solve
+        # holds the Jenkin branch at its previous value just like the Maxwell state.
+        _overstress_shared(column, decay * bed.q_state[i] - gain * bed.peq_prev[i] + bed.slider_state[i], 1)
     _sync_threads()
     # Red-black Gauss-Seidel: lanes hold columns sorted by color and a color
     # reads only the other color, so each half sweep updates in place and then
@@ -365,6 +375,12 @@ def _column_bed_step(
         q = maxwell_step(bed.q_state[i], peq, bed.peq_prev[i], p.overstress, decay, ramp)
         bed.q_state[i] = q
         bed.peq_prev[i] = peq
+        strain = comp / thickness
+        slider = wp.clamp(
+            bed.slider_state[i] + p.slider_modulus * (strain - bed.strain_prev[i]), -p.slider_yield, p.slider_yield
+        )
+        bed.slider_state[i] = slider
+        bed.strain_prev[i] = strain
         # Shear on each end, positive down, from the balanced neighbours.
         on_top = float(0.0)
         on_bottom = float(0.0)
@@ -381,7 +397,7 @@ def _column_bed_step(
         landed = (support & BOTTOM_LANDED) != 0
         # Axial column force. A column free at one end passes on exactly the shear
         # that balances that end, including the reaction of its compression bounds.
-        axial = wp.max(area * (peq + q), 0.0)
+        axial = wp.max(area * (peq + q + slider), 0.0)
         if held and landed:
             if comp > 0.0:
                 axial = wp.max(axial - p.normal_damping * velocity[2], 0.0)
@@ -450,6 +466,8 @@ def _reset_worlds(
     bottom: wp.array[wp.float32],
     q_state: wp.array[wp.float32],
     peq_prev: wp.array[wp.float32],
+    slider_state: wp.array[wp.float32],
+    strain_prev: wp.array[wp.float32],
     deflection: wp.array[wp.vec2],
 ):
     """Clear the columns of the masked worlds."""
@@ -459,6 +477,8 @@ def _reset_worlds(
         bottom[i] = 0.0
         q_state[i] = 0.0
         peq_prev[i] = 0.0
+        slider_state[i] = 0.0
+        strain_prev[i] = 0.0
         deflection[i] = wp.vec2(0.0)
 
 
@@ -600,6 +620,8 @@ class ColumnBed:
             "bottom",
             "q_state",
             "peq_prev",
+            "slider_state",
+            "strain_prev",
             "compression",
             "carried",
             "reaction",
@@ -651,14 +673,30 @@ class ColumnBed:
         """Return the worlds in ``mask``, or every world, to the unloaded rest shape with no history."""
         bed = self.bed
         if mask is None:
-            for array in (bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.deflection):
+            for array in (
+                bed.top,
+                bed.bottom,
+                bed.q_state,
+                bed.peq_prev,
+                bed.slider_state,
+                bed.strain_prev,
+                bed.deflection,
+            ):
                 array.zero_()
             return
         wp.launch(
             _reset_worlds,
             dim=self.world_count * self.column_count,
             inputs=[mask, self.column_count],
-            outputs=[bed.top, bed.bottom, bed.q_state, bed.peq_prev, bed.deflection],
+            outputs=[
+                bed.top,
+                bed.bottom,
+                bed.q_state,
+                bed.peq_prev,
+                bed.slider_state,
+                bed.strain_prev,
+                bed.deflection,
+            ],
             device=self.device,
         )
 

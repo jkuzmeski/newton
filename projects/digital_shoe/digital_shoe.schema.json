@@ -16,7 +16,7 @@
     "constitutive_model": {
       "properties": {
         "parameters": {
-          "description": "Two-term Ogden-Hill (Hyperfoam) equilibrium series plus one Maxwell branch. instantaneous_shear_modulus_2_pa and hyperfoam_exponent_2 describe the second term and stay optional so single-term artifacts written before it remain valid; an absent second modulus is zero, which disables the term and reproduces the single-term law exactly. The series equilibrium shear modulus, which pins the Pasternak coupling, is the SUM (instantaneous_shear_modulus_pa + instantaneous_shear_modulus_2_pa) * equilibrium_fraction.",
+          "description": "Two-term Ogden-Hill (Hyperfoam) equilibrium series plus one Maxwell branch. instantaneous_shear_modulus_2_pa and hyperfoam_exponent_2 describe the second term and stay optional so single-term artifacts written before it remain valid; an absent second modulus is zero, which disables the term and reproduces the single-term law exactly. The series equilibrium shear modulus, which pins the Pasternak coupling, is the SUM (instantaneous_shear_modulus_pa + instantaneous_shear_modulus_2_pa) * equilibrium_fraction. slider_modulus_pa and slider_yield_pa add a rate-independent Jenkin (spring-slider) branch in parallel: a per-column slider stress clipped at slider_yield_pa and advanced by slider_modulus_pa per unit strain, dissipating 2 * slider_yield_pa * area * stroke per cycle; absent or zero values disable the branch and keep the viscoelastic law exact.",
           "required": [
             "instantaneous_shear_modulus_pa",
             "hyperfoam_exponent",
