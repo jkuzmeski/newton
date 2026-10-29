@@ -553,6 +553,9 @@ class TestRunnerIdentification(unittest.TestCase):
             self.assertTrue((output / "trace_000.npz").is_file())
             report = json.loads((output / "summary.json").read_text())
             self.assertIn("impedance_instron/hogan/runner.py", {p.replace("\\", "/") for p in report["source_sha256"]})
+            fitted = root / "fit"
+            main(["fit", "--dataset", str(root), "--shoe", str(exported), "--iterations", "1", "--output", str(fitted)])
+            self.assertTrue((fitted / "report.html").is_file())
             # Make the measurements unavailable: the standalone generator must not read them.
             (root / "reference.npz").unlink()
             (root / "manifest.json").unlink()
