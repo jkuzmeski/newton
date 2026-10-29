@@ -1,0 +1,1 @@
+Commit the slider-law FR3 and Dev3 Digital Shoe exports with their GIFs and validation reports under ``DigitalInstron/digital_shoe_showcase/``, the 66.5 kg F01 leg profile, the material sensitivity results, and the Hogan slider-shoe report page, so the showcase and Hogan pipeline run without refitting or re-exporting.

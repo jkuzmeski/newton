@@ -79,9 +79,8 @@ docs/_static/viser/
 /projects/gait_c3d/subjects/*
 !/projects/gait_c3d/subjects/.gitkeep
 
-# Generated Digital Instron calibration and presentation outputs
+# Generated Digital Instron calibration outputs
 /DigitalInstron/processed/v2_cache/
-/DigitalInstron/digital_shoe_showcase/
 
 # Local impedance rig inputs, reports, and recordings (restricted derivatives).
 /outputs/impedance_instron/

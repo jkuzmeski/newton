@@ -20,7 +20,7 @@ repos:
     hooks:
       - id: check-added-large-files
         args: [--maxkb=500]
-        exclude: ^(DigitalInstron/.*\.(STL|obj|csv|im_gpf)|DigitalInstron/FoamSweep/fit/.*|data/.*|projects/impedance_instron/data/.*)$
+        exclude: ^(DigitalInstron/.*\.(STL|obj|csv|im_gpf)|DigitalInstron/FoamSweep/fit/.*|DigitalInstron/digital_shoe_showcase/.*|projects/impedance_instron/hogan/report_site/.*|data/.*|projects/impedance_instron/data/.*)$
       - id: check-case-conflict
       - id: check-illegal-windows-names
       - id: check-json

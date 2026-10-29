@@ -7,6 +7,12 @@ hip, knee, and ankle are actuated.
 
 ## Experiment reports
 
+[`hogan/report_site/index.html`](hogan/report_site/index.html) is the committed
+summary of the runner on the slider FR3 shoe: shoe and Instron fit, both
+controllers, spring geometry, material sensitivity and the Dev3 check. It is one
+self-contained page. Rebuild it from the committed JSON with
+`uv run python projects/impedance_instron/hogan/report_site/_build/build.py`.
+
 Open `outputs/index.html` for the results dashboard, with separate
 `outputs/controller-testing/index.html` and `outputs/materials-testing/index.html`
 catalogs. Each study links to its individual report and available saved motion.
@@ -120,7 +126,7 @@ uv run --no-sync -m projects.impedance_instron fit --dataset outputs/hogan_reset
 
 That dataset repeats the 2026-10-08 recipe on the new exports:
 
-- `prepare --data-root data/F01 --profile outputs/hogan_reset/profile_66_5kg/profile.json --shoe outputs/shoe_landing/hogan_2026_10_27/fr3_export/digital_shoe.json --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894 --output outputs/hogan_reset/dataset_f01_20hz`.
+- `prepare --data-root data/F01 --profile projects/impedance_instron/hogan/profiles/f01_66_5kg.json --shoe DigitalInstron/digital_shoe_showcase/digital_shoe.json --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894 --output outputs/hogan_reset/dataset_f01_20hz`.
 - Pass `--profile` and `--shoe` explicitly; no prepared bundle is preserved to
   supply defaults. The shoe is the FR3 `digital_shoe.json` written by
   `python -m projects.digital_instron_v2.export_digital_shoe`. Datasets whose
@@ -128,7 +134,11 @@ That dataset repeats the 2026-10-08 recipe on the new exports:
   exported shoe to `fit`, `inspect`, or `evaluate` to replace every member's
   shoe.
 - The leg profile is mass-scaled to 66.5 kg; the 66.5 kg profile is a
-  reconstruction kept at `outputs/hogan_reset/profile_66_5kg/profile.json`.
+  reconstruction committed at `projects/impedance_instron/hogan/profiles/f01_66_5kg.json`.
+- The committed shoe is the slider-law FR3 export. The 2026-10-29 score
+  baseline was fit on the earlier column-bed FR3 export (sha256 `a9bf61dd...`),
+  so a dataset prepared with the committed shoe gives a new baseline, not the
+  saved numbers.
 - `prepare` writes all 110 members. The fit set is a hand-written derived
   manifest (`outputs/hogan_reset/fit_dataset_f01_20hz`, schema
   `generative_runner_dataset_1` with `derived_from.excluded`) that excludes the

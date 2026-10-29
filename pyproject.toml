@@ -351,6 +351,8 @@ iy = "iy"
 iz = "iz"
 HAA = "HAA"
 lod = "lod"
+# Jenkin element: a spring in series with a Coulomb slider
+Jenkin = "Jenkin"
 # MuJoCo Menagerie brand/product names
 Pincher = "Pincher"
 Robotis = "Robotis"

@@ -1,0 +1,86 @@
+{
+ "groups": {
+  "foam stiffness (G\u00d70.5 / \u00d72; inner \u00d70.7 / \u00d71.4)": [
+   "stiffness_x0.5",
+   "stiffness_x2",
+   "stiffness_x0.7",
+   "stiffness_x1.4"
+  ],
+  "hyperfoam exponents (\u00d71.4 / \u00d70.7)": [
+   "exponent_x1.4",
+   "exponent_x0.7",
+   null,
+   null
+  ],
+  "shear-layer fraction (\u00d70.5 / \u00d72)": [
+   "shear_layer_x0.5",
+   "shear_layer_x2",
+   null,
+   null
+  ],
+  "slider yield (\u00d70 = off / \u00d72; inner \u00d70.5)": [
+   "slider_yield_x0",
+   "slider_yield_x2",
+   "slider_yield_x0.5",
+   null
+  ],
+  "no loss (slider + Maxwell off)": [
+   "no_loss",
+   null,
+   null,
+   null
+  ],
+  "Maxwell share (off / \u00d72)": [
+   "maxwell_off",
+   "maxwell_share_x2",
+   null,
+   null
+  ],
+  "slider modulus (\u00d70.5 / \u00d72)": [
+   "slider_modulus_x0.5",
+   "slider_modulus_x2",
+   null,
+   null
+  ]
+ },
+ "marathon065": {
+  "score": {
+   "original": 0.0,
+   "stiffness_x0.5": 164.34048096119477,
+   "stiffness_x0.7": 110.97804519885176,
+   "stiffness_x1.4": -143.4150405891778,
+   "stiffness_x2": -339.83206236689693,
+   "slider_yield_x0": 9.43530160273258,
+   "slider_yield_x0.5": 4.377148073361241,
+   "slider_yield_x2": -8.064880775127676,
+   "slider_modulus_x0.5": 0.9033515761420858,
+   "slider_modulus_x2": -0.3701382027411455,
+   "maxwell_off": 1.1856875532466802,
+   "maxwell_share_x2": -1.6889057918397157,
+   "no_loss": 10.546314637207615,
+   "shear_layer_x0.5": 20.058604009494957,
+   "shear_layer_x2": -27.00772247779605,
+   "exponent_x0.7": -79.41831257538252,
+   "exponent_x1.4": 42.64435587559274
+  },
+  "sample": {
+   "original": 0.0,
+   "stiffness_x0.5": 375.3093608890231,
+   "stiffness_x0.7": 218.26174231230834,
+   "stiffness_x1.4": -205.93069431845106,
+   "stiffness_x2": -457.6875673096347,
+   "slider_yield_x0": 20.81251004596197,
+   "slider_yield_x0.5": 10.195847975337529,
+   "slider_yield_x2": -18.68099836104011,
+   "slider_modulus_x0.5": 0.9634830115210207,
+   "slider_modulus_x2": -0.4106477103632642,
+   "maxwell_off": 5.020944961668647,
+   "maxwell_share_x2": -5.763031545395279,
+   "no_loss": 25.76160023578268,
+   "shear_layer_x0.5": 68.3203137541077,
+   "shear_layer_x2": -85.41172582536637,
+   "exponent_x0.7": -104.46650577400032,
+   "exponent_x1.4": 83.0573390264799
+  }
+ }
+}

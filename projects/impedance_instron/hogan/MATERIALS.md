@@ -121,6 +121,9 @@ neighbours with `shear_layer_fraction * mu_eq` and never reads
 `--combine NAME=VARIANT+VARIANT` adds a combined condition, and `--variants`
 selects a subset.
 
+Results for the slider FR3 shoe with the score and sample controllers are in
+[material_sensitivity/RESULTS.md](material_sensitivity/RESULTS.md).
+
 `--instron` replays the held-out bench sweep for every condition in one batch,
 with the exporter's validation replay. It saves `instron.json` with the peak
 force, secant stiffness and loop energy loss of every curve at the measured

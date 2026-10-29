@@ -70,6 +70,31 @@ showcase integration on `main`.
 | `newton/examples/assets/gait2354_subject01_walk.mot` | 86534 | `752a125afddfa442c76fe74807b66b3d8e3836cac3a15cd409283766bcf402d4` |
 | `docs/images/examples/example_impedance_instron.jpg` | 5946 | `033d6098989d3f4adc7814b58770fd77c3c9b1864f19cd219d7e493d572be4e6` |
 | `docs/images/examples/example_impedance_stiffness.jpg` | 3677 | `abd8a0853391f8e081781cc80fefb44dbcf248f495e6ab24805432c4a53ae4b0` |
+| `DigitalInstron/digital_shoe_showcase/dev3/digital_shoe.json` | 4538772 | `8f3b579bd23b9d8ff147900eb06d61d8f7f5f575bed404629a895116c55ec903` |
+| `DigitalInstron/digital_shoe_showcase/dev3/digital_shoe_right.json` | 4536392 | `b93ccd1f84c90f2fddf7048edf3476e7ff3446da0a1ba8b1df2deba515114b11` |
+| `DigitalInstron/digital_shoe_showcase/dev3/drop.gif` | 7160376 | `31634d8ca1b76636b7521151723b0fdb7d4290721a4886bdb39391b8173ec146` |
+| `DigitalInstron/digital_shoe_showcase/dev3/instron.gif` | 827215 | `2a3482144ff2f33ffa330cf001b1cd5514fed18a3acc8a02d3492f4c419e373a` |
+| `DigitalInstron/digital_shoe_showcase/dev3/rocker.gif` | 2129092 | `7809060127e931af566da999ab65463ce1ce6830541fb1e7dae91bec9ccceba9` |
+| `DigitalInstron/digital_shoe_showcase/dev3/validation_report.html` | 14314443 | `fa664e49ca98a55d6cae1dff500712df6beecdce8aa2e4b28f2b24c0a946b5f9` |
+| `DigitalInstron/digital_shoe_showcase/digital_shoe.json` | 4530311 | `2fc95daeb4536f3fd43892039aefcec2d3816aa42f775f3ba0d5a9fef81a0ff4` |
+| `DigitalInstron/digital_shoe_showcase/digital_shoe_right.json` | 4529050 | `dfe252e5d9e0bf5f26e6f9ed975341ad3bfa64ca58d9ce7e0689ed7ad6f86673` |
+| `DigitalInstron/digital_shoe_showcase/drop.gif` | 7122837 | `3a54d85d5f9398cc20f8b81a39ccf0ec4e28a80d8e594c13c34702c01546fdcc` |
+| `DigitalInstron/digital_shoe_showcase/instron.gif` | 794612 | `260b775bd368cbaed0eb54680c4f898f6fb8cb1dfc672d7b7c12d514bff97f8f` |
+| `DigitalInstron/digital_shoe_showcase/rocker.gif` | 1942403 | `2c4d48ea9bab69b5284e4cf1becd1c10b6c999d03586c607a27a9a61193686cb` |
+| `DigitalInstron/digital_shoe_showcase/validation_report.html` | 13971909 | `0082ad02e1bf987e54fd82efe6eb3d9fa1e6c191df22d9297be561126dcc8dee` |
+| `projects/impedance_instron/hogan/material_sensitivity/tornado_data.json` | 2343 | `f851c1c8e27290383c9ef2118c534c97f3fb38d792bb88872d83931d7c3db0fd` |
+| `projects/impedance_instron/hogan/material_sensitivity/tornado_marathon065.png` | 76346 | `d3516b952ffdd49974dfdea06cf7db8b51c3a9093da917be0acd71d3cef4fe5b` |
+| `projects/impedance_instron/hogan/profiles/f01_66_5kg.json` | 1641 | `ca0b719ad91ce16ebabd657079179c6698c37a69a6fec558848601db5bbc9daf` |
+| `projects/impedance_instron/hogan/report_site/assets/dev3_loops.png` | 271803 | `c2f54cedd0d1507f49b07b4f35c0393987c8b3e49d78cd4a08814106ff7fea2f` |
+| `projects/impedance_instron/hogan/report_site/assets/dev3_loss_trend.png` | 138070 | `20f7e9feea3fc9eb6e462864348102098c5a1ddb7fe6dc4483194fae7604240f` |
+| `projects/impedance_instron/hogan/report_site/assets/drop.gif` | 7122837 | `3a54d85d5f9398cc20f8b81a39ccf0ec4e28a80d8e594c13c34702c01546fdcc` |
+| `projects/impedance_instron/hogan/report_site/assets/instron.gif` | 794612 | `260b775bd368cbaed0eb54680c4f898f6fb8cb1dfc672d7b7c12d514bff97f8f` |
+| `projects/impedance_instron/hogan/report_site/assets/rocker.gif` | 1942403 | `2c4d48ea9bab69b5284e4cf1becd1c10b6c999d03586c607a27a9a61193686cb` |
+| `projects/impedance_instron/hogan/report_site/data.json` | 43428 | `620f4a8394e9f30c17fecf5c3dea44e2aa78a7e3d3bb12e837bd0629f7b0aa16` |
+| `projects/impedance_instron/hogan/report_site/index.html` | 221817 | `9e27d0834744b597fba61a4420f667ca24a7d98cdf4eca0a8b9957b38c3a0b30` |
+| `projects/impedance_instron/hogan/report_site/instron.json` | 59708 | `e1058a6592b3cd7ca2f33f89eb81720c24ef5cf4b708524a2640120c2f252ec0` |
+| `projects/impedance_instron/hogan/report_site/motion.json` | 104765 | `c9339d68dd6c39cf2dbe83df5304d31a10827daa3a778485784420a94c353768` |
+| `projects/impedance_instron/hogan/report_site/stance.gif` | 872786 | `0c1be7c57fcf19ef6ca0a40cf9c417eee98dfeeca983d722604c54171badd5f2` |
 
 ## Impedance Instron derivatives
 

@@ -1,0 +1,48 @@
+{
+  "schema": "cartesian_single_leg_1",
+  "masses_kg": [
+    8.229181046361626,
+    3.280117903980519,
+    1.3860101613924865
+  ],
+  "com_local_m": [
+    [
+      0.17227771334749734,
+      0.0
+    ],
+    [
+      0.16827859236059467,
+      0.0
+    ],
+    [
+      0.025,
+      -0.047
+    ]
+  ],
+  "inertias_kg_m2": [
+    0.1298914268018626,
+    0.03477206481336601,
+    0.00581413729730774
+  ],
+  "provenance": {
+    "inertial": "S001 model shape transferred and mass scaled to measured F01 body mass 66.5 kg (participant record; static plate); reconstructed 2026-10-29 for the Hogan baseline reset by rescaling the preserved 66 kg profile (sha256 15f37cb55b5200c548501b32028ac2f62cbf2e57346d7acdcc897a1c979c7b12) by 66.5/66.0 with unchanged segment lengths",
+    "impedance": "Selected Maxwell baseline gains from projects/impedance_instron/baseline.json; provisional transfer",
+    "limits": "Engineering envelope around F01 selected stance; provisional assumption",
+    "source_model": "projects/gait_c3d/assets/s001_base/model/subject.xml",
+    "model_mass_kg": 81.9312118,
+    "target_mass_kg": 66.5,
+    "mass_scale": 0.8116564925504983,
+    "model_leg_segment_masses_kg": [
+      10.1387485,
+      4.04126368,
+      1.70763146
+    ],
+    "model_sagittal_inertias_kg_m2": [
+      0.198752538,
+      0.0490168595,
+      0.00716329796
+    ],
+    "com_policy": "Thigh and shank at 45% of measured segment length; foot [0.025,-0.047] m from ankle in foot frame",
+    "inertia_policy": "Scale model inertia by subject mass ratio and squared segment length ratio; foot by mass ratio only"
+  }
+}

@@ -171,9 +171,14 @@ Maxwell recurrence, Pasternak coupling, wrench/COP assembly, and normalized fit
 objective. `methods.mmd` is the Mermaid source for the workflow diagram;
 `methods.svg` is its pre-rendered offline form embedded in the HTML.
 
-The output directory is intentionally ignored. The measurements, footwear
-geometry, fitted artifact, and their derivatives are not cleared for upstream
-redistribution. See `ASSET_PROVENANCE.md`.
+The committed showcase holds the current FR3 shoe, its GIFs and report, so the
+demonstrations below and the Hogan pipeline run without refitting or
+re-exporting. `DigitalInstron/digital_shoe_showcase/dev3/` holds the Dev3 shoe
+exported the same way from `DigitalInstron/FoamSweep/fit/puma-deviate-nitro-elite-3`
+and `DigitalInstron/FoamSweep/processed/Dev3Elite`. Re-export after a refit to
+keep them in sync. The measurements, footwear geometry, fitted artifacts, and
+their derivatives are approved only for this fork and must stay out of upstream
+pull requests. See `ASSET_PROVENANCE.md`.
 
 To refresh only the report layout, reuse the existing artifact and recordings:
 
