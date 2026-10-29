@@ -21,6 +21,10 @@ export PYTHONPYCACHEPREFIX="$TMPDIR/pycache"
 # multiarch pyconfig.h of the system Python. Triton must use the system gcc.
 export CC=/usr/bin/gcc CXX=/usr/bin/g++
 cd "$GRID_CODE_DIR"
+# The snapshot is a git archive export: answer `git rev-parse HEAD` with its commit.
+export GIT_DIR="$TMPDIR/snapshot.git"
+git init -q --bare "$GIT_DIR"
+cat GRID_COMMIT > "$GIT_DIR/HEAD"
 
 NAME=$("$PYTHON" -c 'import json, sys; print(json.load(open(sys.argv[1]))[int(sys.argv[2])]["name"])' \
     "$RUN_DIR/tasks.json" "$SLURM_ARRAY_TASK_ID")
