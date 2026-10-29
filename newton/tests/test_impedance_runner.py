@@ -15,7 +15,7 @@ import numpy as np
 import warp as wp
 
 from newton.tests.test_impedance_hogan import _chain, _reference, _tiny_shoe
-from projects.impedance_instron.cartesian.prepare_dataset import _flight_velocity, _share_bundle_assets
+from projects.impedance_instron.cartesian.prepare_dataset import _flight_velocity, _share_bundle_assets, build_dataset
 from projects.impedance_instron.cartesian.profile import validate
 from projects.impedance_instron.hogan import least_squares
 from projects.impedance_instron.hogan.generate import main as generate_main
@@ -381,6 +381,21 @@ class TestRunnerIdentification(unittest.TestCase):
             shared = _share_bundle_assets(root, records)
         self.assertEqual(shared["profile.json"]["file"], "assets/profile.json")
         self.assertEqual(shared["digital_shoe.json"]["file"], "assets/digital_shoe.json")
+
+    def test_prepare_requires_explicit_profile_and_shoe(self):
+        """Reject dataset preparation without an explicit leg profile, shoe, and pitch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaises(ValueError) as caught:
+                build_dataset(root)
+            self.assertIn("leg profile", str(caught.exception))
+            profile = root / "profile.json"
+            profile.write_text("{}", encoding="utf-8")
+            shoe = root / "digital_shoe.json"
+            shoe.write_text("{}", encoding="utf-8")
+            with self.assertRaises(ValueError) as caught:
+                build_dataset(root, profile_path=profile, shoe_path=shoe)
+            self.assertIn("static shoe pitch", str(caught.exception))
 
     def test_coordinate_conversion_ignores_grf_and_exported_velocity(self):
         """Retain measured geometry rather than adapting it to measured force."""

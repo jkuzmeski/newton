@@ -1,0 +1,1 @@
+Require an explicit leg profile and shoe for ``python -m projects.impedance_instron prepare``. The default prepared bundle no longer exists, so ``--prepared-root`` has no default and ``build_dataset`` raises a clear error when the profile, shoe, or static shoe pitch is missing. Pass ``--profile`` and ``--shoe`` as in the README recipe.

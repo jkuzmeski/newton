@@ -20,7 +20,6 @@ from .visual3d import load_visual3d_export
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATA = ROOT / "data/F01"
-DEFAULT_PREPARED = ROOT / "outputs/impedance_instron/three_trial_fresh_20260924"
 DEFAULT_OUTPUT = ROOT / "outputs/impedance_instron/stance_dataset_peak_hip"
 TRIALS = ("FR3_1", "FR3_2")
 SEED = 20260929
@@ -250,7 +249,7 @@ def _split(cycles: list[dict[str, Any]], rng: np.random.Generator) -> tuple[list
 
 def build_dataset(
     data_root: Path = DEFAULT_DATA,
-    prepared_root: Path = DEFAULT_PREPARED,
+    prepared_root: Path | None = None,
     output_root: Path = DEFAULT_OUTPUT,
     seed: int = SEED,
     *,
@@ -262,12 +261,26 @@ def build_dataset(
     """Prepare 100 training and 10 evaluation peak-to-peak stance references.
 
     Args:
+        prepared_root: Optional prepared bundle root; supplies the profile, shoe, and pitch
+            defaults.
         profile_path: Leg profile; defaults to the FR3_2 bundle under ``prepared_root``.
         shoe_path: Shoe artifact; defaults to the FR3_2 bundle under ``prepared_root``.
         shoe_static_pitch_rad: Static shoe pitch [rad]; defaults to the FR3_2 bundle summary.
         virtual_foot_reference: Foot-angle source passed to :func:`.prepare_visual3d.prepare`.
     """
     rng = np.random.default_rng(seed)
+    # Both trial bundles carry byte-identical profile and shoe artifacts; use
+    # the FR3_2 right-side bundle as the shared right-foot source.
+    prepared = None if prepared_root is None else prepared_root / "FR3_2" / "prepared"
+    profile = profile_path or (prepared / "profile.json" if prepared else None)
+    shoe = shoe_path or (prepared / "digital_shoe.json" if prepared else None)
+    if profile is None or shoe is None:
+        raise ValueError("Supply the leg profile and shoe artifact, or prepared_root with a prepared FR3_2 bundle")
+    if shoe_static_pitch_rad is None:
+        if prepared is None:
+            raise ValueError("Supply the static shoe pitch, or prepared_root with a prepared FR3_2 bundle")
+        summary = json.loads((prepared / "summary.json").read_text(encoding="utf-8"))
+        shoe_static_pitch_rad = float(summary["angle_convention"]["shoe_static_pitch_rad"])
     selection_paths: dict[str, Path] = {}
     for trial_name in TRIALS:
         selection_path = data_root / trial_name / "stance_selection.json"
@@ -299,14 +312,6 @@ def build_dataset(
     for trial_name in TRIALS:
         trial_root = data_root / trial_name
         trial_info, _ = available[trial_name]
-        # Both trial bundles carry byte-identical profile and shoe artifacts;
-        # use the FR3_2 right-side bundle as the shared right-foot source.
-        prepared = prepared_root / "FR3_2" / "prepared"
-        profile = profile_path or prepared / "profile.json"
-        shoe = shoe_path or prepared / "digital_shoe.json"
-        if shoe_static_pitch_rad is None:
-            summary = json.loads((prepared / "summary.json").read_text(encoding="utf-8"))
-            shoe_static_pitch_rad = float(summary["angle_convention"]["shoe_static_pitch_rad"])
         trial_info["source_hashes"][str(profile)] = _sha256(profile)
         trial_info["source_hashes"][str(shoe)] = _sha256(shoe)
         selection_path = selection_paths[trial_name]
@@ -383,7 +388,9 @@ def build_dataset(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA)
-    parser.add_argument("--prepared-root", type=Path, default=DEFAULT_PREPARED)
+    parser.add_argument(
+        "--prepared-root", type=Path, help="Prepared bundle root supplying profile, shoe, and pitch defaults"
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument("--profile", type=Path, help="Leg profile; defaults to the prepared FR3_2 bundle")
