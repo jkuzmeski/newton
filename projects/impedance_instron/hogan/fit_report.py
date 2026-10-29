@@ -291,6 +291,7 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
         height_offset_m=command["height_offset"],
         limit_per_split=command["limit_per_split"],
         force_observation=force_observation(command),
+        shoe_artifact=command.get("shoe"),
     )
     if [t.id for t in trials] != [entry["id"] for entry in summary["trials"]]:
         raise ValueError("Dataset trials no longer match the fit summary")
@@ -431,6 +432,7 @@ def rebuild_motion_from_saved_traces(run: Path) -> Path:
         height_offset_m=command["height_offset"],
         limit_per_split=command["limit_per_split"],
         force_observation=force_observation(command),
+        shoe_artifact=command.get("shoe"),
     )
     entries = summary["trials"]
     if [trial.id for trial in trials] != [entry["id"] for entry in entries]:
