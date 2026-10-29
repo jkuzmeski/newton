@@ -49,7 +49,7 @@ def _share_bundle_assets(root: Path, records: list[dict[str, Any]]) -> dict[str,
                 raise ValueError(f"Dataset members do not share an identical {name}")
             duplicate.unlink()
             os.link(asset, duplicate)
-        shared[name] = {"file": str(asset.relative_to(root)), "sha256": digest}
+        shared[name] = {"file": asset.relative_to(root).as_posix(), "sha256": digest}
     return shared
 
 
