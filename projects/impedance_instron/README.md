@@ -42,39 +42,46 @@ Build the saved comparison selector with:
 uv run --no-project python -m projects.impedance_instron.hogan.comparison_viewer_report --run RUN_DIRECTORY --default CONDITION_ID
 ```
 
-The installed Instron report renderer dispatches catalog rebuilding to this
-repository generator. Existing report URLs and experiment artifacts are retained.
+The material report generators call the Instron report renderer, an external
+Codex skill at `$CODEX_HOME/skills/instron-reports` that is not part of this
+repository; without it they write `report-spec.json` and then fail. The renderer
+dispatches catalog rebuilding to this repository generator. Existing report URLs and experiment artifacts are retained.
 
 ## Preserved full-run baseline
 
-The latest retained controller is the
-[full-score runner](hogan/baselines/generative_runner_score_20261010.json), with
-[saved fit provenance](hogan/baselines/generative_runner_score_20261010.provenance.json).
-It was fitted independently from unfitted engineering weights for all 50 LM
-iterations, using `--lm-objective score --lm-tolerance 0 --lm-bound 3
---lm-regularization 0.001`, 20 Hz force observation, vibration weight 1, and
-immediate damping. Its unchanged common score is **10.30854217799746 train**
-and **10.16172407224562 held-out**, with zero rollout failures across 98 training
-and 9 held-out stances. Held-out results did not select the controller. Force
-and contact matching improved; hip and angle tracking were slightly worse than
-the paired sample-objective fit. Local matching motion, deformation, charts,
-and fitting histories remain in
-`outputs/impedance_instron/hogan_score_from_scratch_20261010`; the comparison is
-in `outputs/reports/impedance-instron/hogan-score-from-scratch-20261010/report.html`.
+The current controller is the
+[column-bed score runner](hogan/baselines/generative_runner_score_20261029.json), with
+[saved fit provenance](hogan/baselines/generative_runner_score_20261029.provenance.json).
+It was fitted on the FR3 column-bed shoe from the unfitted `Runner.seed`
+engineering weights for all 50 LM iterations, on 98 training and 9 held-out
+stances of `outputs/hogan_reset/fit_dataset_f01_20hz`:
 
-The original full-run baseline remains available:
+```console
+uv run --no-sync -m projects.impedance_instron fit --dataset outputs/hogan_reset/fit_dataset_f01_20hz --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --dt 0.000125 --compression-limit 0.99 --force-filter-hz 20 --force-gate-n 1 --force-vibration-weight 1 --iterations 50 --lm-step 0.01 --lm-damping 0.01 --lm-bound 3 --lm-regularization 0.001 --lm-tolerance 0 --chunk 128 --immediate-damping --lm-objective score --output outputs/impedance_instron/hogan_score
+```
 
-- Model: [F01 runner](hogan/baselines/generative_runner_f01_20261008.json).
-- Saved run: `outputs/impedance_instron/generative_fit_lm_flightcom_20261008`.
-- Dataset: `outputs/impedance_instron/generative_fit_dataset_flight_20261008`.
-- Subject: 66 kg; belt: 3.65 m/s; 98 training and 9 held-out stances.
-- Mean loss: **16.079667862151016 train**, **14.796461691170371 held-out**.
-- Fitted to the original F01 exports (6 Hz plate filter, 66 kg); new fits use
-  the 20 Hz exports below.
+Its common score is **10.562578694392826 train** and **10.54930489875738
+held-out**, with zero rollout failures. Held-out results did not select the
+controller. The paired sample-objective fit scores 12.195 train and 11.873
+held-out and misses peak vertical force by about 120 N. Horizontal hip error
+stays near 45-50 mm for every fit. `test_impedance_pipeline` replays all 107
+saved traces of this run exactly when the run is at
+`outputs/hogan_reset/fit_score_20261029` and CUDA is available.
 
-The saved model, scenarios, traces, summaries, and report are not rewritten by
-cleanup. Local motion and shoe assets are required; see
+The earlier controllers remain as records. They were fitted under shoe laws
+that predate the column bed, and their saved datasets no longer load:
+
+- [2026-10-10 score runner](hogan/baselines/generative_runner_score_20261010.json)
+  ([provenance](hogan/baselines/generative_runner_score_20261010.provenance.json)):
+  10.309 train and 10.162 held-out under its shoe law. Frozen on the column
+  bed it scores 11.954 and 11.350, and it ranks the paper foams opposite to both
+  controllers fitted on the column bed, so do not use it for material studies.
+- [2026-10-08 F01 runner](hogan/baselines/generative_runner_f01_20261008.json):
+  16.080 train and 14.796 held-out, fitted to the 6 Hz, 66 kg F01 exports.
+
+Local motion and shoe assets are required; see
 [asset provenance](../../ASSET_PROVENANCE.md).
+
 
 ## Run
 
@@ -93,8 +100,8 @@ uv run --no-sync -m projects.impedance_instron fit --dataset outputs/hogan_reset
 Choose a new output directory. CUDA is the default; `--device cpu` selects the
 reference backend, which integrates the body on the host and steps the CUDA
 column bed once per step. Use `--limit-per-split 1 --iterations 1` for a small
-fit. The saved baseline fits ran with earlier shoe laws; the shoe is now the
-two-surface column bed, so their traces and costs are not reproduced exactly.
+fit. Baselines fitted before 2026-10-29 ran with earlier shoe laws; their traces
+and costs are not reproduced on the two-surface column bed.
 The bed advances every world's bed one step from the carrier's start-of-step
 pose and writes the carrier wrench; the caller applies that wrench to the body.
 `--chunk` (default 128) sets candidates integrated concurrently; 128 candidates
