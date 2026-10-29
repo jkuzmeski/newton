@@ -4,6 +4,7 @@
 """Check the explicit column bed: normal support, bristle friction and passivity under a free carrier."""
 
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -447,8 +448,14 @@ class TestColumnBedWorlds(unittest.TestCase):
         ColumnBed(*args, FR3, config, np.array([0]), wp.zeros(1, dtype=wp.vec3), max_strain=0.9)
 
     def test_shear_layer_joins_a_loaded_and_a_free_column_at_a_fraction_of_the_foam_shear_modulus(self):
-        """A free column beside a pressed one is held down by the series layer of modulus ``SHEAR_LAYER_FRACTION * G_eq``."""
+        """A free column beside a pressed one is held down by the series layer of modulus ``shear_layer_fraction * G_eq``."""
         self.assertAlmostEqual(SHEAR_LAYER_FRACTION, 0.1)
+        self.assertEqual(FR3.shear_layer_fraction, SHEAR_LAYER_FRACTION)
+        for material in (FR3, replace(FR3, shear_layer_fraction=0.3)):
+            with self.subTest(fraction=material.shear_layer_fraction):
+                self._check_shear_layer(material)
+
+    def _check_shear_layer(self, material):
         spacing, depth = 0.005, 0.012
         thickness = np.array([0.03, 0.02])
         anchors, neighbors = _flat_bed(2, 1, spacing)
@@ -459,7 +466,7 @@ class TestColumnBedWorlds(unittest.TestCase):
             neighbors,
             spacing,
             np.array([TOP_BONDED, TOP_FREE], np.int32),
-            FR3,
+            material,
             FoundationConfig(ground_height_m=0.0),
             np.array([0]),
             wp.zeros(1, dtype=wp.vec3),
@@ -469,14 +476,16 @@ class TestColumnBedWorlds(unittest.TestCase):
         for _ in range(2400):
             bed.apply(state)
         top, compression, reaction = (bed.column_state(name)[0] for name in ("top", "compression", "reaction"))
-        g_eq = FR3.equilibrium_fraction * (FR3.instantaneous_shear_modulus_pa + FR3.instantaneous_shear_modulus_2_pa)
-        coupling = 2.0 * (SHEAR_LAYER_FRACTION * g_eq) * np.prod(thickness) / thickness.sum()
+        g_eq = material.equilibrium_fraction * (
+            material.instantaneous_shear_modulus_pa + material.instantaneous_shear_modulus_2_pa
+        )
+        coupling = 2.0 * (material.shear_layer_fraction * g_eq) * np.prod(thickness) / thickness.sum()
         foam = spacing**2 * hyperfoam_pressure_numpy(
             compression[1] / thickness[1],
-            FR3.equilibrium_fraction * FR3.instantaneous_shear_modulus_pa,
-            FR3.hyperfoam_exponent,
-            FR3.equilibrium_fraction * FR3.instantaneous_shear_modulus_2_pa,
-            FR3.hyperfoam_exponent_2,
+            material.equilibrium_fraction * material.instantaneous_shear_modulus_pa,
+            material.hyperfoam_exponent,
+            material.equilibrium_fraction * material.instantaneous_shear_modulus_2_pa,
+            material.hyperfoam_exponent_2,
             0.0,
             1.0,
             0.05,

@@ -83,6 +83,29 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(force)))
 
     @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
+    def test_start_offset_deepens_only_its_candidate(self):
+        """A candidate's start offset replays as the same stroke made that much deeper."""
+        h = 0.005
+        bed = LastBed(
+            uv_m=np.array([[0.0, 0.0], [h, 0.0]]),
+            bottom_m=np.zeros(2),
+            gap_m=np.array([0.0, 0.002]),
+            rest_m=np.full(2, 0.02),
+            area_m2=np.full(2, h * h),
+            spacing_m=h,
+            tread=np.ones(2, dtype=bool),
+        )
+        depth = 0.006 * np.sin(np.linspace(0.0, np.pi, 21))[:, None]
+        offset = 0.002
+        both = LastReplay(bed, depth, 1.0e-3, 2).run([CALIBRATED_MATERIAL] * 2, offsets_m=[0.0, offset])[:, 0]
+        plain = LastReplay(bed, depth, 1.0e-3, 1).run([CALIBRATED_MATERIAL])[0, 0]
+        deeper = LastReplay(bed, depth + offset, 1.0e-3, 1).run([CALIBRATED_MATERIAL])[0, 0]
+
+        np.testing.assert_allclose(both[0], plain, rtol=1.0e-6, atol=1.0e-6)
+        np.testing.assert_allclose(both[1], deeper, rtol=1.0e-6, atol=1.0e-6)
+        self.assertGreater(deeper[0], 1.5 * plain[0])
+
+    @unittest.skipUnless(wp.is_cuda_available(), "ColumnBed needs CUDA")
     def test_fit_replays_in_substeps(self):
         """The fit scores its start on the substepped replay, the runner's contact step."""
         h = 0.005
@@ -105,7 +128,9 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
         self.assertGreater(np.max(np.abs(substepped - single)), 1.0e-3 * np.max(single))
         trace = {"time_s": np.arange(frames) * 1.0e-3, "displacement_m": displacement, "force_n": substepped}
 
-        _, records = fit_material(bed, depth, 1.0e-3, [trace], [material], evaluations=1, substeps=8)
+        _, _, records = fit_material(
+            bed, depth, 1.0e-3, [trace], [material], evaluations=1, substeps=8, offset_bounds_m=(-1.0e-3, 1.0e-3)
+        )
 
         self.assertAlmostEqual(records[0]["history"][0]["loss"], 0.0, places=10)
 
