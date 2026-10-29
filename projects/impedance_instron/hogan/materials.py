@@ -206,7 +206,7 @@ def main(argv=None, *, condition_builder=None, trial_builder=None, study_metadat
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument(
-        "--model", type=Path, default=Path(__file__).parent / "baselines/generative_runner_score_20261010.json"
+        "--model", type=Path, default=Path(__file__).parent / "baselines/generative_runner_score_20261029.json"
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0")
