@@ -240,6 +240,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
             "registration": {"pose": registration.pose, "qc": {"preload": preload}},
             "conditions": {},
             "substeps": 1,
+            "start_offset_m": 0.002,
         }
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -278,6 +279,11 @@ class TestDigitalShoeArtifact(unittest.TestCase):
         (curve,) = artifact["validation"]["curves"]
         self.assertEqual(curve["name"], "200ms_800N")
         self.assertGreater(max(curve["predicted_force_n"]), 0.0)
+        # The curve records the depth the replay drove: stroke plus preload indentation plus start offset.
+        np.testing.assert_allclose(
+            curve["indenter_depth_m"],
+            np.maximum(displacement, 0.0) + registration.qc["preload"]["indentation_m"] + 0.002,
+        )
         encoded = json.dumps(artifact, sort_keys=True)
         self.assertNotIn(str(Path.cwd()), encoded)
         self.assertNotIn(directory, encoded)

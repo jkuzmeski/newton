@@ -3,6 +3,7 @@
 
 """Check full-bed portable Instron replay without measured assets."""
 
+import copy
 import json
 import tempfile
 import unittest
@@ -42,6 +43,8 @@ def _fixture_artifact():
     curve = data["validation"]["curves"][0]
     curve["fixture"] = "fullfoot_last"
     curve["metrics"]["peak_force_n"] = 90.0
+    # The exported replay drives the last from first contact: preload plus start offset deeper than the stroke.
+    curve["indenter_depth_m"] = [0.003, 0.013, 0.003]
     return data
 
 
@@ -85,7 +88,9 @@ class TestDigitalShoeConsumers(unittest.TestCase):
         shoe = load_artifact(self.path)
         for name in ("fullfoot_last", "rearfoot_punch"):
             with self.subTest(fixture=name):
-                scene = SimpleNamespace(shoe=shoe, fixture_name=name, _add_instron_indenter_visual=MagicMock())
+                scene = SimpleNamespace(
+                    shoe=shoe, fixture_name=name, curve_name=None, _add_instron_indenter_visual=MagicMock()
+                )
                 anchor, rest, area, neighbors, _, connection, _ = Example._build_instron(scene, MagicMock())
                 self.assertEqual(len(rest), 2)
                 np.testing.assert_array_equal(connection, [TOP_PRESSED, TOP_FREE])
@@ -94,25 +99,55 @@ class TestDigitalShoeConsumers(unittest.TestCase):
                 np.testing.assert_array_equal(neighbors, shoe.column_bed.neighbors)
                 np.testing.assert_array_equal(area, shoe.column_bed.area_m2)
 
-    def test_export_curve_gate_uses_force_evaluation_time(self):
-        """Compare warm force samples at their pre-integration phase and reject drift."""
+    def test_instron_drives_the_exported_indenter_depth(self):
+        """Drive the last along the depth the exporter replayed, not the raw crosshead stroke."""
+        np.testing.assert_allclose(self.example._instron_pose(0.0)[2], -0.003, atol=1e-7)
+        np.testing.assert_allclose(self.example._instron_pose(0.5)[2], -0.013, atol=1e-7)
+
+    def test_instron_drives_the_named_curve(self):
+        """Select a validation curve by name instead of always the fixture's first curve."""
+        data = _fixture_artifact()
+        curve = copy.deepcopy(data["validation"]["curves"][0])
+        curve["name"] = "deeper"
+        curve["indenter_depth_m"] = [0.004, 0.024, 0.004]
+        curve["predicted_force_n"] = [0.0, 180.0, 0.0]
+        data["validation"]["curves"].append(curve)
+        self.path.write_text(json.dumps(data))
+        example = Example(
+            MagicMock(),
+            SimpleNamespace(artifact=self.path, mode="instron", fixture="fullfoot_last", curve="deeper"),
+        )
+        np.testing.assert_allclose(example._instron_pose(0.5)[2], -0.024, atol=1e-7)
+        self.assertEqual(example._expected_peak_force_n, 180.0)
+
+    def _gate_scene(self, peak_n):
+        """Return a warmed Instron scene whose runtime curve equals its exported prediction."""
         scene = SimpleNamespace(
             sim_time=3.0,
             _period=0.5,
             sim_dt=0.01,
-            _expected_peak_force_n=1000.0,
+            _expected_peak_force_n=peak_n,
             _cycle_time=np.array([0.0, 0.25, 0.5]),
-            _predicted_force=np.array([0.0, 1000.0, 0.0]),
+            _predicted_force=np.array([0.0, peak_n, 0.0]),
             _peak_force=MagicMock(),
             shoe=SimpleNamespace(shoe_id="test"),
         )
-        scene._peak_force.numpy.return_value = np.array([1000.0])
+        scene._peak_force.numpy.return_value = np.array([peak_n])
         scene.history = [{"time_s": float(t)} for t in np.arange(2.5, 3.001, 0.05)]
         phase = np.array([row["time_s"] - scene.sim_dt for row in scene.history]) % scene._period
-        force = np.interp(phase, scene._cycle_time, scene._predicted_force)
+        return scene, np.interp(phase, scene._cycle_time, scene._predicted_force)
+
+    def test_export_curve_gate_uses_force_evaluation_time(self):
+        """Compare warm force samples at their pre-integration phase and reject drift."""
+        scene, force = self._gate_scene(1000.0)
         Example._test_instron(scene, force)
         with self.assertRaisesRegex(AssertionError, "runtime curve differs"):
             Example._test_instron(scene, force + 100.0)
+
+    def test_instron_gate_accepts_a_light_curve_that_matches_its_prediction(self):
+        """Pass an 800 N sweep curve: the gate is the exported prediction, not a fixed force range."""
+        scene, force = self._gate_scene(790.0)
+        Example._test_instron(scene, force)
 
     def test_instron_free_top_uses_solved_compression(self):
         """Render the shear-loaded free top rather than rigid indenter translation."""
