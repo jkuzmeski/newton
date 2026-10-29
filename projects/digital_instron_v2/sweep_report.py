@@ -50,6 +50,9 @@ FIELDS = {
     "hyperfoam_exponent_2": ("alpha2, term 2 exponent", "-", 1.0),
     "equilibrium_fraction": ("f_eq, equilibrium fraction", "-", 1.0),
     "maxwell_relaxation_time_s": ("tau, Maxwell relaxation time", "ms", 1.0e3),
+    "shear_layer_fraction": ("s, shear-layer fraction", "-", 1.0),
+    "slider_modulus_pa": ("E_s, slider modulus", "kPa", 1.0e-3),
+    "slider_yield_pa": ("sigma_y, slider yield stress", "kPa", 1.0e-3),
 }
 STATES = (
     ("held, landed", "#1b9e77"),
@@ -244,7 +247,7 @@ def summary_section(shoes: dict, old: dict) -> str:
     )
     return f"""<h2 id="summary">1. Summary</h2>
 <p>One material is fitted per shoe to its Instron foam sweep: a two-term Hyperfoam (Ogden-Hill) equilibrium network
-with one Maxwell branch, 6 parameters. Every sweep trace is replayed through the GPU column bed with the
+with one Maxwell branch and a Jenkin (spring-slider) branch, plus the shear-layer fraction, {len(FIELDS)} parameters. Every sweep trace is replayed through the GPU column bed with the
 <b>new two-face column contact law</b> (<code>ColumnBed</code>): each midsole column has a top pressed by the last and a
 bottom that lands on the platen. The fit uses train cycles only; validate and repeat traces are scored, not fitted.</p>
 {table(["Shoe", "Validate peak error %", "Validate RMSE %", "Validate loop-area error %", "Repeat block max peak / RMSE %", "Validate traces within all 10% gates", "Fitted material"], rows)}
@@ -412,8 +415,8 @@ platen on the bottom   b &lt;= h         (h = rest clearance of the bottom over 
 outside the last       top free
 
 energy   E = sum_i A_i W(c_i)  +  1/2 sum_faces k_ij [ (t_i - t_j)^2 + (b_i - b_j)^2 ]
-         W'(c) = p(c/L): two-term Hyperfoam equilibrium pressure + Maxwell overstress
-         k_ij  = mu_eq (L_i + L_j) / 2,    mu_eq = (G1 + G2) f_eq     (Pasternak shear layer, no new parameter)
+         W'(c) = p(c/L): two-term Hyperfoam equilibrium pressure + Maxwell overstress + slider stress
+         k_ij  = s mu_eq (L_i + L_j) / 2,    mu_eq = (G1 + G2) f_eq   (Pasternak shear layer, s fitted)
 
 reactions   T_i = last on top i (held tops only),   R_i = platen on bottom i (landed bottoms only)
 balance     sum_i T_i = sum_i R_i   (the shear terms cancel over the bed)
@@ -432,10 +435,10 @@ neighbours put on it.</li>
 </ul>
 <p>Columns outside the last tread have a free top and are only <i>landed</i> or <i>floating</i>.</p>
 <p><b>Range of shear support.</b> A held column with a floating bottom is supported only by shear from landed
-neighbours. In the continuum limit the bottom-layer stiffness per area is mu_eq L and the foam stiffness per area is
+neighbours. In the continuum limit the bottom-layer stiffness per area is s mu_eq L and the foam stiffness per area is
 E/L with E = 2 mu_eq at small strain, so the support decays over a length
-lambda = sqrt(mu_eq L^2 / E) = L/sqrt(2), about 14-25 mm for 20-35 mm thick columns, and less once the foam stiffens
-at large strain. A floating region much wider than that gets almost no support.</p>
+lambda = sqrt(s mu_eq L^2 / E) = L sqrt(s/2), a few millimetres for 20-35 mm thick columns at the fitted s, and less
+once the foam stiffens at large strain. A floating region much wider than that gets almost no support.</p>
 <p><b>Solver.</b> One CUDA block per world runs red-black Gauss-Seidel sweeps. Each column update solves its local
 2x2 problem exactly over the active constraints. A step limiter (fraction-to-boundary, factor 0.5) lets one update
 close at most half of the remaining open thickness L - c, so a far-off step cannot jump into the foam lock-up near
@@ -1046,13 +1049,11 @@ def open_issues_section(shoes: dict) -> str:
         )
     return f"""<h2 id="issues">8. Open issues</h2>
 <ul>
-<li><b>Hysteresis at low force.</b> The loop area is the largest error, worst at 800 N ({", ".join(loops)}). One Maxwell
-branch with one relaxation time does not shape the small loops well.</li>
+<li><b>Hysteresis at low force.</b> The loop area is the largest error, worst at 800 N ({", ".join(loops)}).</li>
 <li><b>Load outside the last.</b> Columns that the last never touches still carry {", ".join(shares)} of the platen load
 at peak through shear. This share is not measured; a pressure-mat test would check it.</li>
-<li><b>Parameters at a bound.</b> {"; ".join(bounds)}. Dev3Elite drives alpha2 to its lower bound: it wants a
-steeper densification wall, close to a hard stop near 0.5 strain. G2 is tiny on purpose (it sets the wall steepness
-together with alpha2) and is not listed.</li>
+<li><b>Parameters at a bound.</b> {"; ".join(bounds)}. G2 is not listed; it sets the steepness of the
+densification wall together with alpha2.</li>
 {flag_issue}<li><b>Shoe and last side.</b> The left last is assumed from the STL file name; the side is not confirmed.</li>
 <li><b>Runner migration.</b> The GPU runner already steps the same <code>ColumnBed</code> kernel with the fitted shoes,
 but its gait results are not yet validated against measured references.</li>

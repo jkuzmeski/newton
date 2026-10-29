@@ -7,8 +7,8 @@ import unittest
 
 import numpy as np
 
-from projects.digital_instron_v2.core import metrics
-from projects.digital_instron_v2.sweep_report import flagged
+from projects.digital_instron_v2.core import Material, metrics
+from projects.digital_instron_v2.sweep_report import FIELDS, flagged
 
 
 class TestDigitalInstronSweepReport(unittest.TestCase):
@@ -22,6 +22,10 @@ class TestDigitalInstronSweepReport(unittest.TestCase):
         fit = {"conditions": {"a": {"validate": {"fitted": good}}, "b": {"validate": {"fitted": blown}}}}
         replay = {"keys": [("a", "validate"), ("b", "validate")], "traces": [trace, trace], "force": [0.98 * force] * 2}
         self.assertEqual(list(flagged(fit, replay)), [("b", "validate")])
+
+    def test_reports_every_material_parameter(self):
+        """Every fitted parameter has a report row, so a parameter at its bound can be named."""
+        self.assertEqual(set(FIELDS), set(Material.__dataclass_fields__))
 
 
 if __name__ == "__main__":

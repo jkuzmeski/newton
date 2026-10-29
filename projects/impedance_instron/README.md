@@ -126,7 +126,7 @@ uv run --no-sync -m projects.impedance_instron fit --dataset outputs/hogan_reset
 
 That dataset repeats the 2026-10-08 recipe on the new exports:
 
-- `prepare --data-root data/F01 --profile projects/impedance_instron/hogan/profiles/f01_66_5kg.json --shoe DigitalInstron/digital_shoe_showcase/digital_shoe.json --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894 --output outputs/hogan_reset/dataset_f01_20hz`.
+- `prepare --data-root data/F01 --profile projects/impedance_instron/hogan/profiles/f01_66_5kg.json --shoe DigitalInstron/digital_shoe_showcase/digital_shoe.json --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894 --exclude FR3_2_train_003 FR3_2_eval_001 FR3_2_train_009 --output outputs/hogan_reset/fit_dataset_f01_20hz`.
 - Pass `--profile` and `--shoe` explicitly; no prepared bundle is preserved to
   supply defaults. The shoe is the FR3 `digital_shoe.json` written by
   `python -m projects.digital_instron_v2.export_digital_shoe`. Datasets whose
@@ -139,13 +139,10 @@ That dataset repeats the 2026-10-08 recipe on the new exports:
   baseline was fit on the earlier column-bed FR3 export (sha256 `a9bf61dd...`),
   so a dataset prepared with the committed shoe gives a new baseline, not the
   saved numbers.
-- `prepare` writes all 110 members. The fit set is a hand-written derived
-  manifest (`outputs/hogan_reset/fit_dataset_f01_20hz`, schema
-  `generative_runner_dataset_1` with `derived_from.excluded`) that excludes the
-  three stances whose relaxed shoe starts below ground (`FR3_2_train_003`,
-  `FR3_2_eval_001`, `FR3_2_train_009`), leaving 98 training and 9 held-out
-  stances. `inspect` reports their clearance; no command writes the reduced
-  dataset.
+- The seeded split selects 110 stances. `--exclude` leaves out the three whose
+  relaxed shoe starts below ground, leaving 98 training and 9 held-out stances;
+  the other IDs keep their numbering. Without it, `inspect` reports the
+  clearance of every stance.
 
 For a small balanced motion/GRF tuning pilot, see the
 [Hogan sweep setup](hogan/SWEEP.md). It saves a plan before running candidates

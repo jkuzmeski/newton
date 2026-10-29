@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +258,7 @@ def build_dataset(
     shoe_path: Path | None = None,
     shoe_static_pitch_rad: float | None = None,
     virtual_foot_reference: str = "reconstructed_ground",
+    exclude: Collection[str] = (),
 ) -> Path:
     """Prepare 100 training and 10 evaluation peak-to-peak stance references.
 
@@ -267,6 +269,9 @@ def build_dataset(
         shoe_path: Shoe artifact; defaults to the FR3_2 bundle under ``prepared_root``.
         shoe_static_pitch_rad: Static shoe pitch [rad]; defaults to the FR3_2 bundle summary.
         virtual_foot_reference: Foot-angle source passed to :func:`.prepare_visual3d.prepare`.
+        exclude: Member IDs to leave out after the seeded split, such as stances whose
+            relaxed shoe starts below ground (``inspect`` reports these). The other IDs keep
+            their numbering.
     """
     rng = np.random.default_rng(seed)
     # Both trial bundles carry byte-identical profile and shoe artifacts; use
@@ -301,6 +306,14 @@ def build_dataset(
     for trial_name, (_, cycles) in available.items():
         train, evaluation = _split(cycles, rng)
         selections[trial_name] = {"train": train, "eval": evaluation}
+    ids = {
+        f"{name}_{split}_{index:03d}"
+        for name, splits in selections.items()
+        for split, rows in splits.items()
+        for index in range(len(rows))
+    }
+    if unknown := set(exclude) - ids:
+        raise ValueError(f"Unknown member IDs to exclude: {sorted(unknown)}")
 
     # Build into a fresh directory so manifests never describe a partial set.
     destination = output_root
@@ -320,6 +333,8 @@ def build_dataset(
         for split_name in ("train", "eval"):
             for index, cycle in enumerate(selections[trial_name][split_name]):
                 sample_id = f"{trial_name}_{split_name}_{index:03d}"
+                if sample_id in exclude:
+                    continue
                 bundle = output_root / split_name / trial_name / sample_id
                 prepare(
                     trial_root,
@@ -375,6 +390,7 @@ def build_dataset(
             "split_per_trial": {"train": 50, "eval": 5},
             "eval_block": "Five consecutive eligible contact windows, with two eligible windows of source-time guard on either side from training.",
             "eligible_cycle_counts": counts,
+            "excluded_members": sorted(exclude),
         },
         "hip_center_proxy_provenance": "Right hip-center height is used as a proxy for COM height per user instruction; it is not a measured or inferred whole-body COM.",
         "shared_assets": shared_assets,
@@ -405,6 +421,7 @@ def main() -> None:
         default="reconstructed_ground",
         choices=("reconstructed_ground", "sole_markers"),
     )
+    parser.add_argument("--exclude", nargs="+", default=[], metavar="ID", help="Member IDs to leave out of the dataset")
     args = parser.parse_args()
     print(
         build_dataset(
@@ -416,6 +433,7 @@ def main() -> None:
             shoe_path=args.shoe,
             shoe_static_pitch_rad=args.shoe_static_pitch_rad,
             virtual_foot_reference=args.virtual_foot_reference,
+            exclude=args.exclude,
         )
     )
 

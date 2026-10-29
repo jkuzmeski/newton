@@ -52,10 +52,10 @@ Schema-1 models still load with zero weights on the added features.
 [`prepare_dataset`](../cartesian/prepare_dataset.py) preserves the selected
 windows and split. The rebuilt dataset (`outputs/hogan_reset/dataset_f01_20hz`)
 uses the corrected mass and belt speed from
-`data/F01/FR3_1/stance_selection.json`. Its fit set is a hand-written derived
-manifest (`outputs/hogan_reset/fit_dataset_f01_20hz`) that excludes the three
-of 110 windows whose relaxed shoe starts below ground; `inspect` reports their
-clearance and no command writes the reduced dataset.
+`data/F01/FR3_1/stance_selection.json`. Its fit set
+(`outputs/hogan_reset/fit_dataset_f01_20hz`) is prepared with `--exclude` for the
+three of 110 windows whose relaxed shoe starts below ground; `inspect` reports
+their clearance.
 
 [`identify.load_trials`](identify.py) re-solves hip and knee from measured hip
 and ankle positions, keeping the absolute foot angle. This position-only step
