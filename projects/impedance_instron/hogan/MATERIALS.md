@@ -15,8 +15,8 @@ All 98 training and nine held-out windows are saved and scored separately.
 
 The material ranking depends on the frozen controller, so check it with more
 than one. On the column-bed shoe, the score and sample controllers fitted to
-that shoe agree in sign on 8 of the 9 material-by-geometry conditions: the
-longer springs lower the weighted-work proxy by 3.0-4.5% and the 40 mm block
+that shoe agree in sign on 8 of the 9 material-by-geometry conditions. With
+the measured foam, the longer springs lower the weighted-work proxy by 3.0-4.5% and the 40 mm block
 raises it by 5.2-7.9% on every held-out stance. The foam swap alone changes it
 by 0.7-3.7%, with a size that depends on the controller. The 2026-10-10
 controller, fitted under an earlier shoe law, reverses almost every sign.
