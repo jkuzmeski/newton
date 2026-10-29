@@ -112,20 +112,20 @@ def _mesh_json(vertices: np.ndarray, triangles: np.ndarray) -> dict[str, Any]:
     }
 
 
-def _validation_curves(
+def validation_curves(
     sweep: Path,
     grid: ColumnGrid,
     registration: LastRegistration,
-    material: Material,
+    materials: list[Material],
     substeps: int,
     start_offset_m: float,
-) -> list[dict[str, Any]]:
-    """Replay the held-out trace of every sweep condition with the fitted material.
+) -> list[list[dict[str, Any]]]:
+    """Replay the held-out trace of every sweep condition with each material in one batch.
 
     The stroke, preload indentation plus the fitted start offset, frame interval
     and contact substeps follow :func:`sweep_fit.run`. Each curve records the
     last's descent from first contact it was replayed with as ``indenter_depth_m``,
-    so a consumer can drive the same stroke.
+    so a consumer can drive the same stroke. Returns one curve list per material.
     """
     index = json.loads((sweep / "conditions.json").read_text())
     conditions = [c for c in index["conditions"] if c["role"] == "condition"]
@@ -133,25 +133,30 @@ def _validation_curves(
     indentation = registration.qc["preload"]["indentation_m"]
     depth = np.stack([np.maximum(t["displacement_m"], 0.0) + indentation + start_offset_m for t in traces], axis=1)
     dt = float(np.mean(np.diff(traces[0]["time_s"])))
-    force = LastReplay(last_bed(grid, registration), depth, dt, candidates=1, substeps=substeps).run([material])[0]
+    forces = LastReplay(last_bed(grid, registration), depth, dt, candidates=len(materials), substeps=substeps).run(
+        materials
+    )
     return [
-        {
-            "name": f"{c['stance_ms']}ms_{c['target_n']}N",
-            "fixture": "fullfoot_last",
-            "split": "validate",
-            "cycles": list(VALIDATION_CYCLES),
-            "time_s": (t["time_s"] - t["time_s"][0]).tolist(),
-            "displacement_m": t["displacement_m"].tolist(),
-            "indenter_depth_m": d.tolist(),
-            "measured_force_n": t["force_n"].tolist(),
-            "predicted_force_n": predicted.tolist(),
-            "metrics": {
-                **metrics(t["force_n"], predicted, t["displacement_m"]),
-                "peak_force_n": float(np.max(predicted)),
-                "measured_peak_force_n": float(np.max(t["force_n"])),
-            },
-        }
-        for c, t, d, predicted in zip(conditions, traces, depth.T, force, strict=True)
+        [
+            {
+                "name": f"{c['stance_ms']}ms_{c['target_n']}N",
+                "fixture": "fullfoot_last",
+                "split": "validate",
+                "cycles": list(VALIDATION_CYCLES),
+                "time_s": (t["time_s"] - t["time_s"][0]).tolist(),
+                "displacement_m": t["displacement_m"].tolist(),
+                "indenter_depth_m": d.tolist(),
+                "measured_force_n": t["force_n"].tolist(),
+                "predicted_force_n": predicted.tolist(),
+                "metrics": {
+                    **metrics(t["force_n"], predicted, t["displacement_m"]),
+                    "peak_force_n": float(np.max(predicted)),
+                    "measured_peak_force_n": float(np.max(t["force_n"])),
+                },
+            }
+            for c, t, d, predicted in zip(conditions, traces, depth.T, force, strict=True)
+        ]
+        for force in forces
     ]
 
 
@@ -213,7 +218,9 @@ def build_artifact(
     tread = np.isfinite(registration.surface_m)
     tread_uv = grid.uv_m[tread]
     last_vertices, last_triangles = _last_mesh(last_path, last, grid, registration)
-    curves = _validation_curves(sweep, grid, registration, material, fit["substeps"], fit.get("start_offset_m", 0.0))
+    curves = validation_curves(sweep, grid, registration, [material], fit["substeps"], fit.get("start_offset_m", 0.0))[
+        0
+    ]
     index = json.loads((sweep / "conditions.json").read_text())
     sources = [
         ("material_fit", fit_path),

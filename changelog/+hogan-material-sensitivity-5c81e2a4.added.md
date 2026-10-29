@@ -1,0 +1,1 @@
+Add a one-at-a-time material sensitivity study of the fitted shoe for the Hogan runner, with a batched bench replay of every variant. The Digital Shoe exporter's validation replay now takes several materials at once.

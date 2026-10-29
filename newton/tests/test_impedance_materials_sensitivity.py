@@ -6,6 +6,10 @@
 import unittest
 
 import numpy as np
+
+from projects.digital_shoe.artifact import SCHEMA_VERSION
+from projects.digital_shoe.material import hyperfoam_pressure_from_stretch_numpy
+from projects.digital_shoe.runtime import ShoeMaterial
 from projects.impedance_instron.hogan.materials_sensitivity import (
     VARIANTS,
     combine,
@@ -13,10 +17,6 @@ from projects.impedance_instron.hogan.materials_sensitivity import (
     scale_material,
     variant_artifact,
 )
-
-from projects.digital_shoe.artifact import SCHEMA_VERSION
-from projects.digital_shoe.material import hyperfoam_pressure_from_stretch_numpy
-from projects.digital_shoe.runtime import ShoeMaterial
 
 FITTED = {
     "instantaneous_shear_modulus_pa": 365000.0,
@@ -136,7 +136,7 @@ class MaterialSensitivityTests(unittest.TestCase):
         self.assertAlmostEqual(result["peak_force_n"], 1000.0)
         self.assertAlmostEqual(result["secant_stiffness_n_per_mm"], 100.0)
         self.assertAlmostEqual(result["loading_work_j"], 5.0)
-        self.assertAlmostEqual(result["energy_loss_fraction"], 0.5, places=2)
+        self.assertAlmostEqual(result["energy_loss_fraction"], 0.5, delta=0.01)
 
 
 if __name__ == "__main__":

@@ -98,6 +98,36 @@ nine combinations. It preserves failure counts, out-of-support compression,
 representative half-step sensitivity, and original-geometry reproduction checks.
 The Materials testing landing page retains both the material and geometry studies.
 
+## Material sensitivity of the fitted shoe
+
+Vary the fitted shoe's own material one property at a time on its original
+geometry, with the controller frozen:
+
+```console
+uv run -m projects.impedance_instron.hogan.materials_sensitivity --dataset PATH_TO_DATASET --model RUNNER_JSON --output outputs/impedance_instron/materials_sensitivity --run --instron SHOE_FOLDER MATERIAL_FIT_JSON SWEEP_FOLDER LAST_STL
+```
+
+`scale_material` holds every parameter edit. Stiffness scales both Ogden-Hill
+moduli, so the equilibrium and instantaneous curves and the shear modulus
+`mu_eq` scale together. The Maxwell variants change the Maxwell share
+`1 - equilibrium_fraction` and keep the equilibrium curve and relaxation time.
+The slider variants scale its yield stress or modulus; zero yield turns the
+slider off. `no_loss` turns off both the slider and Maxwell, so it is the
+purely elastic control; the `original_elastic` condition of the paper-foam
+study keeps the slider. Exponent scaling leaves the small-strain tangent
+`2 (G_1 + G_2) equilibrium_fraction` unchanged. The column bed couples
+neighbours with `shear_layer_fraction * mu_eq` and never reads
+`pasternak_n_per_m`; the variants rewrite that reported value to match.
+`--combine NAME=VARIANT+VARIANT` adds a combined condition, and `--variants`
+selects a subset.
+
+`--instron` replays the held-out bench sweep for every condition in one batch,
+with the exporter's validation replay. It saves `instron.json` with the peak
+force, secant stiffness and loop energy loss of every curve at the measured
+stroke. Run the study with more than one controller. A variant whose score
+degrades a lot is outside the controller's fitted range, so its work change is
+not a speed estimate.
+
 ## Saved spring rendering
 
 The report updater draws each condition from its own saved native poses and
