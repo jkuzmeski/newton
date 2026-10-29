@@ -41,7 +41,7 @@ def _fixture_artifact():
     }
     curve = data["validation"]["curves"][0]
     curve["fixture"] = "fullfoot_last"
-    curve["metrics"]["simulated_peak_force_n"] = 90.0
+    curve["metrics"]["peak_force_n"] = 90.0
     return data
 
 
