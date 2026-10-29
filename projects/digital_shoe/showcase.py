@@ -204,7 +204,7 @@ class Example:
         self._cycle_depth = np.asarray(curve["displacement_m"], dtype=np.float64)
         self._measured_force = np.asarray(curve["measured_force_n"], dtype=np.float64)
         self._predicted_force = np.asarray(curve["predicted_force_n"], dtype=np.float64)
-        self._expected_peak_force_n = float(curve["metrics"]["simulated_peak_force_n"])
+        self._expected_peak_force_n = float(np.max(self._predicted_force))
         self._period = float(self._cycle_time[-1] - self._cycle_time[0])
         self.carrier = builder.add_body(mass=1.0, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)))
         # Keep the untouched foam: deleting it cuts the identified shear layer at the indenter rim.
