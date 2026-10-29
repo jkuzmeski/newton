@@ -33,7 +33,7 @@ parameters. It does not accept or load learned checkpoints:
 
 ```bash
 uv run --no-sync -m projects.impedance_instron.hogan.scratch_search \
-  --dataset outputs/impedance_instron/hogan_scratch_20261009/dataset \
+  --dataset PATH_TO_DATASET \
   --iterations 50 --budget-minutes 80 \
   --output outputs/impedance_instron/hogan_independent_scratch --run
 ```
@@ -72,9 +72,8 @@ at 20 Hz and vibration weight 1, so reducing a loss weight cannot win the search
 
 ```bash
 uv run --no-sync -m projects.impedance_instron.hogan.search \
-  --dataset outputs/impedance_instron/hogan_scratch_20261009/dataset \
-  --models outputs/impedance_instron/hogan_scratch_20261009/seed_fit/runner.json \
-    outputs/impedance_instron/hogan_scratch_20261009/full/fit_vibration_1/runner.json \
+  --dataset PATH_TO_DATASET \
+  --models PATH_TO_SEED_RUNNER PATH_TO_FITTED_RUNNER \
   --iterations 12 --finalists 3 --refine-iterations 40 --budget-minutes 120 \
   --output outputs/impedance_instron/hogan_parameter_search --run
 ```

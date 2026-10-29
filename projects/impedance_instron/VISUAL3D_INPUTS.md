@@ -44,8 +44,9 @@ sample counts without granting simulation readiness.
 The supplied `data/F01/FR3_1`, `FR3_2` and `FR3_3` directories now contain
 dynamic and static targets, explicit point and analog clocks, model joint
 centers and angles, FP1 force, COP, and free moment. All three normalize with
-the current importer. The exported model mass is `70.0` kg in each trial; this
-is the model metric and still needs confirmation against the subject record.
+the current importer. The exported model mass is `66.5` kg in each trial
+(PROCESSED MASS METRIC), matching the subject mass in
+`data/F01/FR3_1/stance_selection.json`.
 The static heel-to-metatarsal and heel-to-toe vectors point along laboratory
 `+Y`, so the F01 manifests declare `forward_axis: "+Y"`.
 
@@ -70,7 +71,7 @@ its calibration model, and exports:
 - `static_joint_angles.txt` and `motion_joint_angles.txt`: 3D Cardan joint angles
   (`RHipAngle`, `RKneeAngle`, `RAnkleAngle`, `RVirtualFootAngle`, `L...`) in degrees.
 - `FORCE`, `COFP`, `FREEMOMENT`: separate XYZ signals at their native rate.
-- `model_mass.txt`: the model mass metric, which still needs verification.
+- `model_mass.txt`: the model mass metric (66.5 kg in the current exports).
 
 ### Foot and Ankle Handling with Visual3D
 

@@ -50,9 +50,12 @@ Schema-1 models still load with zero weights on the added features.
 ## Preparation and initialization
 
 [`prepare_dataset`](../cartesian/prepare_dataset.py) preserves the selected
-windows and split. The latest dataset uses the corrected mass and belt speed
-from `data/F01/FR3_1/stance_selection.json`. Three of 110 windows were excluded
-because the relaxed shoe starts below ground.
+windows and split. The rebuilt dataset (`outputs/hogan_reset/dataset_f01_20hz`)
+uses the corrected mass and belt speed from
+`data/F01/FR3_1/stance_selection.json`. Its fit set is a hand-written derived
+manifest (`outputs/hogan_reset/fit_dataset_f01_20hz`) that excludes the three
+of 110 windows whose relaxed shoe starts below ground; `inspect` reports their
+clearance and no command writes the reduced dataset.
 
 [`identify.load_trials`](identify.py) re-solves hip and knee from measured hip
 and ankle positions, keeping the absolute foot angle. This position-only step
@@ -122,8 +125,11 @@ shoe artifact. A scenario contains chain, shoe, initial state, task, horizon,
 and numerical settings, never observations.
 
 Datasets accept `peak_hip_stance_dataset_1` or `generative_runner_dataset_1`.
-Members specify `id`, `split`, `reference`, profile/shoe paths (or
-`shared_assets`), mount, pitch, and task speed. Paths are dataset-relative.
+Members specify `id`, `split`, `reference`, trial and window metadata, and
+source hashes; the profile and shoe are dataset-level `shared_assets`. Paths
+are dataset-relative. The mount and task speed come from `--mount` and
+`--speed` (or matching member fields), and pitch falls back to the reference's
+`shoe_static_pitch_rad`.
 Use one fixed physical subject profile; hold out entire sessions/conditions
 when testing transfer. Changing the shoe for a mechanical comparison must keep
 the runner and initial state fixed.
@@ -141,9 +147,11 @@ F01 targets: 10-40 Hz Fz RMS of 137, 74, and 42 N in the first 30 %, middle
 **The original targets were over-smoothed.** Those Visual3D exports filtered the
 plate force with a zero-lag second-order Butterworth at 6 Hz (Winter-corrected),
 a walking setting, and zeroed both axes where filtered Fz fell below about 1 N.
-Reprocessing the raw `data/FR3_Metabolic.c3d` plate reproduces that export
-within 20 N RMS. The raw force carries a 1185 N impact peak about 40 ms after
-contact and 191/78/43 N of 10-40 Hz Fz content, as much as the simulation. The
+Reprocessing the raw
+`projects/impedance_instron/data/FR3_Metabolic.c3d` plate reproduces that
+export within 20 N RMS. The raw force carries a 1185 N impact peak about
+40 ms after contact and 191/78/43 N of 10-40 Hz Fz content, as much as the
+simulation. The
 6 Hz filter moved the 50 N touchdown 21.7 ms early and lengthened contact by
 27 ms, so most of the earlier "contact ends about 40 ms early" was the filter.
 

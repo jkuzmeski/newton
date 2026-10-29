@@ -4,7 +4,7 @@ Evaluate material substitutions with the accepted runner, identical shoe geometr
 trial initial states, body parameters, task, and friction settings:
 
 ```console
-uv run -m projects.impedance_instron.hogan.materials --dataset outputs/impedance_instron/hogan_scratch_20261009/dataset --output outputs/impedance_instron/materials_paper_20261010 --run
+uv run -m projects.impedance_instron.hogan.materials --dataset PATH_TO_DATASET --output outputs/impedance_instron/materials_paper --run
 ```
 
 Use a fresh output directory. Omitting `--run` writes a plan without evaluation;
@@ -47,7 +47,7 @@ native CUDA evaluation before publishing a viewer.
 Build the comparison report and Materials testing catalog entry after capture:
 
 ```console
-uv run -m projects.impedance_instron.hogan.materials_report --run outputs/impedance_instron/materials_paper_20261010 --outputs outputs
+uv run -m projects.impedance_instron.hogan.materials_report --run PATH_TO_MATERIALS_RUN --outputs outputs
 ```
 
 Report rendering uses the local `instron-reports` skill installation. Keep the
@@ -63,8 +63,8 @@ geometry, 25% longer springs, and a flat 40 mm block at the existing spring XY
 sites. All nine combinations receive fresh rollouts with the accepted controller:
 
 ```console
-uv run -m projects.impedance_instron.hogan.materials_geometry --dataset outputs/impedance_instron/hogan_scratch_20261009/dataset --output outputs/impedance_instron/materials_geometry_20261010 --run
-uv run -m projects.impedance_instron.hogan.materials_geometry_report --run outputs/impedance_instron/materials_geometry_20261010 --outputs outputs
+uv run -m projects.impedance_instron.hogan.materials_geometry --dataset PATH_TO_DATASET --output outputs/impedance_instron/materials_geometry --run
+uv run -m projects.impedance_instron.hogan.materials_geometry_report --run PATH_TO_GEOMETRY_RUN --outputs outputs
 ```
 
 The longer-spring condition holds the original free-top surface fixed and moves

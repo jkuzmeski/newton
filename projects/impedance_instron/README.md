@@ -87,7 +87,7 @@ uv run --no-sync -m projects.impedance_instron --help
 Reproduce the latest fit from its original seed, including the HTML report:
 
 ```console
-uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_instron/generative_fit_dataset_flight_20261008 --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --output outputs/impedance_instron/hogan_fit
+uv run --no-sync -m projects.impedance_instron fit --dataset outputs/hogan_reset/fit_dataset_f01_20hz --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --output outputs/impedance_instron/hogan_fit
 ```
 
 Choose a new output directory. CUDA is the default; `--device cpu` selects the
@@ -95,9 +95,10 @@ reference backend, which integrates the body on the host and steps the CUDA
 column bed once per step. Use `--limit-per-split 1 --iterations 1` for a small
 fit. The saved baseline fits ran with earlier shoe laws; the shoe is now the
 two-surface column bed, so their traces and costs are not reproduced exactly.
-The bed solves its normal and friction forces together with the leg's motion,
-from the whole leg's inverse effective mass at the ankle. `--chunk` (default 128) sets candidates integrated
-concurrently; 128 candidates over 98 stances need about 2.5 GB of GPU memory,
+The bed advances every world's bed one step from the carrier's start-of-step
+pose and writes the carrier wrench; the caller applies that wrench to the body.
+`--chunk` (default 128) sets candidates integrated concurrently; 128 candidates
+over 98 stances need about 2.5 GB of GPU memory,
 so lower it on smaller GPUs. It changes speed, not results.
 
 The F01 force exports are now low-passed at 20 Hz, the running convention, and
@@ -107,20 +108,27 @@ torque lag. See
 [GRF targets and force ripple](hogan/GENERATIVE_RUNNER.md#grf-targets-and-force-ripple-2026-10-09):
 
 ```console
-uv run --no-sync -m projects.impedance_instron fit --dataset outputs/impedance_instron/generative_fit_dataset_20hz_20261009 --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --model projects/impedance_instron/hogan/baselines/generative_runner_f01_20261008.json --force-filter-hz 20 --immediate-damping --output outputs/impedance_instron/hogan_fit_20hz
+uv run --no-sync -m projects.impedance_instron fit --dataset outputs/hogan_reset/fit_dataset_f01_20hz --mount -0.03186147427106201 0 0.10943209684347802 --speed 3.65 --compression-limit 0.99 --iterations 15 --model projects/impedance_instron/hogan/baselines/generative_runner_f01_20261008.json --force-filter-hz 20 --immediate-damping --output outputs/impedance_instron/hogan_fit_20hz
 ```
 
 That dataset repeats the 2026-10-08 recipe on the new exports:
 
-- `prepare --data-root data/F01 --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894`.
-- The shoe was `fr3_2_hogan_reference_sole/digital_shoe.json`. That file
-  predates the column bed and no longer loads. Run these datasets with a newly
-  exported shoe: pass `--shoe` with the FR3 `digital_shoe.json` written by
-  `python -m projects.digital_instron_v2.export_digital_shoe` to `fit`,
-  `inspect`, or `evaluate`. It replaces every member's shoe.
-- The leg profile is mass-scaled to 66.5 kg.
-- The three stances whose relaxed shoe starts below ground are dropped;
-  `inspect` reports them.
+- `prepare --data-root data/F01 --profile outputs/hogan_reset/profile_66_5kg/profile.json --shoe outputs/shoe_landing/hogan_2026_10_27/fr3_export/digital_shoe.json --virtual-foot-reference sole_markers --shoe-static-pitch-rad -0.24446041090480894 --output outputs/hogan_reset/dataset_f01_20hz`.
+- Pass `--profile` and `--shoe` explicitly; no prepared bundle is preserved to
+  supply defaults. The shoe is the FR3 `digital_shoe.json` written by
+  `python -m projects.digital_instron_v2.export_digital_shoe`. Datasets whose
+  saved shoe predates the column bed no longer load; pass `--shoe` with a newly
+  exported shoe to `fit`, `inspect`, or `evaluate` to replace every member's
+  shoe.
+- The leg profile is mass-scaled to 66.5 kg; the 66.5 kg profile is a
+  reconstruction kept at `outputs/hogan_reset/profile_66_5kg/profile.json`.
+- `prepare` writes all 110 members. The fit set is a hand-written derived
+  manifest (`outputs/hogan_reset/fit_dataset_f01_20hz`, schema
+  `generative_runner_dataset_1` with `derived_from.excluded`) that excludes the
+  three stances whose relaxed shoe starts below ground (`FR3_2_train_003`,
+  `FR3_2_eval_001`, `FR3_2_train_009`), leaving 98 training and 9 held-out
+  stances. `inspect` reports their clearance; no command writes the reduced
+  dataset.
 
 For a small balanced motion/GRF tuning pilot, see the
 [Hogan sweep setup](hogan/SWEEP.md). It saves a plan before running candidates
@@ -150,6 +158,11 @@ Regenerate one saved prediction without the measurement dataset:
 uv run --no-sync -m projects.impedance_instron generate --model projects/impedance_instron/hogan/baselines/generative_runner_f01_20261008.json --scenario outputs/impedance_instron/generative_fit_lm_flightcom_20261008/scenario_000.json --output outputs/impedance_instron/hogan_generated
 ```
 
+That run's saved scenarios embed a shoe artifact that predates the column bed;
+it no longer loads and `generate` takes no `--shoe` override, so the command
+above is a historical record. Regenerate predictions from a scenario written
+by a current fit.
+
 ## Code and checks
 
 - [Model and method](hogan/GENERATIVE_RUNNER.md): initialization, loss, baseline results, and limitations.
@@ -163,8 +176,10 @@ CEM optimizer, quick-fit/recovery experiments, old controller bundles, and their
 reports are removed. Shared Digital Shoe material/contact laws and Newton's
 public controllers are unchanged.
 
-Run the focused regression checks, including an exact replay of all 107 saved
-full-run traces when the local dataset and CUDA are available:
+Run the focused regression checks. `test_impedance_pipeline` also replays a
+saved local full run when its artifacts and CUDA are available; the retained
+2026-10-08 run predates the column-bed shoe, so its dataset no longer loads
+and an exact replay of its 107 traces is not possible:
 
 ```console
 uv run --no-sync -m unittest newton.tests.test_impedance_pipeline newton.tests.test_impedance_profile newton.tests.test_impedance_hogan newton.tests.test_impedance_runner newton.tests.test_impedance_runner_gpu newton.tests.test_impedance_least_squares newton.tests.test_impedance_gpu_workflow
