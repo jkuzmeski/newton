@@ -4,7 +4,6 @@
 """Sample vertical material columns from triangle meshes."""
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -28,15 +27,6 @@ class ColumnGrid:
         return self.top_m - self.bottom_m
 
 
-def _rotation_xyz(rotation_deg) -> np.ndarray:
-    """Return the existing XYZ Euler rotation matrix from angles [degrees]."""
-    roll, pitch, yaw = np.deg2rad(rotation_deg)
-    rx = np.array([[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]])
-    ry = np.array([[np.cos(pitch), 0, np.sin(pitch)], [0, 1, 0], [-np.sin(pitch), 0, np.cos(pitch)]])
-    rz = np.array([[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]])
-    return rz @ ry @ rx
-
-
 def _positive_rays(mesh, uv_m: np.ndarray, thickness_axis: int) -> tuple[np.ndarray, np.ndarray]:
     """Place rays [m] below the mesh and point them along the positive thickness axis."""
     plane_axes = [axis for axis in range(3) if axis != thickness_axis]
@@ -46,47 +36,6 @@ def _positive_rays(mesh, uv_m: np.ndarray, thickness_axis: int) -> tuple[np.ndar
     directions = np.zeros_like(origins)
     directions[:, thickness_axis] = 1.0
     return origins, directions
-
-
-def load_mesh(
-    path: str | Path,
-    scale: float = 1.0,
-    rotation_deg: tuple[float, float, float] | list[float] | None = None,
-    crop_height_m: float | None = None,
-) -> Any:
-    """Load one triangle mesh."""
-
-    import trimesh
-
-    mesh = trimesh.load_mesh(path, process=False)
-    mesh.vertices *= scale
-    extents = np.ptp(mesh.vertices, axis=0)
-    thickness_axis = int(np.argmin(extents))
-    length_axis = int(np.argmax(extents))
-    width_axis = ({0, 1, 2} - {thickness_axis, length_axis}).pop()
-    mesh.vertices = mesh.vertices[:, [length_axis, width_axis, thickness_axis]]
-    mesh.vertices[:, :2] -= (np.min(mesh.vertices[:, :2], axis=0) + np.max(mesh.vertices[:, :2], axis=0)) / 2.0
-    mesh.vertices[:, 2] -= np.min(mesh.vertices[:, 2])
-    if rotation_deg is not None:
-        mesh.vertices = mesh.vertices @ _rotation_xyz(rotation_deg).T
-        mesh.vertices[:, :2] -= (np.min(mesh.vertices[:, :2], axis=0) + np.max(mesh.vertices[:, :2], axis=0)) / 2.0
-        mesh.vertices[:, 2] -= np.min(mesh.vertices[:, 2])
-    if crop_height_m is not None:
-        faces = mesh.faces[np.max(mesh.vertices[mesh.faces, 2], axis=1) <= crop_height_m]
-        vertices, inverse = np.unique(faces.reshape(-1), return_inverse=True)
-        mesh = trimesh.Trimesh(mesh.vertices[vertices], inverse.reshape(-1, 3), process=False)
-        mesh.vertices[:, 2] -= np.min(mesh.vertices[:, 2])
-    return mesh
-
-
-def transform_mesh(
-    mesh: Any,
-    rotation_deg: tuple[float, float, float] | list[float],
-    translation_m: tuple[float, float, float] | list[float],
-) -> None:
-    """Apply an XYZ rotation about the canonical origin followed by translation."""
-
-    mesh.vertices = mesh.vertices @ _rotation_xyz(rotation_deg).T + np.asarray(translation_m, dtype=np.float64)
 
 
 def raycast(
@@ -120,25 +69,6 @@ def raycast(
         & (top_normal >= normal_threshold)
     )
     return np.where(valid, bottom, np.nan), np.where(valid, top, np.nan)
-
-
-def raycast_surface(
-    mesh: Any,
-    uv_m: np.ndarray,
-    thickness_axis: int,
-    side: str,
-) -> np.ndarray:
-    """Return the near or far mesh surface along the positive ray direction."""
-
-    if side not in {"near", "far"}:
-        raise ValueError("side must be 'near' or 'far'")
-
-    origins, directions = _positive_rays(mesh, uv_m, thickness_axis)
-    locations, rays, _ = mesh.ray.intersects_location(origins, directions, multiple_hits=True)
-    surface = np.full(len(uv_m), np.inf if side == "near" else -np.inf)
-    update = np.minimum.at if side == "near" else np.maximum.at
-    update(surface, rays, locations[:, thickness_axis])
-    return np.where(np.isfinite(surface), surface, np.nan)
 
 
 def build_column_grid(mesh: Any, spacing_m: float, min_thickness_m: float = 0.005) -> ColumnGrid:
@@ -178,15 +108,3 @@ def neighbor_indices(uv: np.ndarray, grid_uv: np.ndarray, spacing: float) -> np.
             elif c not in full:
                 out[i, side] = -1
     return out
-
-
-def rearfoot_center(mesh: Any, grid: ColumnGrid, length_fraction: float) -> np.ndarray:
-    """Place the punch along the long footprint axis."""
-
-    plane_axes = [axis for axis in range(3) if axis != grid.thickness_axis]
-    plane = mesh.vertices[:, plane_axes]
-    lower, upper = np.min(plane, axis=0), np.max(plane, axis=0)
-    long_axis = int(np.argmax(upper - lower))
-    center = (lower + upper) / 2.0
-    center[long_axis] = lower[long_axis] + length_fraction * (upper[long_axis] - lower[long_axis])
-    return center

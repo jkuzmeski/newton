@@ -16,8 +16,7 @@ import argparse
 import json
 import threading
 import time
-from collections.abc import Iterable, Mapping
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -133,22 +132,6 @@ def latin_hypercube_starts(count: int, seed: int) -> list[Material]:
     return [Material(*np.where(log, 10.0**p, p)) for p in points]
 
 
-def parse_fixed(pairs: Iterable[str]) -> dict[str, float]:
-    """Return the ``material-field=value`` pins of the hidden ``--fix`` option.
-
-    A pinned field is held at its value in every start and dropped from the
-    searched vector, so an identification question (``--fix shear_layer_fraction=0.1``)
-    is a clean comparison instead of a bound-pinned optimum.
-    """
-    fixed: dict[str, float] = {}
-    for pair in pairs:
-        name, _, value = pair.partition("=")
-        if name not in Material.__dataclass_fields__ or not value:
-            raise ValueError(f"--fix needs material-field=value, got {pair!r}")
-        fixed[name] = float(value)
-    return fixed
-
-
 def fit_material(
     bed: LastBed,
     depth_m: np.ndarray,
@@ -158,7 +141,6 @@ def fit_material(
     evaluations: int,
     substeps: int,
     offset_bounds_m: tuple[float, float],
-    fixed: Mapping[str, float] = {},
 ) -> tuple[Material, float, list[dict]]:
     """Fit the replayed traces from every start at once and keep the lowest loss.
 
@@ -168,8 +150,7 @@ def fit_material(
     included, run as candidate worlds of one launch. Each trace frame is
     replayed in ``substeps`` contact steps. A start offset within
     ``offset_bounds_m`` deepens every stroke so the model's start force can meet
-    the measured preload; it is fitted with the material. Every ``fixed``
-    material field is held at its value over the whole solve instead of searched.
+    the measured preload; it is fitted with the material.
 
     Returns:
         The best material and start offset [m] by training loss, and one record per start.
@@ -177,15 +158,14 @@ def fit_material(
     from scipy.optimize import least_squares
 
     fields = tuple(Material.__dataclass_fields__)
-    free = [name for name in fields if name not in fixed]
-    lower = np.array([FIT_LOWER_BOUNDS[fields.index(name)] for name in free] + [offset_bounds_m[0]])
-    upper = np.array([FIT_UPPER_BOUNDS[fields.index(name)] for name in free] + [offset_bounds_m[1]])
+    lower = np.array([*FIT_LOWER_BOUNDS, offset_bounds_m[0]])
+    upper = np.array([*FIT_UPPER_BOUNDS, offset_bounds_m[1]])
     width = len(lower) + 1
     replays: dict[int, LastReplay] = {}
 
     def material_of(point: np.ndarray) -> Material:
-        """Return the material of one search point with the fixed fields applied."""
-        return Material(**fixed, **dict(zip(free, point[:-1], strict=True)))
+        """Return the material represented by one search point."""
+        return Material(**dict(zip(fields, point[:-1], strict=True)))
 
     def evaluate(points: list[np.ndarray]) -> list[np.ndarray]:
         # Launch sizes are rounded up to whole Jacobians so few replays are built.
@@ -208,20 +188,12 @@ def fit_material(
 
     def solve(index: int) -> None:
         cache: dict[bytes, np.ndarray] = {}
-        history: list[dict[str, float]] = []
         nonphysical = [0]
 
         def residuals(points: list[np.ndarray]) -> list[np.ndarray]:
             missing = [p for p in points if p.tobytes() not in cache]
             for point, row in zip(missing, batcher.request(missing) if missing else [], strict=True):
                 cache[point.tobytes()] = row
-                history.append(
-                    {
-                        "loss": float(np.mean(row**2)),
-                        **asdict(material_of(point)),
-                        "start_offset_m": float(point[-1]),
-                    }
-                )
                 nonphysical[0] += int(not np.all(np.isfinite(row)))
             return [cache[p.tobytes()] for p in points]
 
@@ -238,10 +210,8 @@ def fit_material(
             return np.column_stack([(rows[j + 1] - rows[0]) / step[j] for j in range(len(x))])
 
         try:
-            # The pinned fields override their start, and the free ones clip into bounds
-            # so a start without the newer fields still starts inside them.
-            start = replace(starts[index], **fixed)
-            x0 = np.clip(np.array([*(asdict(start)[name] for name in free), 0.0], dtype=float), lower, upper)
+            start = starts[index]
+            x0 = np.clip(np.array([*asdict(start).values(), 0.0], dtype=float), lower, upper)
             try:
                 result = least_squares(
                     lambda x: residuals([x])[0],
@@ -271,7 +241,6 @@ def fit_material(
                 "message": str(result.message),
                 "near_bounds": near_bounds(asdict(material_of(result.x))),
                 "nonphysical_evaluations": nonphysical[0],
-                "history": history,
             }
         finally:
             batcher.finish()
@@ -342,17 +311,13 @@ def run(
     random_starts: int,
     seed: int,
     substeps: int,
-    start_fits: tuple[Path, ...] = (),
-    fixed: Mapping[str, float] = {},
 ) -> dict:
     """Register the last, fit the material to the train traces from many starts, and score every trace.
 
     Every trace frame is replayed in ``substeps`` contact steps.
 
-    The starts are :data:`CALIBRATED_MATERIAL`, the materials of ``start_fits``
-    (earlier ``material_fit.json`` files), and ``random_starts`` Latin-hypercube
-    materials drawn with ``seed``. ``fixed`` holds named material fields at a
-    given value over the search.
+    The starts are :data:`CALIBRATED_MATERIAL` and ``random_starts``
+    Latin-hypercube materials drawn with ``seed``.
     """
     grid = load_grid(shoe / side / "column_grid.npz")
     index = json.loads((sweep / "conditions.json").read_text())
@@ -381,8 +346,7 @@ def run(
     dt = float(np.mean(np.diff(traces[0]["time_s"])))
     train = [k for k, (_, split) in enumerate(names) if split == "train"]
 
-    starts = [initial, *(Material(**json.loads(path.read_text())["material"]) for path in start_fits)]
-    starts += latin_hypercube_starts(random_starts, seed)
+    starts = [initial, *latin_hypercube_starts(random_starts, seed)]
     start = time.perf_counter()
     # The start may move from first contact (the whole indentation undone) to
     # MAX_START_OFFSET_M deeper than the registered preload indentation.
@@ -395,7 +359,6 @@ def run(
         evaluations,
         substeps,
         (-indentation, MAX_START_OFFSET_M),
-        fixed,
     )
     fit_seconds = time.perf_counter() - start
 
@@ -437,7 +400,6 @@ def run(
             "best_start": int(np.argmin([record["loss"] for record in records])),
             "identifiability": identifiability(records),
             "starts": records,
-            "fixed": dict(fixed),
         },
         "conditions": scores,
     }
@@ -462,12 +424,6 @@ def main() -> None:
         default=8,
         help="Contact steps per 1 ms trace frame; 8 is the runner's 1.25e-4 s contact step.",
     )
-    parser.add_argument(
-        "--start", type=Path, action="append", default=[], help="Earlier material_fit.json to start from; repeatable."
-    )
-    # A field=value pin held over the whole search, for identification questions
-    # a bounded solve would answer with a bound-pinned optimum.
-    parser.add_argument("--fix", action="append", default=[], metavar="FIELD=VALUE", help=argparse.SUPPRESS)
     args = parser.parse_args()
     report = run(
         args.shoe,
@@ -479,8 +435,6 @@ def main() -> None:
         random_starts=args.random_starts,
         seed=args.seed,
         substeps=args.substeps,
-        start_fits=tuple(args.start),
-        fixed=parse_fixed(args.fix),
     )
     print(json.dumps({k: report[k] for k in ("shoe", "material", "registration")}, indent=2, default=float))
 

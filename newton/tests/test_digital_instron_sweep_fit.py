@@ -180,7 +180,7 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
             bed, depth, 1.0e-3, [trace], [material], evaluations=1, substeps=8, offset_bounds_m=(-1.0e-3, 1.0e-3)
         )
 
-        self.assertAlmostEqual(records[0]["history"][0]["loss"], 0.0, places=10)
+        self.assertAlmostEqual(records[0]["loss"], 0.0, places=10)
 
     def test_physical_flags_balanced_divergence(self):
         """A diverged bed whose last and platen forces stay balanced is still flagged by its columns."""

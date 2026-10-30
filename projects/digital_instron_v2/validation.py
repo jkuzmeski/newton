@@ -1,13 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Held-out validation metrics for Digital Instron effective shoe properties.
+"""Score held-out Instron force traces against a simulated prediction.
 
-Implements the official Phase-1/Phase-2 metric definitions: baseline-corrected
-force, an active-frame mask at 5% of the robust peak, the top-five robust peak,
-active-frame relative RMSE, and positive dissipated hysteresis work from a
-loading/unloading branch split at the measured displacement peak. Every metric
-is evaluated on held-out cycles only and gated at 10%.
+Metrics use an active-frame mask at 5% of the robust peak, the mean of the top
+five force samples, active-frame relative RMSE, and positive hysteresis work.
 """
 
 from __future__ import annotations
