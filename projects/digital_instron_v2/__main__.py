@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fit Digital Instron sweeps, view the column bed, and export a portable shoe."""
+"""Fit Instron sweeps and export a portable Digital Shoe artifact."""
 
 from projects._cli import dispatch
 
@@ -11,7 +11,6 @@ _COMMANDS = {
         "projects.digital_instron_v2.export_digital_shoe",
         "Export a sweep_fit material as a Digital Shoe artifact and report.",
     ),
-    "view": ("projects.digital_instron_v2.example", "View source-backed Instron, settle, stride, or attached scenes."),
 }
 
 

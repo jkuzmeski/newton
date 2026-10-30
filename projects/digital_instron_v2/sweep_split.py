@@ -34,7 +34,7 @@ def _condition_rows(columns: dict[str, np.ndarray], stance_ms: int, target_n: in
     loop_index = (target_n - 800) // 400 + 1
     loop_column = LOOP_COLUMNS[stance_ms]
     expected_step = STANCE_STEPS[stance_ms]
-    required = ("Step", "Elapsed Cycles", "Total Cycles", loop_column)
+    required = ("Step", "Elapsed Cycles", loop_column)
     missing = [name for name in required if name not in columns]
     if missing:
         raise ValueError(f"tracking CSV is missing counter columns: {', '.join(missing)}")

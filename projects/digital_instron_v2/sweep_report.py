@@ -4,7 +4,7 @@
 """Build one self-contained HTML report of the foam-sweep material fit.
 
 The report reads the ``material_fit.json`` of each shoe, the processed sweep,
-the registration QC and the optional old-law fits and kernel profile from disk,
+the registration QC from disk,
 replays every trace once with the fitted material through
 :class:`~projects.digital_instron_v2.last_replay.LastReplay` (one short GPU
 run per shoe), and writes one HTML file with every figure inlined::
@@ -35,8 +35,6 @@ from .sweep_fit import DEFAULT_LAST, identifiability, load_grid, load_trace, nea
 SWEEP = Path("DigitalInstron/FoamSweep")
 SHOES = {"puma-fast-r-nitro-elite-3": "FR3", "puma-deviate-nitro-elite-3": "Dev3Elite"}
 NAMES = {"FR3": "Puma Fast-R Nitro Elite 3 (FR3)", "Dev3Elite": "Puma Deviate Nitro Elite 3 (Dev3Elite)"}
-BACKUPS = SWEEP / "fit" / "history"
-"""Earlier fits shown for comparison and used as fit starts."""
 STANCES = (160, 200, 240, 280)
 FORCES = (800, 1200, 1600, 2000, 2400, 2800)
 MAP_FORCES = (800, 2000, 2800)
@@ -211,7 +209,7 @@ def flag_note(shoes: dict) -> str:
 # --------------------------------------------------------------------- sections
 
 
-def summary_section(shoes: dict, old: dict) -> str:
+def summary_section(shoes: dict) -> str:
     rows = []
     for slug, s in shoes.items():
         fit = s["fit"]
@@ -235,16 +233,6 @@ def summary_section(shoes: dict, old: dict) -> str:
                 f"f_eq {m['equilibrium_fraction']:.3f}, tau {m['maxwell_relaxation_time_s'] * 1e3:.1f} ms",
             ]
         )
-    change = ""
-    if old:
-        change = (
-            " With the old single-face law the same fit pipeline reached the errors in "
-            '<a href="#old">section 6</a>; the new law removes the floating-column problem described there.'
-        )
-    gif = SWEEP / "fit" / "instron_fr3_dev3.gif"
-    animation = (
-        image(gif.read_bytes(), "image/gif", "Replay of both shoes in the digital Instron.") if gif.exists() else ""
-    )
     return f"""<h2 id="summary">1. Summary</h2>
 <p>One material is fitted per shoe to its Instron foam sweep: a two-term Hyperfoam (Ogden-Hill) equilibrium network
 with one Maxwell branch and a Jenkin (spring-slider) branch, plus the shear-layer fraction, {len(FIELDS)} parameters. Every sweep trace is replayed through the GPU column bed with the
@@ -252,9 +240,8 @@ with one Maxwell branch and a Jenkin (spring-slider) branch, plus the shear-laye
 bottom that lands on the platen. The fit uses train cycles only; validate and repeat traces are scored, not fitted.</p>
 {table(["Shoe", "Validate peak error %", "Validate RMSE %", "Validate loop-area error %", "Repeat block max peak / RMSE %", "Validate traces within all 10% gates", "Fitted material"], rows)}
 <p class="note">Errors are relative to the measured peak force (peak, RMSE) and to the measured loop area (hysteresis).
-Ranges are over the 24 validate traces. The repeat block is 6 traces.{change}</p>
-{flag_note(shoes)}
-{animation}"""
+Ranges are over the 24 validate traces. The repeat block is 6 traces.</p>
+{flag_note(shoes)}"""
 
 
 def data_section(shoes: dict) -> str:
@@ -300,22 +287,8 @@ REGISTRATION_NOTES = """<p><b>Caveats</b></p>
 <ul>
 <li>FR3: the last tread just fits the narrow FR3 waist. The outline sets x, y and yaw, not the surface fit.</li>
 <li>First contact is at the heel cup rim and heel. The forefoot footbed sits 5-9 mm below the last plantar surface.</li>
-<li>The last side (left) comes from the file name. Mirror check: the left last does not fit inside the right FR3
-outline at all, and fits the right Deviate worse (spread 0.88 vs 0.76 mm). The Deviate grid side cue is weak
-('unverified'). shoe_prep says both scans are right shoes, so left = mirror.</li>
+<li>The last side (left) comes from its file name; the shoe side evidence is not definitive.</li>
 <li>The midsole is rigid while it rocks. The preload uses linear columns.</li>
-</ul>
-<p><b>Legacy manifest pose</b> (<code>manifest_v2.json</code> fullfoot_last), for comparison with older results</p>
-<ul>
-<li><code>geometry.load_mesh</code> reorders the STL axes to (z, y, x). This is a mirror (det -1): the left last became
-a right last. The legacy obj is a right shoe, so the pair still had matching sides.</li>
-<li><code>rotation_deg [90, 0, 0]</code> makes up = STL +y. That is 3.3 deg off the plate normal.
-<code>crop_height_m 0.08</code> removes the stud and plate. Then <code>pose_rotation_deg [-1.0, -1.8, 0]</code> makes
-the error 5.3 deg. The load axis in the shoe frame was about 4.7 deg pitch, toe down, plus 2.5 deg roll. That pitch
-matches the FR3 rocker rest pitch in the table above.</li>
-<li>Heel ends were on the same side. The last heel sat about 27 mm in from the midsole heel edge, at y = -6 mm. This
-came from bounding-box centering, not from heel alignment.</li>
-<li>The 95th-percentile contact offset started 31 of 611 columns compressed by up to 1.4 mm.</li>
 </ul>"""
 
 
@@ -421,9 +394,8 @@ energy   E = sum_i A_i W(c_i)  +  1/2 sum_faces k_ij [ (t_i - t_j)^2 + (b_i - b_
 reactions   T_i = last on top i (held tops only),   R_i = platen on bottom i (landed bottoms only)
 balance     sum_i T_i = sum_i R_i   (the shear terms cancel over the bed)
 </pre>
-<p><b>No cross term.</b> The energy has one shear layer at the tops and one at the bottoms, and nothing that couples a
-top difference to a bottom difference. An earlier variant had such a cross term. It lifted thick edge columns off the
-platen, so it was dropped.</p>
+<p><b>No cross term.</b> The energy has one shear layer at the tops and one at the bottoms; the layers do not couple
+top and bottom differences.</p>
 <p><b>Four column states</b> (for columns under the last tread):</p>
 <ul>
 <li><b>held, landed</b>: the last presses the top and the bottom stands on the platen; the foam carries the load straight through.</li>
@@ -448,11 +420,7 @@ and |sum T - sum R| stays within 2% of the peak load every frame (<code>last_rep
 fails returns NaN. In the fit, a start whose own replay is not physical stops with a message, a Jacobian column is
 differenced from the other side, and the final scoring raises instead of writing a result. So a broken solve fails
 loudly instead of giving a smooth wrong force.</p>
-<p><b>Old single-face law.</b> The old bed had one unknown per column: its compression, set by the last's position,
-with the bottom fixed. A column whose bottom floats above the platen (arch, rocker toe and heel) cannot be described.
-It either carried nothing (old law, option A) or it was treated as standing on the platen and was crushed by the
-stroke plus its clearance (the "grounded columns" stopgap). The new law lets the bottom land when it reaches the
-platen, so floating columns carry load only once they really touch.</p>"""
+"""
 
 
 def material_rows(fit: dict) -> str:
@@ -724,145 +692,31 @@ def max_strain(r: dict) -> float:
     return float(np.max(r["columns"]["compression"] / r["bed"].rest_m))
 
 
-def wall_onsets(fit: dict) -> list[float]:
-    """Return the wall onset of every near-best start with a densifying (negative alpha2) second term."""
-    starts = fit["optimization"]["starts"]
-    best = min(s["loss"] for s in starts)
-    return [
-        wall_onset(s["material"])
-        for s in starts
-        if s["loss"] <= (1 + NEAR_BEST) * best and s["material"]["hyperfoam_exponent_2"] < 0.0
-    ]
-
-
 def second_term_block(shoes: dict) -> str:
-    """Explain the densification wall of the second Hyperfoam term with the fitted numbers."""
+    """Show fitted Hyperfoam pressure terms and the strain range reached in each sweep."""
     import matplotlib.pyplot as plt
 
-    rows = []
     fig, axes = plt.subplots(1, len(shoes), figsize=(11, 3.8), sharey=True)
-    for ax, (slug, s) in zip(axes, shoes.items(), strict=True):
-        material = s["fit"]["material"]
-        onset, reached = wall_onset(material), max_strain(s["replay"])
-        grid = np.arange(np.floor(onset / 0.05) * 0.05, reached + 1e-9, 0.05)
-        first, second = term_pressures(grid, material)
-        near = wall_onsets(s["fit"])
-        bound20 = s["bound20"]
-        rows.append(
-            [
-                SHOES[slug],
-                f"{material['instantaneous_shear_modulus_2_pa']:.3g}",
-                f"{material['hyperfoam_exponent_2']:.1f}"
-                + (" (at bound)" if "hyperfoam_exponent_2" in near_bounds(material) else ""),
-                ", ".join(f"{q:.2f} at {e:.2f}" for e, q in zip(grid, second / first, strict=True)),
-                f"{onset:.2f}",
-                f"{reached:.2f}",
-                f"{wall_onset(bound20['material']):.2f}" if bound20 else "-",
-                f"{min(near):.2f}-{max(near):.2f} (n = {len(near)})",
-            ]
-        )
+    for ax, (slug, shoe) in zip(axes, shoes.items(), strict=True):
+        material = shoe["fit"]["material"]
+        onset, reached = wall_onset(material), max_strain(shoe["replay"])
         strain = np.linspace(1.0e-3, min(0.95, reached + 0.12), 300)
         first, second = term_pressures(strain, material)
         ax.plot(strain, first / 1e6, color=BLUE, label="term 1")
-        ax.plot(strain, np.maximum(second, 1e-12) / 1e6, color=ORANGE, label="term 2 (wall)")
+        ax.plot(strain, np.maximum(second, 1e-12) / 1e6, color=ORANGE, label="term 2")
         ax.plot(strain, (first + second) / 1e6, color=INK, ls="--", label="sum")
-        ax.axvline(onset, color=GREEN, ls=":", label=f"onset (term 2 = {100 * WALL_ONSET:.0f}% of term 1) {onset:.2f}")
-        ax.axvline(reached, color="#c0392b", ls="-.", label=f"max column strain in sweep {reached:.2f}")
+        ax.axvline(onset, color=GREEN, ls=":", label=f"wall onset {onset:.2f}")
+        ax.axvline(reached, color="#c0392b", ls="-.", label=f"max strain {reached:.2f}")
         decorate(ax, "compression strain c / L", "equilibrium pressure [MPa]")
         ax.set_yscale("log")
         ax.set_ylim(1e-3, 1e2)
         ax.set_title(SHOES[slug], loc="left")
         ax.legend(loc="upper left", fontsize=8.5)
-    table_html = table(
-        [
-            "Shoe",
-            "G2 [Pa]",
-            "alpha2",
-            "term 2 / term 1 at strain",
-            "Wall onset strain",
-            "Max column strain",
-            "Onset, bound-20 fit",
-            "Onset, near-best wall starts",
-        ],
-        rows,
-    )
-    return (
-        """<h4>Second Hyperfoam term: a densification wall</h4>
-<p>The second Hyperfoam term is <b>not</b> switched off. With alpha2 strongly negative,
-term2 = 2 G2 / (|alpha2| lam) (lam^-|alpha2| - 1) explodes as the stretch lam = 1 - c/L goes to 0, so a tiny G2 still
-gives a densification wall. The table gives term2 / term1 (the ratio is the same for the instantaneous and the
-equilibrium network). The wall is active when the most compressed column passes the onset strain.</p>"""
-        + table_html
-        + """<p>The onset strain (term 2 = 10% of term 1) is the same in the bound-20 and bound-40 fits and across the
-near-best starts with a wall. So the wall <b>onset</b> is identified by this sweep; its <b>steepness</b> (the split
-between G2 and alpha2) is not. Dev3Elite pushes alpha2 to its -20 bound: it wants an even steeper wall, close to a
-hard stop near 0.5 strain.</p>"""
-        + figure(
-            fig,
-            "Equilibrium pressure of the two Hyperfoam terms and their sum for the best fits (log scale), with the wall "
-            "onset and the largest column strain the sweep reaches.",
-        )
-    )
 
-
-def bound20_block(shoes: dict) -> str:
-    """Compare the alpha1 <= 20 fit (backup) with the current alpha1 <= 40 fit."""
-    if not any(s["bound20"] for s in shoes.values()):
-        return ""
-    out = [
-        f"""<h4>Bound 20 vs bound 40</h4>
-<p>The first fit capped the term-1 exponent alpha1 at 20, and FR3 ended on that cap. The current fit allows
-alpha1 up to {FIT_UPPER_BOUNDS[1]:g}. The bound-20 results are from a backup and predate the kernel step-limiter fix;
-their Dev3Elite 280 ms / 2800 N validate score was a solver blow-up. Validate numbers: median / max over 24 traces.</p>"""
-    ]
-    for slug, s in shoes.items():
-        if not s["bound20"]:
-            continue
-        runs = {"alpha1 &lt;= 20 (backup)": s["bound20"], f"alpha1 &lt;= {FIT_UPPER_BOUNDS[1]:g} (current)": s["fit"]}
-        rows = []
-        for name, fit in runs.items():
-            m = fit["material"]
-            vals = [fit["conditions"][label(t, f)]["validate"]["fitted"] for t in STANCES for f in FORCES]
-            peak = [v["peak_force_error"] for v in vals]
-            rmse = [v["force_rmse_relative"] for v in vals]
-            loop = [v["hysteresis_error"] for v in vals]
-            rows.append(
-                [
-                    name,
-                    f"{m['hyperfoam_exponent']:.2f}",
-                    f"{m['instantaneous_shear_modulus_pa'] / 1e3:.0f}",
-                    f"{m['instantaneous_shear_modulus_2_pa']:.3g} / {m['hyperfoam_exponent_2']:.1f}",
-                    f"{Material(**m).equilibrium_shear_modulus_pa / 1e3:.0f}",
-                    f"{m['equilibrium_fraction']:.3f} / {m['maxwell_relaxation_time_s'] * 1e3:.1f}",
-                    f"{wall_onset(m):.2f}",
-                    f"{min(st['loss'] for st in fit['optimization']['starts']):.5f}",
-                    f"{pct(np.median(peak))} / {pct(max(peak))}",
-                    f"{pct(np.median(rmse))} / {pct(max(rmse))}",
-                    f"{pct(np.median(loop))} / {pct(max(loop))}",
-                    f"{sum(v['passed'] for v in vals)} / 24",
-                ]
-            )
-        out.append(f"<p><b>{html.escape(NAMES[SHOES[slug]])}</b></p>")
-        out.append(
-            table(
-                [
-                    "Fit",
-                    "alpha1",
-                    "G1 [kPa]",
-                    "G2 [Pa] / alpha2",
-                    "mu_eq [kPa]",
-                    "f_eq / tau [ms]",
-                    "Wall onset",
-                    "Best train loss",
-                    "Peak %",
-                    "RMSE %",
-                    "Loop %",
-                    "Within all gates",
-                ],
-                rows,
-            )
-        )
-    return "\n".join(out)
+    return "<h4>Second Hyperfoam term</h4>" + figure(
+        fig,
+        "Equilibrium pressure terms and their sum, with wall onset and the largest column strain in each sweep.",
+    )
 
 
 def results_section(shoes: dict) -> str:
@@ -898,230 +752,76 @@ Hyperfoam term acts as a densification wall whose onset is identified and whose 
             f"{len(r['keys']) - len(s['flagged'])} of {len(r['keys'])} traces within one percentage point.</p>"
         )
     out.append('<h3 id="wall">Both shoes</h3>' + second_term_block(shoes))
-    out.append(bound20_block(shoes))
     out.append("<h4>Load outside the last</h4>" + outside_share_figure(shoes))
     out.append("<h4>Conservation: sum T vs sum R</h4>" + conservation_block(shoes))
     return "\n".join(out)
 
 
-def load_old(backups: Path, slug: str) -> dict[str, dict]:
-    """Return the old-law and stopgap fits that exist on disk, by label."""
-    paths = {
-        "Stopgap (grounded columns)": SWEEP / "fit" / f"{slug}_grounded_columns" / "material_fit.json",
-        "Old law A (2 evaluations)": backups / f"{slug}_A2.json",
-        "Old law A (30 evaluations)": backups / f"{slug}_30" / "material_fit.json",
-    }
-    return {name: json.loads(path.read_text()) for name, path in paths.items() if path.exists()}
-
-
-def old_law_section(shoes: dict, old: dict) -> str:
-    if not old:
-        return ""
-    out = [
-        """<h2 id="old">6. Old vs new law</h2>
-<p>Same sweep, same split, same objective. Old law A is the single-face bed where floating columns carry nothing;
-the stopgap treats every column as standing on the platen. New law C is this report's fit. Numbers are over the 24
-validate traces: median and worst. A worst value in the thousands of percent is a solver blow-up of that run.</p>"""
-    ]
-    for slug, s in shoes.items():
-        runs = {**old.get(slug, {}), "New law C (this fit)": s["fit"]}
-        rows = []
-        for name, fit in runs.items():
-            vals = [fit["conditions"][label(t, f)]["validate"]["fitted"] for t in STANCES for f in FORCES]
-            row = [html.escape(name)]
-            for metric in ("peak_force_error", "force_rmse_relative", "hysteresis_error"):
-                v = [x[metric] for x in vals]
-                row.append(f"{pct(np.median(v))} / {pct(max(v))}")
-            row.append(f"{sum(x['passed'] for x in vals)} / {len(vals)}")
-            rows.append(row)
-        out.append(f"<h3>{html.escape(NAMES[SHOES[slug]])}</h3>")
-        out.append(
-            table(["Fit", "Peak error % (median / max)", "RMSE %", "Loop-area error %", "Within all gates"], rows)
-        )
-        per = []
-        for f in FORCES:
-            row = [f"200 ms, {f} N"]
-            for fit in runs.values():
-                v = fit["conditions"][label(200, f)]["validate"]["fitted"]
-                row.append(f"{pct(v['peak_force_error'])} / {pct(v['force_rmse_relative'])}")
-            per.append(row)
-        out.append(
-            "<details><summary>Per force at 200 ms (peak / RMSE %)</summary>"
-            + table(["Condition"] + [html.escape(n) for n in runs], per)
-            + "</details>"
-        )
-    return "\n".join(out)
-
-
-def flatten(value, prefix: str = "") -> list[tuple[str, str]]:
-    if isinstance(value, dict):
-        return [item for key, v in value.items() for item in flatten(v, f"{prefix}{key}.")]
-    if isinstance(value, float):
-        return [(prefix[:-1], f"{value:.4g}")]
-    return [(prefix[:-1], html.escape(str(value)))]
-
-
-def before_after_rows(value, name: str = "") -> list[list[str]]:
-    """Collect the ``before``/``after`` and ``before_x``/``after_x`` pairs of the kernel profile at any depth."""
-    if not isinstance(value, dict):
-        return []
-
-    def row(label: str, before, after) -> list[str]:
-        numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (before, after))
-        speedup = f"{before / after:.2f}x" if numbers and after else ""
-        text = [
-            f"{v:.4g}" if isinstance(v, float) else "-" if v is None else html.escape(str(v)) for v in (before, after)
-        ]
-        return [html.escape(label), *text, speedup]
-
-    if "before" in value and "after" in value:
-        before, after = value["before"], value["after"]
-        if isinstance(after, dict):
-            return [row(f"{name}: {key}", before.get(key), v) for key, v in after.items()]
-        return [row(name, before, after)]
-    rows = [
-        row(f"{name} ({key[len('after_') :]})", value[f"before_{key[len('after_') :]}"], value[key])
-        for key in value
-        if key.startswith("after_") and f"before_{key[len('after_') :]}" in value
-    ]
-    for key, v in value.items():
-        rows += before_after_rows(v, f"{name} / {key}" if name else key)
-    return rows
-
-
-def kernel_section(path: Path) -> str:
-    head = '<h2 id="kernel">7. Kernel performance</h2>'
-    if not path.exists():
-        return (
-            head + f"<p>Pending: the profiling run has not written <code>{html.escape(path.as_posix())}</code> yet.</p>"
-        )
-    profile = json.loads(path.read_text())
-    setups = [(key, v) for key, v in flatten(profile) if key == "gpu" or key.endswith("setup")]
-    other = [
-        [html.escape(key), v]
-        for key, v in flatten(profile)
-        if not any(part.startswith(("before", "after")) for part in key.split("."))
-        and key != "gpu"
-        and not key.endswith("setup")
-        and not key.startswith("notes")
-    ]
-    return (
-        head + "<p>The column-bed kernel was restructured for speed with the same arithmetic per column and "
-        "compiled with <code>fast_math</code>. "
-        f"Numbers from <code>{html.escape(path.as_posix())}</code>.</p><ul>"
-        + "".join(f"<li><b>{html.escape(key)}</b>: {v}</li>" for key, v in setups)
-        + "</ul><h4>Before and after</h4>"
-        + table(["Quantity", "Before", "After", "Before / after"], before_after_rows(profile))
-        + "<h4>Other measurements</h4>"
-        + table(["Quantity", "Value"], other)
-        + "<h4>Where the time goes and what was tried</h4><ul>"
-        + "".join(f"<li>{html.escape(note)}</li>" for note in profile.get("notes", []))
-        + "</ul><p><code>fast_math</code> is on: against a converged solve it changes forces by about 3e-6 of the "
-        "peak, far below the 16-sweep truncation error. A convergence-based early exit from the sweeps was studied and "
-        "not adopted (<code>result_changing_study</code>).</p>"
-    )
-
-
 def open_issues_section(shoes: dict) -> str:
     loops, shares = [], []
-    for slug, s in shoes.items():
-        loop = [fitted(s["fit"], label(t, 800), "validate")["hysteresis_error"] for t in STANCES]
-        r = s["replay"]
-        share = [outside_share(r, k) for k in range(len(r["keys"]))]
+    for slug, shoe in shoes.items():
+        loop = [fitted(shoe["fit"], label(stance, 800), "validate")["hysteresis_error"] for stance in STANCES]
+        replayed = shoe["replay"]
+        share = [outside_share(replayed, k) for k in range(len(replayed["keys"]))]
         loops.append(f"{SHOES[slug]} {pct(min(loop))}-{pct(max(loop))}%")
         shares.append(f"{SHOES[slug]} {pct(min(share))}-{pct(max(share))}%")
 
-    count = sum(len(s["flagged"]) for s in shoes.values())
-    flag_issue = (
-        f"<li><b>Unreproduced blow-up in the stored scores.</b> {count} stored trace score(s) are solver blow-ups "
-        "(column strain above 1) that a fresh replay does not reproduce, and the T = R balance check did not catch "
-        "them because both blew up together. A check on column strain (c &lt; L) would catch this case.</li>"
-        if count
-        else ""
-    )
-    bounds = []
-    for slug, s in shoes.items():
-        m = s["fit"]["material"]
-        at = [FIELDS[key][0].split(",")[0] for key in near_bounds(m) if key != "instantaneous_shear_modulus_2_pa"]
-        bounds.append(
-            f"{SHOES[slug]}: alpha1 = {m['hyperfoam_exponent']:.2f} (upper bound {FIT_UPPER_BOUNDS[1]:g}); "
-            + (f"at a bound: {', '.join(at)}" if at else "no other parameter at a bound")
-        )
-    return f"""<h2 id="issues">8. Open issues</h2>
+    return f"""<h2 id="issues">7. Open issues</h2>
 <ul>
-<li><b>Hysteresis at low force.</b> The loop area is the largest error, worst at 800 N ({", ".join(loops)}).</li>
-<li><b>Load outside the last.</b> Columns that the last never touches still carry {", ".join(shares)} of the platen load
-at peak through shear. This share is not measured; a pressure-mat test would check it.</li>
-<li><b>Parameters at a bound.</b> {"; ".join(bounds)}. G2 is not listed; it sets the steepness of the
-densification wall together with alpha2.</li>
-{flag_issue}<li><b>Shoe and last side.</b> The left last is assumed from the STL file name; the side is not confirmed.</li>
-<li><b>Runner migration.</b> The GPU runner already steps the same <code>ColumnBed</code> kernel with the fitted shoes,
-but its gait results are not yet validated against measured references.</li>
+<li><b>Hysteresis at low force.</b> The loop-area error is largest at 800 N ({", ".join(loops)}).</li>
+<li><b>Load outside the last.</b> Columns beyond the last tread carry {", ".join(shares)} of platen load at peak through
+shear. This share is not measured; a pressure-mat test would check it.</li>
+<li><b>Shoe and last side.</b> The left last is assumed from its file name; the side has not been independently confirmed.</li>
+<li><b>Runner validation.</b> The fitted shoes use the shared column-bed kernel, but gait results still need comparison
+with measured references.</li>
 </ul>"""
 
 
 def reproduce_section() -> str:
-    starts = " ".join(f"--start {BACKUPS.as_posix()}/{slug}_C2nx/material_fit.json" for slug in SHOES)
     lines = [
-        "git lfs pull",
-        "uv run --extra dev python -m projects.digital_instron_v2.sweep_split",
+        "uv run --extra dev -m projects.digital_instron_v2.sweep_split",
         *(
             f"uv run --extra dev -m projects.digital_instron_v2 fit --shoe DigitalInstron/{slug} "
-            f"--sweep {SWEEP.as_posix()}/processed/{name} --out {SWEEP.as_posix()}/fit/{slug} {starts}"
+            f"--sweep {SWEEP.as_posix()}/processed/{name} --out {SWEEP.as_posix()}/fit/{slug}"
             for slug, name in SHOES.items()
         ),
-        "uv run --extra dev python -m projects.digital_instron_v2.sweep_report --out DigitalInstron/FoamSweep/fit/report.html",
-        "uv run --extra dev -m projects.digital_instron_v2.example --shoe DigitalInstron/puma-fast-r-nitro-elite-3 --shoe DigitalInstron/puma-deviate-nitro-elite-3 --slow-motion 6.7",
+        "uv run --extra dev -m projects.digital_instron_v2.sweep_report",
     ]
-    return f"""<h2 id="reproduce">9. How to reproduce</h2>
-<p>PowerShell, from the repository root. Split the raw sweeps, fit each shoe, build this report, open the
-interactive viewer. Each fit starts from the calibrated material, the two earlier fits in
-<code>{BACKUPS.as_posix()}</code>, and six Latin-hypercube starts (seed 0). See
-<code>{SWEEP.as_posix()}/README.md</code> for the data files.</p>
+    return f"""<h2 id="reproduce">8. Reproduce</h2>
+<p>From the repository root, split the raw sweeps, fit each shoe and rebuild this report.</p>
 <pre>{html.escape(chr(10).join(lines))}</pre>"""
 
 
-def build(out: Path, backups: Path = BACKUPS) -> Path:
-    """Replay both shoes, render every section, and write the report."""
+def build(out: Path) -> Path:
+    """Replay both shoes, render the report sections and write the HTML."""
     start = time.perf_counter()
     shoes = {}
     for slug in SHOES:
         fit = json.loads((SWEEP / "fit" / slug / "material_fit.json").read_text())
-        r = replay(slug, fit)
-        bound20 = backups / f"{slug}_MS_bound20.json"
-        shoes[slug] = {
-            "fit": fit,
-            "replay": r,
-            "flagged": flagged(fit, r),
-            "bound20": json.loads(bound20.read_text()) if bound20.exists() else None,
-        }
-    old = {slug: runs for slug in SHOES if (runs := load_old(backups, slug))}
+        replayed = replay(slug, fit)
+        shoes[slug] = {"fit": fit, "replay": replayed, "flagged": flagged(fit, replayed)}
+
     style()
     sections = [
-        summary_section(shoes, old),
+        summary_section(shoes),
         data_section(shoes),
         registration_section(shoes),
         contact_law_section(),
         results_section(shoes),
-        old_law_section(shoes, old),
-        kernel_section(SWEEP / "fit" / "kernel_profile.json"),
         open_issues_section(shoes),
         reproduce_section(),
     ]
     nav = "".join(
-        f'<a href="#{a}">{t}</a>'
-        for a, t in (
+        f'<a href="#{anchor}">{title}</a>'
+        for anchor, title in (
             ("summary", "Summary"),
             ("data", "Data"),
             ("shoe", "Shoe and last"),
             ("law", "Contact law"),
             ("results", "Results"),
-            ("old", "Old vs new"),
-            ("kernel", "Kernel"),
             ("issues", "Open issues"),
             ("reproduce", "Reproduce"),
         )
-        if a != "old" or old
     )
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Foam sweep fit: two-face column contact law</title>
@@ -1140,14 +840,11 @@ def build(out: Path, backups: Path = BACKUPS) -> Path:
 
 
 def main() -> None:
-    """Run the report command."""
+    """Build the foam-sweep fit report."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, default=SWEEP / "fit" / "report.html")
-    parser.add_argument(
-        "--backups", type=Path, default=BACKUPS, help="Folder with the earlier fits; missing ones are skipped."
-    )
     args = parser.parse_args()
-    build(args.out, args.backups)
+    build(args.out)
 
 
 if __name__ == "__main__":

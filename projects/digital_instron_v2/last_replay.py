@@ -217,7 +217,6 @@ class LastReplay:
         self.reaction = wp.zeros((self.frames, self.world_count), dtype=float, device=self.device)
         self.strain = wp.zeros(self.world_count, dtype=float, device=self.device)
         self.lowest = wp.zeros(self.world_count, dtype=float, device=self.device)
-        self.launches = 0
         self._cycle = None
 
     def run(
@@ -243,7 +242,6 @@ class LastReplay:
         """
         if len(materials) != self.candidates:
             raise ValueError("run needs one material per candidate")
-        self.launches += 1
         self.bed.set_world_materials([m for m in materials for _ in range(self.trace_count)])
         offsets = np.zeros(self.candidates) if offsets_m is None else np.asarray(offsets_m, dtype=float)
         self.offset.assign(np.repeat(offsets, self.trace_count))

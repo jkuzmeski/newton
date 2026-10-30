@@ -3,15 +3,18 @@
 
 """Tests for replaying Instron last traces through the two-surface column bed."""
 
+import json
+import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import asdict, replace
+from pathlib import Path
 
 import numpy as np
 import warp as wp
 
 from projects.digital_instron_v2.core import CALIBRATED_MATERIAL, Material
 from projects.digital_instron_v2.last_replay import LastBed, LastReplay, physical
-from projects.digital_instron_v2.sweep_fit import fit_material
+from projects.digital_instron_v2.sweep_fit import fit_material, starts_from_fit
 from projects.digital_shoe.column_bed import BOTTOM_LANDED, TOP_HELD
 
 
@@ -180,7 +183,17 @@ class TestDigitalInstronSweepFit(unittest.TestCase):
             bed, depth, 1.0e-3, [trace], [material], evaluations=1, substeps=8, offset_bounds_m=(-1.0e-3, 1.0e-3)
         )
 
-        self.assertAlmostEqual(records[0]["history"][0]["loss"], 0.0, places=10)
+        self.assertAlmostEqual(records[0]["loss"], 0.0, places=10)
+
+    def test_starts_from_fit_loads_recorded_materials(self):
+        """The starts-from option uses the recorded materials in their original order."""
+        starts = [CALIBRATED_MATERIAL, replace(CALIBRATED_MATERIAL, hyperfoam_exponent=9.0)]
+        with tempfile.TemporaryDirectory() as directory:
+            fit = Path(directory) / "material_fit.json"
+            fit.write_text(
+                json.dumps({"optimization": {"starts": [{"start": asdict(material)} for material in starts]}})
+            )
+            self.assertEqual(starts_from_fit(fit), starts)
 
     def test_physical_flags_balanced_divergence(self):
         """A diverged bed whose last and platen forces stay balanced is still flagged by its columns."""
