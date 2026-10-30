@@ -978,37 +978,6 @@ If you run the examples from a source checkout with uv, use
     <td align="center" width="33%">
     </td>
   </tr>
-  <tr>
-    <td colspan="3"><h3>OpenSim Adapter Examples</h3></td>
-  </tr>
-  <tr>
-    <td align="center" width="33%">
-      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_opensim_subject.py">
-        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_opensim_subject.jpg" alt="OpenSim Subject Compiler">
-      </a>
-    </td>
-    <td align="center" width="33%">
-      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_native_motion_fit.py">
-        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_native_motion_fit.jpg" alt="Native Motion Fit">
-      </a>
-    </td>
-    <td align="center" width="33%">
-      <a href="https://github.com/newton-physics/newton/blob/main/newton/examples/opensim/example_marker_mapper.py">
-        <img width="320" src="https://raw.githubusercontent.com/newton-physics/newton/main/docs/images/examples/example_marker_mapper.jpg" alt="Visual Marker Mapper">
-      </a>
-    </td>
-  </tr>
-  <tr>
-    <td align="center" width="33%">
-      <code>python -m newton.examples opensim_subject</code>
-    </td>
-    <td align="center" width="33%">
-      <code>python -m newton.examples native_motion_fit --synthetic</code>
-    </td>
-    <td align="center" width="33%">
-      <code>python -m newton.examples marker_mapper</code>
-    </td>
-  </tr>
 </table>
 
 ### Example Options
@@ -1044,64 +1013,18 @@ python -m newton.examples basic_urdf --device cuda:0
 python -m newton.examples basic_viewer --viewer gl --num-frames 500 --device cpu
 ```
 
-## Digital Shoe friction comparison
+## Shoe-to-runner pipeline
 
-Compare anchored bristles, a coupled tangential solver, and regularized Coulomb
-friction without changing normal contact:
+This fork adds research code that turns a running shoe into a simulated
+midsole and runs a simulated runner on it:
 
-```bash
-uv run --no-sync -m projects.digital_shoe friction --viewer gl
-```
+1. Fit a foam material for each shoe to Instron press sweeps.
+2. Export the fitted midsole as a digital shoe, a bed of spring columns.
+3. Fit a variable-impedance runner to measured running data on that shoe.
 
-<img src="projects/digital_shoe/friction_example.jpg" width="320" height="320" alt="Synthetic friction contact samples, anchors, and force vectors">
-
-Use the [friction guide](projects/digital_shoe/FRICTION.md) for headless tests and
-leg-impedance braking/propulsion comparisons. The coupled solver is opt-in;
-no physical-friction validation or speedup is implied.
-
-## Digital Instron / Digital Shoe showcase
-
-See the [shoe-project organization and command map](projects/README.md) for
-Digital Instron, Digital Shoe, and the generative Hogan runner pipeline.
-
-This fork includes a standalone shoe calibrated from Digital Instron measurements.
-Export the shoe's fitted material (`material_fit.json` from
-`projects.digital_instron_v2 fit`) as the artifact and HTML report, then launch
-the Virtual Instron:
-
-```bash
-uv run --extra dev -m projects.digital_instron_v2 export \
-  --shoe DigitalInstron/puma-fast-r-nitro-elite-3 \
-  --fit DigitalInstron/FoamSweep/fit/puma-fast-r-nitro-elite-3/material_fit.json \
-  --sweep DigitalInstron/FoamSweep/processed/FR3 \
-  --output DigitalInstron/digital_shoe_showcase
-uv run --extra examples -m projects.digital_shoe.showcase \
-  --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json \
-  --mode instron --viewer gl
-```
-
-Use `--mode drop` for the 80 kg free-body drop or `--mode rocker` for the
-heel-to-toe demonstration. See [Digital Shoe](projects/digital_shoe/README.md)
-for headless tests, GIF recording, methods, and known validation limits.
-The measurements and footwear assets are restricted to internal fork use; see
+See [projects/README.md](projects/README.md) for the steps and commands. The
+measurements and footwear assets are restricted; see
 [asset provenance](ASSET_PROVENANCE.md) before redistribution.
-The integration retains the current Newton-native gait and motion adapters;
-it does not restore the branch's legacy OpenSim runtime or human-shoe pipeline.
-
-## Generative Hogan runner
-
-The impedance project retains one shared, reference-free variable-impedance
-runner and its Levenberg-Marquardt fitting pipeline. The latest frozen F01
-model preserves the 98-training/9-held-out full run (held-out mean loss 14.8).
-
-```bash
-uv run --no-sync -m projects.impedance_instron --help
-```
-
-See [the baseline, commands, and limitations](projects/impedance_instron/README.md).
-Fit and report with the `fit` command; independently regenerate frozen scenarios
-with `generate`. Numerical completion is not physiological validation.
-Motion and shoe assets remain restricted to internal fork use.
 
 ## Research using Newton
 
