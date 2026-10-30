@@ -16,17 +16,16 @@ uv run --no-sync -m projects.digital_instron_v2 --help
 uv run --no-sync -m projects.digital_instron_v2 fit --help
 ```
 
-| Task | Package command | Module |
-|---|---|---|
-| Fit one shoe's material to its foam sweep | `fit` | `sweep_fit.py` |
-| Portable artifact production | `export` | `export_digital_shoe.py` |
-| Process and fit data | `sweep_split.py`, `shoe_prep.py`, `sweep_fit.py` |
-| Fit report | `sweep_report.py` |
+| Step | Command |
+|---|---|
+| Split the raw sweeps | `python -m projects.digital_instron_v2.sweep_split` |
+| Prepare midsole scans | `python -m projects.digital_instron_v2.shoe_prep` |
+| Fit a shoe's material | `python -m projects.digital_instron_v2 fit` |
+| Build the fit report | `python -m projects.digital_instron_v2.sweep_report` |
+| Export the shoe | `python -m projects.digital_instron_v2 export` |
 
-> **Standalone presentation:** Use `projects.digital_instron_v2.export_digital_shoe`
-> to produce a portable `digital_shoe.json`, then run the artifact-only Virtual
-> Instron, free-body drop, and rocker examples in `projects/digital_shoe`. See
-> `projects/digital_shoe/README.md`. These examples do not use gait or a human model.
+The exported `digital_shoe.json` runs in the Instron, drop and rocker demos of
+[`projects/digital_shoe`](../digital_shoe/README.md).
 
 ## Shared mechanics implementation
 
@@ -35,7 +34,7 @@ uv run --no-sync -m projects.digital_instron_v2 fit --help
 | Module | Owns |
 |---|---|
 | `digital_shoe.material` | Ogden–Hill pressure and Maxwell recurrence, one expression source for NumPy and Warp |
-| `digital_shoe.contact` | Symmetric neighbor coupling, the two-surface column balance and the bristle law (used by the friction example, not by the column bed) |
+| `digital_shoe.contact` | Symmetric neighbor coupling and the two-surface column balance |
 | `digital_shoe.column_bed` | The batched GPU column bed |
 | `digital_shoe.runtime` | The material block and `FoundationConfig` |
 | `digital_shoe.rendering` | Column drawing from solved bottom and top endpoints |

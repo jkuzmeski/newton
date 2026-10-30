@@ -10,8 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from projects.digital_instron_v2.frame_qc import read_numeric_csv
-from projects.digital_instron_v2.sweep_split import _condition_rows, _measure_condition
+from projects.digital_instron_v2.sweep_split import _condition_rows, _measure_condition, read_numeric_csv
 
 
 class TestDigitalInstronSweepSplit(unittest.TestCase):

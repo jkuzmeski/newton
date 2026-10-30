@@ -1,19 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Split and validate the October 2026 Digital Instron foam sweeps."""
+"""Split and validate the Digital Instron foam sweeps."""
 
 from __future__ import annotations
 
+import csv
 import itertools
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
-from .cycle_windows import CycleWindowTrace, _interp_cycle, write_cycle_window_trace
-from .frame_qc import read_numeric_csv
 
 STANCE_STEPS = {160: 3, 200: 6, 240: 9, 280: 12, 320: 15}
 LOOP_COLUMNS = {
@@ -27,6 +25,31 @@ TARGETS_N = tuple(range(800, 2801, 400))
 TRAIN_CYCLES = tuple(range(90, 99))
 VALIDATION_CYCLES = (99, 100)
 PHASE_COUNT = 501
+
+
+def read_numeric_csv(path: Path) -> dict[str, np.ndarray]:
+    """Read a numeric CSV into per-column float arrays, mapping blanks to NaN."""
+    with path.open(newline="", encoding="utf-8-sig") as csv_file:
+        reader = csv.DictReader(csv_file)
+        columns: dict[str, list[float]] = {name: [] for name in reader.fieldnames}
+        for row in reader:
+            for name in reader.fieldnames:
+                try:
+                    columns[name].append(float(row[name]))
+                except (TypeError, ValueError):
+                    columns[name].append(np.nan)
+    return {name: np.asarray(values, dtype=np.float64) for name, values in columns.items()}
+
+
+def _interp_cycle(phase_grid: np.ndarray, phase: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Resample one cycle onto the phase grid."""
+    order = np.argsort(phase)
+    unique_phase, unique_indices = np.unique(phase[order], return_index=True)
+    return np.interp(phase_grid, unique_phase, values[order][unique_indices])
+
+
+def _write_trace(path: Path, data: dict[str, np.ndarray]) -> None:
+    np.savetxt(path, np.column_stack(list(data.values())), delimiter=",", header=",".join(data), comments="")
 
 
 def _condition_rows(columns: dict[str, np.ndarray], stance_ms: int, target_n: int) -> np.ndarray:
@@ -59,8 +82,8 @@ def _cycle_data(
     *,
     position_sign: float,
     force_sign: float,
-) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
-    """Phase-average requested elapsed cycles into the shared trace schema."""
+) -> dict[str, np.ndarray]:
+    """Phase-average requested elapsed cycles into the processed trace columns."""
     time = columns["Cycle Elapsed Time (s)"]
     elapsed = columns["Elapsed Cycles"]
     position = columns["Position (mm)"]
@@ -86,7 +109,7 @@ def _cycle_data(
     signed_position = position_sign * mean_position
     displacement_m = (signed_position - np.min(signed_position)) * 0.001
     time_grid = phase_grid * float(np.mean(durations))
-    data = {
+    return {
         "phase": phase_grid,
         "time_s": time_grid,
         "displacement_m": displacement_m,
@@ -96,12 +119,6 @@ def _cycle_data(
         "force_n_raw": mean_raw_force,
         "velocity_m_s": np.gradient(displacement_m, time_grid),
         "cycle_energy_j": np.zeros_like(phase_grid),
-    }
-    return data, {
-        "cycles": list(cycles),
-        "phase_count": PHASE_COUNT,
-        "displacement_zero_policy": "top_of_stroke",
-        "force_zero_policy": "sign_flip_only",
     }
 
 
@@ -174,7 +191,7 @@ def _waveform(
     columns: dict[str, np.ndarray], rows: np.ndarray, *, position_sign: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return train-cycle mean phase, compression displacement, and force."""
-    data, _ = _cycle_data(columns, rows, TRAIN_CYCLES, position_sign=position_sign, force_sign=-1.0)
+    data = _cycle_data(columns, rows, TRAIN_CYCLES, position_sign=position_sign, force_sign=-1.0)
     return data["phase"], data["displacement_m"], data["force_n"]
 
 
@@ -214,7 +231,7 @@ def _repeat_metrics(
 def process_sweep(path: str | Path, output_root: str | Path | None = None, shoe: str | None = None) -> dict[str, Any]:
     """Validate one raw sweep and write train/validation traces plus an index.
 
-    ``shoe`` labels the sweep; the October 2026 sweeps infer it from their folder name.
+    ``shoe`` labels the sweep; by default it is inferred from the folder name.
     """
     path = Path(path)
     columns = read_numeric_csv(path)
@@ -235,29 +252,8 @@ def process_sweep(path: str | Path, output_root: str | Path | None = None, shoe:
             rows = _condition_rows(columns, stance_ms, target_n)
             metrics = _measure_condition(columns, rows, stance_ms, target_n)
             for split, cycles in (("train", TRAIN_CYCLES), ("validate", VALIDATION_CYCLES)):
-                data, provenance = _cycle_data(
-                    columns, rows, cycles, position_sign=position_sign, force_sign=force_sign
-                )
-                stem = f"stance{stance_ms}ms_{target_n}N_{split}"
-                write_cycle_window_trace(
-                    out_dir / f"{stem}.csv",
-                    CycleWindowTrace(
-                        data,
-                        {
-                            "source_csv": str(path),
-                            "cycle_column": "Elapsed Cycles",
-                            **provenance,
-                            "condition": {"stance_ms": stance_ms, "target_n": target_n, "role": "condition"},
-                            "frame_config": {
-                                "time_column": "Cycle Elapsed Time (s)",
-                                "position_column": "Position (mm)",
-                                "force_column": "Force (N)",
-                                "position_sign": position_sign,
-                                "force_sign": force_sign,
-                            },
-                        },
-                    ),
-                )
+                data = _cycle_data(columns, rows, cycles, position_sign=position_sign, force_sign=force_sign)
+                _write_trace(out_dir / f"stance{stance_ms}ms_{target_n}N_{split}.csv", data)
             conditions.append(
                 {
                     "stance_ms": stance_ms,
@@ -277,20 +273,9 @@ def process_sweep(path: str | Path, output_root: str | Path | None = None, shoe:
         repeat_metrics = _measure_condition(columns, rows, 320, target_n)
         repeat_waveform = _waveform(columns, rows, position_sign=position_sign)
         comparison = _repeat_metrics(original_waveforms[target_n], repeat_waveform, target_n)
-        data, provenance = _cycle_data(columns, rows, TRAIN_CYCLES, position_sign=position_sign, force_sign=force_sign)
+        data = _cycle_data(columns, rows, TRAIN_CYCLES, position_sign=position_sign, force_sign=force_sign)
         repeat_path = f"stance200ms_repeat_{target_n}N.csv"
-        write_cycle_window_trace(
-            out_dir / repeat_path,
-            CycleWindowTrace(
-                data,
-                {
-                    "source_csv": str(path),
-                    "cycle_column": "Elapsed Cycles",
-                    **provenance,
-                    "condition": {"stance_ms": 200, "programmed_label_ms": 320, "target_n": target_n, "role": "repeat"},
-                },
-            ),
-        )
+        _write_trace(out_dir / repeat_path, data)
         conditions.append(
             {
                 "stance_ms": 200,

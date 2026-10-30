@@ -105,7 +105,7 @@ The unchanged shoe adapter subtracts the fixed shoe pitch after combining the th
 so the actual contact carrier and rendered mesh both rotate by $g$. The saved reference retains
 the reconstructed ground target separately from the raw Visual3D relative angle and the derived
 solver joint coordinate. Hogan converts the prepared five-coordinate reference
-to its floating-pelvis chain before identification; the the legacy controller fitting objectives are not part of this pipeline. Positive ground pitch indicates toe-up.
+to its floating-pelvis chain before identification. Positive ground pitch indicates toe-up.
 The linked HAS-Motion tutorial returned HTTP 403 during the cleanup review;
 the retained preparation/frame conventions are verified by local regression tests.
 

@@ -29,34 +29,6 @@ def column_endpoints(
     tops[i] = point + wp.vec3(0.0, 0.0, rest_len[i] - top[i])
 
 
-@wp.func
-def carried_column_segment(
-    transform: wp.transform,
-    anchor: wp.vec3,
-    rest: float,
-    compression: float,
-    driven: int,
-    ground_height: float,
-) -> tuple[wp.vec3, wp.vec3]:
-    """Reconstruct non-extending carrier-relative endpoints [m].
-
-    Only free surround retreats relative to the carrier. The pressure proxy and
-    friction reference anchor are not geometric displacements. Using current
-    penetration bounds also handles a render pose one integration step ahead of
-    the force history without advancing that history.
-    """
-    bottom = wp.transform_point(transform, anchor)
-    top = wp.transform_point(transform, anchor + wp.vec3(0.0, 0.0, rest))
-    retreat = float(0.0)
-    if driven == 0:
-        penetration = wp.max(ground_height - bottom[2], 0.0)
-        retreat = penetration - wp.clamp(compression, 0.0, penetration)
-    return (
-        wp.vec3(bottom[0], bottom[1], wp.max(bottom[2] + retreat, ground_height)),
-        wp.vec3(top[0], top[1], wp.max(top[2] + retreat, ground_height)),
-    )
-
-
 @wp.kernel
 def column_colors(compression: wp.array[wp.float32], reference_m: wp.float32, colors: wp.array[wp.vec3]):
     """Map compression blue to cyan to yellow to red on one fixed scale."""

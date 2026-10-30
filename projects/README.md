@@ -1,49 +1,63 @@
-# Shoe and runner project map
+# Shoe-to-runner pipeline
 
-| Package | Responsibility | Start here |
-|---|---|---|
-| [Digital Instron](digital_instron_v2/README.md) | Prepare bench data, identify material, validate and export it | `uv run --no-sync -m projects.digital_instron_v2 --help` |
-| [Digital Shoe](digital_shoe/README.md) | Portable artifacts, shared material/contact laws, shoe-only examples | `uv run --no-sync -m projects.digital_shoe --help` |
-| [Impedance Instron](impedance_instron/README.md) | Shared generative Hogan runner, LM fit, frozen prediction | `uv run --no-sync -m projects.impedance_instron --help` |
-| [Gait C3D](gait_c3d/README.md) | Separate motion/data adapters | See its input guide |
+This directory holds the research code that turns a running shoe into a
+simulated midsole and fits a simulated runner on it.
 
-## Data flow
+| Package | Role |
+|---|---|
+| [`digital_instron_v2`](digital_instron_v2/README.md) | Split Instron sweeps, prepare midsole scans, fit the foam material, export the shoe |
+| [`digital_shoe`](digital_shoe/README.md) | The `digital_shoe.json` format, the column-bed contact model, the validation report and demos |
+| [`impedance_instron`](impedance_instron/README.md) | Prepare F01 running data, fit and evaluate the Hogan runner, compare shoe materials |
 
-Bench measurements and geometry feed Digital Instron identification.
-Its exported Digital Shoe artifact supplies the same material/contact laws
-to standalone examples and the Hogan runner. Visual3D observations feed
-offline runner identification; the frozen runner generates motion without
-those observations.
+Data lives in [`DigitalInstron/`](../DigitalInstron/README.md) (shoes and Instron
+sweeps) and `data/F01/` (Visual3D running exports). Restricted assets are listed
+in [asset provenance](../ASSET_PROVENANCE.md).
 
-## Where to edit
+## Run the pipeline
 
-- `digital_shoe/material.py`, `contact.py`, `runtime.py`: shared physical laws.
-- `digital_shoe/artifact.py`: portable records and validation.
-- `digital_instron_v2/`: bench calibration, validation, and artifact export.
-- `impedance_instron/hogan/runner.py`, `mechanics.py`: causal runner and chain.
-- `impedance_instron/hogan/gpu_runner.py`, `gpu_mechanics.py`: CUDA equivalents.
-- `impedance_instron/hogan/identify.py`, `least_squares.py`: observations and LM.
-- `impedance_instron/hogan/generate.py`, `fit_report.py`: frozen prediction and report.
-- `impedance_instron/cartesian/`: retained reference/profile preparation and
-  shoe attachment, not an alternate controller pipeline.
+Run every command from the repository root after `uv sync --extra dev --extra examples`.
 
-The project routers forward options to the selected tool. No command shows
-help; it does not launch training. Impedance `fit` also writes its HTML report.
-The retired equilibrium-spline and reference-tracking workflows are removed.
+1. Split the raw Instron sweeps into train, validation and repeat traces:
 
-## Provenance and structural checks
+   ```console
+   uv run -m projects.digital_instron_v2.sweep_split
+   ```
 
-The preserved local full run is
-`outputs/impedance_instron/generative_fit_lm_flightcom_20261008`.
-Restricted motion and shoe data are not included in a source-only checkout;
-see [asset provenance](../ASSET_PROVENANCE.md). Newton's public controllers and
-shared Digital Shoe constitutive laws are unchanged.
+2. Fit a shoe's foam material and build the fit report. The committed fits are
+   in `DigitalInstron/FoamSweep/fit/`; see
+   [FoamSweep](../DigitalInstron/FoamSweep/README.md) to rerun them.
 
-Run the existing AST duplicate check without importing the projects:
+   ```console
+   uv run -m projects.digital_instron_v2 fit --shoe DigitalInstron/puma-fast-r-nitro-elite-3 --sweep DigitalInstron/FoamSweep/processed/FR3 --out <output folder>
+   uv run -m projects.digital_instron_v2.sweep_report
+   ```
+
+3. Export the fitted shoe:
+
+   ```console
+   uv run -m projects.digital_instron_v2 export --shoe DigitalInstron/puma-fast-r-nitro-elite-3 --fit DigitalInstron/FoamSweep/fit/puma-fast-r-nitro-elite-3/material_fit.json --sweep DigitalInstron/FoamSweep/processed/FR3 --output DigitalInstron/digital_shoe_showcase
+   ```
+
+4. View the shoe on the virtual Instron (`--mode drop` and `--mode rocker` also work):
+
+   ```console
+   uv run --extra examples -m projects.digital_shoe.showcase --artifact DigitalInstron/digital_shoe_showcase/digital_shoe.json --mode instron --viewer gl
+   ```
+
+5. Prepare the runner dataset, then evaluate the committed runner baseline. The
+   [runner README](impedance_instron/README.md) lists the full commands, the
+   expected losses (10.5377 train, 10.4277 held-out) and how to fit a new runner.
+
+6. Rebuild the report page from its committed data:
+
+   ```console
+   uv run python projects/impedance_instron/hogan/report_site/_build/build.py
+   ```
+
+## Tests
 
 ```console
-uv run --no-sync python scripts/check_shoe_project_duplicates.py --check
+uv run --extra dev -m newton.tests -k test_digital_instron_
+uv run --extra dev -m newton.tests -k test_digital_shoe
+uv run --extra dev -m newton.tests -k test_impedance_
 ```
-
-[SHARED_FUNCTIONS.md](SHARED_FUNCTIONS.md) describes shared computations and
-non-interchangeable copies.
