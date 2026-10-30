@@ -34,8 +34,8 @@ uv run --no-sync -m projects.impedance_instron visual3d normalize data/F01/FR3_1
 
 This writes SI measurements, marker names/validity masks, separate point/force
 clocks and SHA-256 provenance. It does not perform gait-cycle normalization,
-filtering, or controller fitting. The normalized measurements are an ingestion
-artifact, not the Cartesian solver's `reference.npz`. Existing output files and
+filtering, or controller fitting. The normalized measurements are an ingestion artifact. The runner's stance
+references are built by `prepare` from selected Visual3D stance windows. Existing output files and
 manifest templates are not overwritten. The audit reports missing files and
 sample counts without granting simulation readiness.
 
@@ -105,8 +105,7 @@ The unchanged shoe adapter subtracts the fixed shoe pitch after combining the th
 so the actual contact carrier and rendered mesh both rotate by $g$. The saved reference retains
 the reconstructed ground target separately from the raw Visual3D relative angle and the derived
 solver joint coordinate. Hogan converts the prepared five-coordinate reference
-to its floating-pelvis chain before identification; the former Cartesian and
-adjoint fitting objectives are removed. Positive ground pitch indicates toe-up.
+to its floating-pelvis chain before identification; the the legacy controller fitting objectives are not part of this pipeline. Positive ground pitch indicates toe-up.
 The linked HAS-Motion tutorial returned HTTP 403 during the cleanup review;
 the retained preparation/frame conventions are verified by local regression tests.
 
