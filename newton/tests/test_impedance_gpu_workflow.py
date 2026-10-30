@@ -269,21 +269,6 @@ class TestGpuWorkflowCpu(_WorkflowFixture):
         self.assertFalse(report["reference_inputs_used"])
         json.dumps(report, allow_nan=False)
 
-    def test_explicit_compatibility_override_is_not_validation(self):
-        """Allow deliberate diagnostic fitting while retaining the incompatibility disclosure."""
-        trial = self.contact_trial("fk")
-        _, report = fit_lm(
-            Runner.seed(),
-            [trial],
-            config=self.config,
-            search=LMConfig(iterations=1, ladder=(1.0,), chunk=16),
-            allow_incompatible=True,
-            device="cpu",
-        )
-        self.assertEqual(report["incompatible_trials"], [trial.id])
-        self.assertTrue(report["allow_incompatible"])
-        self.assertFalse(report["validated"])
-
     def test_cpu_predictions_never_receive_measurement_feedback(self):
         """Change offline targets and clocks without changing any CPU prediction input or trace."""
         self.assertTargetIsolation("cpu")

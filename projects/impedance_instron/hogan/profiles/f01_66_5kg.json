@@ -26,8 +26,6 @@
   ],
   "provenance": {
     "inertial": "S001 model shape transferred and mass scaled to measured F01 body mass 66.5 kg (participant record; static plate); reconstructed 2026-10-29 for the Hogan baseline reset by rescaling the preserved 66 kg profile (sha256 15f37cb55b5200c548501b32028ac2f62cbf2e57346d7acdcc897a1c979c7b12) by 66.5/66.0 with unchanged segment lengths",
-    "impedance": "Selected Maxwell baseline gains from projects/impedance_instron/baseline.json; provisional transfer",
-    "limits": "Engineering envelope around F01 selected stance; provisional assumption",
     "source_model": "projects/gait_c3d/assets/s001_base/model/subject.xml",
     "model_mass_kg": 81.9312118,
     "target_mass_kg": 66.5,

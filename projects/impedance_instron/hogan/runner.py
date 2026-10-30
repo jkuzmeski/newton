@@ -37,16 +37,6 @@ FEATURE_NAMES = (
     "speed_error",
     "task_speed_offset",
 )
-_SCHEMA_1_FEATURES = (
-    "bias",
-    "sin_phase",
-    "cos_phase",
-    "filtered_normal_load_bw",
-    "hip_over_ankle_leg_lengths",
-    "pelvis_lean_rad",
-    "speed_error",
-    "task_speed_offset",
-)
 OUTPUT_NAMES = ("equilibrium", "stiffness", "damping")
 
 
@@ -331,21 +321,9 @@ class Runner:
 
     @classmethod
     def from_dict(cls, data: dict) -> Runner:
-        """Load a versioned model, rejecting incompatible feature semantics.
-
-        Schema-1 models load exactly: their features are a subset, so the added
-        harmonic and load-phase weights are zero.
-        """
+        """Load a schema-2 model, rejecting incompatible feature semantics."""
         data = dict(data)
-        schema, features = data.pop("schema"), data.pop("features")
-        if schema == "generative_runner_1" and features == list(_SCHEMA_1_FEATURES):
-            old = np.asarray(data["weights"], dtype=float)
-            if old.shape != (3, 3, len(_SCHEMA_1_FEATURES)):
-                raise ValueError("Schema-1 weights must have shape (3, 3, 8)")
-            weights = np.zeros((3, 3, len(FEATURE_NAMES)))
-            weights[:, :, [FEATURE_NAMES.index(name) for name in _SCHEMA_1_FEATURES]] = old
-            data["weights"] = weights
-        elif schema != SCHEMA or features != list(FEATURE_NAMES):
+        if data.pop("schema") != SCHEMA or data.pop("features") != list(FEATURE_NAMES):
             raise ValueError("Unsupported runner schema or features")
         if data.pop("outputs") != list(OUTPUT_NAMES):
             raise ValueError("Unsupported runner outputs")

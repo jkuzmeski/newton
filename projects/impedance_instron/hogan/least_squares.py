@@ -311,7 +311,6 @@ def fit_lm(
     *,
     config: RolloutConfig | None = None,
     search: LMConfig | None = None,
-    allow_incompatible: bool = False,
     device: str = "cpu",
 ) -> tuple[Runner, dict]:
     """Fit on training trials with Levenberg-Marquardt; evaluate held-out trials afterwards.
@@ -329,7 +328,7 @@ def fit_lm(
     if not train:
         raise ValueError("Identification requires training trials")
     incompatible = [trial.id for trial in trials if not trial.provenance["compatibility"]["passed"]]
-    if incompatible and not allow_incompatible:
+    if incompatible:
         raise ValueError(f"Input compatibility failed for {len(incompatible)} trials; run inspect before fitting")
     observation = trials[0].force_observation
     if any(trial.force_observation != observation for trial in trials):
@@ -449,7 +448,6 @@ def fit_lm(
         "wall_s": perf_counter() - started,
         "history": history,
         "incompatible_trials": incompatible,
-        "allow_incompatible": allow_incompatible,
         "splits": results,
         "trials": [{"id": trial.id, "split": trial.split, **trial.provenance} for trial in trials],
     }

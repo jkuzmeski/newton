@@ -32,7 +32,6 @@ from projects.impedance_instron.hogan.identify import (
 )
 from projects.impedance_instron.hogan.least_squares import LMConfig, fit_lm
 from projects.impedance_instron.hogan.runner import (
-    _SCHEMA_1_FEATURES,
     FEATURE_NAMES,
     Bounds,
     RolloutConfig,
@@ -277,24 +276,10 @@ class TestGenerativeRunner(unittest.TestCase):
         data["features"][0] = "future_force"
         with self.assertRaises(ValueError):
             Runner.from_dict(data)
-
-    def test_schema_1_model_loads_with_identical_impedance(self):
-        """Load an eight-feature model exactly by zeroing the added feature weights."""
-        runner = Runner(Runner.seed().weights + np.random.default_rng(4).normal(0, 0.3, (3, 3, len(FEATURE_NAMES))))
-        data = runner.to_dict()
-        old = [FEATURE_NAMES.index(name) for name in _SCHEMA_1_FEATURES]
-        added = [i for i in range(len(FEATURE_NAMES)) if i not in old]
-        data["weights"] = np.asarray(data["weights"])[:, :, old].tolist()
-        data["schema"], data["features"] = "generative_runner_1", list(_SCHEMA_1_FEATURES)
-        loaded = Runner.from_dict(data)
-        np.testing.assert_array_equal(loaded.weights[:, :, added], 0)
-        state = _initial()
-        state.phase_rad, state.normal_load_bw = 2.3, 1.4
-        features = loaded.features(state, _chain(), Task(3))
-        # Schema-1 logits used exactly the retained features with the stored weights.
-        np.testing.assert_allclose(
-            loaded.weights @ features, np.asarray(data["weights"]) @ features[old], rtol=0, atol=1e-14
-        )
+        old = runner.to_dict()
+        old["schema"] = "generative_runner_1"
+        with self.assertRaises(ValueError):
+            Runner.from_dict(old)
 
     def test_harmonic_and_load_phase_features(self):
         """Evaluate higher phase harmonics and load-gated phase from internal state only."""

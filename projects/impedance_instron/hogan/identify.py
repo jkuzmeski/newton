@@ -698,11 +698,6 @@ def _parser() -> argparse.ArgumentParser:
         default=1.0,
         help="With --force-filter-hz, weight of simulated GRF content above the target bandwidth (0 ignores it)",
     )
-    parser.add_argument(
-        "--allow-incompatible",
-        action="store_true",
-        help="Permit diagnostic fitting of incompatible inputs; never a validation claim",
-    )
     return parser
 
 
@@ -758,7 +753,6 @@ def main(argv: list[str] | None = None) -> None:
                 tolerance=args.lm_tolerance,
                 central=args.central,
             ),
-            allow_incompatible=args.allow_incompatible,
             device=args.device,
         )
     elif args.command == "evaluate":

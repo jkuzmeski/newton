@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare a Cartesian reference bundle from complete Visual3D exports.
+"""Prepare a Hogan runner reference from complete Visual3D exports.
 
 Endpoint registration preserves the measured static ankle-to-MTH displacement
 in the state's foot frame. This diagnostic endpoint correction does not resolve
@@ -333,10 +333,10 @@ def prepare(
     ):
         raise ValueError("side, selected window, and subject mass are invalid")
     dynamic_root, static_root, output = Path(dynamic_root), Path(static_root), Path(output)
-    valid_refs = {"shank", "ground", "reconstructed_ground", "raw_ground_deprecated", "sole_markers"}
+    valid_refs = {"shank", "ground", "reconstructed_ground", "sole_markers"}
     if virtual_foot_reference not in valid_refs:
         raise ValueError(f"virtual_foot_reference must be one of {sorted(valid_refs)}")
-    if virtual_foot_reference in {"ground", "reconstructed_ground", "raw_ground_deprecated", "sole_markers"} and (
+    if virtual_foot_reference in {"ground", "reconstructed_ground", "sole_markers"} and (
         shoe_static_pitch_rad is None or not np.isfinite(shoe_static_pitch_rad)
     ):
         raise ValueError("Ground-referenced input requires the fixed shoe static pitch")
@@ -493,11 +493,6 @@ def prepare(
             centers[mask, center_ids[1]], centers[mask, center_ids[2]], virt_3d_deg
         )
         # Invert the existing carrier transform, preserving the fixed shoe mount.
-        state[:, 4] = np.unwrap(ground_target + shoe_static_pitch_rad - (state[:, 2] + state[:, 3]) - np.pi / 2)
-    elif virtual_foot_reference == "raw_ground_deprecated":
-        if joint_angles_source != "visual3d_virtual_foot":
-            raise ValueError("Ground interpretation requires an exported virtual-foot angle")
-        ground_target = np.unwrap(ankle_angle.copy())
         state[:, 4] = np.unwrap(ground_target + shoe_static_pitch_rad - (state[:, 2] + state[:, 3]) - np.pi / 2)
     elif virtual_foot_reference == "sole_markers":
 
@@ -713,7 +708,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--belt-speed-m-s", type=float)
     parser.add_argument(
         "--virtual-foot-reference",
-        choices=("shank", "ground", "reconstructed_ground", "raw_ground_deprecated", "sole_markers"),
+        choices=("shank", "ground", "reconstructed_ground", "sole_markers"),
         default="shank",
     )
     parser.add_argument("--shoe-static-pitch-rad", type=float)

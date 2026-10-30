@@ -14,7 +14,6 @@ import argparse
 import datetime
 import html
 import json
-import re
 from pathlib import Path
 
 import numpy as np
@@ -407,90 +406,7 @@ def write_report(run: Path, *, device: str = "cuda:0") -> Path:
     )
     path = run / "report.html"
     path.write_text(document, encoding="utf-8")
-    from .presentation import format_report  # noqa: PLC0415 - report presentation is a separate layer
-
-    return format_report(run)
-
-
-def rebuild_motion_from_saved_traces(run: Path) -> Path:
-    """Replace a fit report's motion section using only its saved fitted traces.
-
-    This supports old reports without repeating the seed-model rollout used by
-    :func:`write_report` for comparison plots.
-    """
-    run = Path(run)
-    report_path = run / "report.html"
-    if not report_path.is_file():
-        raise FileNotFoundError(f"Cannot rebuild saved motion; report is missing: {report_path}")
-    summary = json.loads((run / "summary.json").read_text(encoding="utf-8"))
-    command = summary["command"]
-    trials = load_trials(
-        command["dataset"],
-        mount_m=command["mount"],
-        pitch_rad=command["pitch"],
-        speed_m_s=command["speed"],
-        height_offset_m=command["height_offset"],
-        limit_per_split=command["limit_per_split"],
-        force_observation=force_observation(command),
-        shoe_artifact=command.get("shoe"),
-    )
-    entries = summary["trials"]
-    if [trial.id for trial in trials] != [entry["id"] for entry in entries]:
-        raise ValueError("Dataset trials no longer match the fit summary")
-    split = "eval" if "eval" in summary["splits"] else "train"
-    rows = _rows(summary, split, "learned")
-    order = np.argsort([row["loss"] for row in rows])
-    picks = [
-        (rows[int(order[0])], "Best motion", f"Lowest {split} loss of {len(rows)} stances."),
-        (rows[int(order[len(order) // 2])], "Typical motion", f"Median {split} loss of {len(rows)} stances."),
-    ]
-    if picks[0][0]["id"] == picks[1][0]["id"]:
-        picks = picks[:1]
-    by_id = {trial.id: (trial, entry) for trial, entry in zip(trials, entries, strict=True)}
-    examples = []
-    for row, title, why in picks:
-        trial, entry = by_id[row["id"]]
-        trace_path = run / entry["trace"]
-        if not trace_path.is_file():
-            raise FileNotFoundError(f"Saved fitted trace for {trial.id} is missing: {trace_path}")
-        with np.load(trace_path) as archive:
-            fitted = {key: archive[key] for key in archive.files}
-        examples.append(_example(trial, fitted, None, row, title, why, run))
-    motion = (
-        '<section id="motion"><h2>2. Motion</h2>'
-        "<p>Motion is replayed from the saved fitted trace over the full stance. Solid blue shows the fitted model; "
-        "grey shows measured pose. The digital shoe outline and measured/simulated ground reaction force remain visible.</p>"
-        + "".join(examples)
-        + "</section>"
-    )
-    document = report_path.read_text(encoding="utf-8")
-    previous = re.search(r'<section id="motion">.*?</section>', document, flags=re.S)
-    snapshot_pattern = r'(<h3>.*?</h3><p class="note">.*?</p>).*?(?=<div class="grid">)'
-    if previous and len(re.findall(snapshot_pattern, previous.group(), flags=re.S)) == len(examples):
-        # Keep existing seed comparison curves; only replace the snapshot blocks.
-        animations = iter(
-            re.search(r'<figure class="motion-gif">.*?</figure>', item, flags=re.S).group() for item in examples
-        )
-
-        def replace_snapshot(match):
-            note = re.sub(
-                r"Solid blue:.*?</p>",
-                "Blue: saved simulated pose; grey: measured pose. The GIF includes the measured and simulated GRF.</p>",
-                match.group(1),
-                flags=re.S,
-            )
-            return note + next(animations)
-
-        motion = re.sub(snapshot_pattern, replace_snapshot, previous.group(), flags=re.S)
-        motion = motion.replace(
-            "Snapshots are at measured touchdown, 30% of contact, measured peak Fz, and 85% of contact.",
-            "Looping GIFs replay the saved fitted motion against the measured pose.",
-        )
-    updated, count = re.subn(r'<section id="motion">.*?</section>', lambda _: motion, document, count=1, flags=re.S)
-    if count != 1:
-        raise ValueError(f"Could not find one motion section in {report_path}")
-    report_path.write_text(updated, encoding="utf-8")
-    return report_path
+    return path
 
 
 _PAGE = """<!doctype html>
@@ -540,18 +456,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--device", default="cuda:0", help="Device for the seed comparison rollouts")
-    parser.add_argument(
-        "--saved-traces", action="store_true", help="Upgrade an existing report without rerunning dynamics"
-    )
     args = parser.parse_args(argv)
-    if args.saved_traces:
-        from .presentation import format_report  # noqa: PLC0415
-
-        if 'data-generative-layout="shared"' not in (args.run / "report.html").read_text():
-            rebuild_motion_from_saved_traces(args.run)
-        print(format_report(args.run))
-    else:
-        print(write_report(args.run, device=args.device))
+    print(write_report(args.run, device=args.device))
 
 
 if __name__ == "__main__":
