@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate and load the frozen measured Cartesian reference."""
+"""Validate and load a prepared Visual3D stance reference."""
 
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def validate(reference: dict[str, np.ndarray]) -> None:
 
 
 def load(path: str | Path) -> dict[str, np.ndarray]:
-    """Load and validate a Cartesian reference NPZ without pickle."""
+    """Load and validate a prepared stance NPZ without pickle."""
     with np.load(Path(path), allow_pickle=False) as archive:
         reference = {name: archive[name].copy() for name in archive.files}
     validate(reference)

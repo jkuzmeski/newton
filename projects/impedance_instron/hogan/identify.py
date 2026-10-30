@@ -235,8 +235,6 @@ class Trial:
             raise ValueError("Trial clocks must increase strictly")
         if self.force_time_s[0] > 0 or self.force_time_s[-1] < self.time_s[-1]:
             raise ValueError("Trial forces must cover the prediction horizon")
-        if self.force_observation is not None and not isinstance(self.force_observation, ForceObservation):
-            raise ValueError("force_observation must be a ForceObservation or None")
 
     @property
     def duration_s(self) -> float:
@@ -698,11 +696,6 @@ def _parser() -> argparse.ArgumentParser:
         default=1.0,
         help="With --force-filter-hz, weight of simulated GRF content above the target bandwidth (0 ignores it)",
     )
-    parser.add_argument(
-        "--allow-incompatible",
-        action="store_true",
-        help="Permit diagnostic fitting of incompatible inputs; never a validation claim",
-    )
     return parser
 
 
@@ -758,7 +751,6 @@ def main(argv: list[str] | None = None) -> None:
                 tolerance=args.lm_tolerance,
                 central=args.central,
             ),
-            allow_incompatible=args.allow_incompatible,
             device=args.device,
         )
     elif args.command == "evaluate":

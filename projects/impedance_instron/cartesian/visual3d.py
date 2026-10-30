@@ -40,12 +40,7 @@ def _clock_rate(times: np.ndarray, declared: float | None, label: str) -> float:
     """Validate a uniform clock allowing for Visual3D float32 time rounding."""
     if len(times) < 2:
         raise ValueError(f"{label} needs at least two samples")
-    if declared is not None and (
-        isinstance(declared, bool)
-        or not isinstance(declared, (int, float))
-        or not np.isfinite(declared)
-        or declared <= 0
-    ):
+    if declared is not None and (not np.isfinite(declared) or declared <= 0):
         raise ValueError(f"{label} declared rate must be finite and positive")
     inferred = (len(times) - 1) / float(times[-1] - times[0])
     if declared is not None and not np.isclose(declared, inferred, rtol=1.0e-4):
@@ -174,18 +169,16 @@ def _manifest(root: Path, manifest_path: Path | None) -> dict[str, Any]:
     missing = [name for name in required if name not in data]
     if missing:
         raise ValueError(f"{path} is missing required fields: {', '.join(missing)}")
-    if not isinstance(data["up_axis"], str) or not isinstance(data["forward_axis"], str):
-        raise ValueError(f"{path} must declare string up_axis and forward_axis")
     return data
 
 
-def _time_file(root: Path, name: str, count: int, rate: float | None, units: str) -> np.ndarray:
+def _time_file(root: Path, name: str, count: int, units: str) -> np.ndarray:
     path = root / name
     if path.exists():
         _check_signal(path, "FRAME_NUMBERS", folder="ORIGINAL")
         _, values = _ascii(path)
         if values.shape[1] != 1 or len(values) != count:
-            raise ValueError(f"{path} must contain exactly one time value for each sample")
+            raise ValueError(f"{path} must contain one time value for each of {count} samples")
         times = values[:, 0]
         if not np.all(np.isfinite(times)):
             raise ValueError(f"{path} contains nonfinite time values")
@@ -206,8 +199,8 @@ def _single_signal(root: Path, directory: str, axis: str, count: int | None = No
         raise ValueError(f"missing required Visual3D signal: {path}")
     _check_signal(path, directory, folder="ORIGINAL", axis=axis, name="FP1")
     _, values = _ascii(path)
-    if values.shape[1] != 1 or (count is not None and len(values) != count):
-        raise ValueError(f"{path} must contain one column and {count} samples")
+    if count is not None and len(values) != count:
+        raise ValueError(f"{path} must contain {count} samples")
     return values[:, 0]
 
 
@@ -248,9 +241,7 @@ def load_visual3d_export(root: str | Path, *, manifest_path: str | Path | None =
     _check_signal(
         root / manifest.get("marker_time_file", "motion_time.txt"), "FRAME_NUMBERS", folder="ORIGINAL", name="TIME"
     )
-    marker_time = _time_file(
-        root, manifest.get("marker_time_file", "motion_time.txt"), len(marker_values), point_rate, time_units
-    )
+    marker_time = _time_file(root, manifest.get("marker_time_file", "motion_time.txt"), len(marker_values), time_units)
     force = np.stack([_single_signal(root, "FORCE", axis) for axis in "XYZ"], axis=1) * force_scale
     moment = np.stack([_single_signal(root, "FREEMOMENT", axis, len(force)) for axis in "XYZ"], axis=1) * moment_scale
     cop = np.stack([_single_signal(root, "COFP", axis, len(force)) for axis in "XYZ"], axis=1) * cop_scale
@@ -262,9 +253,7 @@ def load_visual3d_export(root: str | Path, *, manifest_path: str | Path | None =
         folder="ORIGINAL",
         name="ANALOGTIME",
     )
-    analog_time = _time_file(
-        root, manifest.get("analog_time_file", "motion_analog_time.txt"), len(force), analog_rate, time_units
-    )
+    analog_time = _time_file(root, manifest.get("analog_time_file", "motion_analog_time.txt"), len(force), time_units)
 
     point_rate = _clock_rate(marker_time, point_rate, "point clock")
     analog_rate = _clock_rate(analog_time, analog_rate, "analog clock")

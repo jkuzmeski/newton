@@ -1,13 +1,13 @@
-# Runner inputs and shoe attachment
+# Visual3D and runner inputs
 
-This directory retains only the infrastructure used by the
-[generative Hogan pipeline](../README.md):
+The historical `cartesian/` package name is retained for existing imports and
+serialized schema names. It contains current preparation and input code, not a
+Cartesian controller:
 
-- `visual3d.py`, `prepare_visual3d.py`, `prepare_dataset.py`: export ingestion,
-  endpoint registration, and peak-to-peak observations.
-- `data.py`, `profile.py`: validation/loading of existing observation and inertial schemas.
-- `shoe.py`: rigid attachment to the shared Digital Shoe runtime.
+- `visual3d.py` reads Visual3D exports and source clocks.
+- `prepare_visual3d.py` makes a stance reference from a selected window.
+- `prepare_dataset.py` selects and splits the F01 stance windows.
+- `data.py` and `profile.py` validate the saved observation and inertial inputs.
+- `shoe.py` attaches the shared Digital Shoe column bed to the planar foot.
 
-The directory name and existing data schemas are retained so saved datasets
-remain usable. Cartesian controller models, splines, searches, and adjoint
-experiments are removed; runner dynamics live exclusively in `hogan/`.
+The runner model and its identification are in `hogan/`.

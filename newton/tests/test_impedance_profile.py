@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Verify that Hogan profiles contain inertias, not retired controller settings."""
+"""Verify that Hogan profiles contain the physical inputs used by the chain."""
 
 import json
 import tempfile
@@ -17,7 +17,7 @@ from projects.impedance_instron.hogan.mechanics import chain_from_profile
 
 class TestRunnerProfile(unittest.TestCase):
     def setUp(self):
-        """Build a physically complete profile without controller settings."""
+        """Build a complete profile from inertial inputs."""
         self.profile = {
             "schema": profile.SCHEMA,
             "masses_kg": [8.0, 4.0, 1.0],
@@ -26,20 +26,19 @@ class TestRunnerProfile(unittest.TestCase):
             "provenance": {"inertial": "Synthetic test geometry"},
         }
 
-    def test_load_inertias_without_tracker_gains(self):
-        """Accept inertial-only input and discard recognized historical controller fields."""
+    def test_load_physical_inputs(self):
+        """Load only the inertial fields used to build the runner chain."""
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profile.json"
-            for extra in ({}, dict.fromkeys(profile._LEGACY_FIELDS, "unused tracker setting")):
-                path.write_text(json.dumps(self.profile | extra))
-                loaded = profile.load(path)
-                self.assertEqual(loaded, self.profile)
-                chain = chain_from_profile(_reference(), loaded)
-                np.testing.assert_array_equal(chain.masses_kg[1:], self.profile["masses_kg"])
-                np.testing.assert_array_equal(chain.inertias_kg_m2[1:], self.profile["inertias_kg_m2"])
+            path.write_text(json.dumps(self.profile))
+            loaded = profile.load(path)
+        self.assertEqual(loaded, self.profile)
+        chain = chain_from_profile(_reference(), loaded)
+        np.testing.assert_array_equal(chain.masses_kg[1:], self.profile["masses_kg"])
+        np.testing.assert_array_equal(chain.inertias_kg_m2[1:], self.profile["inertias_kg_m2"])
 
     def test_reject_invalid_physical_inputs(self):
-        """Reject missing, nonfinite, nonnumeric, wrongly shaped, or nonpositive inertias."""
+        """Reject missing, malformed, nonfinite, and nonpositive inertias."""
         for name, shape in profile._SHAPES.items():
             missing = self.profile.copy()
             del missing[name]
@@ -53,13 +52,14 @@ class TestRunnerProfile(unittest.TestCase):
                     profile.validate(self.profile | {name: value})
 
     def test_reject_unrecorded_or_unknown_physical_fields(self):
-        """Require inertial provenance and reject unsupported schemas or physical parameters."""
+        """Require inertial provenance and reject unsupported profile fields."""
         for extra in (
             {"schema": "unrecognized"},
             {"provenance": {}},
             {"provenance": {"inertial": " "}},
             {"provenance": {"inertial": "test", "mass": np.nan}},
             {"shoe_mass_kg": 1.0},
+            {"hip_stiffness_n_m": 10.0},
         ):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 profile.validate(self.profile | extra)

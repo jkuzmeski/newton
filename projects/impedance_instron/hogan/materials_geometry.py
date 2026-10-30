@@ -178,7 +178,7 @@ def rematerialize_matched(trials: list, condition: dict) -> list:
     return result
 
 
-def study_metadata(conditions: list[dict], trials: list, args) -> dict:
+def study_metadata(conditions: list[dict], args) -> dict:
     """Declare the factorial geometry experiment and its matched initialization."""
     return {
         "question": "How do three foam material laws and two column-bed geometry changes affect joint mechanical work under one frozen controller?",

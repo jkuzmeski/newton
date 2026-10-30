@@ -42,7 +42,7 @@ def _tiny_shoe_file(directory: str) -> Path:
     return path
 
 
-class TestCartesianShoeDevice(unittest.TestCase):
+class TestShoeDevice(unittest.TestCase):
     def test_cpu_device_is_rejected(self):
         """Refuse a CPU shoe because the column bed runs only on CUDA."""
         with tempfile.TemporaryDirectory() as directory:
@@ -51,7 +51,7 @@ class TestCartesianShoeDevice(unittest.TestCase):
 
 
 @unittest.skipUnless(wp.is_cuda_available(), "The column bed requires CUDA")
-class TestCartesianShoe(unittest.TestCase):
+class TestShoe(unittest.TestCase):
     """Keep contact a force response rather than prescribed foot motion."""
 
     def setUp(self):

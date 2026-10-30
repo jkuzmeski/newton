@@ -281,7 +281,7 @@ def main(argv=None, *, condition_builder=None, trial_builder=None, study_metadat
         },
     }
     if study_metadata:
-        plan.update(study_metadata(conditions, trials, args))
+        plan.update(study_metadata(conditions, args))
     write_json(root / "experiment-plan.json", plan)
     roles = (
         "provenance",
@@ -296,8 +296,6 @@ def main(argv=None, *, condition_builder=None, trial_builder=None, study_metadat
         "training_history",
         "metrics",
         "qualification",
-        "report_spec",
-        "report_html",
     )
     template = {
         "schema": "instron-experiment-artifacts-v1",
@@ -324,7 +322,6 @@ def main(argv=None, *, condition_builder=None, trial_builder=None, study_metadat
         return
     started = datetime.now(timezone.utc).isoformat()
     source_paths = [*Path("projects/impedance_instron").rglob("*.py"), *Path("projects/digital_shoe").glob("*.py")]
-    # Presentation is generated after execution and cannot affect saved trajectories.
     source_paths = [p for p in source_paths if not p.name.endswith("_report.py")]
     sources = {str(p.relative_to("projects")): sha256(p) for p in source_paths}
     for path in source_paths:

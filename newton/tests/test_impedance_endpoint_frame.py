@@ -18,7 +18,7 @@ from projects.impedance_instron.cartesian import prepare_visual3d
 from projects.impedance_instron.cartesian.data import load as load_reference
 from projects.impedance_instron.hogan.mechanics import Chain, from_leg_coordinates
 
-GROUND_REFERENCES = ("ground", "reconstructed_ground", "raw_ground_deprecated", "sole_markers")
+GROUND_REFERENCES = ("ground", "reconstructed_ground", "sole_markers")
 
 
 def _rotation(angle: float) -> np.ndarray:

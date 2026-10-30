@@ -1,21 +1,15 @@
 # Generative runner with variable impedance
 
-## Latest full run (2026-10-08)
+## Current evaluated model
 
-The [frozen F01 model](baselines/generative_runner_f01_20261008.json) describes
-one 66 kg runner at 3.65 m/s, with the Puma Fast-R Nitro Elite 3 digital shoe.
-The original run is `outputs/impedance_instron/generative_fit_lm_flightcom_20261008`.
-See the [pipeline guide](../README.md) for commands.
+The committed slider-shoe model is
+[`baselines/generative_runner_score_slider_20261029.json`](baselines/generative_runner_score_slider_20261029.json),
+with its fit record beside it. On the prepared 107-member F01 dataset, its
+mean score is 10.537715730923786 on 98 training stances and 10.427736690837257
+on 9 held-out stances. It was fitted against the current Digital Shoe column
+bed with 20 Hz force observation and immediate damping. See the
+[command guide](../README.md) for reproducible preparation and evaluation.
 
-| Split | Model | Mean loss | Hip RMSE fwd / up [mm] | Angle RMSE [deg] | Fx / Fz RMSE [N] | Mean absolute peak Fz error [N] | Contact error [ms] |
-|---|---|---:|---:|---:|---:|---:|---:|
-| Train (98) | seed | 120.8 | 84 / 51 | 12.0 | 211 / 349 | 775 | -1 |
-| Train (98) | fitted | 16.1 | 47 / 19 | 6.2 | 108 / 128 | 58 | -39 |
-| Held-out (9) | seed | 125.4 | 79 / 52 | 11.8 | 214 / 359 | 866 | -2 |
-| Held-out (9) | fitted | **14.8** | **42 / 18** | **6.5** | **105 / 119** | **26** | -42 |
-
-LM ran 15 iterations and 195,608 candidate-stance rollouts in about 82 minutes
-on an RTX A4000 Laptop GPU. Training objective fell from 42.2 to 10.03.
 These are free-prediction fitting results, not physiological validation.
 
 ## Runtime boundary
@@ -45,13 +39,13 @@ snaps to observed touchdown.
 
 The equilibrium moves internally and can supply work. This is an active
 effective-actuation model, not a passivity or muscle-identification claim.
-Schema-1 models still load with zero weights on the added features.
+Models use schema 2; incompatible feature sets are rejected.
 
 ## Preparation and initialization
 
 [`prepare_dataset`](../cartesian/prepare_dataset.py) preserves the selected
-windows and split. The rebuilt dataset (`outputs/hogan_reset/dataset_f01_20hz`)
-uses the corrected mass and belt speed from
+windows and split. The fit dataset (`outputs/hogan_reset/fit_dataset_f01_20hz`)
+uses the measured mass and belt speed from
 `data/F01/FR3_1/stance_selection.json`. Its fit set
 (`outputs/hogan_reset/fit_dataset_f01_20hz`) is prepared with `--exclude` for the
 three of 110 windows whose relaxed shoe starts below ground; `inspect` reports
@@ -71,8 +65,7 @@ start at zero.
 
 The loader checks ankle FK agreement and flight at the prediction origin.
 Loaded clearance and COP footprint conflicts are reported, not gated.
-Incompatible inputs stop fitting before training; `--allow-incompatible` is
-an explicitly unvalidated diagnostic override. Upstream filtering may be
+Incompatible inputs stop fitting before training; Upstream filtering may be
 noncausal: the prefix boundary applies to the supplied prepared positions.
 
 ## Identification and execution
@@ -134,8 +127,7 @@ Use one fixed physical subject profile; hold out entire sessions/conditions
 when testing transfer. Changing the shoe for a mechanical comparison must keep
 the runner and initial state fixed.
 Profiles contain thigh/shank/foot masses, local COM offsets, sagittal inertias,
-and inertial provenance. Historical Cartesian gains and search limits are
-discarded on load, not reused as runner parameters.
+and inertial provenance. The profile contains inertial inputs only; controller settings belong to the runner model.
 
 ## GRF targets and force ripple (2026-10-09)
 
@@ -214,5 +206,5 @@ stances, so start such fits from a completed model with `--model`.
 - No explicit muscles, tendons, transport delays, or metabolic cost are modeled.
   Transfer across speed/footwear and sustained running are not certified.
 
-The saved full-run results and original measurements are preserved; cleanup
+The committed fit record and original measurements are preserved; cleanup
 does not refit parameters or conceal these limitations.
