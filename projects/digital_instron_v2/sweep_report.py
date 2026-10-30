@@ -394,9 +394,8 @@ energy   E = sum_i A_i W(c_i)  +  1/2 sum_faces k_ij [ (t_i - t_j)^2 + (b_i - b_
 reactions   T_i = last on top i (held tops only),   R_i = platen on bottom i (landed bottoms only)
 balance     sum_i T_i = sum_i R_i   (the shear terms cancel over the bed)
 </pre>
-<p><b>No cross term.</b> The energy has one shear layer at the tops and one at the bottoms, and nothing that couples a
-top difference to a bottom difference. An earlier variant had such a cross term. It lifted thick edge columns off the
-platen, so it was dropped.</p>
+<p><b>No cross term.</b> The energy has one shear layer at the tops and one at the bottoms; the layers do not couple
+top and bottom differences.</p>
 <p><b>Four column states</b> (for columns under the last tread):</p>
 <ul>
 <li><b>held, landed</b>: the last presses the top and the bottom stands on the platen; the foam carries the load straight through.</li>

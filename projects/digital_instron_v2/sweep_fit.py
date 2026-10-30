@@ -300,6 +300,12 @@ def contact_diagnostics(columns: dict[str, np.ndarray], world: int, bed) -> dict
     }
 
 
+def starts_from_fit(path: Path) -> list[Material]:
+    """Load start materials from a fit report, in order."""
+    records = json.loads(path.read_text())["optimization"]["starts"]
+    return [Material(**record["start"]) for record in records]
+
+
 def run(
     shoe: Path,
     sweep: Path,
@@ -311,13 +317,15 @@ def run(
     random_starts: int,
     seed: int,
     substeps: int,
+    starts_from: Path | None = None,
 ) -> dict:
     """Register the last, fit the material to the train traces from many starts, and score every trace.
 
     Every trace frame is replayed in ``substeps`` contact steps.
 
-    The starts are :data:`CALIBRATED_MATERIAL` and ``random_starts``
-    Latin-hypercube materials drawn with ``seed``.
+    By default, starts are :data:`CALIBRATED_MATERIAL` and ``random_starts``
+    Latin-hypercube materials drawn with ``seed``. ``starts_from`` loads the
+    recorded starts from an earlier fit report instead.
     """
     grid = load_grid(shoe / side / "column_grid.npz")
     index = json.loads((sweep / "conditions.json").read_text())
@@ -346,7 +354,7 @@ def run(
     dt = float(np.mean(np.diff(traces[0]["time_s"])))
     train = [k for k, (_, split) in enumerate(names) if split == "train"]
 
-    starts = [initial, *latin_hypercube_starts(random_starts, seed)]
+    starts = starts_from_fit(starts_from) if starts_from else [initial, *latin_hypercube_starts(random_starts, seed)]
     start = time.perf_counter()
     # The start may move from first contact (the whole indentation undone) to
     # MAX_START_OFFSET_M deeper than the registered preload indentation.
@@ -424,6 +432,7 @@ def main() -> None:
         default=8,
         help="Contact steps per 1 ms trace frame; 8 is the runner's 1.25e-4 s contact step.",
     )
+    parser.add_argument("--starts-from", type=Path, help="Use starts recorded in a prior material_fit.json.")
     args = parser.parse_args()
     report = run(
         args.shoe,
@@ -435,6 +444,7 @@ def main() -> None:
         random_starts=args.random_starts,
         seed=args.seed,
         substeps=args.substeps,
+        starts_from=args.starts_from,
     )
     print(json.dumps({k: report[k] for k in ("shoe", "material", "registration")}, indent=2, default=float))
 

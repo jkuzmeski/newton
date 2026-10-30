@@ -48,14 +48,10 @@ class Material:
     :data:`~projects.digital_shoe.runtime.SHEAR_LAYER_FRACTION`.
 
     The optional rate-independent hysteresis branch is a Jenkin (spring-slider)
-    unit per column in parallel with the equilibrium series and the Maxwell
-    branch: a slider stress clipped at ``slider_yield_pa`` and advanced by
-    ``slider_modulus_pa`` per unit strain. The measured FR3 loops lose a larger
-    share of their loop energy at low load than the Maxwell branch can spread
-    over one relaxation time, and the fit used to pay for that by pinning foam
-    parameters on bounds; the slider adds that loss without a rate. Both fields
-    default to zero, which keeps the slider stress at zero and the
-    viscoelastic law exact, so earlier fits and artifacts start where they were.
+    unit per column, in parallel with the equilibrium and Maxwell branches. Its
+    stress is clipped at ``slider_yield_pa`` and advances by
+    ``slider_modulus_pa`` per unit strain. Zero defaults disable the branch and
+    preserve the viscoelastic law.
 
     """
 
@@ -102,18 +98,7 @@ class Material:
         )
 
 
-# Fitted intact-shoe parameters from the one-unknown-per-column calibration that
-# preceded the two-surface column bed; the column-bed fit starts from them.
-#
-# Under that calibration this material passed all six declared held-out gates (rearfoot peak 2.8%,
-# RMSE 5.6%, loop 7.5%; full-foot peak 5.9%, RMSE 6.4%, loop 8.8%), which the
-# single-term law did not: it reached 2 of 6 and split the peak error between
-# the fixtures at -15% and +19%. The reason is the strain range, not extra
-# freedom to absorb a disagreement. The rearfoot punch reaches about 90% strain
-# and the full-foot last about 74%, and one first-order term has a single shape
-# exponent for both, so its objective was bimodal (mu_eq 52 kPa with alpha 0.22
-# against mu_eq 240 kPa with alpha 11.4 at nearly equal loss). With two terms a
-# multi-start from both of those basins converges to this one optimum.
+# Calibrated material parameters used as the first fit start.
 CALIBRATED_MATERIAL = Material(
     instantaneous_shear_modulus_pa=267615.1977311966,
     hyperfoam_exponent=18.07697643908876,
@@ -165,23 +150,9 @@ def force_residual(measured_n: np.ndarray, displacement_m: np.ndarray, predicted
     )
 
 
-# Order matches the :class:`Material` field order: first-term shear modulus,
-# first-term exponent, equilibrium fraction, relaxation time, second-term shear
-# modulus, second-term exponent, shear-layer fraction, slider modulus, slider
-# yield stress. There is no fixture-specific parameter to bound.
-#
-# The second modulus may reach zero, which turns the series back into the
-# single-term law exactly. The second exponent may be negative: an Ogden-Hill
-# series admits either sign, a positive exponent produces the soft ``1 / lambda``
-# plateau and a negative one produces densification, and the published two-term
-# fits of this foam family use one of each. Zero is inside the interval and is
-# handled by the removable limit of the Ogden-Hill term. The first exponent
-# reaches 40 because the FR3 sweep drives it onto a bound of 20. The shear-layer
-# fraction spans a hundredth of the foam modulus to a layer stiffened 30-fold by
-# a plate. The slider bounds reach zero like the second modulus's: a material
-# with the branch off must stay off when a start clips into them, so the fit's
-# first evaluation still reproduces that material's replay exactly, and the
-# search space keeps the branch identifiable above the noise floor.
+# Order matches the :class:`Material` field order. A zero second modulus or
+# slider recovers the simpler law exactly. The second exponent may be negative:
+# a positive exponent gives the soft plateau and a negative one densification.
 FIT_LOWER_BOUNDS = (1.0e3, 0.1, 0.01, 5.0e-3, 0.0, -20.0, 0.01, 0.0, 0.0)
 FIT_UPPER_BOUNDS = (1.0e8, 40.0, 1.0, 2.0, 1.0e8, 20.0, 30.0, 1.0e8, 1.0e6)
 

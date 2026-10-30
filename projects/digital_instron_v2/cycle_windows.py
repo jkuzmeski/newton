@@ -154,9 +154,6 @@ def build_cycle_window_trace(
     frame = _frame_from_config(frame_config)
     columns = read_numeric_csv(path)
     selected_cycle_column = cycle_column or infer_cycle_column(columns)
-    if selected_cycle_column not in columns:
-        raise ValueError(f"Cycle column {selected_cycle_column!r} is missing from {path}")
-
     required = (frame.time_column, frame.position_column, frame.force_column, selected_cycle_column)
     missing = [name for name in required if name not in columns]
     if missing:
