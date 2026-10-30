@@ -1,1 +1,0 @@
-Add `--method lm` to the generative runner `identify fit` command to run Levenberg-Marquardt identification with per-iteration progress output, and `--compression-limit` to set the driven-shoe compression fraction that fails a rollout

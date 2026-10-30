@@ -1,1 +1,0 @@
-Give the digital-shoe column bed's shear layers a constant modulus of a tenth of the foam's rest shear modulus, and join neighbouring columns in series (harmonic mean of their thicknesses). Refit materials that were fitted on the earlier bed.

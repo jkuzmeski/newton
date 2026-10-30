@@ -1,1 +1,0 @@
-Pin the Digital Instron midsole model to measured foam mechanics: set the effective Poisson ratio to zero and derive each column's Pasternak coefficient from the equilibrium shear modulus and its rest thickness instead of fitting one shared coefficient.

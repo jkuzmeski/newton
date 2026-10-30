@@ -1,1 +1,0 @@
-Cap the digital-shoe Hyperfoam equilibrium tangent modulus at 100 MPa from the strain where it first gets that stiff, continue the pressure linearly past it. Column beds clamp compression at ``max_strain`` (0.95) in their sweeps.

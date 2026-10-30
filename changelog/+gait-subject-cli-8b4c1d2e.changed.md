@@ -1,1 +1,0 @@
-Simplify the `opensim_subject` CLI with a self-contained `--subject` folder workflow and `--mass`, `--height`, `--template`, `--geometry`, `--substeps`, `--overwrite`, and `--show-collision`; interactive runs default to a project-local subject folder, legacy option names remain accepted but hidden from help, and compiled subjects can be reopened without repeating source paths.

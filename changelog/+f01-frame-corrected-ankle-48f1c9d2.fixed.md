@@ -1,1 +1,0 @@
-Reconstruct foot ground pitch from 3D Cardan joint angles and shank frame for Visual3D virtual foot exports in impedance_instron, correcting late-stance shoe pitch and aligning with physical tracking markers.

@@ -1,1 +1,0 @@
-Bump the Digital Shoe artifact schema to ``digital_shoe_2``: ``column_bed`` requires ``top_bonded`` and each Instron fixture requires ``bed_bottom_above_platen_m``. Re-export existing ``digital_shoe.json`` files with ``projects.digital_instron_v2.export_digital_shoe``.

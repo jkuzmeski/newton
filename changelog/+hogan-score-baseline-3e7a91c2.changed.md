@@ -1,1 +1,0 @@
-Change the Hogan materials study default controller to the 2026-10-29 score baseline fitted on the FR3 column-bed shoe; the 2026-10-10 controller predates the column bed and reverses the material ranking.
