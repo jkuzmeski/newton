@@ -20,7 +20,6 @@ import warp as wp
 
 from newton.tests.unittest_utils import patch_sys_module
 from projects.impedance_instron import __main__ as pipeline
-from projects.impedance_instron.hogan import __main__ as hogan_pipeline
 from projects.impedance_instron.hogan.fit_report import write_report
 from projects.impedance_instron.hogan.identify import force_observation, load_trials, predict_many, score
 from projects.impedance_instron.hogan.runner import RolloutConfig, Runner
@@ -55,7 +54,6 @@ class TestHoganCommands(unittest.TestCase):
         for command in pipeline._COMMANDS:
             self.assertIn(command, stream.getvalue())
         self.assertNotIn("baseline12", stream.getvalue())
-        self.assertIs(hogan_pipeline.main, pipeline.main)
 
     def test_reject_unknown_or_retired_commands(self):
         """Reject retired tracking commands instead of silently launching another model."""

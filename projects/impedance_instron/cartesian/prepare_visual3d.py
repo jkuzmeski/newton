@@ -21,11 +21,9 @@ from typing import Any
 
 import numpy as np
 
-from projects.gait_c3d.c3d_adapter import lab_to_newton_rotation
-
 from .data import validate as validate_reference
 from .profile import load as load_profile
-from .visual3d import _ascii, load_visual3d_export
+from .visual3d import _ascii, lab_to_newton_rotation, load_visual3d_export
 
 
 def _kabsch_rigid_transforms(

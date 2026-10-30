@@ -14,7 +14,6 @@ newton
 - :doc:`newton.geometry <newton_geometry>`
 - :doc:`newton.ik <newton_ik>`
 - :doc:`newton.math <newton_math>`
-- :doc:`newton.opensim <newton_opensim>`
 - :doc:`newton.selection <newton_selection>`
 - :doc:`newton.sensors <newton_sensors>`
 - :doc:`newton.solvers <newton_solvers>`
@@ -59,7 +58,6 @@ newton
 
    AxisType
    eval_fk
-   eval_fk_batched
    eval_ik
    eval_inverse_dynamics_force
    eval_inverse_dynamics_passive

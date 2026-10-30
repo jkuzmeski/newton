@@ -63,3 +63,4 @@ Example::
 .. autofunction:: add_tendon_fixed
 
 .. autofunction:: add_tendon_spatial
+

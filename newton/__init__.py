@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-from importlib import import_module as _import_module
-
 # ==================================================================================
 # core
 # ==================================================================================
@@ -92,7 +90,6 @@ from ._src.sim import (  # noqa: E402
     State,
     StateFlags,
     eval_fk,
-    eval_fk_batched,
     eval_ik,
     eval_inverse_dynamics_force,
     eval_inverse_dynamics_passive,
@@ -117,7 +114,6 @@ __all__ += [
     "State",
     "StateFlags",
     "eval_fk",
-    "eval_fk_batched",
     "eval_ik",
     "eval_inverse_dynamics_force",
     "eval_inverse_dynamics_passive",
@@ -132,23 +128,12 @@ __all__ += [
 # ==================================================================================
 from . import actuators, controllers, geometry, ik, math, selection, sensors, solvers, usd, utils, viewer  # noqa: E402
 
-
-def __getattr__(name: str):
-    """Load optional format adapters only when requested."""
-    if name == "opensim":
-        module = _import_module(f"{__name__}.opensim")
-        globals()[name] = module
-        return module
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 __all__ += [
     "actuators",
     "controllers",
     "geometry",
     "ik",
     "math",
-    "opensim",
     "selection",
     "sensors",
     "solvers",

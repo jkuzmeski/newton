@@ -14,12 +14,26 @@ from typing import Any
 
 import numpy as np
 
-from projects.gait_c3d.c3d_adapter import lab_to_newton_rotation
-
 _SCHEMA = "visual3d_export_manifest_1"
 _UNIT_SCALE = {"m": 1.0, "cm": 1.0e-2, "mm": 1.0e-3}
 _FORCE_SCALE = {"n": 1.0, "newton": 1.0, "newtons": 1.0}
 _MOMENT_SCALE = {"n*m": 1.0, "nm": 1.0, "nmm": 1.0e-3}
+
+
+def lab_to_newton_rotation(up_axis: str, forward_axis: str) -> np.ndarray:
+    """Return the rotation from lab axes to Newton's X-forward, Y-left, Z-up frame.
+
+    Args:
+        up_axis: Lab axis pointing up, such as ``"+Z"``.
+        forward_axis: Lab axis pointing forward, such as ``"-Y"``.
+    """
+
+    def axis(value: str) -> np.ndarray:
+        sign = -1.0 if value.startswith("-") else 1.0
+        return sign * np.eye(3)["XYZ".index(value.lstrip("+-").upper())]
+
+    up, forward = axis(up_axis), axis(forward_axis)
+    return np.stack((forward, np.cross(up, forward), up))
 
 
 def _clock_rate(times: np.ndarray, declared: float | None, label: str) -> float:
