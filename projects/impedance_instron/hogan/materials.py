@@ -281,7 +281,7 @@ def main(argv=None, *, condition_builder=None, trial_builder=None, study_metadat
         },
     }
     if study_metadata:
-        plan.update(study_metadata(conditions, trials, args))
+        plan.update(study_metadata(conditions, args))
     write_json(root / "experiment-plan.json", plan)
     roles = (
         "provenance",

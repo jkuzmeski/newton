@@ -155,7 +155,7 @@ def build_conditions(artifact: Path, output: Path, *, variants: dict[str, dict[s
     return rows
 
 
-def study_metadata(conditions: list[dict], trials: list, args) -> dict:
+def study_metadata(conditions: list[dict], args) -> dict:
     """Declare the one-at-a-time material sensitivity study."""
     return {
         "question": "How much do the fitted shoe's own material properties change joint work under a frozen controller?",

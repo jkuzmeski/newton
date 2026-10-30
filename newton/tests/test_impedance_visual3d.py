@@ -250,7 +250,7 @@ class Visual3DExportTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "must contain one column and 3 samples"):
+            with self.assertRaisesRegex(ValueError, "must contain 3 samples"):
                 load_visual3d_export(root)
 
 

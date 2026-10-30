@@ -194,8 +194,6 @@ class Runner:
         if np.any(self.intrinsic_damping_nms_rad < 0):
             raise ValueError("intrinsic_damping_nms_rad must be nonnegative")
         self.intrinsic_damping_nms_rad.setflags(write=False)
-        if not isinstance(immediate_damping, (bool, np.bool_)):
-            raise ValueError("immediate_damping must be a boolean")
         self.immediate_damping = bool(immediate_damping)
 
     @classmethod

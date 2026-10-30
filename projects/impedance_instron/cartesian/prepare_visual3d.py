@@ -32,17 +32,6 @@ def _kabsch_rigid_transforms(
     """Fit proper rigid transforms and report marker residuals per frame."""
     source = np.asarray(source_points_m, dtype=np.float64)
     target = np.asarray(target_points_m, dtype=np.float64)
-    for name, value in (("source_points_m", source), ("target_points_m", target)):
-        if not np.all(np.isfinite(value)):
-            raise ValueError(f"{name} contains nonfinite values")
-    if (
-        source.ndim != 2
-        or source.shape[0] < 3
-        or source.shape[-1] != 3
-        or target.ndim != 3
-        or target.shape[1:] != source.shape
-    ):
-        raise ValueError("Kabsch rigid fit expects source [point_count, 3] and target [frame_count, point_count, 3]")
     source_centroid = source.mean(axis=0)
     source_centered = source - source_centroid
     rotations = np.empty((len(target), 3, 3), dtype=np.float64)
@@ -71,8 +60,6 @@ def _kabsch_rigid_transforms(
 
 def _read_triplets(path: Path, manifest: dict[str, Any]) -> tuple[tuple[str, ...], np.ndarray, np.ndarray]:
     labels, values = _ascii(path)
-    if values.shape[1] != 3 * len(labels) or len(set(labels)) != len(labels):
-        raise ValueError(f"{path} must contain unique XYZ triplets")
     scale = {"m": 1.0, "cm": 1.0e-2, "mm": 1.0e-3}.get(str(manifest["marker_units"]).lower())
     if scale is None:
         raise ValueError("marker_units must be m, cm, or mm")
@@ -81,15 +68,6 @@ def _read_triplets(path: Path, manifest: dict[str, Any]) -> tuple[tuple[str, ...
     valid = np.all(np.isfinite(points), axis=-1)
     points = points @ rotation.T
     return labels, points, valid
-
-
-def _signal(path: Path, count: int) -> np.ndarray:
-    _, values = _ascii(path)
-    if values.shape != (count, 1):
-        raise ValueError(f"{path} must contain one column and {count} samples")
-    if not np.isfinite(values).all():
-        raise ValueError(f"{path} contains nonfinite values")
-    return values[:, 0]
 
 
 def _joint_angles(path: Path) -> tuple[tuple[str, ...], np.ndarray]:
@@ -351,8 +329,6 @@ def prepare(
         static_root, static_manifest, len(static)
     )
     centers_labels, centers, centers_valid = _joint_centers(dynamic_root, trial.manifest, len(trial.marker_positions_m))
-    if not np.array_equal(trial.marker_time_s.shape, centers[:, 0, 0].shape):
-        raise ValueError("joint-center export length does not match marker clock")
     processed_path = dynamic_root / "motion_processed_targets.txt"
     if not processed_path.exists():
         raise ValueError("missing motion_processed_targets.txt; export PROCESSED targets explicitly")

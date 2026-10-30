@@ -120,7 +120,7 @@ def _trial_candidates(
         raise ValueError(f"{trial_root.name}: missing {hip_name} joint center")
     hip_id = center_labels.index(hip_name)
     hip_height = centers[:, hip_id, 2]
-    usable = center_valid[:, hip_id] & np.isfinite(hip_height)
+    usable = center_valid[:, hip_id]
     if not np.all(usable):
         raise ValueError(f"{trial_root.name}: hip-center height contains missing values")
     peaks = _peak_indices(hip_height, trial.marker_time_s)

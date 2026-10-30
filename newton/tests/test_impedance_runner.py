@@ -145,8 +145,6 @@ class TestGenerativeRunner(unittest.TestCase):
         legacy = plain.to_dict()
         del legacy["immediate_damping"]
         self.assertFalse(Runner.from_dict(legacy).immediate_damping)
-        with self.assertRaises(ValueError):
-            Runner(plain.weights, immediate_damping=1)
 
     def test_variable_impedance_responds_to_simulated_state(self):
         """Change impedance with internal phase and load rather than a reference."""

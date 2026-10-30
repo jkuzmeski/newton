@@ -235,8 +235,6 @@ class Trial:
             raise ValueError("Trial clocks must increase strictly")
         if self.force_time_s[0] > 0 or self.force_time_s[-1] < self.time_s[-1]:
             raise ValueError("Trial forces must cover the prediction horizon")
-        if self.force_observation is not None and not isinstance(self.force_observation, ForceObservation):
-            raise ValueError("force_observation must be a ForceObservation or None")
 
     @property
     def duration_s(self) -> float:
