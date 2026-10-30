@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 The Newton Developers
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strict loader for the path-independent ``digital_shoe.json`` artifact."""
+"""Data contract and loader for ``digital_shoe.json`` shoe artifacts."""
 
 from __future__ import annotations
 
@@ -17,7 +17,19 @@ from .runtime import ShoeMaterial
 SCHEMA_VERSION = "digital_shoe_2"
 MODEL_TYPE = "effective_hyperfoam_maxwell_pasternak_foundation"
 DEFAULT_SHOE_MASS_KG = 0.2
-"""Mass of one shoe [kg] for artifacts whose ``shoe`` record lacks ``mass_kg``; a typical running shoe."""
+"""Mass of one shoe [kg] when the artifact omits ``shoe.mass_kg``."""
+
+__all__ = [
+    "DEFAULT_SHOE_MASS_KG",
+    "MODEL_TYPE",
+    "SCHEMA_VERSION",
+    "ColumnBed",
+    "DigitalShoe",
+    "InstronFixture",
+    "VisualMesh",
+    "load_artifact",
+    "validate_artifact",
+]
 
 
 @dataclass(frozen=True)

@@ -15,6 +15,8 @@ import numpy as np
 
 from .artifact import DigitalShoe, load_artifact
 
+__all__ = ["render_html", "write_report"]
+
 
 def _polyline(x: np.ndarray, y: np.ndarray, xlim: tuple[float, float], ylim: tuple[float, float]) -> str:
     dx = max(xlim[1] - xlim[0], 1.0e-12)
@@ -108,8 +110,6 @@ def _material_rows(shoe: DigitalShoe) -> str:
         "slider_yield_pa": ("Slider yield stress, Jenkin branch (fitted)", "Pa"),
     }
     values = shoe.raw["constitutive_model"]["parameters"]
-    # A single-term artifact predates the second Ogden-Hill term and simply omits
-    # its two parameters, so a missing key is a disabled term, not an error.
     return "".join(
         f"<tr><td>{label}</td><td>{values[key]:.6g}</td><td>{unit}</td></tr>"
         for key, (label, unit) in labels.items()
@@ -118,67 +118,32 @@ def _material_rows(shoe: DigitalShoe) -> str:
 
 
 def _methods_section() -> str:
-    """Render the model derivation, selection rationale, and Mermaid workflow."""
-    directory = Path(__file__).resolve().parent
-    diagram = (directory / "methods.svg").read_text()
-    mermaid_source = html.escape((directory / "methods.mmd").read_text())
-    return f"""<section id="methods"><h2>1. Methods</h2>
-<p>One <strong>effective intact-shoe model</strong> connects the measured force&ndash;compression cycles to the Newton simulations. Geometry, fitted parameters, and validation curves travel together in a portable artifact.</p>
-<ol class="workflow">
-<li><strong>Measure</strong><span>Instron cycles and shoe geometry</span></li>
-<li><strong>Identify</strong><span>One shared model across fixtures</span></li>
-<li><strong>Export</strong><span>Portable digital_shoe.json</span></li>
-<li><strong>Simulate</strong><span>Instron, drop, and rocker</span></li>
-</ol>
-<details class="workflow-details"><summary>Detailed workflow diagram</summary><div class="details-body">
-<div class="method-diagram">{diagram}</div>
-<details><summary>Mermaid source for the method diagram</summary><pre><code class="language-mermaid">{mermaid_source}</code></pre></details>
-</div></details>
-<details class="derivation"><summary>Model equations and assumptions</summary>
-<div class="details-body">
-<h3>1.1 Geometry and column kinematics</h3>
-<p>The calibrated midsole mesh is sampled on a 5 mm grid. Each valid ray through the mesh creates a column with rest length &#8467;<sub>0,i</sub>, tributary area A<sub>i</sub>, and four-neighbor topology. The fixture or rigid shoe carrier determines the current top position. Ground is the horizontal z = 0 plane.</p>
-<div class="equation">c<sub>i</sub> = max(z<sub>free,i</sub> &minus; z<sub>i</sub>(q), 0), &nbsp; &epsilon;<sub>i</sub> = c<sub>i</sub>/&#8467;<sub>0,i</sub>, &nbsp; &lambda;<sub>i</sub> = max(1 &minus; &epsilon;<sub>i</sub>, &lambda;<sub>min</sub>)</div>
-<p>Here c is compression, &epsilon; is engineering compressive strain, &lambda; is the remaining thickness stretch, and &lambda;<sub>min</sub> = 0.05 prevents collapse to zero thickness. Released columns carry no tension.</p>
-
-<h3>1.2 Smooth nonlinear equilibrium: two-term Ogden-Hill (Hyperfoam)</h3>
-<p>A linear spring cannot reproduce the soft initial response and rapid densification of a running-shoe foam. The equilibrium network therefore uses a smooth compressible Ogden-Hill (Hyperfoam) series. One term has a single shape exponent and cannot cover both the small-strain secant and the 74&ndash;90% peak strains the two bench fixtures reach, so the series carries <em>two</em> terms. Setting the second modulus to zero recovers the earlier single-term law exactly.</p>
-<div class="equation">G<sub>eq,n</sub> = f<sub>eq</sub>G<sub>inst,n</sub>, &nbsp; &beta; = &nu;/(1 &minus; 2&nu;), &nbsp; J<sub>i</sub> = &lambda;<sub>i</sub><sup>(1&minus;2&nu;)</sup></div>
-<div class="equation">p<sub>eq,i</sub> = &Sigma;<sub>n</sub> [2G<sub>eq,n</sub>/(&alpha;<sub>n</sub>&lambda;<sub>i</sub>)] [J<sub>i</sub><sup>(&minus;&alpha;<sub>n</sub>&beta;)</sup> &minus; &lambda;<sub>i</sub><sup>&alpha;<sub>n</sub></sup>]</div>
-<p>G<sub>inst,n</sub> sets each term's stiffness, &alpha;<sub>n</sub> controls its nonlinear stiffening (either sign is admissible: a positive exponent gives a soft 1/&lambda; plateau, a negative one gives densification), and f<sub>eq</sub> is the long-term-to-instantaneous modulus fraction. Every term adds 2G<sub>eq,n</sub> to the small-strain compressive tangent whatever its exponent, so the series modulus &mu;<sub>eq</sub> is the <em>sum</em> of the term moduli; that sum is what pins the Pasternak coupling in &sect;1.4. The effective Poisson ratio &nu; is fixed at 0 because confined and unconfined compression of this foam class agree within scatter.</p>
-
-<h3>1.3 Rate dependence and hysteresis: one Maxwell memory branch</h3>
-<p>Hyperfoam alone is conservative and cannot open a load-unload loop. A generalized-Maxwell overstress q stores the minimal memory needed for rate-dependent hysteresis. The recurrence integrates exponential relaxation over each timestep.</p>
-<div class="equation">d = exp(&minus;&Delta;t/&tau;), &nbsp; r = &tau;(1&minus;d)/&Delta;t, &nbsp; &gamma; = (1&minus;f<sub>eq</sub>)/f<sub>eq</sub></div>
-<div class="equation">q<sub>i,n</sub> = d q<sub>i,n&minus;1</sub> + &gamma;r[p<sub>eq,i,n</sub> &minus; p<sub>eq,i,n&minus;1</sub>], &nbsp; p<sub>base,i</sub> = p<sub>eq,i</sub> + q<sub>i</sub></div>
-<p>The relaxation time &tau; is fixed at 0.08 s. Additional free branches were not retained because the two current single-rate tests do not identify a unique relaxation spectrum.</p>
-
-<h3>1.4 Lateral load spreading: Pasternak coupling</h3>
-<p>Independent Winkler columns localize load too strongly under the rearfoot punch and curved last. A Pasternak shear layer couples neighboring compressions while keeping the solve GPU-local.</p>
-<div class="equation">&nabla;<sup>2</sup>c<sub>i</sub> &approx; [&Sigma;<sub>j&isin;N(i)</sub> c<sub>j</sub> &minus; 4c<sub>i</sub>]/h<sup>2</sup>, &nbsp; p<sub>i</sub> = max(p<sub>base,i</sub> &minus; k<sub>p</sub>&nabla;<sup>2</sup>c<sub>i</sub>, 0)</div>
-<p>The boundary uses a natural zero-gradient condition. The fitted k<sub>p</sub> has units N/m, so k<sub>p</sub>&nabla;<sup>2</sup>c has pressure units. This term represents effective intact-shoe confinement and load spreading, not an intrinsic foam shear modulus.</p>
-
-<h3>1.5 Column force, wrench, COP, power, and work</h3>
-<div class="equation">f<sub>n,i</sub> = max(p<sub>i</sub>A<sub>i</sub> &minus; c<sub>n</sub>v<sub>z,i</sub>, 0), &nbsp; F = &Sigma;<sub>i</sub> f<sub>i</sub>, &nbsp; M<sub>O</sub> = &Sigma;<sub>i</sub> r<sub>i</sub> &times; f<sub>i</sub></div>
-<div class="equation">COP<sub>x,y</sub> = [&Sigma;<sub>i</sub>(x<sub>i</sub>,y<sub>i</sub>)f<sub>z,i</sub>]/&Sigma;<sub>i</sub>f<sub>z,i</sub>, &nbsp; P = &Sigma;<sub>i</sub> f<sub>i</sub>&middot;v<sub>i</sub>, &nbsp; W = &int;P dt</div>
-<p>Optional normal damping and friction belong to a simulation scenario; they are not part of the four-parameter Instron fit. The Virtual Instron uses no added damping or friction. The free drop uses 5 N&middot;s/m per-column normal damping for impact stability.</p>
-
-<h3>1.6 Parameter identification and held-out test</h3>
-<div class="equation">&theta; = (G<sub>inst,1</sub>, &alpha;<sub>1</sub>, f<sub>eq</sub>, &tau;, G<sub>inst,2</sub>, &alpha;<sub>2</sub>), &nbsp; &theta;* = arg min<sub>&theta;</sub> &Sigma;<sub>trial,t</sub> [(F&#770;<sub>trial,t</sub>(&theta;) &minus; F<sub>trial,t</sub>)/F<sub>peak,trial</sub>]<sup>2</sup></div>
-<p>One shared &theta; is fitted to every sample from rearfoot and full-foot cycles 90-98. Cycles 99-100 are held out. Peak force, active-region RMSE, and dissipated loop work are reported as validation metrics rather than extra fit weights. The authoritative fit uses bounded SciPy least squares; the exact-gradient Warp path is retained for future coupled design objectives.</p>
-
-<h3>1.7 Why this foundation model</h3>
-<ul>
-<li><strong>Real geometry:</strong> column thickness and engagement come from the measured shoe and fixture meshes, not a uniform slab.</li>
-<li><strong>Minimal nonlinear physics:</strong> a two-term Hyperfoam series captures the J-shaped compression response across the full 0&ndash;90% strain range without piecewise stiffness regions.</li>
-<li><strong>Minimal memory:</strong> one Maxwell branch opens the hysteresis loop without claiming an unidentifiable relaxation spectrum.</li>
-<li><strong>Spatial transfer:</strong> Pasternak coupling corrects the strongest failure of independent Winkler columns while remaining inexpensive.</li>
-<li><strong>Runtime identity:</strong> the equations fitted in NumPy are the equations executed in Warp; no surrogate replaces the calibrated law.</li>
-<li><strong>Practical speed:</strong> roughly 910 columns map naturally to one GPU thread per column and support real-time rigid-body experiments.</li>
-</ul>
-<p>A full three-dimensional finite-element foam model was not selected because the present data lack multi-rate, relaxation, shear, and lateral-strain measurements needed to identify it, while its cost conflicts with real-time and differentiable use. Linear and Kelvin-Voigt foundations were rejected because they do not transfer the observed nonlinear force envelope and loop work across both fixtures.</p>
-</div></details>
-</section>"""
+    """Summarize the shoe model represented by the exported artifact."""
+    return """<section id="methods"><h2>1. Methods</h2>
+<p>The artifact combines the sampled midsole column bed, fitted effective material,
+held-out Instron curves, and provenance. The same geometry and constitutive law
+are consumed by Digital Instron and the shoe simulations.</p>
+<details class="derivation"><summary>Model equations and assumptions</summary><div class="details-body">
+<h3>Geometry and compression</h3>
+<p>Each column has rest thickness <i>t</i>, area <i>A</i>, and up to four neighbors.
+The two-surface solve constrains the column top by its carrier connection and
+its bottom by ground contact. Compression is nonnegative and limited by the
+configured minimum stretch.</p>
+<h3>Effective material</h3>
+<p>Equilibrium pressure is the sum of two Ogden&ndash;Hill terms. One Maxwell
+memory variable supplies rate dependence; the optional Jenkin slider supplies
+rate-independent hysteresis. Neighboring columns are coupled by two Pasternak
+shear layers.</p>
+<div class="equation">p<sub>eq</sub> = &Sigma;<sub>n=1,2</sub> 2G<sub>eq,n</sub>/(&alpha;<sub>n</sub>&lambda;)
+[J<sup>(&minus;&alpha;<sub>n</sub>&beta;)</sup> &minus; &lambda;<sup>&alpha;<sub>n</sub></sup>]</div>
+<p>The material parameters describe the tested intact shoe, not isolated foam.
+They do not identify ground friction, scenario damping, or response to new
+rates, temperatures, impacts, or shoes.</p>
+<h3>Validation boundary</h3>
+<p>The report compares stored predictions with held-out cycles from the measured
+Instron conditions. Adjacent-cycle agreement is an implementation and
+repeatability check, not validation of gait or unseen loading conditions.</p>
+</div></details></section>"""
 
 
 def _experiment_media(media_dir: str | Path | None) -> str:
@@ -380,7 +345,7 @@ def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> st
 {_methods_section()}
 <section id="results"><h2>2. Results</h2>
 <h3>2.1 Held-out validation</h3>
-<p class="section-note">Lower errors are better. Each declared error must be below 10% to pass. These held-out cycles test local repeatability, not performance under new physical conditions.</p>
+<p class="section-note">Lower errors are better. The reported gates are evaluated on held-out cycles from the measured conditions. These results test local repeatability, not performance under new physical conditions.</p>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Held-out validation metrics">
 <table class="metrics"><caption>Measured versus predicted response · held-out cycles</caption>
 <thead><tr><th scope="col">Fixture</th><th scope="col">Peak error</th><th scope="col">Active RMSE</th><th scope="col">Hysteresis error</th><th scope="col">Measured peak</th><th scope="col">Overall</th></tr></thead>

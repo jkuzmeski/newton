@@ -57,7 +57,9 @@ class TestRearfootShoeGeometry(unittest.TestCase):
 
     def scene(self, fixture):
         """Build fixture inputs without using a viewer or a physical collision mesh."""
-        scene = SimpleNamespace(shoe=self.shoe, fixture_name=fixture, _add_instron_indenter_visual=MagicMock())
+        scene = SimpleNamespace(
+            shoe=self.shoe, fixture_name=fixture, curve_name=None, _add_instron_indenter_visual=MagicMock()
+        )
         return scene, Example._build_instron(scene, MagicMock())
 
     def test_both_fixtures_preserve_intrinsic_bottom_and_top(self):
@@ -102,10 +104,13 @@ class TestRearfootShoeGeometry(unittest.TestCase):
 
     def test_rest_columns_stand_on_the_curved_outsole(self):
         """Draw unloaded columns from the artifact outsole, floating where it curves off the platen."""
-        example = Example(MagicMock(), SimpleNamespace(mode="instron", fixture="rearfoot_punch", artifact=self.path))
+        example = Example(
+            MagicMock(),
+            SimpleNamespace(mode="instron", fixture="rearfoot_punch", artifact=self.path),
+        )
         example.render()
         bed = self.shoe.column_bed
-        bench = np.column_stack((bed.anchor_bottom_m[:, :2], [0.0, 0.008]))
+        bench = np.column_stack((bed.anchor_bottom_m[:, :2], [0.0, 0.008])) - [0.0, 0.0, 0.003]
         np.testing.assert_allclose(example._bottoms.numpy(), bench, atol=1e-7)
         np.testing.assert_allclose(example._tops.numpy()[:, 2], bench[:, 2] + bed.rest_length_m, atol=1e-7)
 

@@ -13,6 +13,16 @@ import warp as wp
 from .material import HYPERFOAM_ALPHA_FLOOR, SOLID_MODULUS_PA, densification_onset
 from .material import ogden_hill_term as _hyperfoam_term
 
+__all__ = [
+    "SHEAR_LAYER_FRACTION",
+    "FoundationConfig",
+    "FoundationParams",
+    "ShoeMaterial",
+    "material_shear_modulus",
+    "set_hyperfoam_series",
+    "set_material_block",
+]
+
 SHEAR_LAYER_FRACTION = 0.1
 """Default shear-layer modulus over the foam's rest shear modulus; user choice 2026-10-22, softened so the
 sole conforms instead of bridging. A material with ``shear_layer_fraction`` sets its own."""
