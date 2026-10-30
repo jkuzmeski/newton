@@ -44,59 +44,6 @@ def cone_viscous_scale(f_elastic: wp.vec2, f_viscous: wp.vec2, f_max: wp.float32
 
 
 @wp.func
-def bristle_step(
-    position: wp.vec2,
-    velocity: wp.vec2,
-    dt: float,
-    normal: float,
-    kt: float,
-    kv: float,
-    mu: float,
-    viscous_ratio: float,
-    release_dwell: float,
-    anchor: wp.vec2,
-    stuck: int,
-    dwell: float,
-) -> tuple[wp.vec2, wp.vec2, int, float]:
-    """Advance one anchored Coulomb bristle without mutating caller-owned state.
-
-    Positions and anchor are [m], velocity [m/s], time and dwell [s], normal
-    force [N], stiffness [N/m], damping [N·s/m]. Return tangential force [N],
-    new anchor, grip flag and unloaded dwell. Float state can live in separate
-    timestep buffers for autodiff; branches have the same meaning in both paths.
-    """
-    f_max = mu * normal
-    force = wp.vec2(0.0, 0.0)
-    next_anchor = anchor
-    next_stuck = stuck
-    next_dwell = dwell
-    if normal <= 0.0 or kt <= 0.0:
-        next_dwell = dwell + dt
-        if kt <= 0.0 or stuck == 0 or next_dwell > release_dwell:
-            next_anchor = position
-            next_stuck = 0
-            next_dwell = 0.0
-    else:
-        next_dwell = 0.0
-        if stuck == 0:
-            next_anchor = position
-            next_stuck = 1
-        # Implicit elastic trial avoids ringing in the stiff stick regime.
-        p_next = position + velocity * dt
-        elastic = -kt * (p_next - next_anchor)
-        mag = wp.length(elastic)
-        if mag > f_max:
-            elastic = elastic * (f_max / wp.max(mag, 1.0e-12))
-            next_anchor = p_next + elastic / kt
-        force = elastic
-        speed = wp.length(velocity)
-        if kv > 0.0 and speed > 1.0e-12:
-            viscous = -velocity * (wp.min(kv * speed, viscous_ratio * f_max) / speed)
-            force = elastic + viscous * cone_viscous_scale(elastic, viscous, f_max)
-    return force, next_anchor, next_stuck, next_dwell
-
-
-@wp.func
 def contact_kinematics(
     transform: wp.transform,
     velocity: wp.spatial_vector,

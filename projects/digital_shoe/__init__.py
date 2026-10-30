@@ -9,8 +9,6 @@ _EXPORT_MODULES = {
     "ColumnBed": "artifact",
     "DigitalShoe": "artifact",
     "FoundationConfig": "runtime",
-    "FrictionParams": "friction_solver",
-    "FrictionSolver": "friction_solver",
     "InstronFixture": "artifact",
     "ShoeMaterial": "runtime",
     "VisualMesh": "artifact",
@@ -18,24 +16,9 @@ _EXPORT_MODULES = {
     "load_artifact": "artifact",
     "maxwell_coefficients_numpy": "material",
     "maxwell_step_numpy": "material",
-    "physics_source_identity": "provenance",
 }
 
-__all__ = [
-    "ColumnBed",
-    "DigitalShoe",
-    "FoundationConfig",
-    "FrictionParams",
-    "FrictionSolver",
-    "InstronFixture",
-    "ShoeMaterial",
-    "VisualMesh",
-    "hyperfoam_pressure_numpy",
-    "load_artifact",
-    "maxwell_coefficients_numpy",
-    "maxwell_step_numpy",
-    "physics_source_identity",
-]
+__all__ = list(_EXPORT_MODULES)
 
 
 def __getattr__(name: str) -> object:

@@ -24,6 +24,24 @@ import warp as wp
 # Preserve the existing removable-singularity branch, including its zero alpha
 # derivative inside this narrow interval. It is a limit approximation, not an
 # exactly equal continuation at the cutoff.
+__all__ = [
+    "HYPERFOAM_ALPHA_FLOOR",
+    "SOLID_MODULUS_PA",
+    "densification_onset",
+    "hyperfoam_pressure",
+    "hyperfoam_pressure_from_stretch",
+    "hyperfoam_pressure_from_stretch_numpy",
+    "hyperfoam_pressure_numpy",
+    "maxwell_coefficients",
+    "maxwell_coefficients_numpy",
+    "maxwell_increment_step",
+    "maxwell_increment_step_numpy",
+    "maxwell_step",
+    "maxwell_step_numpy",
+    "ogden_hill_term",
+    "ogden_hill_term_numpy",
+]
+
 HYPERFOAM_ALPHA_FLOOR = 1.0e-3
 
 
