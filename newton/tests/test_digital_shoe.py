@@ -19,7 +19,7 @@ from projects.digital_instron_v2 import export_digital_shoe
 from projects.digital_instron_v2.core import CALIBRATED_MATERIAL
 from projects.digital_instron_v2.registration import load_last, register_last
 from projects.digital_instron_v2.sweep_fit import DEFAULT_LAST, load_grid
-from projects.digital_shoe.artifact import DEFAULT_SHOE_MASS_KG, load_artifact, validate_artifact
+from projects.digital_shoe.artifact import DEFAULT_SHOE_MASS_KG, ColumnBed, load_artifact, validate_artifact
 from projects.digital_shoe.report import render_html
 from projects.digital_shoe.showcase import Example
 
@@ -97,6 +97,16 @@ class TestDigitalShoeArtifact(unittest.TestCase):
                 os.chdir(previous)
         self.assertEqual(shoe.shoe_id, "tiny<&shoe")
         self.assertEqual(len(shoe.column_bed.rest_length_m), 2)
+
+    def test_load_decodes_geometry_once(self):
+        """Reuse the validated column geometry when loading an artifact."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "digital_shoe.json"
+            data = _tiny_artifact()
+            path.write_text(json.dumps(data))
+            with patch.object(ColumnBed, "from_json", wraps=ColumnBed.from_json) as decode:
+                load_artifact(path)
+        decode.assert_called_once_with(data["column_bed"])
 
     def test_reads_shoe_mass_or_defaults(self):
         """Read the shoe mass from the artifact and fall back to the documented default."""
@@ -288,7 +298,7 @@ class TestDigitalShoeArtifact(unittest.TestCase):
 class TestDigitalShoeRendering(unittest.TestCase):
     def test_instron_renders_connected_nodes_without_midsole_surface(self):
         """Show both spring endpoints and connectors without an opaque midsole mesh."""
-        example = MagicMock(mode="instron", sim_time=0.0, history=[], column_count=2, device="cpu")
+        example = MagicMock(mode="instron", sim_time=0.0, history=[], column_count=2, device="cpu", _gif_path=None)
         with patch("projects.digital_shoe.showcase.wp.launch"):
             Example.render(example)
         example.viewer.log_mesh.assert_not_called()

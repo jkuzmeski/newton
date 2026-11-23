@@ -229,57 +229,12 @@ def column_balance_pressures(
         best = y0
         best_value = float(1.0e30)
         best, best_value = _keep_better(free, 1, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
-        best, best_value = _keep_better(
-            _line_minimum(y0, grad, foam, shear, n0, b0),
-            1,
-            y0,
-            grad,
-            foam,
-            shear,
-            n0,
-            b0,
-            n1,
-            b1,
-            n2,
-            b2,
-            tol,
-            best,
-            best_value,
-        )
-        best, best_value = _keep_better(
-            _line_minimum(y0, grad, foam, shear, n1, b1),
-            1,
-            y0,
-            grad,
-            foam,
-            shear,
-            n0,
-            b0,
-            n1,
-            b1,
-            n2,
-            b2,
-            tol,
-            best,
-            best_value,
-        )
-        best, best_value = _keep_better(
-            _line_minimum(y0, grad, foam, shear, n2, b2),
-            1,
-            y0,
-            grad,
-            foam,
-            shear,
-            n0,
-            b0,
-            n1,
-            b1,
-            n2,
-            b2,
-            tol,
-            best,
-            best_value,
-        )
+        y = _line_minimum(y0, grad, foam, shear, n0, b0)
+        best, best_value = _keep_better(y, 1, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
+        y = _line_minimum(y0, grad, foam, shear, n1, b1)
+        best, best_value = _keep_better(y, 1, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
+        y = _line_minimum(y0, grad, foam, shear, n2, b2)
+        best, best_value = _keep_better(y, 1, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
         y, valid = _vertex(n0, b0, n1, b1)
         best, best_value = _keep_better(y, valid, y0, grad, foam, shear, n0, b0, n1, b1, n2, b2, tol, best, best_value)
         y, valid = _vertex(n0, b0, n2, b2)

@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import base64
 import html
-from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
@@ -67,34 +66,6 @@ def _svg(curve: dict, *, domain: str) -> str:
 </g></svg>"""
 
 
-def _curve_label(curve: dict) -> str:
-    """Name a curve by its fixture and trial; unknown fixtures show the trial alone."""
-    fixture = {"rearfoot_punch": "Rearfoot punch", "fullfoot_last": "Full-foot last"}.get(curve.get("fixture"))
-    return f"{fixture}, {curve['name']}" if fixture else curve["name"]
-
-
-def _percent(value: float) -> str:
-    return f"{100.0 * value:.1f}%"
-
-
-def _metric_rows(curves: Iterable[dict]) -> str:
-    rows = []
-    for curve in curves:
-        metric = curve["metrics"]
-        passed = bool(metric["passed"])
-        rows.append(
-            "<tr>"
-            f'<th scope="row">{html.escape(_curve_label(curve))}</th>'
-            f"<td>{_percent(metric['peak_force_error'])}</td>"
-            f"<td>{_percent(metric['force_rmse_relative'])}</td>"
-            f"<td>{_percent(metric['hysteresis_error'])}</td>"
-            f"<td>{metric['measured_peak_force_n']:.0f} N</td>"
-            f'<td><span class="{"pass" if passed else "fail"}">{"PASS" if passed else "NOT ALL GATES"}</span></td>'
-            "</tr>"
-        )
-    return "".join(rows)
-
-
 def _material_rows(shoe: DigitalShoe) -> str:
     labels = {
         "instantaneous_shear_modulus_pa": ("Instantaneous shear modulus, term 1", "Pa"),
@@ -117,9 +88,7 @@ def _material_rows(shoe: DigitalShoe) -> str:
     )
 
 
-def _methods_section() -> str:
-    """Summarize the shoe model represented by the exported artifact."""
-    return """<section id="methods"><h2>1. Methods</h2>
+_METHODS = """<section id="methods"><h2>1. Methods</h2>
 <p>The artifact combines the sampled midsole column bed, fitted effective material,
 held-out Instron curves, and provenance. The same geometry and constitutive law
 are consumed by Digital Instron and the shoe simulations.</p>
@@ -304,12 +273,25 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line);
 
 def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> str:
     """Render a deterministic, self-contained validation report with optional GIF loops."""
-    curves = shoe.validation["curves"]
     passed = bool(shoe.raw["identification"]["passed_all_declared_gates"])
+    fixture_labels = {"rearfoot_punch": "Rearfoot punch", "fullfoot_last": "Full-foot last"}
+    metric_rows = []
     curve_figures = []
-    for curve in curves:
+    for curve in shoe.validation["curves"]:
+        fixture = fixture_labels.get(curve.get("fixture"))
+        label = html.escape(f"{fixture}, {curve['name']}" if fixture else curve["name"])
+        metric = curve["metrics"]
+        gate_class, gate_text = ("pass", "PASS") if metric["passed"] else ("fail", "NOT ALL GATES")
+        metric_rows.append(
+            f'<tr><th scope="row">{label}</th>'
+            f"<td>{100.0 * metric['peak_force_error']:.1f}%</td>"
+            f"<td>{100.0 * metric['force_rmse_relative']:.1f}%</td>"
+            f"<td>{100.0 * metric['hysteresis_error']:.1f}%</td>"
+            f"<td>{metric['measured_peak_force_n']:.0f} N</td>"
+            f'<td><span class="{gate_class}">{gate_text}</span></td></tr>'
+        )
         curve_figures.append(
-            f"<article><h4>{html.escape(_curve_label(curve))}</h4>"
+            f"<article><h4>{label}</h4>"
             '<div class="plot-grid"><figure><figcaption>Force&ndash;compression loop</figcaption>'
             f"{_svg(curve, domain='displacement')}</figure>"
             "<figure><figcaption>Force history</figcaption>"
@@ -342,14 +324,14 @@ def render_html(shoe: DigitalShoe, *, media_dir: str | Path | None = None) -> st
 </nav>
 </header>
 <main>
-{_methods_section()}
+{_METHODS}
 <section id="results"><h2>2. Results</h2>
 <h3>2.1 Held-out validation</h3>
 <p class="section-note">Lower errors are better. The reported gates are evaluated on held-out cycles from the measured conditions. These results test local repeatability, not performance under new physical conditions.</p>
 <div class="table-scroll" tabindex="0" role="region" aria-label="Held-out validation metrics">
 <table class="metrics"><caption>Measured versus predicted response · held-out cycles</caption>
 <thead><tr><th scope="col">Fixture</th><th scope="col">Peak error</th><th scope="col">Active RMSE</th><th scope="col">Hysteresis error</th><th scope="col">Measured peak</th><th scope="col">Overall</th></tr></thead>
-<tbody>{_metric_rows(curves)}</tbody></table></div>
+<tbody>{"".join(metric_rows)}</tbody></table></div>
 <h3>2.2 Response curves</h3>
 <p class="plot-caption">Blue solid: measured. Orange dashed: predicted. Both curves use the same axes within each plot.</p>
 {"".join(curve_figures)}

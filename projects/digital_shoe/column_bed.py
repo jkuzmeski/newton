@@ -214,12 +214,6 @@ _STRAIN_STEP = wp.constant(1.0e-3)
 
 
 @wp.func
-def _face_coupling(bed: _Bed, column: int, j: int, shear: float) -> float:
-    """Return the shear conductance between two columns of one world, whose layers have modulus ``shear`` [N/m]."""
-    return pasternak_coupling(bed.rest_len[column], bed.rest_len[j], shear)
-
-
-@wp.func
 def _face_sums(bed: _Bed, column: int, top: float, bottom: float, shear: float) -> tuple[float, float, float]:
     """Return ``sum k_ij``, ``sum k_ij (t - t_j)`` and ``sum k_ij (b - b_j)`` over a column's faces."""
     coupling_sum = float(0.0)
@@ -228,7 +222,7 @@ def _face_sums(bed: _Bed, column: int, top: float, bottom: float, shear: float) 
     for side in range(4):
         j = bed.neighbors[column, side]
         if j >= 0:
-            k = _face_coupling(bed, column, j, shear)
+            k = pasternak_coupling(bed.rest_len[column], bed.rest_len[j], shear)
             coupling_sum += k
             top_pull += k * (top - _top_shared(j, 0.0, 0))
             bottom_pull += k * (bottom - _bottom_shared(j, 0.0, 0))
@@ -311,12 +305,11 @@ def _column_bed_step(
         sweep = half / 2
         start = 0
         end = bed.color_split
-        if half % 2 == 0:
-            if lane == 0:
-                _changed_shared((sweep + 1) % 3, 0, 1)
-        else:
+        if half % 2 == 1:
             start = bed.color_split
             end = count
+        elif lane == 0:
+            _changed_shared((sweep + 1) % 3, 0, 1)
         for slot in range(start + lane, end, _BLOCK):
             column = bed.order[slot]
             thickness = bed.rest_len[column]
@@ -382,14 +375,7 @@ def _column_bed_step(
         bed.slider_state[i] = slider
         bed.strain_prev[i] = strain
         # Shear on each end, positive down, from the balanced neighbours.
-        on_top = float(0.0)
-        on_bottom = float(0.0)
-        for side in range(4):
-            j = bed.neighbors[column, side]
-            if j >= 0:
-                k = _face_coupling(bed, column, j, shear)
-                on_top += k * (top - _top_shared(j, 0.0, 0))
-                on_bottom += k * (bottom - _bottom_shared(j, 0.0, 0))
+        _, on_top, on_bottom = _face_sums(bed, column, top, bottom, shear)
         point, com, velocity, _gap = contact_kinematics(
             pose, twist, com_local, bed.anchor_local[column], bed.ground_height, 1
         )
@@ -638,15 +624,6 @@ class ColumnBed:
         self.bed = bed
         self.set_world_materials(self.materials)
 
-    def _params(self, material, mu: float) -> FoundationParams:
-        params = FoundationParams()
-        set_material_block(params, material)
-        params.inv_h2 = 1.0 / self.spacing_m**2
-        params.stretch_floor = self.config.stretch_floor
-        params.normal_damping = self.config.normal_damping
-        params.mu = mu
-        return params
-
     def set_world_materials(self, materials, *, friction: Sequence[float] | None = None) -> None:
         """Set one material for every world, or one material per world.
 
@@ -660,7 +637,16 @@ class ColumnBed:
             friction = [self.config.mu] * self.world_count
         if len(materials) != self.world_count or len(friction) != self.world_count:
             raise ValueError(f"Expected {self.world_count} materials and friction coefficients")
-        self.bed.params.assign([self._params(m, float(mu)) for m, mu in zip(materials, friction, strict=True)])
+        world_params = []
+        for material, mu in zip(materials, friction, strict=True):
+            params = FoundationParams()
+            set_material_block(params, material)
+            params.inv_h2 = 1.0 / self.spacing_m**2
+            params.stretch_floor = self.config.stretch_floor
+            params.normal_damping = self.config.normal_damping
+            params.mu = float(mu)
+            world_params.append(params)
+        self.bed.params.assign(world_params)
 
     def set_timesteps(self, dt) -> None:
         """Set one step for every world, or one step per world [s]."""
@@ -672,31 +658,24 @@ class ColumnBed:
     def reset(self, mask: wp.array[bool] | None = None) -> None:
         """Return the worlds in ``mask``, or every world, to the unloaded rest shape with no history."""
         bed = self.bed
+        history = [
+            bed.top,
+            bed.bottom,
+            bed.q_state,
+            bed.peq_prev,
+            bed.slider_state,
+            bed.strain_prev,
+            bed.deflection,
+        ]
         if mask is None:
-            for array in (
-                bed.top,
-                bed.bottom,
-                bed.q_state,
-                bed.peq_prev,
-                bed.slider_state,
-                bed.strain_prev,
-                bed.deflection,
-            ):
+            for array in history:
                 array.zero_()
             return
         wp.launch(
             _reset_worlds,
             dim=self.world_count * self.column_count,
             inputs=[mask, self.column_count],
-            outputs=[
-                bed.top,
-                bed.bottom,
-                bed.q_state,
-                bed.peq_prev,
-                bed.slider_state,
-                bed.strain_prev,
-                bed.deflection,
-            ],
+            outputs=history,
             device=self.device,
         )
 

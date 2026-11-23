@@ -104,12 +104,43 @@ class Example:
         builder = newton.ModelBuilder()
         if self.mode == "instron":
             anchor, rest, area, neighbors, spacing, connection, top_gap = self._build_instron(builder)
-        elif self.mode == "drop":
-            anchor, rest, area, neighbors, spacing, connection, top_gap = self._build_drop(builder, args)
-        elif self.mode == "rocker":
-            anchor, rest, area, neighbors, spacing, connection, top_gap = self._build_rocker(builder)
         else:
-            raise ValueError(f"unknown showcase mode {self.mode!r}")
+            if self.mode not in ("drop", "rocker"):
+                raise ValueError(f"unknown showcase mode {self.mode!r}")
+            builder.add_ground_plane()
+            if self.mode == "drop":
+                self.drop_mass_kg = float(getattr(args, "drop_mass", 80.0))
+                self.drop_height_m = float(getattr(args, "drop_height", 0.04))
+                last = self.shoe.visual_mesh("fullfoot_last").vertices_m
+                lower, upper = np.min(last, axis=0), np.max(last, axis=0)
+                center = 0.5 * (lower + upper)
+                size_x, size_y = float(upper[0] - lower[0]), float(upper[1] - lower[1])
+                effective_height = 0.35
+                principal_inertia = wp.vec3(
+                    self.drop_mass_kg * (size_y**2 + effective_height**2) / 12.0,
+                    self.drop_mass_kg * (size_x**2 + effective_height**2) / 12.0,
+                    self.drop_mass_kg * (size_x**2 + size_y**2) / 12.0,
+                )
+                self.carrier = builder.add_body(
+                    mass=self.drop_mass_kg,
+                    com=wp.vec3(float(center[0]), float(center[1]), float(center[2])),
+                    inertia=wp.diag(principal_inertia),
+                    label="free_body_weight_drop",
+                )
+                self._add_fullfoot_last_visual(builder, label="free_drop_shoe_last")
+            else:
+                self._rocker_period = 1.2
+                self.carrier = builder.add_body(mass=1.0, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)))
+            self.foundation_config = FoundationConfig(
+                stretch_floor=0.05,
+                normal_damping=5.0 if self.mode == "drop" else 0.0,
+                ground_height_m=0.0,
+            )
+            bed = self.shoe.column_bed
+            anchor, rest = bed.anchor_bottom_m, bed.rest_length_m
+            area, neighbors, spacing = bed.area_m2, bed.neighbors, bed.spacing_m
+            connection = np.full(len(rest), TOP_BONDED, dtype=np.int32)
+            top_gap = np.zeros(len(rest))
 
         builder.color()
         self.model = builder.finalize()
@@ -246,59 +277,6 @@ class Example:
         top_gap = np.zeros(len(bottom))
         top_gap[supported] = surface[:, 2] - free_top[supported]
         return anchor, bed.rest_length_m, bed.area_m2, bed.neighbors, bed.spacing_m, connection, top_gap
-
-    def _build_drop(self, builder, args):
-        builder.add_ground_plane()
-        self.drop_mass_kg = float(getattr(args, "drop_mass", 80.0))
-        self.drop_height_m = float(getattr(args, "drop_height", 0.04))
-        shoe_last = self.shoe.visual_mesh("fullfoot_last").vertices_m
-        lower = np.min(shoe_last, axis=0)
-        upper = np.max(shoe_last, axis=0)
-        center = 0.5 * (lower + upper)
-        size_x = float(upper[0] - lower[0])
-        size_y = float(upper[1] - lower[1])
-        effective_height = 0.35
-        inertia = wp.mat33(
-            self.drop_mass_kg * (size_y**2 + effective_height**2) / 12.0,
-            0.0,
-            0.0,
-            0.0,
-            self.drop_mass_kg * (size_x**2 + effective_height**2) / 12.0,
-            0.0,
-            0.0,
-            0.0,
-            self.drop_mass_kg * (size_x**2 + size_y**2) / 12.0,
-        )
-        self.carrier = builder.add_body(
-            mass=self.drop_mass_kg,
-            com=wp.vec3(float(center[0]), float(center[1]), float(center[2])),
-            inertia=inertia,
-            label="free_body_weight_drop",
-        )
-        self._add_fullfoot_last_visual(builder, label="free_drop_shoe_last")
-        self.foundation_config = FoundationConfig(stretch_floor=0.05, normal_damping=5.0, ground_height_m=0.0)
-        return self._bonded_bed()
-
-    def _build_rocker(self, builder):
-        builder.add_ground_plane()
-        self._rocker_period = 1.2
-        self.carrier = builder.add_body(mass=1.0, com=wp.vec3(0.0), inertia=wp.mat33(np.eye(3)))
-        self.foundation_config = FoundationConfig(stretch_floor=0.05, ground_height_m=0.0)
-        return self._bonded_bed()
-
-    def _bonded_bed(self):
-        """Return the whole bed with every top glued to the carried shoe."""
-        bed = self.shoe.column_bed
-        count = len(bed.rest_length_m)
-        return (
-            bed.anchor_bottom_m,
-            bed.rest_length_m,
-            bed.area_m2,
-            bed.neighbors,
-            bed.spacing_m,
-            np.full(count, TOP_BONDED, dtype=np.int32),
-            np.zeros(count),
-        )
 
     def _instron_pose(self, time_s: float) -> np.ndarray:
         phase = time_s % self._period
@@ -454,10 +432,6 @@ class Example:
         else:
             self.viewer.log_scalar("/digital_shoe/mass_height_m", last.get("height_m", 0.0))
         self.viewer.end_frame()
-        self._capture_gif_frame()
-
-    def _capture_gif_frame(self) -> None:
-        """Capture one downsampled OpenGL frame inside the selected loop window."""
         if self._gif_path is None:
             return
         if not hasattr(self.viewer, "get_frame"):

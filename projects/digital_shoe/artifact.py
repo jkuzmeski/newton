@@ -235,6 +235,12 @@ class DigitalShoe:
 
 def validate_artifact(data: dict[str, Any]) -> None:
     """Fail closed on an unknown or incomplete artifact contract."""
+    _decode_artifact(data)
+
+
+def _decode_artifact(
+    data: dict[str, Any],
+) -> tuple[ShoeMaterial, ColumnBed, dict[str, VisualMesh], dict[str, InstronFixture]]:
     if data.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"unsupported schema_version {data.get('schema_version')!r}; expected {SCHEMA_VERSION!r}")
     required = {"shoe", "coordinate_system", "constitutive_model", "column_bed", "validation", "provenance"}
@@ -243,37 +249,38 @@ def validate_artifact(data: dict[str, Any]) -> None:
     model = data["constitutive_model"]
     if model.get("type") != MODEL_TYPE:
         raise ValueError(f"unsupported constitutive model {model.get('type')!r}")
-    ShoeMaterial(**model["parameters"])
+    material = ShoeMaterial(**model["parameters"])
     mass_kg = data["shoe"].get("mass_kg", DEFAULT_SHOE_MASS_KG)
     if not np.isfinite(mass_kg) or not mass_kg > 0.0:
         raise ValueError(f"shoe mass_kg must be finite and positive, got {mass_kg!r}")
     bed = ColumnBed.from_json(data["column_bed"])
-    for name, mesh_data in data.get("visual_meshes", {}).items():
-        VisualMesh.from_json(name, mesh_data)
+    mesh_data = data.get("visual_meshes", {})
+    meshes = {name: VisualMesh.from_json(name, mesh) for name, mesh in mesh_data.items()}
+    fixtures = {}
     for fixture, fixture_data in data.get("instron_fixtures", {}).items():
-        if len(InstronFixture.from_json(fixture, fixture_data).bed_bottom_above_platen_m) != len(bed.rest_length_m):
-            raise ValueError(f"fixture {fixture!r} needs one bed_bottom_above_platen_m per column_bed column")
+        decoded = InstronFixture.from_json(fixture, fixture_data)
+        if len(decoded.bed_bottom_above_platen_m) != len(bed.rest_length_m):
+            raise ValueError(
+                f"fixture {fixture!r} needs one bed_bottom_above_platen_m per column_bed column",
+            )
+        fixtures[fixture] = decoded
     coordinate = data["coordinate_system"]
     if coordinate.get("length_unit") != "m" or coordinate.get("up_axis") != "+Z":
         raise ValueError("runtime currently requires metres and a +Z ground normal")
+    return material, bed, meshes, fixtures
 
 
 def load_artifact(path: str | Path) -> DigitalShoe:
     """Load one self-contained artifact independently of the current directory."""
     data = json.loads(Path(path).read_text())
-    validate_artifact(data)
+    material, bed, meshes, fixtures = _decode_artifact(data)
     return DigitalShoe(
         shoe_id=data["shoe"]["id"],
         mass_kg=float(data["shoe"].get("mass_kg", DEFAULT_SHOE_MASS_KG)),
-        material=ShoeMaterial(**data["constitutive_model"]["parameters"]),
-        column_bed=ColumnBed.from_json(data["column_bed"]),
-        visual_meshes={
-            name: VisualMesh.from_json(name, value) for name, value in data.get("visual_meshes", {}).items()
-        },
-        instron_fixtures={
-            fixture: InstronFixture.from_json(fixture, value)
-            for fixture, value in data.get("instron_fixtures", {}).items()
-        },
+        material=material,
+        column_bed=bed,
+        visual_meshes=meshes,
+        instron_fixtures=fixtures,
         validation=data["validation"],
         provenance=data["provenance"],
         raw=data,
